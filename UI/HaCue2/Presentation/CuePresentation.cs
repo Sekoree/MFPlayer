@@ -1,4 +1,5 @@
 using System.Globalization;
+using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Core.Patch;
 using HaCue2.Engine;
@@ -393,6 +394,11 @@ public static class CuePresentation
         // longer the useful fact.
         MediaCueNode media when runtime.Broken.Contains(cue.Id) =>
             $"media offline · {Path.GetFileName(media.MediaPath)}",
+
+        // A URI is unreadable at row width and mostly punctuation. What identifies a live cue is the
+        // camera's name or the device's, which is what Describe pulls out of it.
+        MediaCueNode media when SourceUri.IsSource(media.MediaPath) => SourceUri.Describe(media.MediaPath),
+
         MediaCueNode media => media.MediaPath,
 
         // The WORDS, trimmed to the column. A card's path is a cache file nobody chose and nobody can
@@ -497,6 +503,10 @@ public static class CuePresentation
         switch (cue)
         {
             case MediaCueNode media:
+                // A live cue behaves unlike every other row in the list: it never ends, it cannot be
+                // seeked, and firing it claims a device or a network connection. Worth one word.
+                if (SourceUri.IsLive(media.MediaPath))
+                    badges.Add(new Badge("live", Gel.Congo));
                 if (media.Loop)
                     badges.Add(new Badge("loop"));
                 foreach (var placement in media.Placements)

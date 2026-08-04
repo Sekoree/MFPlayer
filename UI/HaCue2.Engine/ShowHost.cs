@@ -5,6 +5,7 @@ using HaCue2.Machine;
 using HaCue2.Core.Patch;
 using S.Media.Core.Audio;
 using S.Media.Core.Registry;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Present.SDL3;
 using S.Media.Decode.FFmpeg;
@@ -378,7 +379,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         ArgumentNullException.ThrowIfNull(context);
 
         var runtimeProject = ProjectSnapshot.Copy(project);
-        var registry = MediaRegistry.Build(builder => builder.Use(new FFmpegModule()));
+        var registry = BuildRegistry(backend);
         var bay = ProjectPatchBay.Open(runtimeProject, backend);
         var screens = ProjectVideoOutputs.OpenAll(runtimeProject, headless);
 
@@ -438,6 +439,59 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         // performance's first, and the one that would otherwise pay for an open.
         host.WarmAllStandby();
         return host;
+    }
+
+    /// <summary>
+    /// The registry a show opens its media through.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It was FFmpeg alone, which meant a cue could only ever play a FILE: the <c>ndi:</c>,
+    /// <c>padev:</c>, <c>youtube:</c> and <c>text:</c> providers all exist and were simply never
+    /// registered, so those URIs fell through to FFmpeg and failed to open.
+    /// </para>
+    /// <para>
+    /// Each optional module is registered inside its own try. NDI in particular is frequently absent —
+    /// no runtime, or a CPU it does not support — and its module throws at REGISTRATION rather than at
+    /// first open, deliberately. A booth without NDI must still be able to run the show; the absence is
+    /// reported once and every other source keeps working.
+    /// </para>
+    /// </remarks>
+    private static MediaRegistry BuildRegistry(IAudioBackend? backend) =>
+        MediaRegistry.Build(builder =>
+        {
+            builder.Use(new FFmpegModule());
+
+            // A capture device is opened through the SAME backend the bay plays out of: two backends
+            // in one process see different device tables, and a cue would capture from a device the
+            // operator never picked.
+            if (backend is S.Media.Audio.PortAudio.PortAudioBackend)
+                Optional(builder, () => new S.Media.Audio.PortAudio.PortAudioModule(), "PortAudio");
+
+            Optional(builder, () => new S.Media.NDI.NDIModule(), "NDI");
+            // Over the SHARED preparer: the add dialog downloads into that cache, and a second one
+            // here would open onto an empty one and report every prepared cue as unprepared.
+            Optional(builder, YouTubeRuntime.Module, "YouTube");
+            Optional(builder, () => new S.Media.Source.Text.TextSourceModule(), "Text");
+        });
+
+    /// <summary>Registers a module, or notes that this machine cannot provide it.</summary>
+    private static void Optional(IMediaRegistryBuilder builder, Func<IMediaModule> create, string name)
+    {
+        try
+        {
+            builder.Use(create());
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // Logged rather than reported to the operator: an absent NDI runtime is a property of the
+            // BOX, not a fault in the show, and a modal about it at every start-up is a modal nobody
+            // reads. A cue that actually needs it fails by name when it fires.
+            MediaDiagnostics.LogInformation(
+                "HaCue2: the {Module} source is not available on this machine — {Reason}",
+                name,
+                failure.Message);
+        }
     }
 
     private void OnClipNaturallyEnded(string cueId)

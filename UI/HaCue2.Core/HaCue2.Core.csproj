@@ -24,6 +24,9 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Session\S.Media.Session.csproj" />
+        <!-- The text: source. A text cue compiles to one of its URIs, which carries the whole render
+             spec — so a card needs nothing from the app and no cache file anywhere. -->
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Source.Text\S.Media.Source.Text.csproj" />
     </ItemGroup>
 
 </Project>

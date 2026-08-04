@@ -22,6 +22,11 @@
       <Border DockPanel.Dock="Bottom" Classes="chain">
         <DockPanel LastChildFill="False">
           <Button DockPanel.Dock="Right" Classes="primary" Content="{Binding Confirm}" Click="OnConfirm" />
+          <!-- The third answer, between confirm and cancel: closing with unsaved edits is save /
+               discard / go back, and two buttons make one of those three unreachable. -->
+          <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
+                  IsVisible="{Binding HasAlternative}"
+                  Content="{Binding Alternative}" Click="OnAlternative" />
           <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
                   Content="CANCEL" Click="OnCancel" />
         </DockPanel>

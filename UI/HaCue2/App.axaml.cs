@@ -57,6 +57,19 @@ public partial class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 
+    /// <summary>
+    /// Opens a project in its own shell window — the one route every "open" in the app takes.
+    /// </summary>
+    /// <remarks>
+    /// Public because the File menu needs it too: switching project means a NEW window rather than
+    /// swapping the document under a running shell, which owns a session, a journal and a dozen
+    /// projections built around one project.
+    /// </remarks>
+    public static void ShowProject(HaCueProject project, string path) => Open(project, path).Show();
+
+    /// <summary>Returns to the launcher — what "close project" leaves the operator looking at.</summary>
+    public static void ShowLauncher() => OpenLauncher().Show();
+
     private static LauncherWindow OpenLauncher()
     {
         var vm = new LauncherViewModel(Settings, Machine);

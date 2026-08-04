@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using HaCue2.Core.Compile;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Media;
@@ -646,35 +647,12 @@ public partial class ShellViewModel : ObservableObject
 
     private string? ProjectPath => HasPath ? Path : null;
 
-    /// <summary>
-    /// Draws every text cue whose words changed and hands the compiler where they landed.
-    /// </summary>
-    /// <remarks>
-    /// The render happens HERE, on the way into a compile, rather than on every edit: a card is only
-    /// needed when the document is about to be handed to the engine, and rendering per keystroke would
-    /// rasterise a title one letter at a time. The renderer keys on content, so this is a string
-    /// compare per text cue when nothing has changed.
-    /// </remarks>
-    public TextCards Cards { get; } = new(HaCue2.Machine.MediaCache.RootFor(App.Settings));
-
-    private ShowCompileContext CompileContext()
+    private ShowCompileContext CompileContext() => new()
     {
-        Cards.Refresh(Project);
-
-        foreach (var (cueId, problem) in Cards.Problems)
-        {
-            if (Project.FindCue(cueId) is { } cue)
-                FileMessage = $"“{cue.Label}” could not be drawn — {problem}";
-        }
-
-        return new ShowCompileContext
-        {
-            ProjectPath = ProjectPath,
-            Durations = Runtime.MediaDurations,
-            Tracks = Machine.Media.TracksIn(Project, ProjectPath),
-            RenderedText = Cards.Paths,
-        };
-    }
+        ProjectPath = ProjectPath,
+        Durations = Runtime.MediaDurations,
+        Tracks = Machine.Media.TracksIn(Project, ProjectPath),
+    };
 
     public bool HasPath => Path.Length > 0;
 
@@ -682,6 +660,62 @@ public partial class ShellViewModel : ObservableObject
     public string ProjectFile =>
         (HasPath ? System.IO.Path.GetFileName(Path) : Project.Title + HaCueProjectFile.Extension)
         + (Journal.IsDirty ? " *" : "");
+
+    /// <summary>
+    /// The WINDOW's title — the file, its unsaved marker, then the app.
+    /// </summary>
+    /// <remarks>
+    /// File first because that is what a taskbar truncates TO, and what an operator running two shows
+    /// side by side is trying to tell apart. It was the literal "HaCue2", which meant nothing anywhere
+    /// on screen said which file was open or whether it had been saved.
+    /// </remarks>
+    public string WindowTitle => $"{ProjectFile} — HaCue2";
+
+    /// <summary>
+    /// Where the project lives, in full — the answer to "where is this saved".
+    /// </summary>
+    /// <remarks>
+    /// A tooltip rather than a field: it is long, it is asked for rarely, and it is the one thing the
+    /// short name in the title bar cannot say.
+    /// </remarks>
+    public string ProjectLocation =>
+        HasPath ? Path : "not saved yet — Save will ask where to put it";
+
+    /// <summary>SAVE, or SAVE… when there is nowhere to save yet and it will have to ask.</summary>
+    public string SaveLabel => HasPath ? "Save" : "Save…";
+
+    /// <summary>
+    /// What the File menu's recent list does when a row is chosen.
+    /// </summary>
+    /// <remarks>
+    /// Handed in by the window rather than done here: opening another project closes this window and
+    /// opens another, which is a decision about WINDOWS and belongs to the thing that owns them.
+    /// </remarks>
+    public Action<string>? OpenRecent { get; set; }
+
+    [RelayCommand]
+    private void OpenRecentProject(RecentProjectRow? recent)
+    {
+        if (recent is { IsMissing: false })
+            OpenRecent?.Invoke(recent.Path);
+    }
+
+    /// <summary>What the operator has opened before, for the File menu's recent list.</summary>
+    public IReadOnlyList<RecentProjectRow> Recents =>
+    [
+        .. Settings.Recents
+            // The project already open is not somewhere to go.
+            .Where(recent => !string.Equals(recent.Path, Path, StringComparison.OrdinalIgnoreCase))
+            .Select(recent => new RecentProjectRow
+            {
+                Name = recent.Title.Length > 0
+                    ? recent.Title
+                    : System.IO.Path.GetFileNameWithoutExtension(recent.Path),
+                Path = recent.Path,
+                Contents = recent.Summary,
+                IsMissing = !File.Exists(recent.Path),
+            }),
+    ];
 
     /// <summary>What the last file operation said, for the status bar.</summary>
     [ObservableProperty]
@@ -725,17 +759,26 @@ public partial class ShellViewModel : ObservableObject
         // operator to dismiss the banner without reading it.
         RecoveryStore.Clear(Path, Project.Title);
         Refresh();
-        OnPropertyChanged(nameof(Path));
-        OnPropertyChanged(nameof(HasPath));
+        RaisePathProperties();
     }
 
     /// <summary>Adopts a path for a project that was just opened from it.</summary>
     public void AdoptPath(string path)
     {
         Path = path;
+        RaisePathProperties();
+    }
+
+    /// <summary>Everything on screen that names WHERE the project is.</summary>
+    private void RaisePathProperties()
+    {
         OnPropertyChanged(nameof(Path));
         OnPropertyChanged(nameof(HasPath));
         OnPropertyChanged(nameof(ProjectFile));
+        OnPropertyChanged(nameof(WindowTitle));
+        OnPropertyChanged(nameof(ProjectLocation));
+        OnPropertyChanged(nameof(SaveLabel));
+        OnPropertyChanged(nameof(Recents));
     }
 
     [ObservableProperty]
@@ -859,12 +902,21 @@ public partial class ShellViewModel : ObservableObject
         // Re-running the status pass on every keystroke would be wasteful on a big show; it is cheap
         // here and the honest behaviour, and the real app debounces it the same way it debounces save.
         Status = ProjectStatus.Run(Project, ProjectPath, Environment);
+
+        // An edit can ADD media, and until this the runtime only learned what a file was at load and
+        // after a save — so a cue added at 19:50 read "—" for its length until the show was saved. The
+        // adopt is a dictionary walk over what is already known (which is where a source's own stated
+        // duration arrives), and the probe skips every path it has already looked at.
+        AdoptProbeResults();
+        Machine.Media.Refresh(Project, ProjectPath);
+
         Refresh();
     }
 
     private void Refresh()
     {
         OnPropertyChanged(nameof(ProjectFile));
+        OnPropertyChanged(nameof(WindowTitle));
         OnPropertyChanged(nameof(UnsavedSummary));
         OnPropertyChanged(nameof(SavedSummary));
         OnPropertyChanged(nameof(UndoSummary));

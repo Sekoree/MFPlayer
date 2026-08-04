@@ -1,3 +1,4 @@
+using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Session;
 using HaCue2.ViewModels;
@@ -171,6 +172,7 @@ public static class TimelinePresentation
 
     private static string ClipLabel(CueNode cue, HaCueProject project) => cue switch
     {
+        MediaCueNode media when SourceUri.IsSource(media.MediaPath) => SourceUri.Describe(media.MediaPath),
         MediaCueNode media => Path.GetFileName(media.MediaPath) is { Length: > 0 } file
             ? $"{file} · {CuePresentation.Db(media.LevelDb)}"
             : cue.Label,

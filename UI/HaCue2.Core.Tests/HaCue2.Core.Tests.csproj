@@ -21,6 +21,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Source.Text\S.Media.Source.Text.csproj" />
         <!-- The machine layer too: its device-matching rules are the ones that must never turn
              "nobody looked" into "absent", and they are testable with a fake backend. -->
         <ProjectReference Include="..\HaCue2.Machine\HaCue2.Machine.csproj" />

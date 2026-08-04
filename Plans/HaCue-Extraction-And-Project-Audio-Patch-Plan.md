@@ -2536,32 +2536,79 @@ than it saves, or a source whose open starts a connection or claims a device ear
 phrases it as the positive — "pre-roll this cue" — because a checkbox called "disable", ticked to mean
 "do not", is one an operator has to read twice under pressure.
 
-**Text cues.** A new `TextCueNode`. The document stores WORDS and how they should look; `TextCards`
-(app-side) draws them into the machine's media cache, and the compiler is told where they landed
-through `ShowCompileContext.RenderedText` — the same seam that already carries probe results and
-resolved stream indices.
+**Text cues.** A new `TextCueNode`. The document stores WORDS and how they should look, and the
+compiler turns them into a `text:` URI carrying the whole render spec, which `S.Media.Source.Text`
+draws.
 
-Three decisions worth keeping:
+Two decisions worth keeping:
 
-- **The app draws, not the compiler.** Rasterising text needs a font stack, and a font stack belongs
-  to an application. That is also what keeps a text cue portable: the words travel and each machine
-  draws them with what it has, with the face stored as a HINT matched the way a device name is.
-- **A PNG, not a frame.** A clip is opened from a path, so every stage after the draw — pre-roll,
-  placement, the per-layer mapping, the recorders — already works unchanged, and a card that comes out
-  wrong is a file somebody can open and look at.
-- **Keyed by content.** Two cues that would draw the same card share one file, and editing a word
-  invalidates it without anything tracking what changed. A card with no words draws nothing rather
-  than a black rectangle — which is the state every text cue is in between being added and typed into.
+- **The words travel, not the pixels.** A show file carries language, not a rasterised image of it, so
+  a card is diffable, translatable, and drawn on each machine with the faces it has. The face is a
+  HINT, matched the way a device name is.
+- **A card with no words draws nothing** rather than a black rectangle — the state every text cue is
+  in between being added and typed into, and the same honest state a media cue with no file is in.
 
-The card is `FreezeLastFrame`: a single frame arrives, the clip ends immediately, and freezing is what
-makes it a card rather than a flash. It asks for `AudioStreamIndex: -1`, so a card standing over a
-running bed cannot interrupt it. Verified end to end — words → a 16 KB 1080p PNG → decoded to the
-Bgra32 frame the compositor takes.
+The card asks for `AudioStreamIndex: -1`, so one standing over a running bed cannot interrupt it, and
+carries its own hold duration (0 = hold until something stops it, which is what a title card wants).
+
+This was built TWICE. The first version rasterised cards app-side into the machine's media cache and
+told the compiler where they landed through `ShowCompileContext.RenderedText`. It worked, and it was
+then deleted: `S.Media.Source.Text` already existed in the tree, unwired — a SkiaSharp renderer behind
+a `text:` URI that carries the entire spec, holds the frame for a given duration, and draws an
+outline. Strictly better, because a card then needs no file anywhere, no cache to invalidate and
+nothing from the app. Worth recording as a pattern rather than as an anecdote: four times in one
+session the answer to "how do we build this" turned out to be "the framework already provides it and
+nothing registered it".
 
 **Harness change:** `HaCue2.Tests` now runs headless with Skia (`UseHeadlessDrawing: false`) instead of
-the stub drawing backend, because against the stub a text card renders an empty canvas that a "did a
-file appear" check would happily accept. All 221 app tests stay green.
+the stub drawing backend, because against the stub a card renders an empty canvas that a "did anything
+draw" check would happily accept.
 
-**Everything on the parity audit's recommended list is now closed.** What remains unbuilt from it is
-§4's other media sources (NDI input, PortAudio input, YouTube, MMD) — never on the list, all "what
-else can a cue play", all already provided by the registry HaCue2 uses.
+---
+
+## Source cues: NDI in, local input, YouTube
+
+The last of the parity audit's §4. All three are ORDINARY media cues whose `MediaPath` is a URI the
+registry knows how to open — `ndi://` a camera, `padev://` a capture device, `youtube://` a prepared
+video. MMD was excluded on request. Level, sends, placements, fades, effects and recording then mean
+exactly what they mean for a file, and a separate cue kind would have forked all of them to change one
+field. `HaCue2.Core/Media/SourceUri.cs` owns the whole rule: what a scheme is, what is LIVE, and how
+to build and read each URI's query grammar.
+
+**The work was downstream, not in the model.** Four things assumed a media path is a filename:
+
+- `MediaPaths.Resolve` joined it onto the media root — `Path.Combine("/shows", "ndi://CAM 1")`
+  normalises to `/shows/ndi:/CAM 1`, and the registry would have been handed a directory.
+- `MediaPaths.ReferencesIn` listed it as a file. That one list drives probing, relink, consolidate and
+  the status pass's "missing" report, so every live cue went red on any machine not yet on the venue's
+  network.
+- Durations were only ever machine facts. `MediaCueNode.SourceDurationMs` is the exception, filled
+  only by a source that can state its own length: a prepared YouTube video knows it from the manifest
+  and no probe here can rediscover it from a URI.
+- The clip editor opened any cue's media. It scans a waveform and draws a trim window; neither means
+  anything for a camera.
+
+**Live cues are out of pre-roll**, using the opt-out built above for exactly this case: warming a
+camera would claim the network connection, and warming a capture device would claim the device,
+minutes before anybody asked. A prepared YouTube video is a local file and stays in pre-roll.
+
+**The scheme test is exact and needs two characters**, so a Windows drive letter (`C:\Shows\…`) can
+never be read as one — the failure that would otherwise turn every absolute path on that platform into
+a source URI.
+
+**Registration.** `ShowHost` now builds the registry with FFmpeg plus every optional family — NDI,
+PortAudio capture (only when the app's own backend is PortAudio, so the device names in the picker are
+the ones the provider resolves against), YouTube and Text. A module that will not load is logged and
+skipped, so a box without the NDI runtime still plays files. YouTube registers over a shared
+`YouTubeRuntime.Preparer`: the dialog that downloads and the provider that opens must agree on the
+cache, or an operator watches a download finish and then gets a cue saying the video is not prepared.
+
+**Discovery lives in `HaCue2.Machine`** (`NdiSources.Discover`), beside audio-device enumeration —
+which senders are visible is a question about this machine's view of the world. It never throws: a
+machine without the NDI runtime, a machine on no network and a machine where nothing is sending are
+three situations that all mean "nothing to pick from this list", and none is a reason for the dialog
+not to open on a typed name.
+
+**A bug found on the way.** The shell adopted probe results at load and after a save only, so a media
+cue added at 19:50 read "—" for its length until the show was next saved. `OnJournalChanged` now
+re-adopts and kicks the probe.

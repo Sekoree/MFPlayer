@@ -17,6 +17,21 @@ public partial class ShellWindow : Window
 
     public ShellWindow() => InitializeComponent();
 
+    /// <summary>
+    /// Hands the view-model the one thing it cannot do itself: open another project.
+    /// </summary>
+    /// <remarks>
+    /// The File menu's recent list is bound to a command on the shell, and what that command DOES is
+    /// close this window and open another — a decision about windows, which belongs here.
+    /// </remarks>
+    protected override void OnDataContextChanged(EventArgs e)
+    {
+        base.OnDataContextChanged(e);
+
+        if (DataContext is ShellViewModel shell)
+            shell.OpenRecent = OnOpenRecent;
+    }
+
     private ShellViewModel Shell =>
         DataContext as ShellViewModel ?? throw new InvalidOperationException("The shell has no view-model.");
 
@@ -148,6 +163,171 @@ public partial class ShellWindow : Window
 
         if (file?.TryGetLocalPath() is { } path)
             await shell.SaveToAsync(path);
+    }
+
+    // ── the File menu ─────────────────────────────────────────────────────────────────────────
+    // Every verb here is also a hotkey, and that is the point of having them written down: a save
+    // that only ever happened via Ctrl+S left an operator with nothing to look at and no way to find
+    // out where the project lived.
+
+    private void OnFileSave(object? sender, RoutedEventArgs e) => _ = SaveAsync(Shell);
+
+    private void OnFileSaveAs(object? sender, RoutedEventArgs e) => _ = SaveAsAsync(Shell);
+
+    private async void OnFileNew(object? sender, RoutedEventArgs e) =>
+        await LeaveThenAsync(() =>
+        {
+            // The launcher's own New-project prompt, reused rather than reimplemented: what a new
+            // project is seeded with is one decision and it already lives there.
+            var launcher = new LauncherViewModel(Shell.Settings, App.Machine);
+
+            launcher.ProjectOpened += (project, path) =>
+            {
+                App.ShowProject(project, path);
+                Close();
+            };
+
+            PromptWindow.Show(this, launcher.NewProject());
+            return Task.CompletedTask;
+        });
+
+    private async void OnFileOpen(object? sender, RoutedEventArgs e) =>
+        await LeaveThenAsync(async () =>
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Open project",
+                AllowMultiple = false,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("HaCue2 project") { Patterns = [$"*{ProjectFiles.Extension}"] },
+                ],
+            });
+
+            if (files.FirstOrDefault()?.TryGetLocalPath() is { } path)
+                await SwitchToAsync(path);
+        });
+
+    /// <summary>
+    /// A second INSTANCE, not a second window.
+    /// </summary>
+    /// <remarks>
+    /// Two shells in one process would each open the audio backend and the same devices, and the
+    /// second would find them taken. A process of its own also means a crash in one show cannot take
+    /// the other down, which is the whole reason somebody runs two.
+    /// </remarks>
+    private void OnFileNewWindow(object? sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var executable = Environment.ProcessPath;
+
+            if (executable is null)
+            {
+                Shell.FileMessage = "could not find this application's own executable";
+                return;
+            }
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(executable)
+            {
+                UseShellExecute = false,
+            });
+        }
+        catch (Exception failure) when (
+            failure is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            Shell.FileMessage = $"a second window could not be started — {failure.Message}";
+        }
+    }
+
+    private async void OnFileClose(object? sender, RoutedEventArgs e) =>
+        await LeaveThenAsync(() =>
+        {
+            App.ShowLauncher();
+            Close();
+            return Task.CompletedTask;
+        });
+
+    /// <summary>Opens a project the File menu's recent list names.</summary>
+    private async void OnOpenRecent(string path) => await LeaveThenAsync(() => SwitchToAsync(path));
+
+    /// <summary>
+    /// Asks about unsaved work, then does the thing that would discard it.
+    /// </summary>
+    /// <remarks>
+    /// Three answers, because the question has three: save it, throw it away, or go back to editing.
+    /// Cancelling runs nothing at all — which is what makes this safe to attach to every verb that
+    /// leaves the current project.
+    /// </remarks>
+    private async Task LeaveThenAsync(Func<Task> leave)
+    {
+        if (!Shell.Journal.IsDirty)
+        {
+            await leave();
+            return;
+        }
+
+        var proceed = new TaskCompletionSource();
+
+        PromptWindow.Show(
+            this,
+            new PromptViewModel(
+                $"“{Shell.ProjectFile}” has unsaved edits",
+                $"{Shell.UnsavedSummary} · {Shell.ProjectLocation}",
+                [],
+                // Named rather than discarded: `_` is already the lambda's parameter, and assigning
+                // the task to it would be assigning a Task to a PromptViewModel.
+                prompt => SaveThen(prompt, proceed, leave),
+                confirm: "SAVE FIRST",
+                alternative: "DISCARD",
+                applyAlternative: () => _ = leave()),
+            afterClose: () => proceed.TrySetResult());
+
+        await proceed.Task;
+    }
+
+    private void SaveThen(PromptViewModel prompt, TaskCompletionSource done, Func<Task> leave)
+    {
+        _ = prompt;
+        _ = SaveThenAsync(done, leave);
+    }
+
+    private async Task SaveThenAsync(TaskCompletionSource done, Func<Task> leave)
+    {
+        try
+        {
+            await SaveAsync(Shell);
+
+            // Only when the save actually landed. A cancelled Save As must not then throw the work
+            // away — the operator answered "save first", not "leave anyway".
+            if (!Shell.Journal.IsDirty)
+                await leave();
+        }
+        finally
+        {
+            done.TrySetResult();
+        }
+    }
+
+    /// <summary>Opens another project in its own window and closes this one.</summary>
+    /// <remarks>
+    /// A new window rather than swapping the document under the running view-models: the shell owns a
+    /// session, a journal and a dozen projections built around one project, and rebuilding them in
+    /// place is a great many chances to leave one pointing at the old one. This is the hand-off the
+    /// launcher already performs.
+    /// </remarks>
+    private async Task SwitchToAsync(string path)
+    {
+        var (project, result) = await ProjectFiles.OpenAsync(path);
+
+        if (project is null)
+        {
+            Shell.FileMessage = result.Message;
+            return;
+        }
+
+        App.ShowProject(project, result.Path);
+        Close();
     }
 
     private void OnHideDrawer(object? sender, RoutedEventArgs e)

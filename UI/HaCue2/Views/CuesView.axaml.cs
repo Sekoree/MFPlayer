@@ -2,6 +2,9 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using Avalonia.Interactivity;
+using HaCue2.Core.Media;
+using HaCue2.Engine;
+using HaCue2.Machine;
 using HaCue2.ViewModels;
 using Avalonia.Markup.Xaml;
 
@@ -48,6 +51,66 @@ public partial class CuesView : UserControl
             && (sender as Control)?.Tag as string is { } tag
             && Enum.TryParse<CueKind>(tag, out var kind))
             cues.AddCue(kind);
+    }
+
+    /// <summary>
+    /// Adds a cue that watches an NDI sender.
+    /// </summary>
+    /// <remarks>
+    /// The network scan happens HERE, on the click, rather than inside the view-model factory: it
+    /// blocks for a second or two, and a dialog that opens a beat late having found the cameras is a
+    /// better trade than one that opens instantly with an empty list.
+    /// </remarks>
+    private void OnAddNdi(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not CuesViewModel cues)
+            return;
+
+        PromptWindow.Show(this, Dialogs.NdiSourceCue(cues, NdiSources.Discover()), cues.Refresh);
+    }
+
+    private void OnAddCapture(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not CuesViewModel cues)
+            return;
+
+        PromptWindow.Show(this, Dialogs.CaptureSourceCue(cues, App.Machine.Devices), cues.Refresh);
+    }
+
+    private void OnAddYouTube(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not CuesViewModel cues)
+            return;
+
+        YouTubeCueWindow.Show(
+            this,
+            new YouTubeCueViewModel(cues, YouTubeRuntime.Gateway, YouTubeRuntime.Preparer),
+            cues.Refresh);
+    }
+
+    /// <summary>Reopens the dialog that made this cue, on the cue it made.</summary>
+    private void OnEditSource(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not CuesViewModel cues || cues.SelectedSourceCue is not { } cue)
+            return;
+
+        switch (cues.SelectedSourceKind)
+        {
+            case SourceKind.Ndi:
+                PromptWindow.Show(this, Dialogs.NdiSourceCue(cues, NdiSources.Discover(), cue), cues.Refresh);
+                break;
+
+            case SourceKind.Capture:
+                PromptWindow.Show(this, Dialogs.CaptureSourceCue(cues, App.Machine.Devices, cue), cues.Refresh);
+                break;
+
+            case SourceKind.YouTube:
+                YouTubeCueWindow.Show(
+                    this,
+                    new YouTubeCueViewModel(cues, YouTubeRuntime.Gateway, YouTubeRuntime.Preparer, cue),
+                    cues.Refresh);
+                break;
+        }
     }
 
     private void OnDuplicate(object? sender, RoutedEventArgs e) =>

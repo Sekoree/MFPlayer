@@ -95,5 +95,14 @@ public partial class PromptWindow : Window
         Close();
     }
 
+    /// <summary>The third answer. Distinct from confirm, and equally deliberate.</summary>
+    private void OnAlternative(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is PromptViewModel prompt)
+            prompt.CommitAlternative();
+
+        Close();
+    }
+
     private void OnCancel(object? sender, RoutedEventArgs e) => Close();
 }

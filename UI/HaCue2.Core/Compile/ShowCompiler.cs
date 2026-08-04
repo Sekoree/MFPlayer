@@ -1,6 +1,7 @@
 using HaCue2.Core.Model;
 using HaCue2.Core.Media;
 using S.Media.Session;
+using S.Media.Source.Text;
 
 namespace HaCue2.Core.Compile;
 
@@ -164,11 +165,11 @@ public static class ShowCompiler
                     case TextCueNode text:
                         cues.Add(Definition(text, ++running, id));
 
-                        // A text cue whose picture has not been rendered on this machine yet is a cue
-                        // with no clip — the same honest state as a media cue with no file, and for
-                        // the same reason: one unrendered card must not stop the document loading.
-                        if (context.RenderedText.TryGetValue(text.Id, out var card))
-                            clips.Add(TextClip(project, text, card));
+                        // A card with no words is a cue with no clip — the same honest state as a
+                        // media cue with no file, and the state every text cue is in between being
+                        // added and typed into.
+                        if (text.Text.Trim().Length > 0)
+                            clips.Add(TextClip(project, text));
 
                         break;
 
@@ -368,7 +369,7 @@ public static class ShowCompiler
     /// standing over a running bed cannot interrupt it.
     /// </para>
     /// </remarks>
-    private static ShowClipBinding TextClip(HaCueProject project, TextCueNode text, string renderedPath)
+    private static ShowClipBinding TextClip(HaCueProject project, TextCueNode text)
     {
         var placements = text.Placements;
         var placement = placements.FirstOrDefault();
@@ -377,7 +378,7 @@ public static class ShowCompiler
 
         return new ShowClipBinding(
             ClipId: text.Id.ToString(),
-            MediaPath: renderedPath,
+            MediaPath: TextSourceUri.Encode(TextSpec(text)),
             CompositionId: placement?.CompositionId.ToString(),
             LayerIndex: placement?.LayerIndex ?? 0,
             // −1 rather than null: a card has no audio, and asking the decoder to ELECT a stream in a
@@ -401,6 +402,60 @@ public static class ShowCompiler
             // No envelope. A lane is compiled against the cue's PLAYED length and a card has none — it
             // is one frame held until something stops it. Its fades are the ramps it can have.
         };
+    }
+
+    /// <summary>
+    /// A card's render parameters, in the units the framework's text source takes.
+    /// </summary>
+    /// <remarks>
+    /// The document stores sizes as FRACTIONS of the canvas so a card survives a composition resize;
+    /// the source wants pixels against its own canvas, and this is the one place that knows both.
+    /// Colours are stored as "#RRGGBB" because that is what a designer is handed, and packed to ARGB
+    /// here — an empty background means transparent, which is alpha zero rather than black.
+    /// </remarks>
+    private static TextSourceSpec TextSpec(TextCueNode text) => new()
+    {
+        Text = text.Text,
+        FontFamily = text.FontFamily.Trim().Length > 0 ? text.FontFamily.Trim() : "Inter",
+        FontSizePx = Math.Clamp(text.FontScale, 0.01, 1) * TextCanvasHeight,
+        Bold = text.Bold,
+        Italic = text.Italic,
+        ColorArgb = Argb(text.Foreground, 0xFFFFFFFFu),
+        BackgroundArgb = Argb(text.Background, 0u),
+        OutlineArgb = Argb(text.Outline, 0xFF000000u),
+        OutlineWidthPx = Math.Clamp(text.OutlineWidth, 0, 0.1) * TextCanvasHeight,
+        HAlign = (int)text.Align,
+        VAlign = (int)text.Anchor,
+        CanvasWidth = TextCanvasWidth,
+        CanvasHeight = TextCanvasHeight,
+        DurationMs = Math.Max(0, text.DurationMs),
+    };
+
+    /// <summary>
+    /// The canvas a card is drawn at.
+    /// </summary>
+    /// <remarks>
+    /// Fixed rather than the composition's, and the placement scales it from there: a card is placed
+    /// like any other picture, and tying the render to a canvas size would re-encode every card's URI
+    /// — and so re-open every card — the moment somebody resized a composition.
+    /// </remarks>
+    private const int TextCanvasWidth = 1920;
+
+    private const int TextCanvasHeight = 1080;
+
+    /// <summary>"#RRGGBB" as opaque ARGB; the fallback for anything else, including empty.</summary>
+    private static uint Argb(string text, uint fallback)
+    {
+        var hex = (text ?? "").Trim().TrimStart('#');
+
+        return hex.Length == 6
+               && uint.TryParse(
+                   hex,
+                   System.Globalization.NumberStyles.HexNumber,
+                   System.Globalization.CultureInfo.InvariantCulture,
+                   out var packed)
+            ? 0xFF000000u | packed
+            : fallback;
     }
 
     /// <summary>

@@ -154,6 +154,8 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(PostWaitValue));
         OnPropertyChanged(nameof(NoteValue));
         OnPropertyChanged(nameof(IsEnabled));
+        OnPropertyChanged(nameof(IsSourceCue));
+        OnPropertyChanged(nameof(SourceNote));
         OnPropertyChanged(nameof(SendColumns));
         OnPropertyChanged(nameof(SendRows));
         OnPropertyChanged(nameof(RouteChain));
@@ -224,6 +226,9 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(CardGround));
         OnPropertyChanged(nameof(CardAlignIndex));
         OnPropertyChanged(nameof(CardAnchorIndex));
+        OnPropertyChanged(nameof(CardOutline));
+        OnPropertyChanged(nameof(CardOutlineInk));
+        OnPropertyChanged(nameof(CardDuration));
         OnPropertyChanged(nameof(CardFadeIn));
         OnPropertyChanged(nameof(CardFadeOut));
         OnPropertyChanged(nameof(CardHint));
@@ -338,6 +343,24 @@ public partial class InspectorViewModel : ObservableObject
         get => Cue?.Enabled ?? true;
         set => Edit("enabled", cue => cue.Enabled, (cue, flag) => cue.Enabled = flag, value);
     }
+
+    /// <summary>Whether this cue plays a source URI rather than a file on disk.</summary>
+    public bool IsSourceCue => Cue is MediaCueNode media && SourceUri.IsSource(media.MediaPath);
+
+    /// <summary>
+    /// What the cue is pointed at, in words.
+    /// </summary>
+    /// <remarks>
+    /// Named rather than shown raw: a URI is mostly punctuation, and what identifies the cue is the
+    /// camera's name or the device's. Changing it is "Edit source…" on the cue's own menu, which
+    /// reopens the dialog that built it — there is no path here a file picker could replace.
+    /// </remarks>
+    public string SourceNote => Cue is not MediaCueNode media || !SourceUri.IsSource(media.MediaPath)
+        ? ""
+        : SourceUri.Describe(media.MediaPath)
+          + (SourceUri.IsLive(media.MediaPath)
+              ? " · live — no length, no seeking, and it opens when the cue fires"
+              : "");
 
     public string LevelValue
     {
@@ -1408,6 +1431,31 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
+    /// <summary>An outline behind the ink — what makes a caption readable over picture.</summary>
+    public double CardOutline
+    {
+        get => Card?.OutlineWidth ?? 0;
+        set => EditCard("outlineWidth",
+            card => card.OutlineWidth, (card, width) => card.OutlineWidth = width,
+            Math.Clamp(value, 0, 0.1));
+    }
+
+    public string CardOutlineInk
+    {
+        get => Card?.Outline ?? "#000000";
+        set => EditCard("outline",
+            card => card.Outline, (card, hex) => card.Outline = hex, Hex(value, "#000000"));
+    }
+
+    /// <summary>How long the card is held. Zero holds it until something stops it.</summary>
+    public int CardDuration
+    {
+        get => Card?.DurationMs ?? 0;
+        set => EditCard("duration",
+            card => card.DurationMs, (card, ms) => card.DurationMs = ms,
+            Math.Clamp(value, 0, 3_600_000));
+    }
+
     public int CardFadeIn
     {
         get => Card?.FadeInMs ?? 0;
@@ -1429,7 +1477,9 @@ public partial class InspectorViewModel : ObservableObject
             ? "no words yet — the cue will fire and show nothing"
             : card.Placements.Count == 0
                 ? "not on any canvas yet — add a placement on the Video tab"
-                : "held on screen until something stops it";
+                : card.DurationMs > 0
+                    ? $"held for {card.DurationMs / 1000d:0.##} s, then ends on its own"
+                    : "held on screen until something stops it";
 
     private static string Hex(string? value, string fallback)
     {
@@ -1971,8 +2021,16 @@ public partial class InspectorViewModel : ObservableObject
     /// <summary>The current project filename, read lazily so Save As immediately changes resolution.</summary>
     public Func<string?> ProjectPath { get; set; } = static () => null;
 
-    /// <summary>Whether there is a file to open a clip editor on.</summary>
-    public bool CanEditClip => Cue is MediaCueNode { MediaPath.Length: > 0 };
+    /// <summary>
+    /// Whether there is a FILE to open a clip editor on.
+    /// </summary>
+    /// <remarks>
+    /// A source cue has none. The editor scans a waveform and draws a trim window over it, and neither
+    /// means anything for a camera — nor for a prepared YouTube asset, whose URI names a cache entry
+    /// rather than a path the scanner could open.
+    /// </remarks>
+    public bool CanEditClip =>
+        Cue is MediaCueNode { MediaPath.Length: > 0 } clip && !SourceUri.IsSource(clip.MediaPath);
 
     /// <summary>
     /// The clip editor for the selected cue, or null when there is nothing to edit.
@@ -1983,7 +2041,7 @@ public partial class InspectorViewModel : ObservableObject
     /// what is trimmed is what will be played.
     /// </remarks>
     public ClipEditorViewModel? ClipEditor() =>
-        Cue is not MediaCueNode { MediaPath.Length: > 0 } media
+        !CanEditClip || Cue is not MediaCueNode media
             ? null
             : new ClipEditorViewModel(
                 _journal,

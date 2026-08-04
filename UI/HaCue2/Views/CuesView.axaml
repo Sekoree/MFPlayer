@@ -76,6 +76,13 @@
               <MenuItem Header="Visualizer" Click="OnAddCue" Tag="Visualizer" />
               <MenuItem Header="Text" Click="OnAddCue" Tag="Text" />
               <Separator />
+              <!-- Sources rather than files. Each is an ordinary media cue whose path is a URI the
+                   registry knows how to open, so everything below it — level, sends, placements,
+                   fades — means exactly what it means for a file on disk. -->
+              <MenuItem Header="NDI input…" Click="OnAddNdi" />
+              <MenuItem Header="Local input…" Click="OnAddCapture" />
+              <MenuItem Header="YouTube…" Click="OnAddYouTube" />
+              <Separator />
               <MenuItem Header="Comment" Click="OnAddCue" Tag="Comment" />
             </MenuFlyout>
           </Button.Flyout>
@@ -136,6 +143,8 @@
                 <MenuItem Header="Preview on audition outputs" InputGesture="Ctrl+P" Click="OnPreview" />
                 <MenuItem Header="Move standby here" Click="OnStandbyHere" />
                 <Separator />
+                <MenuItem Header="Edit source…" Click="OnEditSource"
+                          IsVisible="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanEditSource}" />
                 <MenuItem Header="Open timeline" Click="OnOpenTimeline" />
                 <MenuItem Header="Disable for this performance" Click="OnToggleEnabled" />
                 <MenuItem Header="Renumber from here…" Click="OnRenumber" />

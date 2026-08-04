@@ -47,6 +47,14 @@ public sealed class MediaFactsCache
             if (cue.MediaPath.Length == 0)
                 continue;
 
+            // A source that told us its length when it was added — a prepared YouTube video. Nothing
+            // on this machine can be probed for it, and the number is not a guess.
+            if (cue.SourceDurationMs > 0)
+            {
+                durations[cue.Id] = TimeSpan.FromMilliseconds(cue.SourceDurationMs);
+                continue;
+            }
+
             var resolved = MediaPaths.Resolve(project, cue.MediaPath, projectPath);
             if (Facts(resolved) is { Duration: { } duration })
                 durations[cue.Id] = duration;
@@ -136,8 +144,13 @@ public sealed class MediaFactsCache
     }
 
     /// <summary>Whether a stored path names a place on this machine at all.</summary>
+    /// <remarks>
+    /// A source URI never does: it is not a file, so it can be neither found nor missing, and the
+    /// answer to "is the camera there" belongs to the moment the cue fires rather than to a probe.
+    /// </remarks>
     private static bool IsResolvable(HaCueProject project, string path, string? projectPath) =>
-        Path.IsPathRooted(MediaPaths.Resolve(project, path, projectPath));
+        !SourceUri.IsSource(path)
+        && Path.IsPathRooted(MediaPaths.Resolve(project, path, projectPath));
 
     /// <summary>
     /// Probes every media file the project references that has not been looked at yet.

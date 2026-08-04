@@ -16,10 +16,12 @@ namespace HaCue2.Machine;
 public sealed class AudioDevices
 {
     private readonly IReadOnlyList<AudioDeviceInfo> _devices;
+    private readonly IReadOnlyList<AudioDeviceInfo> _inputs;
 
     public AudioDevices(params IAudioBackend[] backends)
     {
         var found = new List<AudioDeviceInfo>();
+        var captures = new List<AudioDeviceInfo>();
         Enumerated = false;
 
         foreach (var backend in backends ?? [])
@@ -36,9 +38,20 @@ public sealed class AudioDevices
                 // A backend that will not start is not an absent device — it is a machine nobody could
                 // ask, which stays Unknown rather than turning every line red.
             }
+
+            try
+            {
+                captures.AddRange(backend.EnumerateInputDevices());
+            }
+            catch (Exception failure) when (failure is not OutOfMemoryException)
+            {
+                // Separately, because a backend can list outputs and refuse inputs — a box with no
+                // capture hardware at all is one of them, and that must not blank the output list.
+            }
         }
 
         _devices = found;
+        _inputs = captures;
     }
 
     /// <summary>Whether anything could be enumerated. False means every answer is Unknown.</summary>
@@ -58,6 +71,26 @@ public sealed class AudioDevices
     /// </remarks>
     public IReadOnlyList<string> HostApis =>
         [.. _devices.Select(device => device.HostApi).Where(name => name.Length > 0).Distinct()];
+
+    /// <summary>
+    /// Every CAPTURE device found — what a live-input cue plays.
+    /// </summary>
+    /// <remarks>
+    /// A separate list rather than a flag on the other one: a device is an input, an output, or both,
+    /// and a picker that offered the outputs would let an operator point a cue at the speakers.
+    /// </remarks>
+    public IReadOnlyList<AudioDeviceInfo> Inputs => _inputs;
+
+    /// <summary>The driver families the CAPTURE devices came from. Same discriminator, different list.</summary>
+    public IReadOnlyList<string> InputHostApis =>
+        [.. _inputs.Select(device => device.HostApi).Where(name => name.Length > 0).Distinct()];
+
+    /// <summary>The inputs belonging to one driver family, or all of them when it is empty.</summary>
+    public IReadOnlyList<AudioDeviceInfo> InputsFor(string hostApi) =>
+        hostApi.Length == 0
+            ? _inputs
+            : [.. _inputs.Where(device =>
+                string.Equals(device.HostApi, hostApi, StringComparison.OrdinalIgnoreCase))];
 
     /// <summary>The outputs belonging to one driver family, or all of them when it is empty.</summary>
     public IReadOnlyList<AudioDeviceInfo> OutputsFor(string hostApi) =>

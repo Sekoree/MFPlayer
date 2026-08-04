@@ -5,7 +5,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.ShellWindow"
         x:DataType="vm:ShellViewModel"
-        Title="HaCue2"
+        Title="{Binding WindowTitle}"
         Width="1440" Height="900"
         MinWidth="1080" MinHeight="700"
         WindowStartupLocation="CenterScreen"
@@ -29,10 +29,43 @@
     <!-- ── title bar ──────────────────────────────────────────────────────────────────────── -->
     <Border Classes="titlebar" DockPanel.Dock="Top">
       <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
-        <TextBlock Grid.Column="0" Classes="mono" FontWeight="SemiBold" FontSize="11"
-                   LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" Margin="0,0,6,0" />
+        <!-- FILE, first and leftmost, where every application on every desktop puts it. It exists as
+             much for the answer to "where is this saved" — the menu names the path — as for the verbs:
+             a save that only ever happened via a hotkey gave an operator nothing to look at. -->
+        <Button Grid.Column="0" Classes="tight" Content="FILE ▾" Margin="0,0,6,0">
+          <Button.Flyout>
+            <MenuFlyout>
+              <MenuItem Header="New project…" Click="OnFileNew" InputGesture="Ctrl+N" />
+              <MenuItem Header="Open project…" Click="OnFileOpen" InputGesture="Ctrl+O" />
+              <MenuItem Header="Open recent" ItemsSource="{Binding Recents}">
+                <MenuItem.ItemTemplate>
+                  <DataTemplate x:DataType="vm:RecentProjectRow">
+                    <TextBlock Text="{Binding Name}" />
+                  </DataTemplate>
+                </MenuItem.ItemTemplate>
+                <MenuItem.Styles>
+                  <Style Selector="MenuItem > MenuItem">
+                    <Setter Property="Command"
+                            Value="{Binding $parent[v:ShellWindow].((vm:ShellViewModel)DataContext).OpenRecentProjectCommand}" />
+                    <Setter Property="CommandParameter" Value="{Binding}" />
+                  </Style>
+                </MenuItem.Styles>
+              </MenuItem>
+              <Separator />
+              <MenuItem Header="{Binding SaveLabel}" Click="OnFileSave" InputGesture="Ctrl+S" />
+              <MenuItem Header="Save as…" Click="OnFileSaveAs" InputGesture="Ctrl+Shift+S" />
+              <Separator />
+              <!-- A second PROCESS, not a second window: two shells in one process would open the
+                   same audio devices and fight over them. -->
+              <MenuItem Header="New window" Click="OnFileNewWindow" />
+              <Separator />
+              <MenuItem Header="Close project" Click="OnFileClose" />
+            </MenuFlyout>
+          </Button.Flyout>
+        </Button>
         <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" VerticalAlignment="Center"
-                   Text="{Binding ProjectFile}" Margin="0,0,6,0" />
+                   Text="{Binding ProjectFile}" Margin="0,0,6,0"
+                   ToolTip.Tip="{Binding ProjectLocation}" />
 
         <ListBox Grid.Column="2"
                  Theme="{StaticResource ViewTabs}"

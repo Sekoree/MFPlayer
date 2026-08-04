@@ -1,4 +1,5 @@
 using HaCue2.Core.Journal;
+using HaCue2.Core.Media;
 using HaCue2.Core.Validation;
 using HaCue2.Core.Model;
 using HaCue2.Machine;
@@ -1289,6 +1290,291 @@ public static class Dialogs
     }
 
     // ── labels ────────────────────────────────────────────────────────────────────────────────
+
+    // ── source cues ───────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A cue that plays an NDI sender.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The name can be PICKED or TYPED, and both are first-class. Picked, because NDI names are
+    /// "STUDIO-PC (CAM 1)" — parentheses, spaces and a machine name nobody types correctly from
+    /// memory. Typed, because the camera is very often not on the network yet: a show authored in an
+    /// office for a rig that arrives on the day must be able to name a sender that does not exist, and
+    /// a dialog that only offered a list would make that impossible.
+    /// </para>
+    /// <para>
+    /// The scan is passed in rather than run here. It blocks for a second or two, and a view-model
+    /// factory is the wrong place to decide the operator can wait.
+    /// </para>
+    /// </remarks>
+    public static PromptViewModel NdiSourceCue(
+        CuesViewModel cues, NdiSources.Scan scan, MediaCueNode? editing = null)
+    {
+        var existing = editing is null ? new NdiSourceOptions("") : SourceUri.ParseNdi(editing.MediaPath);
+
+        var name = new PromptField
+        {
+            Label = "Name",
+            Value = editing?.Label ?? (scan.Names.Count > 0 ? scan.Names[0] : "NDI input"),
+        };
+
+        var sender = new PromptField
+        {
+            Label = "Sender",
+            Value = existing.Name,
+            Hint = scan.Note,
+        };
+
+        var fields = new List<PromptField> { name, sender };
+
+        if (scan.Names.Count > 0)
+        {
+            var found = new PromptField
+            {
+                Label = "Found",
+                Kind = PromptFieldKind.Choice,
+                Options = scan.Names,
+                Hint = "fills the sender above · the typed name is what the show stores",
+            };
+
+            // The list FILLS the field rather than replacing it, so a picked name can then be edited —
+            // which is how an operator names next week's camera after this week's.
+            found.Picked += _ =>
+            {
+                sender.Value = found.Choice;
+                if (name.Value.Trim().Length == 0)
+                    name.Value = found.Choice;
+            };
+
+            var at = scan.Names.ToList().IndexOf(existing.Name);
+            found.SelectedIndex = at >= 0 ? at : 0;
+            if (sender.Value.Length == 0)
+                sender.Value = found.Choice;
+
+            fields.Insert(1, found);
+        }
+
+        var audio = new PromptField
+        {
+            Label = "Audio", Kind = PromptFieldKind.Toggle, IsOn = existing.Audio,
+        };
+
+        var video = new PromptField
+        {
+            Label = "Video", Kind = PromptFieldKind.Toggle, IsOn = existing.Video,
+            Hint = "a sender carries both · take only the half this cue needs",
+        };
+
+        var proxy = new PromptField
+        {
+            Label = "Low bandwidth", Kind = PromptFieldKind.Toggle, IsOn = existing.LowBandwidth,
+            Hint = "the sender's preview stream — a fraction of the bandwidth, at preview resolution",
+        };
+
+        var buffer = new PromptField
+        {
+            Label = "Audio buffer",
+            Kind = PromptFieldKind.Number,
+            Value = existing.AudioBufferMs?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "",
+            Hint = "ms · empty takes the framework default · raise it if the line crackles",
+        };
+
+        fields.AddRange([audio, video, proxy, buffer]);
+
+        return new PromptViewModel(
+            editing is null ? "Add NDI input cue" : "Edit NDI input",
+            "a live sender on the network",
+            fields,
+            _ =>
+            {
+                var options = new NdiSourceOptions(sender.Value.Trim())
+                {
+                    // Both off is not a source. Refusing would lose everything else typed, so the
+                    // half an operator most likely meant — the pictures — comes back on.
+                    Audio = audio.IsOn || !video.IsOn,
+                    Video = video.IsOn || !audio.IsOn,
+                    LowBandwidth = proxy.IsOn,
+                    AudioBufferMs = buffer.Value.Trim().Length == 0
+                        ? null
+                        : Math.Clamp(buffer.Number(0), 0, 2_000),
+                };
+
+                Commit(cues, editing, SourceUri.Ndi(options), name.Value);
+            },
+            confirm: editing is null ? "ADD" : "SAVE");
+    }
+
+    /// <summary>
+    /// A cue that plays a capture device on this machine — a microphone, a line in, a loopback.
+    /// </summary>
+    /// <remarks>
+    /// The host API narrows the list and IS stored, unlike the output-line picker: the same interface
+    /// appears under ALSA and under JACK with different names, and the capture provider resolves the
+    /// name against one family. Storing which one is the difference between opening the interface and
+    /// opening whatever else happens to share its name.
+    /// </remarks>
+    public static PromptViewModel CaptureSourceCue(
+        CuesViewModel cues, AudioDevices? devices, MediaCueNode? editing = null)
+    {
+        var existing = editing is null
+            ? new CaptureSourceOptions("")
+            : SourceUri.ParseCapture(editing.MediaPath);
+
+        var catalog = devices is { Enumerated: true } ? devices : null;
+
+        var name = new PromptField { Label = "Name", Value = editing?.Label ?? "Local input" };
+
+        // Capture is a PortAudio provider, and the device NAMES it resolves against are PortAudio's.
+        // On a machine running the other backend the list below is somebody else's names, so the cue
+        // would be authored against a device the provider cannot find — said here rather than
+        // discovered on GO.
+        var backend = App.Backend is null || App.Backend is S.Media.Audio.PortAudio.PortAudioBackend
+            ? ""
+            : " · this machine runs the miniaudio backend, where capture cues cannot open — switch to"
+              + " PortAudio in Settings";
+
+        var channels = new PromptField
+        {
+            Label = "Channels",
+            Kind = PromptFieldKind.Number,
+            Value = (existing.Channels ?? 2).ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+
+        var rate = new PromptField
+        {
+            Label = "Sample rate",
+            Kind = PromptFieldKind.Number,
+            Value = (existing.SampleRate ?? 48_000).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Hint = "Hz · the device's own rate avoids a resample on the way in",
+        };
+
+        if (catalog is null || catalog.Inputs.Count == 0)
+        {
+            // No backend to ask, or a box with no capture hardware. A name still travels: the show may
+            // be authored here and run somewhere that has one.
+            var typed = new PromptField
+            {
+                Label = "Device",
+                Value = existing.Device,
+                Hint = "matched by name at the venue · leave empty for the default input" + backend,
+            };
+
+            return new PromptViewModel(
+                editing is null ? "Add local input cue" : "Edit local input",
+                "a capture device on the machine running the show",
+                [name, typed, channels, rate],
+                _ => Commit(cues, editing, SourceUri.Capture(new CaptureSourceOptions(typed.Value.Trim())
+                {
+                    HostApi = existing.HostApi,
+                    Channels = Math.Clamp(channels.Number(2), 1, 64),
+                    SampleRate = Math.Clamp(rate.Number(48_000), 8_000, 192_000),
+                }), name.Value),
+                confirm: editing is null ? "ADD" : "SAVE");
+        }
+
+        var hostOptions = new List<string> { "any" };
+        hostOptions.AddRange(catalog.InputHostApis);
+
+        var host = new PromptField
+        {
+            Label = "Driver",
+            Kind = PromptFieldKind.Choice,
+            Options = hostOptions,
+            Hint = "narrows the list below · stored, because the same box appears under several",
+        };
+
+        var device = new PromptField
+        {
+            Label = "Device",
+            Kind = PromptFieldKind.Choice,
+            Hint = "the input this cue captures from" + backend,
+        };
+
+        IReadOnlyList<S.Media.Core.Audio.AudioDeviceInfo> Found() =>
+            catalog.InputsFor(host.Choice == "any" ? "" : host.Choice);
+
+        S.Media.Core.Audio.AudioDeviceInfo? Picked()
+        {
+            var found = Found();
+
+            return device.SelectedIndex >= 0 && device.SelectedIndex < found.Count
+                ? found[device.SelectedIndex]
+                : null;
+        }
+
+        // The width and the rate FOLLOW the device: they are the two numbers an operator would
+        // otherwise have to look up, and a wrong one is refused at open time rather than here.
+        void Follow()
+        {
+            if (Picked() is not { } picked)
+                return;
+
+            channels.Value = Math.Clamp(picked.MaxChannels, 1, 64)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            if (picked.DefaultSampleRate > 0)
+                rate.Value = ((int)Math.Round(picked.DefaultSampleRate))
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            if (name.Value.Trim().Length == 0)
+                name.Value = picked.Name;
+        }
+
+        void Fill()
+        {
+            var found = Found();
+            device.Options = [.. found.Select(InputLabel)];
+            device.SelectedIndex = Math.Max(0, found.ToList().FindIndex(item => item.IsDefault));
+
+            // Explicitly, NOT through the Picked event: narrowing to a driver whose first device is
+            // already at the selected index changes the DEVICE without changing the INDEX, and the
+            // cue would then carry the previous device's channel count.
+            Follow();
+        }
+
+        Fill();
+        host.Picked += _ => Fill();
+        device.Picked += _ => Follow();
+
+        // Re-select what is being edited, if it is still on the machine.
+        var current = Found().ToList().FindIndex(item =>
+            string.Equals(item.Name, existing.Device, StringComparison.OrdinalIgnoreCase));
+        if (current >= 0)
+            device.SelectedIndex = current;
+
+        return new PromptViewModel(
+            editing is null ? "Add local input cue" : "Edit local input",
+            "a capture device on this machine",
+            [name, host, device, channels, rate],
+            _ =>
+            {
+                var picked = Picked();
+
+                Commit(cues, editing, SourceUri.Capture(new CaptureSourceOptions(picked?.Name ?? "")
+                {
+                    HostApi = picked?.HostApi ?? "",
+                    DeviceIndex = int.TryParse(picked?.Id, out var index) ? index : null,
+                    Channels = Math.Clamp(channels.Number(2), 1, 64),
+                    SampleRate = Math.Clamp(rate.Number(48_000), 8_000, 192_000),
+                }), name.Value);
+            },
+            confirm: editing is null ? "ADD" : "SAVE");
+    }
+
+    /// <summary>One capture device row: its name, its width, and whether the machine calls it the default.</summary>
+    private static string InputLabel(S.Media.Core.Audio.AudioDeviceInfo device) =>
+        $"{device.Name} · {device.MaxChannels}ch{(device.IsDefault ? " · default" : "")}";
+
+    /// <summary>Adds the cue, or repoints the one being edited. The one place either path ends.</summary>
+    private static void Commit(CuesViewModel cues, MediaCueNode? editing, string uri, string label)
+    {
+        if (editing is null)
+            cues.AddSourceCue(uri, label);
+        else
+            cues.SetSource(editing.Id, uri, label, editing.SourceDurationMs);
+    }
 
     private static string Describe(AudioLineKind kind) => kind switch
     {

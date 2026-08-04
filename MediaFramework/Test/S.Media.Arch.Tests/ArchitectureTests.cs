@@ -164,6 +164,11 @@ public sealed class ArchitectureTests
             // adds only the binding half. HaControl.Input, which the plan names for this, is likewise
             // not on this branch.
             "S.Control", "S.Control.Abstractions",
+            // The other families a CUE can play, each a URI scheme with a decoder provider already
+            // written: a capture device, a prepared YouTube video, a rendered text card. They are
+            // registered here because this is where the registry the session plays through is built —
+            // every one of them was in the tree and reachable by nothing.
+            "S.Media.Audio.PortAudio", "PALib", "S.Media.Source.YouTube", "S.Media.Source.Text",
         ],
         // Machine facts: what this box has and what a file turned out to be. Separate from
         // HaCue2.Core because everything here needs real hardware or a real decoder, and Core has to
@@ -172,6 +177,9 @@ public sealed class ArchitectureTests
         [
             "HaCue2.Core", "S.Media.Decode.FFmpeg", "S.Media.Session", "S.Media.Core", "S.Media.Time",
             "S.Media.Routing", "S.Media.Players", "S.Media.Compositor", "S.Media.Gpu",
+            // DISCOVERY only. Which NDI senders are visible is a question about this machine's view of
+            // the network, exactly like which audio devices it has; nothing here opens a receiver.
+            "S.Media.NDI", "NDILib",
         ],
         // The project model: document, journal, validation, patch operations. It may see the session
         // layer (it reuses ShowValidationIssue and CustomFadeCurve, and the compiler that turns a
@@ -181,6 +189,9 @@ public sealed class ArchitectureTests
         [
             "S.Media.Session", "S.Media.Core", "S.Media.Time", "S.Media.Routing", "S.Media.Players",
             "S.Media.Compositor", "S.Media.Gpu",
+            // Text cues compile to a `text:` URI carrying the whole render spec. The compiler needs
+            // the codec for it; it never renders anything, which is why this stays a document layer.
+            "S.Media.Source.Text",
         ],
         // The headless status runner: the project model and nothing else, which is what lets it run
         // where no audio backend or window system exists.

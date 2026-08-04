@@ -30,7 +30,11 @@ public static class MediaPaths
     /// <param name="projectPath">The <c>.hacue2proj</c> file, or null when it has never been saved.</param>
     public static string Resolve(HaCueProject project, string storedPath, string? projectPath)
     {
-        if (string.IsNullOrWhiteSpace(storedPath) || Path.IsPathRooted(storedPath))
+        // A source URI is already the whole address. Joining "ndi://CAM 1" onto the media root would
+        // produce a directory nobody meant, and the registry would then be asked to open it as a file.
+        if (string.IsNullOrWhiteSpace(storedPath)
+            || SourceUri.IsSource(storedPath)
+            || Path.IsPathRooted(storedPath))
             return storedPath;
 
         var root = RootOf(project, projectPath);
@@ -70,14 +74,22 @@ public static class MediaPaths
         return projectPath is null ? null : Directory(projectPath);
     }
 
-    /// <summary>Every media file the project refers to, wherever it is held.</summary>
+    /// <summary>
+    /// Every media FILE the project refers to, wherever it is held.
+    /// </summary>
+    /// <remarks>
+    /// Source URIs are deliberately absent. This list is what gets probed, relinked, consolidated and
+    /// reported missing — and an NDI camera has no length to probe, no copy to make and no filesystem
+    /// that could say it is gone. Including them would paint every live cue red on a machine that is
+    /// simply not on the venue's network yet, which is most machines most of the time.
+    /// </remarks>
     public static IReadOnlyList<MediaReference> ReferencesIn(HaCueProject project)
     {
         var found = new List<MediaReference>();
 
         foreach (var cue in project.AllCues().OfType<MediaCueNode>())
         {
-            if (!string.IsNullOrWhiteSpace(cue.MediaPath))
+            if (!string.IsNullOrWhiteSpace(cue.MediaPath) && !SourceUri.IsSource(cue.MediaPath))
                 found.Add(new MediaReference(cue.MediaPath, "cue", cue.Id.ToString(),
                     $"Q{cue.Number} {cue.Label}".TrimEnd()));
 

@@ -19,6 +19,10 @@
     <ItemGroup>
         <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Decode.FFmpeg\S.Media.Decode.FFmpeg.csproj" />
+        <!-- Discovery only: which senders are on the network is a question about this machine's view of
+             the world, exactly like which audio devices it has. Nothing here OPENS a receiver — that is
+             the engine's job, and NdiSources answers "empty, because…" on a box without the runtime. -->
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.NDI\S.Media.NDI.csproj" />
     </ItemGroup>
 
 </Project>

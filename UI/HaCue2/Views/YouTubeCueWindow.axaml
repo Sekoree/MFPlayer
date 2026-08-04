@@ -1,0 +1,93 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.YouTubeCueWindow"
+        x:DataType="vm:YouTubeCueViewModel"
+        Title="{Binding Title}"
+        Width="560" SizeToContent="Height"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource BoothBg}"
+        Foreground="{DynamicResource BoothInk}"
+        FontSize="{DynamicResource FontSizeBase}">
+
+  <!-- Its own window rather than a prompt: a network round trip, two real stream choices and a
+       download measured in minutes do not fit a box with two fields and a verb. -->
+
+  <c:PanelBox Header="{Binding Title}"
+              Hint="the video is downloaded now so the cue fires instantly later"
+              Margin="7">
+    <DockPanel>
+
+      <Border DockPanel.Dock="Bottom" Classes="chain">
+        <DockPanel LastChildFill="False">
+          <Button DockPanel.Dock="Right" Classes="primary" Content="DOWNLOAD &amp; ADD"
+                  IsEnabled="{Binding CanPrepare}" Command="{Binding PrepareCommand}" />
+          <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
+                  Content="CANCEL" Click="OnCancel" />
+        </DockPanel>
+      </Border>
+
+      <StackPanel Margin="0,6,0,8">
+
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="Link">
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+            <TextBox Grid.Column="0" Text="{Binding Url}"
+                     PlaceholderText="https://www.youtube.com/watch?v=…" />
+            <Button Grid.Column="1" Classes="tight" Content="FETCH"
+                    IsEnabled="{Binding IsIdle}" Command="{Binding ResolveCommand}" />
+          </Grid>
+        </HeaderedContentControl>
+
+        <TextBlock Classes="mono bad small" Margin="115,0,10,4" TextWrapping="Wrap"
+                   IsVisible="{Binding Problem.Length}" Text="{Binding Problem}" />
+
+        <StackPanel IsVisible="{Binding HasManifest}">
+
+          <ContentControl Theme="{StaticResource FieldWide}">
+            <Border Classes="chain">
+              <TextBlock Classes="mono dim2 small" TextWrapping="Wrap" Text="{Binding VideoNote}" />
+            </Border>
+          </ContentControl>
+
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
+            <TextBox Text="{Binding Name}" />
+          </HeaderedContentControl>
+
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="Video">
+            <ComboBox HorizontalAlignment="Stretch" IsEnabled="{Binding !AudioOnly}"
+                      ItemsSource="{Binding VideoStreams}" SelectedIndex="{Binding VideoIndex}" />
+          </HeaderedContentControl>
+
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="Audio">
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding AudioStreams}" SelectedIndex="{Binding AudioIndex}" />
+          </HeaderedContentControl>
+
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="Subtitles">
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding SubtitleTracks}" SelectedIndex="{Binding SubtitleIndex}" />
+          </HeaderedContentControl>
+
+          <CheckBox Margin="10,6,10,0" IsChecked="{Binding AudioOnly}"
+                    Content="Sound only — do not download the picture" />
+          <!-- The thumbnail rides along as an attached picture, exactly like MP3 cover art, so an
+               audio-only cue still has something to put on a screen. -->
+          <CheckBox Margin="10,2,10,0" IsChecked="{Binding IncludeThumbnail}"
+                    Content="Include the thumbnail as a still picture" />
+
+          <TextBlock Classes="mono dim3 micro" Margin="12,7,10,0" TextWrapping="Wrap"
+                     Text="{Binding CacheNote}" />
+
+        </StackPanel>
+
+        <StackPanel Margin="10,8,10,0" IsVisible="{Binding IsBusy}">
+          <ProgressBar Minimum="0" Maximum="1" Value="{Binding Progress}" Height="6" />
+          <TextBlock Classes="mono dim3 micro" Margin="0,4,0,0" Text="{Binding ProgressNote}" />
+        </StackPanel>
+
+      </StackPanel>
+    </DockPanel>
+  </c:PanelBox>
+</Window>

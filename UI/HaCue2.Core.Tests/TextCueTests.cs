@@ -2,18 +2,19 @@ using HaCue2.Core.Compile;
 using HaCue2.Core.Model;
 using HaCue2.Core.Serialization;
 using S.Media.Session;
+using S.Media.Source.Text;
 using Xunit;
 
 namespace HaCue2.Core.Tests;
 
 /// <summary>
-/// Words on a canvas: what the document stores, and what the compiler does with it.
+/// Words on a canvas.
 /// </summary>
 /// <remarks>
-/// The split is the whole design. The document keeps WORDS — portable, diffable, translatable — and
-/// the app draws them into a picture the engine plays, because rasterising text needs a font stack
-/// and a font stack belongs to an application rather than to a show file. These pin the half that has
-/// to work without one.
+/// The document stores WORDS — portable, diffable, translatable — and compiles to a <c>text:</c> URI
+/// carrying the whole render spec. The framework's own source draws it, so a card needs no file
+/// anywhere, no cache to invalidate and nothing from the app: the words travel with the show and each
+/// machine draws them with the faces it has.
 /// </remarks>
 public class TextCueTests
 {
@@ -40,18 +41,20 @@ public class TextCueTests
             card);
     }
 
+    private static ShowClipBinding Compile(HaCueProject project) =>
+        Assert.Single(ShowCompiler.Compile(project, new ShowCompileContext()).Clips);
+
     /// <summary>
-    /// A card whose picture has not been drawn on this machine is a cue with NO clip.
+    /// A card with no words is a cue with NO clip.
     /// </summary>
     /// <remarks>
-    /// The same honest state a media cue with no file is in, and for the same reason: one unrendered
-    /// card must not stop the whole document loading in the middle of a rehearsal. The cue is still
-    /// emitted so the cursor can stand on it.
+    /// The same honest state a media cue with no file is in, and the state every text cue is in between
+    /// being added and typed into. A card of nothing would be a black rectangle over the show.
     /// </remarks>
     [Fact]
-    public void AnUnrenderedCardCompilesToACueWithNoClip()
+    public void ACardWithNoWordsCompilesToACueWithNoClip()
     {
-        var (project, card) = WithCard();
+        var (project, card) = WithCard(item => item.Text = "   ");
 
         var document = ShowCompiler.Compile(project, new ShowCompileContext());
 
@@ -60,40 +63,84 @@ public class TextCueTests
     }
 
     [Fact]
-    public void ARenderedCardBecomesAHeldStill()
+    public void ACardCompilesToATextUriTheFrameworkCanRead()
     {
-        var (project, card) = WithCard();
+        var (project, _) = WithCard();
 
-        var document = ShowCompiler.Compile(project, new ShowCompileContext
-        {
-            RenderedText = new Dictionary<Guid, string> { [card.Id] = "/cache/text/abc.png" },
-        });
+        var clip = Compile(project);
 
-        var clip = Assert.Single(document.Clips);
+        Assert.True(TextSourceUri.IsTextUri(clip.MediaPath));
 
-        Assert.Equal("/cache/text/abc.png", clip.MediaPath);
-        // A single frame arrives and the clip ends immediately, so FREEZE is what makes it a card
-        // rather than a flash.
-        Assert.Equal(ClipEndBehavior.FreezeLastFrame, clip.EndBehavior);
+        var spec = TextSourceUri.Decode(clip.MediaPath);
+
+        Assert.NotNull(spec);
+        Assert.Equal("ACT ONE", spec.Text);
         // No audio at all: a card standing over a running bed must not interrupt it.
         Assert.Equal(-1, clip.AudioStreamIndex);
+    }
+
+    /// <summary>Sizes are fractions in the document and pixels in the spec; this is the conversion.</summary>
+    [Fact]
+    public void FractionsBecomePixelsAgainstTheCardsOwnCanvas()
+    {
+        var (project, _) = WithCard(card =>
+        {
+            card.FontScale = 0.25;
+            card.OutlineWidth = 0.01;
+        });
+
+        var spec = TextSourceUri.Decode(Compile(project).MediaPath)!;
+
+        // A fraction survives a composition resize; the source wants pixels against its own canvas.
+        Assert.Equal(spec.CanvasHeight * 0.25, spec.FontSizePx, 3);
+        Assert.Equal(spec.CanvasHeight * 0.01, spec.OutlineWidthPx, 3);
+    }
+
+    [Fact]
+    public void ColoursBecomeOpaqueArgbAndAnEmptyGroundIsTransparent()
+    {
+        var (project, _) = WithCard(card =>
+        {
+            card.Foreground = "#FFCC00";
+            card.Background = "";
+        });
+
+        var spec = TextSourceUri.Decode(Compile(project).MediaPath)!;
+
+        Assert.Equal(0xFFFFCC00u, spec.ColorArgb);
+        // Alpha zero, not black: an empty ground means the card sits over whatever is underneath.
+        Assert.Equal(0u, spec.BackgroundArgb);
+    }
+
+    [Fact]
+    public void AlignmentAndDurationTravelAsThemselves()
+    {
+        var (project, _) = WithCard(card =>
+        {
+            card.Align = TextAlign.Right;
+            card.Anchor = TextAnchor.Bottom;
+            card.DurationMs = 4_000;
+        });
+
+        var spec = TextSourceUri.Decode(Compile(project).MediaPath)!;
+
+        Assert.Equal(2, spec.HAlign);
+        Assert.Equal(2, spec.VAlign);
+        Assert.Equal(4_000, spec.DurationMs);
     }
 
     [Fact]
     public void ACardsPlacementAndFadesReachTheEngine()
     {
-        var (project, card) = WithCard(item =>
+        var (project, _) = WithCard(card =>
         {
-            item.FadeInMs = 500;
-            item.FadeOutMs = 750;
-            item.Placements[0].X = 0.25;
-            item.Placements[0].Width = 0.5;
+            card.FadeInMs = 500;
+            card.FadeOutMs = 750;
+            card.Placements[0].X = 0.25;
+            card.Placements[0].Width = 0.5;
         });
 
-        var clip = Assert.Single(ShowCompiler.Compile(project, new ShowCompileContext
-        {
-            RenderedText = new Dictionary<Guid, string> { [card.Id] = "/cache/text/abc.png" },
-        }).Clips);
+        var clip = Compile(project);
 
         Assert.Equal(TimeSpan.FromMilliseconds(500), clip.FadeIn);
         Assert.Equal(TimeSpan.FromMilliseconds(750), clip.FadeOut);
@@ -101,34 +148,17 @@ public class TextCueTests
         Assert.Equal(0.5, clip.Placement.DestWidth, 6);
     }
 
-    /// <summary>Two cues that would draw the same card share one key, and one file.</summary>
-    [Fact]
-    public void TheRenderKeyIsTheContentAndNothingElse()
-    {
-        var one = new TextCueNode { Number = "1", Label = "A", Text = "ACT ONE" };
-        var two = new TextCueNode { Number = "2", Label = "B", Text = "ACT ONE" };
-
-        // The LABEL and the number differ and the drawing does not, so the key must not.
-        Assert.Equal(one.RenderKey, two.RenderKey);
-
-        two.Text = "ACT TWO";
-        Assert.NotEqual(one.RenderKey, two.RenderKey);
-
-        // Every field the drawing is made from moves it.
-        var three = new TextCueNode { Text = "ACT ONE", Bold = true };
-        Assert.NotEqual(one.RenderKey, three.RenderKey);
-    }
-
     /// <summary>A card round-trips through the project file with its own discriminator.</summary>
     [Fact]
     public void ACardSurvivesASave()
     {
-        var (project, _) = WithCard(item =>
+        var (project, _) = WithCard(card =>
         {
-            item.FontScale = 0.2;
-            item.Align = TextAlign.Left;
-            item.Anchor = TextAnchor.Bottom;
-            item.Foreground = "#FFCC00";
+            card.FontScale = 0.2;
+            card.Align = TextAlign.Left;
+            card.Anchor = TextAnchor.Bottom;
+            card.Foreground = "#FFCC00";
+            card.DurationMs = 3_000;
         });
 
         var restored = HaCueProjectFile.Deserialize(HaCueProjectFile.Serialize(project));
@@ -140,6 +170,7 @@ public class TextCueTests
         Assert.Equal(TextAlign.Left, card.Align);
         Assert.Equal(TextAnchor.Bottom, card.Anchor);
         Assert.Equal("#FFCC00", card.Foreground);
+        Assert.Equal(3_000, card.DurationMs);
     }
 
     /// <summary>A card is placeable like any other picture, through the shared accessor.</summary>

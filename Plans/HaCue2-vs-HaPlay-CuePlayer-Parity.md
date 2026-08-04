@@ -227,21 +227,64 @@ The owner asked for all of it, so items 1–7 above were built in one pass. What
 | --- | --- |
 | **Seek lock** (§5) | A latch above the Active panel, **locked by default** — the one default here chosen against convenience. The bars sit under the pointer for a whole show, a drag is instantly audible, and there is no undo for it. Enforced on the control AND in the command, so a seek arriving from anywhere meets the same latch. |
 | **Per-cue `DisablePreRoll`** (§3) | `ShowClipBinding.DisablePreRoll`, honoured in `BuildUpcomingSpecs`. A clip that opts out is SKIPPED rather than counted and dropped — pre-roll's depth is "how many decoders may be held", and spending one on a clip that declined would shorten the warm for the cues that wanted it. Shown as the positive ("pre-roll this cue"), because a checkbox called "disable", ticked to mean "do not", is one an operator reads twice under pressure. |
-| **Text cues** (§4) | A new `TextCueNode` kind. The document stores WORDS — portable, diffable, translatable — and `TextCards` draws them into the machine's media cache; the compiler is told where they landed through `ShowCompileContext.RenderedText`, the same seam that carries probe results. From there a card is an ordinary single-frame clip with `FreezeLastFrame`, so placement, mapping, fades, pre-roll and recording all work on it unchanged. |
+| **Text cues** (§4) | A new `TextCueNode` kind. The document stores WORDS — portable, diffable, translatable — and the compiler turns them into a `text:` URI carrying the whole render spec, which `S.Media.Source.Text` draws. From there a card is an ordinary held-frame clip, so placement, mapping, fades, pre-roll and recording all work on it unchanged. |
 
-**Why text renders app-side.** Rasterising text needs a font stack, and a font stack belongs to an
-application rather than to a show file or a headless compiler. Rendering to a PNG rather than handing
-the session a frame means every stage after the draw — pre-roll, placement, the layer mapping, the
-recorders — already works, and a card that comes out wrong is a file somebody can open and look at.
-Cards are keyed by CONTENT, so two cues that would draw the same card share one file and editing a
-word invalidates it without anything tracking what changed.
+**Text was built twice.** The first version rasterised cards app-side into the machine's media cache
+and told the compiler where they landed. It worked, and it was then deleted: `S.Media.Source.Text`
+already existed, unwired — a SkiaSharp renderer behind a `text:` URI that carries the entire spec,
+holds the frame for a duration it is given, and draws an outline. Strictly better, because a card then
+needs no file anywhere, no cache to invalidate and nothing from the app: the words travel with the
+show and each machine draws them with the faces it has. The fourth time this session that the answer
+was "the framework already provides it and nothing registered it".
 
 **Harness note.** `HaCue2.Tests` now runs headless with Skia (`UseHeadlessDrawing: false`) rather than
 the stub drawing backend. The stub answers layout and hit-testing and produces no pixels, which was
-enough for every other view test and not enough for this one: a text card against the stub renders an
-empty canvas that a "did a file appear" check would happily accept. All 221 tests stay green.
+enough for every other view test and not enough for the one that checked a card actually drew.
 
-**Nothing from this audit is open.** §4's other media sources — NDI input, PortAudio input, YouTube,
-MMD — remain unbuilt, and were never on the recommended list: they are all "what else can a cue play",
-the framework already provides them through the registry HaCue2 uses, and none of them is a gap an
-operator hits while building an ordinary show.
+---
+
+## 11. Closed on 2026-08-04, part two — the other media sources
+
+§4's remaining sources were the last of this audit still open. All three are now buildable as cues;
+MMD was excluded on request (it was an experiment).
+
+**One idea, and then everything that assumed a media path is a filename.** A live source is an
+ORDINARY media cue whose `MediaPath` is a URI the registry knows how to open — `ndi://` a camera,
+`padev://` a capture device, `youtube://` a prepared video. Level, sends, placements, fades, effects
+and recording then mean exactly what they mean for a file, and a separate cue kind would have forked
+every one of them to change one field. `HaCue2.Core/Media/SourceUri.cs` is the whole rule: what a
+scheme is, what is LIVE, and how to build and read each URI's query grammar.
+
+What had to change downstream, each of which was a real failure:
+
+| Assumed | Now |
+| --- | --- |
+| `MediaPaths.Resolve` joins a relative path onto the media root | A URI returns verbatim. `Path.Combine("/shows", "ndi://CAM 1")` normalises to `/shows/ndi:/CAM 1`, and the registry would have been handed a directory instead of a camera. |
+| `MediaPaths.ReferencesIn` lists every media file | URIs are absent. That one list drives probing, relink, consolidate and the status pass's "missing" report — a camera has no length to probe, no copy to make, and no filesystem that could say it is gone. Including them painted every live cue red on any machine not yet on the venue's network. |
+| A duration is always a machine fact | `MediaCueNode.SourceDurationMs`, filled only by a source that can state its own length. A prepared YouTube video knows it from the manifest and no probe on this machine can rediscover it from a `youtube://` URI, so without it the cue read "—" for the rest of the show's life. |
+| The clip editor can open any cue's media | Gated on file cues: it scans a waveform and draws a trim window, and neither means anything for a camera. |
+
+**Pre-roll is off for a live cue.** Pre-roll opens the next few cues' media early so the next GO is
+instant — which for a camera means claiming the network connection, and for a capture device means
+claiming the device, minutes before anybody asked. `DisablePreRoll` (built earlier the same day for
+exactly this case) is set when the cue is created. A prepared YouTube video is an ordinary local file
+and stays in pre-roll.
+
+**The dialogs.**
+
+| Source | Shape |
+| --- | --- |
+| **NDI input** | A prompt. The sender name can be PICKED from a live scan or TYPED, and both are first-class: names are `STUDIO-PC (CAM 1)` and nobody types those from memory, but the camera is very often not on the network yet and a show authored in an office must be able to name one that does not exist. Audio/video halves, low bandwidth, jitter-buffer override. The scan runs on the click rather than in the view-model factory — it blocks for a second or two, and that is not a factory's decision. |
+| **Local input** | A prompt. Driver narrows the device list AND is stored, unlike the output-line picker: the same interface appears under ALSA and under JACK with different names, and the capture provider resolves against one family. Width and rate follow the chosen device. A machine that can enumerate nothing still gets a free-text name. |
+| **YouTube** | Its own window. Paste a link → FETCH resolves the manifest → pick the video, audio and caption tracks → DOWNLOAD & ADD prepares into the shared cache with a progress bar. It has to download: the registry's youtube provider plays only from the prepared asset and refuses to fetch on the fire path, which is the right refusal — a GO that started a network transfer would be a cue that begins four minutes late, on a machine that may have no network at the venue at all. |
+
+**A bug found on the way.** The shell only adopted probe results at load and after a save, so a media
+cue added at 19:50 read "—" for its length until the show was next saved. `OnJournalChanged` now
+re-adopts and kicks the probe; both are cheap (a dictionary walk, and a scan that skips every path it
+has already looked at).
+
+**Registration.** `ShowHost` builds the registry with every source family, each optional: a module
+that will not load on this machine is LOGGED and skipped, so a box without the NDI runtime still plays
+files. YouTube registers over a shared `YouTubeRuntime.Preparer` — the dialog that downloads and the
+provider that opens have to agree on the cache, and two instances would mean watching a download
+finish and then a cue that says the video is not prepared.

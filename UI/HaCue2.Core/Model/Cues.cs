@@ -105,7 +105,29 @@ public enum CueTrigger
 /// <summary>A media cue: the only kind that carries audio sends and a media file.</summary>
 public sealed record MediaCueNode : CueNode
 {
+    /// <summary>
+    /// A file, or a source URI.
+    /// </summary>
+    /// <remarks>
+    /// A path — relative to the media root or absolute — for a file, and one of the registry's source
+    /// schemes for everything else: <c>ndi://</c> a camera, <c>padev://</c> a capture device,
+    /// <c>youtube://</c> a prepared video. <see cref="Media.SourceUri"/> tells them apart, and the
+    /// difference matters everywhere something would otherwise treat this as a filename.
+    /// </remarks>
     public string MediaPath { get; set; } = "";
+
+    /// <summary>
+    /// What the SOURCE said it runs for, in milliseconds; 0 when nothing said.
+    /// </summary>
+    /// <remarks>
+    /// Durations are otherwise a machine fact, probed from the file and deliberately never written
+    /// into the document. A URI source has no file here to probe: a YouTube video knows its length
+    /// from the manifest at the moment it is added, and without somewhere to keep that the cue reads
+    /// "—" in every list for the rest of the show's life. Live sources leave it zero, which is the
+    /// honest answer for a camera.
+    /// </remarks>
+    public int SourceDurationMs { get; set; }
+
     public double LevelDb { get; set; }
     public bool Loop { get; set; }
 
@@ -346,15 +368,15 @@ public sealed record CommentCueNode : CueNode;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The document stores the WORDS and how they should look. What the engine plays is a picture — the
-/// app rasterises one into its media cache and hands the compiler the path, because rendering text
-/// needs a font stack and a font stack belongs to an application, not to a show file. That is what
-/// keeps a text cue portable: the words travel, and each machine draws them with what it has.
+/// The document stores the WORDS and how they should look, and compiles to a <c>text:</c> URI that
+/// carries the whole render spec. The framework's own text source draws it — so a card needs no file
+/// anywhere, no cache to invalidate, and nothing from the app at all. The words travel with the show
+/// and each machine draws them with the faces it has.
 /// </para>
 /// <para>
-/// It behaves as a still from there on: it holds its picture until something stops it, exactly like an
-/// imported image. Placements, fades and effect lanes all apply, because by the time the engine sees
-/// it there is nothing to distinguish it from any other single-frame clip.
+/// It behaves as a still from there on: one held frame, placed like any other picture. Placements and
+/// fades apply, because by the time the engine sees it there is nothing to distinguish it from any
+/// other single-frame clip.
 /// </para>
 /// </remarks>
 public sealed record TextCueNode : CueNode
@@ -387,8 +409,27 @@ public sealed record TextCueNode : CueNode
 
     public string Background { get; set; } = "";
 
+    /// <summary>An outline behind the ink, in fractions of the canvas height. Zero draws none.</summary>
+    /// <remarks>
+    /// What makes a caption readable over picture. Without one, white words over a bright shot are
+    /// words nobody in the room can read, and the usual fix — a background band — covers the shot.
+    /// </remarks>
+    public double OutlineWidth { get; set; }
+
+    public string Outline { get; set; } = "#000000";
+
     public TextAlign Align { get; set; } = TextAlign.Center;
     public TextAnchor Anchor { get; set; } = TextAnchor.Middle;
+
+    /// <summary>
+    /// How long the card is held, in milliseconds. Zero holds it until something stops it.
+    /// </summary>
+    /// <remarks>
+    /// The text source emits a held frame for exactly this long and then exhausts, so a card with a
+    /// duration ends on its own and can auto-follow. Zero is the title-card answer: up until the
+    /// operator takes it down.
+    /// </remarks>
+    public int DurationMs { get; set; }
 
     /// <summary>Where the card sits, like any other cue's picture.</summary>
     public List<LayerPlacement> Placements { get; set; } = [];

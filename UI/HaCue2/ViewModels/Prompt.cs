@@ -119,19 +119,41 @@ public sealed partial class PromptViewModel : ObservableObject
         string hint,
         IReadOnlyList<PromptField> fields,
         Action<PromptViewModel> apply,
-        string confirm = "ADD")
+        string confirm = "ADD",
+        string alternative = "",
+        Action? applyAlternative = null)
     {
         Title = title;
         Hint = hint;
         Fields = fields;
         Apply = apply;
         Confirm = confirm;
+        Alternative = alternative;
+        ApplyAlternative = applyAlternative;
     }
 
     public string Title { get; }
     public string Hint { get; } = "";
     public string Confirm { get; } = "ADD";
     public IReadOnlyList<PromptField> Fields { get; }
+
+    /// <summary>
+    /// A THIRD answer, beside confirm and cancel. Empty when the question only has two.
+    /// </summary>
+    /// <remarks>
+    /// Added for the one question in the app that genuinely has three answers: closing a project with
+    /// unsaved edits is save / discard / go back, and collapsing it to two makes one of those three
+    /// unreachable — which for "discard" means an operator who wants to abandon a bad edit has to save
+    /// it first.
+    /// </remarks>
+    public string Alternative { get; } = "";
+
+    public bool HasAlternative => Alternative.Length > 0;
+
+    private Action? ApplyAlternative { get; }
+
+    /// <summary>Runs the third answer. Cancel still never runs anything.</summary>
+    public void CommitAlternative() => ApplyAlternative?.Invoke();
 
     private Action<PromptViewModel> Apply { get; }
 

@@ -60,6 +60,7 @@ public partial class CuesViewModel : ObservableObject
             // The tree is the authority on what is selected — SelectedCue follows it rather than the
             // other way round, so a click, a keyboard move and a programmatic set all take one path.
             SetProperty(ref _selectedCue, CueSource.RowSelection.SelectedItem, nameof(SelectedCue));
+            OnPropertyChanged(nameof(CanEditSource));
             Inspector.Facts = FactsFor(CueSource.RowSelection.SelectedItem);
             Inspector.Show([.. CueSource.RowSelection.SelectedItems.OfType<CueRow>().Select(row => row.Id)]);
 
@@ -597,15 +598,109 @@ public partial class CuesViewModel : ObservableObject
             },
         };
 
+        return Insert(list, cue, kind.ToString().ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// Adds a cue that plays a SOURCE — an NDI camera, a capture device, a prepared YouTube video.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An ordinary media cue with a URI where the filename goes, because everything else about it is
+    /// the same: level, sends, placements, fades and effects all mean exactly what they mean for a
+    /// file, and a separate cue type would fork all of them to change one field.
+    /// </para>
+    /// <para>
+    /// Pre-roll is off for a LIVE source. Pre-roll opens the next few cues' media early so the next GO
+    /// is instant — which for a camera means claiming the network connection, and for a capture device
+    /// means claiming the device, minutes before anybody asked. The cue still fires normally; it opens
+    /// at the moment it is fired, which is when an operator expects a camera to go live.
+    /// </para>
+    /// </remarks>
+    /// <param name="durationMs">What the source said it runs for, or 0 when it cannot say.</param>
+    public MediaCueNode? AddSourceCue(string uri, string label, int durationMs = 0)
+    {
+        if (ScopedList is not { } list || uri.Trim().Length == 0)
+            return null;
+
+        var trimmed = uri.Trim();
+
+        var cue = new MediaCueNode
+        {
+            Label = label.Trim().Length > 0 ? label.Trim() : SourceUri.Describe(trimmed),
+            MediaPath = trimmed,
+            SourceDurationMs = Math.Max(0, durationMs),
+            FadeInMs = Math.Max(0, Project.Settings.DefaultFadeInMs),
+            FadeOutMs = Math.Max(0, Project.Settings.DefaultFadeOutMs),
+            DisablePreRoll = SourceUri.IsLive(trimmed),
+        };
+
+        return Insert(list, cue, "source") as MediaCueNode;
+    }
+
+    /// <summary>
+    /// Points an existing cue at a different source, keeping everything else about it.
+    /// </summary>
+    /// <remarks>
+    /// The edit path for the same dialogs. Re-adding the cue would lose its number, its placements and
+    /// its sends — which is the whole cue — so changing which camera it watches is one field.
+    /// </remarks>
+    public void SetSource(Guid cueId, string uri, string label, int durationMs = 0)
+    {
+        if (Project.FindCue(cueId) is not MediaCueNode cue || uri.Trim().Length == 0)
+            return;
+
+        var trimmed = uri.Trim();
+
+        using (_journal.Composite("edit source", "cues"))
+        {
+            _journal.Do(new SetValueCommand<string>(
+                cueId, "mediaPath", "cues",
+                () => cue.MediaPath, value => cue.MediaPath = value, trimmed, "edit source"));
+
+            if (label.Trim().Length > 0)
+                _journal.Do(new SetValueCommand<string>(
+                    cueId, "label", "cues",
+                    () => cue.Label, value => cue.Label = value, label.Trim(), "rename cue"));
+
+            _journal.Do(new SetValueCommand<int>(
+                cueId, "sourceDuration", "cues",
+                () => cue.SourceDurationMs, value => cue.SourceDurationMs = value,
+                Math.Max(0, durationMs), "edit source"));
+        }
+
+        Refresh();
+    }
+
+    /// <summary>
+    /// The selected cue, when it plays a SOURCE rather than a file.
+    /// </summary>
+    /// <remarks>
+    /// Null for a file cue, which has no source dialog to reopen — its media is chosen with the file
+    /// picker, and offering "edit source…" over it would open a box that could not describe it.
+    /// </remarks>
+    public MediaCueNode? SelectedSourceCue =>
+        SelectedCue is { } row && Project.FindCue(row.Id) is MediaCueNode media
+        && SourceUri.IsSource(media.MediaPath)
+            ? media
+            : null;
+
+    public bool CanEditSource => SelectedSourceCue is not null;
+
+    /// <summary>What kind of source the selection is, so the view opens the right dialog.</summary>
+    public SourceKind SelectedSourceKind => SourceUri.KindOf(SelectedSourceCue?.MediaPath);
+
+    /// <summary>Numbers a new cue, files it where the operator is looking, and selects it.</summary>
+    private CueNode Insert(CueList list, CueNode cue, string what)
+    {
         cue.Trigger = Project.Settings.NewCueTrigger;
 
         var (siblings, at) = InsertionPoint(list);
         cue.Number = AutoNumber(siblings, at);
 
-        using (_journal.Composite($"add {kind.ToString().ToLowerInvariant()} cue", "cues"))
+        using (_journal.Composite($"add {what} cue", "cues"))
         {
-            _journal.Do(new AddItemCommand<CueNode>(
-                siblings, cue, at, "cues", $"add {kind.ToString().ToLowerInvariant()} cue"));
+            _journal.Do(new AddItemCommand<CueNode>(siblings, cue, at, "cues", $"add {what} cue"));
 
             if (Project.Settings.AutoRenumberOnInsert)
                 Renumber(siblings);
