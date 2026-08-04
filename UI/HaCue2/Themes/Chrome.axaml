@@ -667,7 +667,7 @@
     <Setter Property="Padding" Value="5,2" />
     <Setter Property="VerticalAlignment" Value="Stretch" />
   </Style>
-  <Style Selector="Border.placement > TextBlock">
+  <Style Selector="Border.placement TextBlock">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeNano}" />
     <Setter Property="VerticalAlignment" Value="Top" />
@@ -676,19 +676,26 @@
     <Setter Property="Background" Value="{DynamicResource PlacementABg}" />
     <Setter Property="BorderBrush" Value="{DynamicResource PlacementABorder}" />
   </Style>
-  <Style Selector="Border.placement.a > TextBlock">
+  <Style Selector="Border.placement.a TextBlock">
     <Setter Property="Foreground" Value="{DynamicResource GelSteel}" />
   </Style>
   <Style Selector="Border.placement.b">
     <Setter Property="Background" Value="{DynamicResource PlacementBBg}" />
     <Setter Property="BorderBrush" Value="{DynamicResource PlacementBBorder}" />
   </Style>
-  <Style Selector="Border.placement.b > TextBlock">
+  <Style Selector="Border.placement.b TextBlock">
     <Setter Property="Foreground" Value="{DynamicResource GelCongo}" />
   </Style>
   <Style Selector="Border.placement.sel">
     <Setter Property="BorderBrush" Value="{DynamicResource GelAmber}" />
     <Setter Property="BorderThickness" Value="2" />
+  </Style>
+  <!-- The eight resize grips on a selected placement. Small, amber to match the selection border, and
+       purely a SIGN: the drag itself works by edge proximity, which is a wider target than the grip. -->
+  <Style Selector="Rectangle.grip">
+    <Setter Property="Width" Value="6" />
+    <Setter Property="Height" Value="6" />
+    <Setter Property="Fill" Value="{DynamicResource GelAmber}" />
   </Style>
 
   <!-- ══ fade-curve thumbnails ══════════════════════════════════════════════════════════════

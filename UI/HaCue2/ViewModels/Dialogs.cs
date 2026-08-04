@@ -613,6 +613,22 @@ public static class Dialogs
     /// chosen screen was silently discarded and the window opened wherever SDL felt like.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// The window sizes worth offering, smallest-monitor-first.
+    /// </summary>
+    /// <remarks>
+    /// A monitoring window, not a canvas: an operator windowing an output is nearly always putting a
+    /// confidence view on the booth screen beside everything else, so the small sizes come first. The
+    /// full list belongs to the output pane, which is where a raster is chosen.
+    /// </remarks>
+    public static IReadOnlyList<string> CommonWindowSizes { get; } =
+    [
+        "960×540",
+        "1280×720",
+        "1920×1080",
+        "1024×768",
+    ];
+
     public static PromptViewModel AddVideoOutput(
         ProjectJournal journal, VideoOutputKind kind, IReadOnlyList<string> screens)
     {
@@ -657,9 +673,27 @@ public static class Dialogs
             var size = new PromptField
             {
                 Label = "Window size",
+                Kind = PromptFieldKind.Suggestion,
+                Options = CommonWindowSizes,
                 Value = "",
-                Hint = "e.g. 960×540 · empty takes the composition's own size",
+                Hint = "empty takes the composition's own size",
+                IsEnabled = false,
             };
+
+            // The two are mutually exclusive and each dialog used to offer both at once: a fullscreen
+            // output takes the SCREEN's size, so a window size typed beside it did nothing, and a
+            // windowed one opens where the desktop puts it, so the screen picker did nothing either.
+            // Whichever the presentation makes meaningless is greyed rather than hidden — the value
+            // survives a change of mind, and the dialog keeps its shape while it is being filled in.
+            void Follow(PromptField _)
+            {
+                var isFullscreen = windowed.Choice != "windowed";
+                size.IsEnabled = !isFullscreen;
+                target.IsEnabled = isFullscreen;
+            }
+
+            windowed.Picked += Follow;
+            Follow(windowed);
 
             fields.Insert(2, windowed);
             fields.Insert(3, size);

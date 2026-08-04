@@ -33,7 +33,23 @@
                     Classes.a="{Binding !IsSecondary}"
                     Classes.b="{Binding IsSecondary}"
                     Classes.sel="{Binding IsSelected}">
-              <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+              <Panel>
+                <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+
+                <!-- The eight grips, on the SELECTED box only. The drag already worked by edge
+                     proximity; nothing said so, and a resize an operator cannot see is a resize they
+                     find by accident while trying to move the layer. -->
+                <Panel IsVisible="{Binding IsSelected}">
+                  <Rectangle Classes="grip" HorizontalAlignment="Left" VerticalAlignment="Top" />
+                  <Rectangle Classes="grip" HorizontalAlignment="Center" VerticalAlignment="Top" />
+                  <Rectangle Classes="grip" HorizontalAlignment="Right" VerticalAlignment="Top" />
+                  <Rectangle Classes="grip" HorizontalAlignment="Left" VerticalAlignment="Center" />
+                  <Rectangle Classes="grip" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                  <Rectangle Classes="grip" HorizontalAlignment="Left" VerticalAlignment="Bottom" />
+                  <Rectangle Classes="grip" HorizontalAlignment="Center" VerticalAlignment="Bottom" />
+                  <Rectangle Classes="grip" HorizontalAlignment="Right" VerticalAlignment="Bottom" />
+                </Panel>
+              </Panel>
             </Border>
           </DataTemplate>
         </ItemsControl.ItemTemplate>

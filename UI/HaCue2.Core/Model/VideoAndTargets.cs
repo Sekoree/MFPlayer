@@ -14,10 +14,27 @@ public sealed record CompositionDefinition
     public string Name { get; set; } = "";
     public int Width { get; set; } = 1920;
     public int Height { get; set; } = 1080;
-    public double FramesPerSecond { get; set; } = 30;
+
+    /// <summary>
+    /// The canvas rate. Sixty, because that is what the screens in the room run at.
+    /// </summary>
+    /// <remarks>
+    /// It defaulted to 30, which halves the smoothness of every pan, wipe and fade the show contains
+    /// for no gain — a compositor already running is not meaningfully cheaper at 30 than at 60, and a
+    /// projector fed 30 into a 60 Hz panel judders visibly on horizontal movement. A show that wants 30
+    /// can still say so.
+    /// </remarks>
+    public double FramesPerSecond { get; set; } = 60;
 
     /// <summary>Shown when the canvas is empty. Takes precedence over an output's own fallback.</summary>
     public string IdleImagePath { get; set; } = "";
+
+    /// <summary>How the idle image fills the canvas.</summary>
+    /// <remarks>
+    /// A holding slate is rarely the canvas's own aspect ratio — it is a logo, or a photograph somebody
+    /// had. Without a choice it was stretched, which is the one option that always looks wrong.
+    /// </remarks>
+    public LayerFit IdleImageFit { get; set; } = LayerFit.Contain;
 }
 
 /// <summary>A video output and the composition it shows.</summary>
@@ -47,6 +64,9 @@ public sealed record VideoOutputDefinition
 
     /// <summary>Used only when the composition has no idle image of its own (register item 23).</summary>
     public string IdleFallbackPath { get; set; } = "";
+
+    /// <summary>How the fallback image fills this output, for the same reason the composition's has one.</summary>
+    public LayerFit IdleFallbackFit { get; set; } = LayerFit.Contain;
 
     /// <summary>Register item 25: a required output that is absent is an error, not a warning.</summary>
     public bool Required { get; set; }

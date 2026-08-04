@@ -22,6 +22,16 @@ public enum PromptFieldKind
 
     /// <summary>A file on this machine, with a browse button beside it.</summary>
     File,
+
+    /// <summary>
+    /// Free text with a list of suggestions beside it — an editable combo box.
+    /// </summary>
+    /// <remarks>
+    /// For a value that is nearly always one of a handful and occasionally none of them. A window size
+    /// is the case it was added for: 1280×720 and 1920×1080 cover almost every use, and the operator
+    /// who needs 1024×768 for an old projector must still be able to say so.
+    /// </remarks>
+    Suggestion,
 }
 
 /// <summary>One line of a prompt: a label, a value, and how to edit it.</summary>
@@ -59,7 +69,21 @@ public sealed partial class PromptField : ObservableObject
     [ObservableProperty]
     private bool _isOn;
 
+    /// <summary>
+    /// Whether this field can be edited right now.
+    /// </summary>
+    /// <remarks>
+    /// One field can make another meaningless: a fullscreen output has no window size to set, and a
+    /// windowed one does not need a screen chosen for it. Greying the field says so where a hidden one
+    /// would just look like a dialog that changes shape, and the value is kept either way.
+    /// </remarks>
+    [ObservableProperty]
+    private bool _isEnabled = true;
+
     public bool IsText => Kind is PromptFieldKind.Text or PromptFieldKind.Number;
+
+    /// <summary>Free text with a preset list beside it.</summary>
+    public bool IsSuggestion => Kind == PromptFieldKind.Suggestion;
     public bool IsChoice => Kind == PromptFieldKind.Choice;
     public bool IsToggle => Kind == PromptFieldKind.Toggle;
 

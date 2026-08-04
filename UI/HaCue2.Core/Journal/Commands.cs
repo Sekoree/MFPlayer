@@ -553,6 +553,37 @@ public readonly record struct NormalizedRect(double X, double Y, double Width, d
             width,
             height);
     }
+
+    /// <summary>How far outside the frame a free rectangle may be dragged, as a multiple of it.</summary>
+    public const double FreeReach = 2;
+
+    /// <summary>
+    /// Kept a sane SIZE but free to leave the frame, which is what a layer placement needs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A picture pushed off the edge of the canvas is an ordinary thing to author — a caption that
+    /// bleeds off the bottom, a wall of screens where each clip sits past its neighbour, a reveal that
+    /// slides in from outside. <see cref="Clamped"/> is the wrong rule for it, and did more than refuse
+    /// the odd case: it pins X to <c>1 − width</c>, so a placement filling the canvas could only ever
+    /// have X = 0 and could not be dragged AT ALL. That is the commonest placement in any show.
+    /// </para>
+    /// <para>
+    /// Still bounded. Free is not infinite: a slip that threw a layer a thousand canvases away would
+    /// leave nothing on screen to drag back, which is the same trap the minimum size exists to avoid.
+    /// </para>
+    /// </remarks>
+    public NormalizedRect Free(double minimum = 0.02, double reach = FreeReach)
+    {
+        var width = Math.Clamp(Width, minimum, 1 + (reach * 2));
+        var height = Math.Clamp(Height, minimum, 1 + (reach * 2));
+
+        return new NormalizedRect(
+            Math.Clamp(X, -reach, 1 + reach),
+            Math.Clamp(Y, -reach, 1 + reach),
+            width,
+            height);
+    }
 }
 
 /// <summary>
@@ -577,12 +608,15 @@ public sealed class SetRectCommand : ICoalescingCommand
         Func<NormalizedRect> read,
         Action<NormalizedRect> write,
         NormalizedRect value,
-        string description)
+        string description,
+        bool allowOutsideFrame = false)
     {
         _read = read;
         _write = write;
         _before = read();
-        _after = value.Clamped();
+        // A mapping's source and target are both regions OF something and stay inside it. A layer
+        // placement is a picture positioned ON a canvas and may hang off it.
+        _after = allowOutsideFrame ? value.Free() : value.Clamped();
         Key = new CoalesceKey(subject, property);
         Domain = domain;
         Description = description;
@@ -627,7 +661,7 @@ public static class RectEdits
                 placement.Width = value.Width;
                 placement.Height = value.Height;
             },
-            rect, "move layer");
+            rect, "move layer", allowOutsideFrame: true);
 
     public static SetRectCommand MappingSource(MappingSection section, NormalizedRect rect) =>
         new(section.Id, "source", "mapping",

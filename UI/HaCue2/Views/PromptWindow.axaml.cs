@@ -22,6 +22,13 @@ public partial class PromptWindow : Window
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
+    /// <summary>Writes a preset into the field it belongs to, leaving it typable afterwards.</summary>
+    private void OnPickSuggestion(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { DataContext: string suggestion, Tag: PromptField field })
+            field.Value = suggestion;
+    }
+
     /// <summary>
     /// Picks a folder or a file into the field beside the button.
     /// </summary>

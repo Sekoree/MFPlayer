@@ -376,6 +376,30 @@ public partial class VideoViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// How an idle image fills its surface. The same six fits a layer placement offers.
+    /// </summary>
+    /// <remarks>
+    /// A holding slate is rarely the canvas's own shape — it is a logo, or a photograph somebody had —
+    /// and it used to be stretched to fill, which is the one option that always looks wrong.
+    /// </remarks>
+    public static IReadOnlyList<string> IdleFits { get; } =
+        ["contain", "cover", "stretch", "centre", "fill width", "fill height"];
+
+    public int OutputIdleFitIndex
+    {
+        get => MappedOutput is { } output ? (int)output.IdleFallbackFit : -1;
+        set
+        {
+            if (value < 0 || MappedOutput is not { } output || (int)output.IdleFallbackFit == value)
+                return;
+
+            Edit(output, "idleFallbackFit", () => output.IdleFallbackFit,
+                fit => output.IdleFallbackFit = fit, (LayerFit)value,
+                $"“{output.Name}” idle fit: {IdleFits[value]}");
+        }
+    }
+
     /// <summary>Mapping in force (0) or clean (1).</summary>
     /// <remarks>
     /// A toggle, never a delete. Switching to clean keeps the authored sections, so an operator who
@@ -462,6 +486,7 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(IsOutputLocal));
         OnPropertyChanged(nameof(OutputRaster));
         OnPropertyChanged(nameof(OutputIdleFallback));
+        OnPropertyChanged(nameof(OutputIdleFitIndex));
         OnPropertyChanged(nameof(OutputMappingIndex));
         OnPropertyChanged(nameof(OutputRequired));
         OnPropertyChanged(nameof(MappingNote));
@@ -575,6 +600,27 @@ public partial class VideoViewModel : ObservableObject
                 composition.Id, "idleImage", "video",
                 () => composition.IdleImagePath, path => composition.IdleImagePath = path, value,
                 $"“{composition.Name}” idle image"));
+            _journal.CloseGroup();
+
+            RaiseCompositionFields();
+        }
+    }
+
+    /// <summary>How the composition's idle image fills the canvas.</summary>
+    public int CompositionIdleFitIndex
+    {
+        get => SelectedComposition is { } composition ? (int)composition.IdleImageFit : -1;
+        set
+        {
+            if (value < 0
+                || SelectedComposition is not { } composition
+                || (int)composition.IdleImageFit == value)
+                return;
+
+            _journal.Do(new SetValueCommand<LayerFit>(
+                composition.Id, "idleImageFit", "video",
+                () => composition.IdleImageFit, fit => composition.IdleImageFit = fit, (LayerFit)value,
+                $"“{composition.Name}” idle fit: {IdleFits[value]}"));
             _journal.CloseGroup();
 
             RaiseCompositionFields();
@@ -699,6 +745,7 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(CompositionSize));
         OnPropertyChanged(nameof(CompositionRate));
         OnPropertyChanged(nameof(CompositionIdleImage));
+        OnPropertyChanged(nameof(CompositionIdleFitIndex));
         OnPropertyChanged(nameof(CompositionHeader));
         OnPropertyChanged(nameof(CompositionName));
         OnPropertyChanged(nameof(HasComposition));

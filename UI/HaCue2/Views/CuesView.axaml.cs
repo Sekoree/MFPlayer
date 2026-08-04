@@ -20,7 +20,24 @@ namespace HaCue2.Views;
 /// </remarks>
 public partial class CuesView : UserControl
 {
-    public CuesView() => InitializeComponent();
+    public CuesView()
+    {
+        InitializeComponent();
+
+        // PANIC is the one control in the app that is HELD rather than clicked, so it needs the raw
+        // pointer edges — and Button marks PointerPressed and PointerReleased HANDLED in its own class
+        // handler, which runs before any instance handler on the same control. Declared in markup, the
+        // hold handlers were therefore never called and the button did nothing whatsoever.
+        //
+        // handledEventsToo is what gets them delivered. It is deliberately narrow: only this button,
+        // only these three events, so nothing else in the view starts seeing handled input.
+        if (this.FindControl<Button>("PanicButton") is { } panic)
+        {
+            panic.AddHandler(PointerPressedEvent, OnPanicPressed, handledEventsToo: true);
+            panic.AddHandler(PointerReleasedEvent, OnPanicReleased, handledEventsToo: true);
+            panic.AddHandler(PointerCaptureLostEvent, OnPanicCaptureLost, handledEventsToo: true);
+        }
+    }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
@@ -238,7 +255,11 @@ public partial class CuesView : UserControl
             cues.BeginPanic();
     }
 
-    private void OnPanicReleased(object? sender, RoutedEventArgs e) =>
+    private void OnPanicReleased(object? sender, PointerReleasedEventArgs e) =>
+        (DataContext as CuesViewModel)?.CancelPanic();
+
+    /// <summary>A pointer that left the button abandons the hold — the mis-click escape hatch.</summary>
+    private void OnPanicCaptureLost(object? sender, PointerCaptureLostEventArgs e) =>
         (DataContext as CuesViewModel)?.CancelPanic();
 
     private void OnOpenTimeline(object? sender, RoutedEventArgs e) =>

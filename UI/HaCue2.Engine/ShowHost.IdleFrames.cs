@@ -26,7 +26,9 @@ public sealed partial class ShowHost
         foreach (var composition in project.Compositions)
         {
             var key = $"c:{composition.Id}";
-            var signature = $"{composition.IdleImagePath}|{Canvas(composition)}";
+            // The FIT is part of the signature: changing how the slate fills the canvas rebuilds the
+            // frame, exactly as changing the picture does.
+            var signature = $"{composition.IdleImagePath}|{composition.IdleImageFit}|{Canvas(composition)}";
             wanted.Add(key);
 
             if (!Changed(key, signature))
@@ -37,6 +39,11 @@ public sealed partial class ShowHost
                 composition.IdleImagePath,
                 projectPath,
                 $"“{composition.Name}” idle image").ConfigureAwait(false);
+
+            if (frame is not null)
+                frame = IdleFrames.Fitted(
+                    frame, composition.Width, composition.Height, composition.IdleImageFit);
+
             await _session.SetCompositionIdleFrameAsync(composition.Id.ToString(), frame).ConfigureAwait(false);
         }
 
@@ -48,7 +55,8 @@ public sealed partial class ShowHost
                 continue;
 
             var key = $"o:{output.Id}";
-            var signature = $"{output.IdleFallbackPath}|{compositionId}|{Canvas(canvas)}";
+            var signature =
+                $"{output.IdleFallbackPath}|{output.IdleFallbackFit}|{compositionId}|{Canvas(canvas)}";
             wanted.Add(key);
 
             if (!Changed(key, signature))
@@ -59,6 +67,9 @@ public sealed partial class ShowHost
                 output.IdleFallbackPath,
                 projectPath,
                 $"“{output.Name}” idle fallback").ConfigureAwait(false);
+
+            if (frame is not null)
+                frame = IdleFrames.Fitted(frame, canvas.Width, canvas.Height, output.IdleFallbackFit);
 
             // Black as the last resort, so an output ALWAYS has something to show. Without it a
             // composition with nothing playing submits no frames at all, and a sink that is configured

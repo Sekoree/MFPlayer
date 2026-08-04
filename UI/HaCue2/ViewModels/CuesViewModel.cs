@@ -53,9 +53,13 @@ public partial class CuesViewModel : ObservableObject
 
         Cues = [];
         ActiveCues = [.. runtime.ActiveCues];
+
+        // The source exists BEFORE the first Rebuild: Rebuild clears the tree selection before it
+        // touches the rows, and it cannot do that against a source that has not been built yet. The
+        // source observes the collection, so filling it afterwards is what it expects.
+        CueSource = BuildSource();
         Rebuild();
 
-        CueSource = BuildSource();
         CueSource.RowSelection!.SelectionChanged += (_, _) =>
         {
             // The tree is the authority on what is selected — SelectedCue follows it rather than the
@@ -71,7 +75,7 @@ public partial class CuesViewModel : ObservableObject
 
             if (!_restoringSelection
                 && Project.Settings.ClickMovesStandby
-                && CueSource.RowSelection.SelectedItem is CueRow selected
+                && CueSource.RowSelection.SelectedItem is { } selected
                 && ScopedList is { } list)
                 SetStandby(list, selected.Id);
         };
@@ -1315,6 +1319,16 @@ public partial class CuesViewModel : ObservableObject
 
     private void Rebuild()
     {
+        // The selection model addresses rows by INDEX PATH into this collection, and it does not learn
+        // that they have gone. Clearing it AFTER the rows were replaced left it walking paths into a
+        // tree that no longer had them, and it threw ArgumentOutOfRangeException out of the
+        // selection-changed handler.
+        //
+        // That is worse than it sounds: a scope change is driven by a two-way binding, so the throw
+        // surfaced inside a binding setter — where Avalonia turns it into a validation error and the
+        // rest of the refresh silently never ran. Clearing first is safe because the paths are still
+        // valid at this point.
+        CueSource.RowSelection!.Clear();
         Cues.Clear();
 
         var rows = SelectedScope switch

@@ -211,12 +211,15 @@ public class VideoOutputPaneTests
     public Task AnImpossibleRateIsRefused() => ShellFixture.WithShell(shell =>
     {
         var (video, _, composition) = WithOutput(shell);
+        var authored = composition.FramesPerSecond;
 
+        // Against whatever the canvas was actually authored at, not a literal: a refused edit leaves
+        // the rate alone, which is the claim — the default it happens to start from is not.
         video.CompositionRate = "0";
-        Assert.Equal(30, composition.FramesPerSecond);
+        Assert.Equal(authored, composition.FramesPerSecond);
 
         video.CompositionRate = "1000";
-        Assert.Equal(30, composition.FramesPerSecond);
+        Assert.Equal(authored, composition.FramesPerSecond);
     });
 
     [Fact]

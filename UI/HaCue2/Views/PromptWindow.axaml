@@ -36,12 +36,39 @@
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="vm:PromptField">
             <StackPanel>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="{Binding Label}">
+              <!-- Disabled rather than hidden when another field makes this one meaningless: a dialog
+                   that changes shape as you fill it in is harder to read than one that greys a line. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{Binding Label}"
+                                      IsEnabled="{Binding IsEnabled}">
                 <Panel>
                   <TextBox IsVisible="{Binding IsText}" Text="{Binding Value}" />
                   <ComboBox IsVisible="{Binding IsChoice}" HorizontalAlignment="Stretch"
                             ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}" />
                   <CheckBox IsVisible="{Binding IsToggle}" IsChecked="{Binding IsOn}" />
+                  <!-- Nearly always one of a handful, occasionally none of them: the presets are a
+                       shortcut and never a fence. -->
+                  <Grid IsVisible="{Binding IsSuggestion}" ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                    <TextBox Grid.Column="0" Text="{Binding Value}" />
+                    <Button Grid.Column="1" Classes="icon" Content="▾"
+                            ToolTip.Tip="Common values. Anything can still be typed.">
+                      <Button.Flyout>
+                        <Flyout>
+                          <ItemsControl ItemsSource="{Binding Options}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="x:String">
+                                <!-- The field itself, carried on the Tag: the item's own data context
+                                     is the suggestion string, and the flyout is not in the field's
+                                     visual tree to walk up from. -->
+                                <Button Classes="tight block" HorizontalAlignment="Stretch"
+                                        Click="OnPickSuggestion" Content="{Binding}"
+                                        Tag="{Binding $parent[ItemsControl].DataContext}" />
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </Flyout>
+                      </Button.Flyout>
+                    </Button>
+                  </Grid>
                   <!-- Still typable beside the button: pasting a path is faster than clicking to it,
                        and one that does not exist yet cannot be picked at all. -->
                   <Grid IsVisible="{Binding IsPath}" ColumnDefinitions="*,Auto" ColumnSpacing="6">

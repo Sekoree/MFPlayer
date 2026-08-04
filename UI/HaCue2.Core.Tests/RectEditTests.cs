@@ -58,7 +58,7 @@ public sealed class RectEditTests
     }
 
     [Fact]
-    public void ARectangleCannotLeaveTheCanvasOrShrinkToNothing()
+    public void APlacementMayLeaveTheCanvasButCannotShrinkToNothingOrRunAway()
     {
         var fixture = new TestProject();
         var journal = new ProjectJournal(fixture.Project);
@@ -66,8 +66,11 @@ public sealed class RectEditTests
 
         journal.Do(RectEdits.Placement(fixture.Track, placement, new NormalizedRect(5, -3, 0.5, 0.5)));
 
-        Assert.Equal(0.5, placement.X, 4);
-        Assert.Equal(0, placement.Y, 4);
+        // A placement is a picture positioned ON a canvas and may hang off it — a caption that bleeds
+        // off the bottom, a reveal that slides in from outside. It is still BOUNDED: a slip that threw
+        // a layer a thousand canvases away would leave nothing on screen to drag back.
+        Assert.Equal(1 + NormalizedRect.FreeReach, placement.X, 4);
+        Assert.Equal(-NormalizedRect.FreeReach, placement.Y, 4);
 
         // A drag that would collapse the box keeps enough of it to grab again — losing a layer to one
         // slip with nothing left to click on is the failure this guards.
@@ -75,7 +78,6 @@ public sealed class RectEditTests
 
         Assert.True(placement.Width > 0);
         Assert.True(placement.Height > 0);
-        Assert.True(placement.X + placement.Width <= 1.0001);
     }
 
     [Fact]

@@ -168,6 +168,12 @@
                 <TextBox Text="{Binding OutputIdleFallback}"
                          PlaceholderText="used when the composition has no idle image · black otherwise" />
               </HeaderedContentControl>
+              <!-- A slate is rarely the canvas's own shape. Without a choice it was stretched, which
+                   is the one option that always looks wrong on a logo. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fit">
+                <ComboBox ItemsSource="{Binding IdleFits}"
+                          SelectedIndex="{Binding OutputIdleFitIndex}" />
+              </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Mapping">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
                   <!-- A toggle, never a delete: switching to clean keeps the authored sections. -->
@@ -372,8 +378,18 @@
                   <TextBox Grid.Column="2" Text="{Binding CompositionRate}" />
                 </Grid>
               </HeaderedContentControl>
+              <!-- Typing a path is how a slate ends up pointing at nothing on the night, so there is a
+                   picker beside it — and still a text box, because pasting one is faster and a path on
+                   the show machine may not exist on this one. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle image">
-                <TextBox Text="{Binding CompositionIdleImage}" PlaceholderText="black" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Text="{Binding CompositionIdleImage}" PlaceholderText="black" />
+                  <Button Grid.Column="1" Classes="tight" Content="BROWSE…" Click="OnBrowseIdleImage" />
+                </Grid>
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fit">
+                <ComboBox ItemsSource="{Binding IdleFits}"
+                          SelectedIndex="{Binding CompositionIdleFitIndex}" />
               </HeaderedContentControl>
             </StackPanel>
           </c:PanelBox>

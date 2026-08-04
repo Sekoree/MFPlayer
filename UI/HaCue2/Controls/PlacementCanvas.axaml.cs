@@ -70,6 +70,45 @@ public partial class PlacementCanvas : UserControl
     public static readonly StyledProperty<bool> IsEditableProperty =
         AvaloniaProperty.Register<PlacementCanvas, bool>(nameof(IsEditable), true);
 
+    /// <summary>
+    /// Extra vertical guides to snap to, in fractions of the canvas.
+    /// </summary>
+    /// <remarks>
+    /// The canvas supplies its own edges and centre; these are what the SHOW adds — the boundaries
+    /// between the output slices of a composition layout, so a picture can be lined up exactly with one
+    /// screen of a wall without arithmetic.
+    /// </remarks>
+    public static readonly StyledProperty<IReadOnlyList<double>> GuidesXProperty =
+        AvaloniaProperty.Register<PlacementCanvas, IReadOnlyList<double>>(nameof(GuidesX), []);
+
+    public static readonly StyledProperty<IReadOnlyList<double>> GuidesYProperty =
+        AvaloniaProperty.Register<PlacementCanvas, IReadOnlyList<double>>(nameof(GuidesY), []);
+
+    /// <summary>Whether a drag snaps at all. Alt suspends it for one gesture.</summary>
+    public static readonly StyledProperty<bool> SnapEnabledProperty =
+        AvaloniaProperty.Register<PlacementCanvas, bool>(nameof(SnapEnabled), true);
+
+    public IReadOnlyList<double> GuidesX
+    {
+        get => GetValue(GuidesXProperty);
+        set => SetValue(GuidesXProperty, value);
+    }
+
+    public IReadOnlyList<double> GuidesY
+    {
+        get => GetValue(GuidesYProperty);
+        set => SetValue(GuidesYProperty, value);
+    }
+
+    public bool SnapEnabled
+    {
+        get => GetValue(SnapEnabledProperty);
+        set => SetValue(SnapEnabledProperty, value);
+    }
+
+    /// <summary>How near a guide a dragged edge has to come before it takes, in pixels.</summary>
+    private const double SnapPixels = 6;
+
     public PlacementCanvas()
     {
         InitializeComponent();
@@ -152,12 +191,139 @@ public partial class PlacementCanvas : UserControl
         // Always computed from where the grab STARTED, never accumulated frame by frame: an
         // incremental sum drifts, and a clamped increment loses the movement that was clipped, so the
         // box stops following the pointer once it has touched an edge.
+        var moved = Resize(
+            _grabbedRect,
+            _edges,
+            dx,
+            dy,
+            // Shift keeps a corner drag on the box's own aspect ratio, which is what stops a resize
+            // quietly distorting a picture that was placed to match its source.
+            e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+
+        // Alt suspends snapping for one gesture — the escape hatch for placing something a few pixels
+        // off a guide, which is otherwise impossible once the guide has it.
+        if (SnapEnabled && !e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+            moved = Snap(moved, _edges, surface);
+
         Gesture?.Invoke(this, new PlacementGesture(
             _draggedIndex,
             Boxes[_draggedIndex].SubjectId,
             Boxes[_draggedIndex].LayerIndex,
-            Resize(_grabbedRect, _edges, dx, dy)));
+            moved));
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// Pulls the edges a drag is moving onto the nearest guide.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A MOVE snaps whichever of the box's own edges — and its centre — comes nearest a guide, and
+    /// carries the whole box with it, so a rectangle can be aligned by its left edge, its right edge or
+    /// its middle without choosing a mode. A RESIZE snaps only the edges being dragged, because the
+    /// opposite side is the thing being measured from.
+    /// </para>
+    /// <para>
+    /// The tolerance is in PIXELS rather than fractions: it has to feel the same on a canvas drawn
+    /// small in the inspector and on the same canvas filling the video pane.
+    /// </para>
+    /// </remarks>
+    private NormalizedRect Snap(NormalizedRect rect, ResizeEdges edges, Panel surface)
+    {
+        var toleranceX = surface.Bounds.Width > 0 ? SnapPixels / surface.Bounds.Width : 0;
+        var toleranceY = surface.Bounds.Height > 0 ? SnapPixels / surface.Bounds.Height : 0;
+
+        var guidesX = Guides(GuidesX, horizontal: true);
+        var guidesY = Guides(GuidesY, horizontal: false);
+
+        var (x, y, width, height) = (rect.X, rect.Y, rect.Width, rect.Height);
+
+        if (edges == ResizeEdges.None)
+        {
+            if (Nearest([x, x + (width / 2), x + width], guidesX, toleranceX) is { } shiftX)
+                x += shiftX;
+            if (Nearest([y, y + (height / 2), y + height], guidesY, toleranceY) is { } shiftY)
+                y += shiftY;
+
+            return new NormalizedRect(x, y, width, height);
+        }
+
+        if (edges.HasFlag(ResizeEdges.Left) && Nearest([x], guidesX, toleranceX) is { } left)
+        {
+            x += left;
+            width -= left;
+        }
+        else if (edges.HasFlag(ResizeEdges.Right)
+                 && Nearest([x + width], guidesX, toleranceX) is { } right)
+        {
+            width += right;
+        }
+
+        if (edges.HasFlag(ResizeEdges.Top) && Nearest([y], guidesY, toleranceY) is { } top)
+        {
+            y += top;
+            height -= top;
+        }
+        else if (edges.HasFlag(ResizeEdges.Bottom)
+                 && Nearest([y + height], guidesY, toleranceY) is { } bottom)
+        {
+            height += bottom;
+        }
+
+        return new NormalizedRect(x, y, width, height);
+    }
+
+    /// <summary>
+    /// Everything a drag can snap to on one axis.
+    /// </summary>
+    /// <remarks>
+    /// The canvas edges and its centre always, the caller's own guides, and the edges and centres of
+    /// every OTHER box on the canvas — lining two placements up with each other is the commonest
+    /// alignment there is and the one arithmetic helps with least.
+    /// </remarks>
+    private List<double> Guides(IReadOnlyList<double> extra, bool horizontal)
+    {
+        var guides = new List<double> { 0, 0.5, 1 };
+        guides.AddRange(extra);
+
+        for (var index = 0; index < Boxes.Count; index++)
+        {
+            if (index == _draggedIndex)
+                continue;
+
+            var box = RectOf(Boxes[index]);
+            var near = horizontal ? box.X : box.Y;
+            var far = horizontal ? box.X + box.Width : box.Y + box.Height;
+
+            guides.Add(near);
+            guides.Add((near + far) / 2);
+            guides.Add(far);
+        }
+
+        return guides;
+    }
+
+    /// <summary>The smallest shift that puts one of <paramref name="edges"/> on a guide, or null.</summary>
+    private static double? Nearest(
+        IReadOnlyList<double> edges, IReadOnlyList<double> guides, double tolerance)
+    {
+        if (tolerance <= 0)
+            return null;
+
+        double? best = null;
+
+        foreach (var edge in edges)
+        {
+            foreach (var guide in guides)
+            {
+                var shift = guide - edge;
+
+                if (Math.Abs(shift) <= tolerance && (best is not { } current || Math.Abs(shift) < Math.Abs(current)))
+                    best = shift;
+            }
+        }
+
+        return best;
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -261,10 +427,32 @@ public partial class PlacementCanvas : UserControl
         return edges;
     }
 
-    private static NormalizedRect Resize(NormalizedRect rect, ResizeEdges edges, double dx, double dy)
+    private static NormalizedRect Resize(
+        NormalizedRect rect, ResizeEdges edges, double dx, double dy, bool keepAspect = false)
     {
         if (edges == ResizeEdges.None)
             return new NormalizedRect(rect.X + dx, rect.Y + dy, rect.Width, rect.Height);
+
+        // A CORNER drag with Shift moves both axes by the same proportion, so the box keeps the shape
+        // it had. Driven by the larger of the two movements: following one axis alone makes the corner
+        // lag the pointer diagonally.
+        if (keepAspect
+            && rect is { Width: > 0, Height: > 0 }
+            && (edges.HasFlag(ResizeEdges.Left) || edges.HasFlag(ResizeEdges.Right))
+            && (edges.HasFlag(ResizeEdges.Top) || edges.HasFlag(ResizeEdges.Bottom)))
+        {
+            var growX = edges.HasFlag(ResizeEdges.Left) ? -dx : dx;
+            var growY = edges.HasFlag(ResizeEdges.Top) ? -dy : dy;
+            var scale = Math.Abs(growX / rect.Width) >= Math.Abs(growY / rect.Height)
+                ? growX / rect.Width
+                : growY / rect.Height;
+
+            growX = scale * rect.Width;
+            growY = scale * rect.Height;
+
+            dx = edges.HasFlag(ResizeEdges.Left) ? -growX : growX;
+            dy = edges.HasFlag(ResizeEdges.Top) ? -growY : growY;
+        }
 
         var (x, y, width, height) = (rect.X, rect.Y, rect.Width, rect.Height);
 

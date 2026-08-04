@@ -24,6 +24,18 @@ namespace HaCue2.Controls;
 /// </remarks>
 public class SeekBar : ProgressBar
 {
+    /// <summary>
+    /// Styled as a <see cref="ProgressBar"/>, because that is what it is.
+    /// </summary>
+    /// <remarks>
+    /// A templated control looks up its default <c>ControlTheme</c> by STYLE KEY, which is its own
+    /// concrete type unless it says otherwise. The booth theme keys its bar off
+    /// <c>{x:Type ProgressBar}</c>, so without this a <c>SeekBar</c> found no theme, got no template,
+    /// and rendered NOTHING — every playing cue in the Active panel showed an empty space where its
+    /// progress should be, which reads as a bar that never moves.
+    /// </remarks>
+    protected override Type StyleKeyOverride => typeof(ProgressBar);
+
     /// <summary>Raised once per gesture, with the fraction of the whole the operator landed on.</summary>
     public static readonly RoutedEvent<SeekEventArgs> SeekedEvent =
         RoutedEvent.Register<SeekBar, SeekEventArgs>(nameof(Seeked), RoutingStrategies.Bubble);

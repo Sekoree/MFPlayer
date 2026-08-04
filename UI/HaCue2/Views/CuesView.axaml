@@ -31,9 +31,10 @@
         </Button>
         <!-- Held, not clicked (register decision: ~400 ms). The one button an operator hits without
              reading is the one that must not fire on a mis-click. -->
-        <Button Grid.Column="3" Classes="panic" Content="{Binding PanicLabel}"
-                PointerPressed="OnPanicPressed" PointerReleased="OnPanicReleased"
-                PointerCaptureLost="OnPanicReleased"
+        <!-- The hold gesture is wired in code-behind, NOT here: Button marks PointerPressed and
+             PointerReleased handled in its own class handler, so a handler declared in markup is
+             never called and PANIC did nothing at all. See CuesView's constructor. -->
+        <Button Grid.Column="3" Classes="panic" Name="PanicButton" Content="{Binding PanicLabel}"
                 ToolTip.Tip="Hold to stop everything." />
         <Button Grid.Column="4" Classes="icon" Content="↑ STBY" Click="OnStandbyUp" />
         <Button Grid.Column="5" Classes="icon" Content="↓ STBY" Click="OnStandbyDown" />

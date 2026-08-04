@@ -3,6 +3,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
 using HaCue2.Controls;
 using HaCue2.Core.Model;
@@ -13,6 +14,37 @@ namespace HaCue2.Views;
 public partial class VideoView : UserControl
 {
     public VideoView() => InitializeComponent();
+
+    /// <summary>
+    /// Picks the composition's holding slate.
+    /// </summary>
+    /// <remarks>
+    /// The field stays typable beside it, for the same reason every other path field in the app does:
+    /// pasting is faster than clicking through, and a path on the show machine cannot be picked from
+    /// the laptop a show is authored on. A cancelled picker leaves what was typed alone.
+    /// </remarks>
+    private async void OnBrowseIdleImage(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not VideoViewModel video || TopLevel.GetTopLevel(this) is not { } top)
+            return;
+
+        var files = await top.StorageProvider.OpenFilePickerAsync(
+            new Avalonia.Platform.Storage.FilePickerOpenOptions
+            {
+                Title = "Choose the idle image",
+                AllowMultiple = false,
+                FileTypeFilter =
+                [
+                    new Avalonia.Platform.Storage.FilePickerFileType("Images")
+                    {
+                        Patterns = ["*.png", "*.jpg", "*.jpeg", "*.bmp", "*.webp", "*.tif", "*.tiff"],
+                    },
+                ],
+            });
+
+        if (files.FirstOrDefault()?.TryGetLocalPath() is { } path)
+            video.CompositionIdleImage = path;
+    }
 
     /// <summary>
     /// Hands the view-model the machine's real screen list.
