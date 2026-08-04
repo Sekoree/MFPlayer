@@ -18,6 +18,16 @@
              The plan's `hacue2` check CLI verb (D9, still draft) is a separate question from this
              binary's name. -->
         <AssemblyName>HaCue2Desktop</AssemblyName>
+        <!-- IL2104 (trim) / IL3053 (AOT) are ILC's per-assembly *aggregate* "this assembly was not
+             trim/AOT tested" warnings, raised only for third-party dependencies we cannot annotate. On
+             win-x64 that is SharpGen.Runtime, which Avalonia's Win32 backend brings in: with repo-wide
+             warnings-as-errors it turned the NativeAOT publish into `error IL2104` and took the whole
+             artifact job down, while the same warning has always been merely visible on HaPlay.Desktop,
+             which demotes the pair. Only IL2104 fires today; IL3053 is its AOT-side twin and travels with
+             it. First-party libraries are IsAotCompatible, so a real regression there still surfaces as a
+             *detailed* IL2xxx/IL3xxx code, which stays fatal (BUILD-03) - including the Mond IL2026 that
+             HaPlay accepts and this app has no reason to. -->
+        <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2104;IL3053</WarningsNotAsErrors>
     </PropertyGroup>
 
     <ItemGroup>
