@@ -146,4 +146,5 @@ public sealed class HaCueProjectFormatException : Exception
 [JsonSerializable(typeof(VisualizerCueNode))]
 [JsonSerializable(typeof(PatchCueNode))]
 [JsonSerializable(typeof(CommentCueNode))]
+[JsonSerializable(typeof(TextCueNode))]
 internal sealed partial class HaCueProjectJsonContext : JsonSerializerContext;

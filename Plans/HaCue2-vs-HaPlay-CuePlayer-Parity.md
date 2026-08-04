@@ -221,6 +221,27 @@ The owner asked for all of it, so items 1–7 above were built in one pass. What
 | **Trimmed LEN** | The cue list showed the FILE's duration, so a ten-second sting cut from a four-minute track read as four minutes. |
 | **Image cues** | Did not need a new cue kind: FFmpeg decodes a still as a one-frame container, and `FreezeLastFrame` is what makes it a title card. An imported image now gets that end behaviour automatically. |
 
-**Still open after this pass:** TEXT cues (§4) — they need a text renderer, which is a genuinely
-different piece of work from everything above. The per-cue `DisablePreRoll` opt-out (§3) is also not
-there: the session's warm picks the next N itself and has no per-cue veto.
+### The last three, closed the same day
+
+| Item | What it was |
+| --- | --- |
+| **Seek lock** (§5) | A latch above the Active panel, **locked by default** — the one default here chosen against convenience. The bars sit under the pointer for a whole show, a drag is instantly audible, and there is no undo for it. Enforced on the control AND in the command, so a seek arriving from anywhere meets the same latch. |
+| **Per-cue `DisablePreRoll`** (§3) | `ShowClipBinding.DisablePreRoll`, honoured in `BuildUpcomingSpecs`. A clip that opts out is SKIPPED rather than counted and dropped — pre-roll's depth is "how many decoders may be held", and spending one on a clip that declined would shorten the warm for the cues that wanted it. Shown as the positive ("pre-roll this cue"), because a checkbox called "disable", ticked to mean "do not", is one an operator reads twice under pressure. |
+| **Text cues** (§4) | A new `TextCueNode` kind. The document stores WORDS — portable, diffable, translatable — and `TextCards` draws them into the machine's media cache; the compiler is told where they landed through `ShowCompileContext.RenderedText`, the same seam that carries probe results. From there a card is an ordinary single-frame clip with `FreezeLastFrame`, so placement, mapping, fades, pre-roll and recording all work on it unchanged. |
+
+**Why text renders app-side.** Rasterising text needs a font stack, and a font stack belongs to an
+application rather than to a show file or a headless compiler. Rendering to a PNG rather than handing
+the session a frame means every stage after the draw — pre-roll, placement, the layer mapping, the
+recorders — already works, and a card that comes out wrong is a file somebody can open and look at.
+Cards are keyed by CONTENT, so two cues that would draw the same card share one file and editing a
+word invalidates it without anything tracking what changed.
+
+**Harness note.** `HaCue2.Tests` now runs headless with Skia (`UseHeadlessDrawing: false`) rather than
+the stub drawing backend. The stub answers layout and hit-testing and produces no pixels, which was
+enough for every other view test and not enough for this one: a text card against the stub renders an
+empty canvas that a "did a file appear" check would happily accept. All 221 tests stay green.
+
+**Nothing from this audit is open.** §4's other media sources — NDI input, PortAudio input, YouTube,
+MMD — remain unbuilt, and were never on the recommended list: they are all "what else can a cue play",
+the framework already provides them through the registry HaCue2 uses, and none of them is a gap an
+operator hits while building an ordinary show.

@@ -21,6 +21,10 @@
 
     <ItemGroup>
         <PackageReference Include="Avalonia.Headless" />
+        <!-- Real drawing in the headless platform. Needed by the text-card render test: a card is
+             words turned into pixels, and the stub drawing backend produces an empty canvas, so
+             without Skia the one thing that test exists to prove is the one thing it cannot see. -->
+        <PackageReference Include="Avalonia.Skia" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" />
         <PackageReference Include="xunit" />
         <PackageReference Include="xunit.runner.visualstudio" />

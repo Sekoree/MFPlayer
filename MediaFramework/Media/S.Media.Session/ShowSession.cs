@@ -1330,7 +1330,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         // Which cues come next is the cue layer's call; turning them into openable specs is the engine's.
         foreach (var cueId in _fires.UpcomingCueIds(groupId, DefaultGroup, GetGoCursor(groupId), count))
         {
-            if (_clipsById.TryGetValue(cueId, out var binding))
+            // A clip that opts OUT is skipped rather than counted and dropped: pre-roll's depth is
+            // "how many decoders may be held", and spending one of them on a clip that declined would
+            // shorten the warm for the cues that did want it.
+            if (_clipsById.TryGetValue(cueId, out var binding) && !binding.DisablePreRoll)
                 specs.Add(BuildClipSpec(binding));
         }
 

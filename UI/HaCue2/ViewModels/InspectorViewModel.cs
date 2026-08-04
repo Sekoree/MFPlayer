@@ -68,6 +68,7 @@ public partial class InspectorViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsFadePane))]
     [NotifyPropertyChangedFor(nameof(IsJumpPane))]
     [NotifyPropertyChangedFor(nameof(IsVisualizerPane))]
+    [NotifyPropertyChangedFor(nameof(IsTextPane))]
     private string? _selectedTab;
 
     public int SelectionCount => _selection.Count;
@@ -213,6 +214,19 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(IsLooping));
         OnPropertyChanged(nameof(LoopCrossfadeValue));
         OnPropertyChanged(nameof(ColorTagIndex));
+        OnPropertyChanged(nameof(PreRollValue));
+        OnPropertyChanged(nameof(CardText));
+        OnPropertyChanged(nameof(CardFont));
+        OnPropertyChanged(nameof(CardSize));
+        OnPropertyChanged(nameof(CardBold));
+        OnPropertyChanged(nameof(CardItalic));
+        OnPropertyChanged(nameof(CardInk));
+        OnPropertyChanged(nameof(CardGround));
+        OnPropertyChanged(nameof(CardAlignIndex));
+        OnPropertyChanged(nameof(CardAnchorIndex));
+        OnPropertyChanged(nameof(CardFadeIn));
+        OnPropertyChanged(nameof(CardFadeOut));
+        OnPropertyChanged(nameof(CardHint));
         OnPropertyChanged(nameof(CrossfadeValue));
         OnPropertyChanged(nameof(AtEndIndex));
         OnPropertyChanged(nameof(SubtitlePicker));
@@ -267,6 +281,9 @@ public partial class InspectorViewModel : ObservableObject
         CueKind.Jump => ["GENERAL", "JUMP", "NOTE"],
         CueKind.Visualizer => ["GENERAL", "VISUALIZER", "VIDEO", "EFFECTS", "NOTE"],
         CueKind.Patch => ["GENERAL", "PATCH", "NOTE"],
+        // A card is words plus where they sit, so it takes VIDEO for the placement and EFFECTS for
+        // an opacity lane — it is a picture from the moment it is drawn.
+        CueKind.Text => ["GENERAL", "TEXT", "VIDEO", "EFFECTS", "NOTE"],
         _ => ["GENERAL", "NOTE"],
     };
 
@@ -282,6 +299,7 @@ public partial class InspectorViewModel : ObservableObject
     public bool IsFadePane => SelectedTab == "FADE";
     public bool IsJumpPane => SelectedTab == "JUMP";
     public bool IsVisualizerPane => SelectedTab == "VISUALIZER";
+    public bool IsTextPane => SelectedTab == "TEXT";
 
     // ── editable fields ───────────────────────────────────────────────────────────────────────
     // Across a multi-selection a differing value reads "—" and stays that way until the operator types
@@ -406,6 +424,27 @@ public partial class InspectorViewModel : ObservableObject
             EditMedia("loopCrossfade",
                 item => item.LoopCrossfadeMs, (item, ms) => item.LoopCrossfadeMs = ms,
                 Math.Clamp(value, 0, 30_000));
+        }
+    }
+
+    /// <summary>
+    /// Whether pre-roll opens this cue's media ahead of time.
+    /// </summary>
+    /// <remarks>
+    /// Phrased as the POSITIVE on screen — "pre-roll this cue" — because the document's flag is a
+    /// disable and a checkbox called "disable" that is ticked to mean "do not" is one an operator has
+    /// to read twice under pressure.
+    /// </remarks>
+    public bool PreRollValue
+    {
+        get => Cue is not MediaCueNode { DisablePreRoll: true };
+        set
+        {
+            if (Cue is not MediaCueNode media || value != media.DisablePreRoll)
+                return;
+
+            EditMedia("preRoll",
+                item => item.DisablePreRoll, (item, off) => item.DisablePreRoll = off, !value);
         }
     }
 
@@ -1281,6 +1320,139 @@ public partial class InspectorViewModel : ObservableObject
     private JumpCueNode? Jump => Cue as JumpCueNode;
     private ActionCueNode? Action => Cue as ActionCueNode;
     private PatchCueNode? Patch => Cue as PatchCueNode;
+    // ── text cues ─────────────────────────────────────────────────────────────────────────────
+    // The document stores WORDS; the app draws them. Everything here is what the drawing is made
+    // from, and changing any of it invalidates the cached card by content rather than by tracking.
+
+    private TextCueNode? Card => Cue as TextCueNode;
+
+    public string CardText
+    {
+        get => Card?.Text ?? "";
+        set => EditCard("text", card => card.Text, (card, text) => card.Text = text, value ?? "");
+    }
+
+    /// <summary>
+    /// The face, or empty for the app's own.
+    /// </summary>
+    /// <remarks>
+    /// A hint, matched the way an audio line's device name is: a booth machine may not have the face a
+    /// show was authored with, and falling back to something readable beats refusing to draw.
+    /// </remarks>
+    public string CardFont
+    {
+        get => Card?.FontFamily ?? "";
+        set => EditCard("font",
+            card => card.FontFamily, (card, name) => card.FontFamily = name, (value ?? "").Trim());
+    }
+
+    /// <summary>Cap height as a fraction of the frame, so the card survives a canvas resize.</summary>
+    public double CardSize
+    {
+        get => Card?.FontScale ?? 0.12;
+        set => EditCard("fontScale",
+            card => card.FontScale, (card, scale) => card.FontScale = scale,
+            Math.Clamp(value, 0.01, 1));
+    }
+
+    public bool CardBold
+    {
+        get => Card?.Bold == true;
+        set => EditCard("bold", card => card.Bold, (card, on) => card.Bold = on, value);
+    }
+
+    public bool CardItalic
+    {
+        get => Card?.Italic == true;
+        set => EditCard("italic", card => card.Italic, (card, on) => card.Italic = on, value);
+    }
+
+    public string CardInk
+    {
+        get => Card?.Foreground ?? "#FFFFFF";
+        set => EditCard("foreground",
+            card => card.Foreground, (card, hex) => card.Foreground = hex, Hex(value, "#FFFFFF"));
+    }
+
+    /// <summary>The ground, or empty for a transparent card that sits over whatever is underneath.</summary>
+    public string CardGround
+    {
+        get => Card?.Background ?? "";
+        set => EditCard("background",
+            card => card.Background, (card, hex) => card.Background = hex, Hex(value, ""));
+    }
+
+    public IReadOnlyList<string> CardAligns { get; } = ["left", "centre", "right"];
+
+    public int CardAlignIndex
+    {
+        get => Card is { } card ? (int)card.Align : -1;
+        set
+        {
+            if (value >= 0)
+                EditCard("align", card => card.Align, (card, align) => card.Align = align,
+                    (TextAlign)value);
+        }
+    }
+
+    public IReadOnlyList<string> CardAnchors { get; } = ["top", "middle", "bottom"];
+
+    public int CardAnchorIndex
+    {
+        get => Card is { } card ? (int)card.Anchor : -1;
+        set
+        {
+            if (value >= 0)
+                EditCard("anchor", card => card.Anchor, (card, anchor) => card.Anchor = anchor,
+                    (TextAnchor)value);
+        }
+    }
+
+    public int CardFadeIn
+    {
+        get => Card?.FadeInMs ?? 0;
+        set => EditCard("fadeIn", card => card.FadeInMs, (card, ms) => card.FadeInMs = ms,
+            Math.Clamp(value, 0, 60_000));
+    }
+
+    public int CardFadeOut
+    {
+        get => Card?.FadeOutMs ?? 0;
+        set => EditCard("fadeOut", card => card.FadeOutMs, (card, ms) => card.FadeOutMs = ms,
+            Math.Clamp(value, 0, 60_000));
+    }
+
+    /// <summary>What the card will do, said on the pane rather than discovered on stage.</summary>
+    public string CardHint => Card is not { } card
+        ? ""
+        : card.Text.Trim().Length == 0
+            ? "no words yet — the cue will fire and show nothing"
+            : card.Placements.Count == 0
+                ? "not on any canvas yet — add a placement on the Video tab"
+                : "held on screen until something stops it";
+
+    private static string Hex(string? value, string fallback)
+    {
+        var text = (value ?? "").Trim();
+
+        if (text.Length == 0)
+            return fallback;
+
+        if (!text.StartsWith('#'))
+            text = '#' + text;
+
+        return text.Length == 7 ? text.ToUpperInvariant() : fallback;
+    }
+
+    private void EditCard<T>(
+        string property, Func<TextCueNode, T> read, Action<TextCueNode, T> write, T value)
+    {
+        if (Card is not { } card || EqualityComparer<T>.Default.Equals(read(card), value))
+            return;
+
+        Edit(property, "cues", () => read(card), number => write(card, number), value, "edit text cue");
+    }
+
     private VisualizerCueNode? Visualizer => Cue as VisualizerCueNode;
 
     // ── FADE ──────────────────────────────────────────────────────────────────────────────────

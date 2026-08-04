@@ -10,9 +10,19 @@ namespace HaCue2.Tests;
 
 public static class AvaloniaHeadlessTestApp
 {
+    /// <summary>
+    /// The headless app, drawing for REAL.
+    /// </summary>
+    /// <remarks>
+    /// <c>UseHeadlessDrawing: false</c> plus Skia, rather than the stub drawing backend. The stub
+    /// answers layout and hit-testing and produces no pixels, which is enough for every view test here
+    /// and not enough for one: a text card is words turned into a picture, and against the stub it
+    /// renders an empty canvas that a "did a file appear" check would happily accept.
+    /// </remarks>
     public static AppBuilder BuildAvaloniaApp() =>
         AppBuilder.Configure<TestApp>()
-            .UseHeadless(new AvaloniaHeadlessPlatformOptions());
+            .UseSkia()
+            .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
 }
 
 /// <summary>

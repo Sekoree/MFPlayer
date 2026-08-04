@@ -342,6 +342,14 @@ public partial class CuesViewModel : ObservableObject
         if (Engine is not { } host)
             return;
 
+        // The lock is enforced HERE as well as on the bar. The control refuses the gesture, and this
+        // refuses the command — a seek that arrived from anywhere else must meet the same latch.
+        if (!SeekUnlocked)
+        {
+            TransportProblem = "seeking is locked — unlock it above the Active panel first";
+            return;
+        }
+
         if (_runtime.ActiveCues.FirstOrDefault(row => row.CueId == cueId) is not { Duration: { } length })
             return;
 
@@ -354,6 +362,38 @@ public partial class CuesViewModel : ObservableObject
     /// <summary>The last refusal from a transport gesture, or nothing.</summary>
     [ObservableProperty]
     private string _transportProblem = "";
+
+    /// <summary>
+    /// Whether the Active panel's bars can be dragged.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// LOCKED by default, and this is the one default in the app chosen against convenience. The bars
+    /// sit under the pointer for the whole show, a drag on one is instantly audible in the room, and
+    /// there is no undo for it — an operator reaching past the panel to click something else must not
+    /// be able to move the playhead of a cue that is on air.
+    /// </para>
+    /// <para>
+    /// A latch rather than a modifier key: seeking is something an operator does deliberately during a
+    /// rehearsal or a fix, and holding a key down while dragging is a two-handed gesture on a surface
+    /// meant to be driven with one.
+    /// </para>
+    /// <para>
+    /// Machine-scope rather than in the document: whether THIS operator wants the bars live is a
+    /// preference, not a property of the show, and a show carried to another booth should not arrive
+    /// with somebody else's answer.
+    /// </para>
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SeekLockLabel))]
+    [NotifyPropertyChangedFor(nameof(SeekLockHint))]
+    private bool _seekUnlocked;
+
+    public string SeekLockLabel => SeekUnlocked ? "SEEK UNLOCKED" : "SEEK LOCKED";
+
+    public string SeekLockHint => SeekUnlocked
+        ? "the bars in Active can be dragged — a drag moves a cue that is on air"
+        : "click to allow dragging the bars in Active";
 
     /// <summary>Stops everything, over the project's stop fade. The split-menu half of STOP.</summary>
     public void StopAll() => _ = Engine?.StopAllAsync();
@@ -545,6 +585,7 @@ public partial class CuesViewModel : ObservableObject
             CueKind.Patch => new PatchCueNode { Label = "Patch" },
             CueKind.Visualizer => new VisualizerCueNode { Label = "Visualizer" },
             CueKind.Comment => new CommentCueNode { Label = "" },
+            CueKind.Text => new TextCueNode { Label = "Text", Text = "" },
             _ => new MediaCueNode
             {
                 Label = mediaPath.Length > 0

@@ -375,8 +375,17 @@ public static class CuePresentation
         JumpCueNode => ViewModels.CueKind.Jump,
         VisualizerCueNode => ViewModels.CueKind.Visualizer,
         PatchCueNode => ViewModels.CueKind.Patch,
+        TextCueNode => ViewModels.CueKind.Text,
         _ => ViewModels.CueKind.Comment,
     };
+
+    /// <summary>One line of a card's words, with the newlines shown rather than swallowed.</summary>
+    private static string Quote(string text)
+    {
+        var single = text.ReplaceLineEndings(" ⏎ ").Trim();
+
+        return single.Length <= 48 ? $"“{single}”" : $"“{single[..47]}…”";
+    }
 
     private static string Source(CueNode cue, HaCueProject project, ShowRuntime runtime) => cue switch
     {
@@ -385,6 +394,11 @@ public static class CuePresentation
         MediaCueNode media when runtime.Broken.Contains(cue.Id) =>
             $"media offline · {Path.GetFileName(media.MediaPath)}",
         MediaCueNode media => media.MediaPath,
+
+        // The WORDS, trimmed to the column. A card's path is a cache file nobody chose and nobody can
+        // read; what identifies it in a list is what it says.
+        TextCueNode { Text.Length: 0 } => "no words yet",
+        TextCueNode text => Quote(text.Text),
 
         GroupCueNode group =>
             $"{group.FireMode.ToString().ToLowerInvariant()} group · {group.Children.Count}",

@@ -2516,3 +2516,52 @@ must never delay the verb that triggered it.
 - **Per-cue `DisablePreRoll`.** The session's warm picks the next N itself and has no per-cue veto.
 - **A seek lock** on the Active panel. HaPlay gates scrubbing behind a toggle so a show cannot be
   dragged by accident; HaCue2's bar is always live.
+
+### 2026-08-04, third pass: the last three parity items
+
+**Seek lock.** A latch above the Active panel, **locked by default** — deliberately the one default in
+the app chosen against convenience. Those bars sit under the pointer for the whole show, a drag on one
+is instantly audible in the room, and there is no undo for it. A latch rather than a modifier key,
+because seeking is something an operator does on purpose during a fix, and holding a key while
+dragging is a two-handed gesture on a surface meant to be driven with one. Enforced twice: the control
+refuses the gesture and `SeekActiveAsync` refuses the command, so a seek arriving from anywhere else
+meets the same latch. Machine-scope, not in the document — whether this operator wants live bars is a
+preference, not a property of the show.
+
+**Per-cue pre-roll opt-out.** `ShowClipBinding.DisablePreRoll`, honoured in
+`ShowSession.BuildUpcomingSpecs`. A clip that opts out is SKIPPED rather than counted and dropped:
+pre-roll's depth is "how many decoders may be held", so spending one on a clip that declined would
+shorten the warm for the cues that wanted it. Worth having for a 4 K master that costs more to hold
+than it saves, or a source whose open starts a connection or claims a device early. The inspector
+phrases it as the positive — "pre-roll this cue" — because a checkbox called "disable", ticked to mean
+"do not", is one an operator has to read twice under pressure.
+
+**Text cues.** A new `TextCueNode`. The document stores WORDS and how they should look; `TextCards`
+(app-side) draws them into the machine's media cache, and the compiler is told where they landed
+through `ShowCompileContext.RenderedText` — the same seam that already carries probe results and
+resolved stream indices.
+
+Three decisions worth keeping:
+
+- **The app draws, not the compiler.** Rasterising text needs a font stack, and a font stack belongs
+  to an application. That is also what keeps a text cue portable: the words travel and each machine
+  draws them with what it has, with the face stored as a HINT matched the way a device name is.
+- **A PNG, not a frame.** A clip is opened from a path, so every stage after the draw — pre-roll,
+  placement, the per-layer mapping, the recorders — already works unchanged, and a card that comes out
+  wrong is a file somebody can open and look at.
+- **Keyed by content.** Two cues that would draw the same card share one file, and editing a word
+  invalidates it without anything tracking what changed. A card with no words draws nothing rather
+  than a black rectangle — which is the state every text cue is in between being added and typed into.
+
+The card is `FreezeLastFrame`: a single frame arrives, the clip ends immediately, and freezing is what
+makes it a card rather than a flash. It asks for `AudioStreamIndex: -1`, so a card standing over a
+running bed cannot interrupt it. Verified end to end — words → a 16 KB 1080p PNG → decoded to the
+Bgra32 frame the compositor takes.
+
+**Harness change:** `HaCue2.Tests` now runs headless with Skia (`UseHeadlessDrawing: false`) instead of
+the stub drawing backend, because against the stub a text card renders an empty canvas that a "did a
+file appear" check would happily accept. All 221 app tests stay green.
+
+**Everything on the parity audit's recommended list is now closed.** What remains unbuilt from it is
+§4's other media sources (NDI input, PortAudio input, YouTube, MMD) — never on the list, all "what
+else can a cue play", all already provided by the registry HaCue2 uses.

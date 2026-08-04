@@ -24,6 +24,7 @@ public enum CueKind
     Visualizer,
     Patch,
     Comment,
+    Text,
 }
 
 /// <summary>Colour role for a badge or a status word, named after the mockup's gels.</summary>
@@ -161,6 +162,7 @@ public sealed record CueRow
         CueKind.Visualizer => "✷",
         CueKind.Patch => "◇",
         CueKind.Comment => "※",
+        CueKind.Text => "T",
         _ => "·",
     };
 

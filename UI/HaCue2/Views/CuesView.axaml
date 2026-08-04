@@ -74,6 +74,7 @@
               <MenuItem Header="Jump" Click="OnAddCue" Tag="Jump" />
               <MenuItem Header="Patch" Click="OnAddCue" Tag="Patch" />
               <MenuItem Header="Visualizer" Click="OnAddCue" Tag="Visualizer" />
+              <MenuItem Header="Text" Click="OnAddCue" Tag="Text" />
               <Separator />
               <MenuItem Header="Comment" Click="OnAddCue" Tag="Comment" />
             </MenuFlyout>
@@ -231,6 +232,23 @@
         <c:PanelBox Grid.Row="2" MinHeight="120"
                     Header="Active" Subhead="{Binding ActiveCues.Count}"
                     Hint="{Binding ActivePanelHint}">
+          <!-- The seek latch. LOCKED by default: these bars sit under the pointer for the whole show,
+               a drag on one is instantly audible in the room, and there is no undo for it. -->
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7">
+                <ToggleButton Grid.Column="0" Theme="{StaticResource ChipToggle}"
+                              IsChecked="{Binding SeekUnlocked}">
+                  <StackPanel Orientation="Horizontal" Spacing="5">
+                    <Ellipse Classes="led" Classes.warn="{Binding SeekUnlocked}" />
+                    <TextBlock Text="{Binding SeekLockLabel}" />
+                  </StackPanel>
+                </ToggleButton>
+                <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
+                           TextWrapping="Wrap" Text="{Binding SeekLockHint}" />
+              </Grid>
+            </Border>
+          </c:PanelBox.Footer>
           <!-- Two row shapes, templated by TYPE: a lone sounding cue, and a GROUP that owns the ones
                inside it. A playlist of twelve used to fill this panel with twelve equal rows and
                nothing saying they were one thing. -->
@@ -317,6 +335,7 @@
                          release — a seek per pointer-move would re-buffer the clip on every pixel. -->
                     <c:SeekBar Grid.Column="6" Maximum="1" Value="{Binding Progress}"
                                IsSeekable="{Binding CanSeek}"
+                               IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).SeekUnlocked}"
                                VerticalAlignment="Center"
                                Seeked="OnSeekActive"
                                Tag="{Binding CueId}"

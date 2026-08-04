@@ -48,6 +48,7 @@ public sealed record CueList
 [JsonDerivedType(typeof(VisualizerCueNode), "visualizer")]
 [JsonDerivedType(typeof(PatchCueNode), "patch")]
 [JsonDerivedType(typeof(CommentCueNode), "comment")]
+[JsonDerivedType(typeof(TextCueNode), "text")]
 public abstract record CueNode
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -127,6 +128,17 @@ public sealed record MediaCueNode : CueNode
     /// the only workaround is to author the crossfade into the file.
     /// </remarks>
     public int LoopCrossfadeMs { get; set; }
+
+    /// <summary>
+    /// Keep this cue out of pre-roll.
+    /// </summary>
+    /// <remarks>
+    /// Pre-roll opens the next few cues' media so the next GO is instant, at the cost of a decoder
+    /// held open per warmed cue. A few are worth exempting: a 4 K master that costs more to hold than
+    /// it saves, or a source whose open starts something — a connection, a device claim — that nobody
+    /// wants running early. The cue still fires normally; it simply opens at that moment.
+    /// </remarks>
+    public bool DisablePreRoll { get; set; }
 
     /// <summary>
     /// Where playback starts inside the file, in milliseconds. HaPlay's <c>startOffsetMs</c>.
@@ -329,6 +341,101 @@ public sealed record PatchCueNode : CueNode
 /// <summary>A cue that is only its note — a marker in the list.</summary>
 public sealed record CommentCueNode : CueNode;
 
+/// <summary>
+/// Words on a canvas: a title card, a caption, a holding slate.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The document stores the WORDS and how they should look. What the engine plays is a picture — the
+/// app rasterises one into its media cache and hands the compiler the path, because rendering text
+/// needs a font stack and a font stack belongs to an application, not to a show file. That is what
+/// keeps a text cue portable: the words travel, and each machine draws them with what it has.
+/// </para>
+/// <para>
+/// It behaves as a still from there on: it holds its picture until something stops it, exactly like an
+/// imported image. Placements, fades and effect lanes all apply, because by the time the engine sees
+/// it there is nothing to distinguish it from any other single-frame clip.
+/// </para>
+/// </remarks>
+public sealed record TextCueNode : CueNode
+{
+    public string Text { get; set; } = "";
+
+    /// <summary>
+    /// The face to draw with, or empty for the app's own.
+    /// </summary>
+    /// <remarks>
+    /// A HINT, matched the way an audio line's device name is: a booth machine may not have the face a
+    /// show was authored with, and falling back to something readable beats refusing to draw. Empty is
+    /// the honest default — the app embeds one face precisely so a show that names none looks the same
+    /// everywhere.
+    /// </remarks>
+    public string FontFamily { get; set; } = "";
+
+    /// <summary>Cap height as a fraction of the canvas, so the card survives a resize.</summary>
+    /// <remarks>
+    /// Not points. A card authored at 72 pt on a 1280×720 canvas is unreadable on a 4 K one, and every
+    /// other geometry in this document is already a fraction for the same reason.
+    /// </remarks>
+    public double FontScale { get; set; } = 0.12;
+
+    public bool Bold { get; set; }
+    public bool Italic { get; set; }
+
+    /// <summary>Ink and ground as "#RRGGBB"; the ground may be "" for a transparent card.</summary>
+    public string Foreground { get; set; } = "#FFFFFF";
+
+    public string Background { get; set; } = "";
+
+    public TextAlign Align { get; set; } = TextAlign.Center;
+    public TextAnchor Anchor { get; set; } = TextAnchor.Middle;
+
+    /// <summary>Where the card sits, like any other cue's picture.</summary>
+    public List<LayerPlacement> Placements { get; set; } = [];
+
+    public int FadeInMs { get; set; }
+    public CurveSpec FadeInCurve { get; set; } = new();
+    public int FadeOutMs { get; set; }
+    public CurveSpec FadeOutCurve { get; set; } = new();
+
+    public List<EffectLane> EffectLanes { get; set; } = [];
+
+    /// <summary>
+    /// Everything the picture is drawn FROM, as one string.
+    /// </summary>
+    /// <remarks>
+    /// The cache key. Two cues that would draw the same card share one file, and editing a word
+    /// invalidates it without anything having to track what changed.
+    /// </remarks>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string RenderKey =>
+        string.Join(
+            '',
+            Text,
+            FontFamily,
+            FontScale.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
+            Bold,
+            Italic,
+            Foreground,
+            Background,
+            Align,
+            Anchor);
+}
+
+public enum TextAlign
+{
+    Left,
+    Center,
+    Right,
+}
+
+public enum TextAnchor
+{
+    Top,
+    Middle,
+    Bottom,
+}
+
 /// <summary>Where a cue's picture sits on a composition.</summary>
 public sealed record LayerPlacement
 {
@@ -466,6 +573,7 @@ public static class CuePlacements
     {
         MediaCueNode media => media.Placements,
         VisualizerCueNode visualizer => visualizer.Placements,
+        TextCueNode text => text.Placements,
         _ => [],
     };
 
@@ -474,6 +582,7 @@ public static class CuePlacements
     {
         MediaCueNode media => media.Placements,
         VisualizerCueNode visualizer => visualizer.Placements,
+        TextCueNode text => text.Placements,
         _ => null,
     };
 }

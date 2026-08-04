@@ -646,12 +646,35 @@ public partial class ShellViewModel : ObservableObject
 
     private string? ProjectPath => HasPath ? Path : null;
 
-    private ShowCompileContext CompileContext() => new()
+    /// <summary>
+    /// Draws every text cue whose words changed and hands the compiler where they landed.
+    /// </summary>
+    /// <remarks>
+    /// The render happens HERE, on the way into a compile, rather than on every edit: a card is only
+    /// needed when the document is about to be handed to the engine, and rendering per keystroke would
+    /// rasterise a title one letter at a time. The renderer keys on content, so this is a string
+    /// compare per text cue when nothing has changed.
+    /// </remarks>
+    public TextCards Cards { get; } = new(HaCue2.Machine.MediaCache.RootFor(App.Settings));
+
+    private ShowCompileContext CompileContext()
     {
-        ProjectPath = ProjectPath,
-        Durations = Runtime.MediaDurations,
-        Tracks = Machine.Media.TracksIn(Project, ProjectPath),
-    };
+        Cards.Refresh(Project);
+
+        foreach (var (cueId, problem) in Cards.Problems)
+        {
+            if (Project.FindCue(cueId) is { } cue)
+                FileMessage = $"“{cue.Label}” could not be drawn — {problem}";
+        }
+
+        return new ShowCompileContext
+        {
+            ProjectPath = ProjectPath,
+            Durations = Runtime.MediaDurations,
+            Tracks = Machine.Media.TracksIn(Project, ProjectPath),
+            RenderedText = Cards.Paths,
+        };
+    }
 
     public bool HasPath => Path.Length > 0;
 

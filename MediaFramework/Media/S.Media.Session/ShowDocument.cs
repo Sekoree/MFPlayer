@@ -197,6 +197,24 @@ public sealed record ShowClipBinding(
     /// <summary>What happens when the clip reaches its (trimmed) end (GUI <c>MediaCueNode.EndBehavior</c>).</summary>
     public ClipEndBehavior EndBehavior { get; init; } = ClipEndBehavior.Stop;
 
+    /// <summary>
+    /// Keep this clip OUT of pre-roll (GUI <c>MediaCueNode.DisablePreRoll</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="ShowSession.WarmUpcomingAsync"/> opens the next few cues' media so the next GO is
+    /// instant. That is a decoder held open per warmed cue, and a few clips are worth exempting: a
+    /// 4 K master on a slow disk that costs more to hold than it saves, a live/network source whose
+    /// open starts a connection nobody wants running early, or a device a warm would take exclusively
+    /// long before the show needs it.
+    /// </para>
+    /// <para>
+    /// It excludes the clip from the WARM only. The cue still fires normally — it simply opens at that
+    /// moment, which is where every cue was before pre-roll existed.
+    /// </para>
+    /// </remarks>
+    public bool DisablePreRoll { get; init; }
+
     /// <summary>Run the end-of-clip monitor purely off the reported <see cref="StartOffset"/>→duration window even
     /// for a plain <see cref="ClipEndBehavior.Stop"/> with no trim/fade/loop. Set for a <em>held</em> source (a
     /// rendered text or still cue) that never signals EOF on its own: the clip is stopped at its duration by the

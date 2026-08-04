@@ -161,6 +161,17 @@ public static class ShowCompiler
 
                         break;
 
+                    case TextCueNode text:
+                        cues.Add(Definition(text, ++running, id));
+
+                        // A text cue whose picture has not been rendered on this machine yet is a cue
+                        // with no clip — the same honest state as a media cue with no file, and for
+                        // the same reason: one unrendered card must not stop the document loading.
+                        if (context.RenderedText.TryGetValue(text.Id, out var card))
+                            clips.Add(TextClip(project, text, card));
+
+                        break;
+
                     // Every remaining kind — visualizer, action, fade, jump, patch, comment — is a cue
                     // with NO CLIP. A visualizer has a canvas presence and no media to open; the rest
                     // are decisions about the show rather than something to play, and the app's
@@ -271,6 +282,7 @@ public static class ShowCompiler
                 _ => media.Loop ? ClipEndBehavior.Loop : ClipEndBehavior.Stop,
             },
             LoopCrossfade = TimeSpan.FromMilliseconds(Math.Max(0, media.LoopCrossfadeMs)),
+            DisablePreRoll = media.DisablePreRoll,
             Placement = placement is null ? null : Placement(placement),
             ExtraPlacements = placements.Count < 2
                 ? null
@@ -340,6 +352,56 @@ public static class ShowCompiler
             send.SourceChannel,
             send.LogicalChannelId.ToString(),
             send.Muted ? 0f : Linear(send.GainDb + media.LevelDb)));
+
+    /// <summary>
+    /// A text cue as a clip: its rendered card, held on screen.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A single-frame picture, so the end arrives immediately and
+    /// <see cref="ClipEndBehavior.FreezeLastFrame"/> is what makes it a CARD rather than a flash. It
+    /// holds until something stops it, which is how a title card, a caption and a holding slate all
+    /// behave; a card that should come off on its own gets a fade cue or a follow, like anything else.
+    /// </para>
+    /// <para>
+    /// No audio at all — a text cue has no sends and asks the decoder for no audio stream, so a card
+    /// standing over a running bed cannot interrupt it.
+    /// </para>
+    /// </remarks>
+    private static ShowClipBinding TextClip(HaCueProject project, TextCueNode text, string renderedPath)
+    {
+        var placements = text.Placements;
+        var placement = placements.FirstOrDefault();
+        var fadeIn = text.FadeInCurve.Resolve(project);
+        var fadeOut = text.FadeOutCurve.Resolve(project);
+
+        return new ShowClipBinding(
+            ClipId: text.Id.ToString(),
+            MediaPath: renderedPath,
+            CompositionId: placement?.CompositionId.ToString(),
+            LayerIndex: placement?.LayerIndex ?? 0,
+            // −1 rather than null: a card has no audio, and asking the decoder to ELECT a stream in a
+            // file that has none is a question with no good answer.
+            AudioStreamIndex: -1)
+        {
+            FadeIn = TimeSpan.FromMilliseconds(text.FadeInMs),
+            FadeInCurve = fadeIn.Law,
+            FadeInShape = fadeIn.Custom,
+            FadeOut = TimeSpan.FromMilliseconds(text.FadeOutMs),
+            FadeOutCurve = fadeOut.Law,
+            FadeOutShape = fadeOut.Custom,
+            EndBehavior = ClipEndBehavior.FreezeLastFrame,
+            Placement = placement is null ? null : Placement(placement),
+            ExtraPlacements = placements.Count < 2
+                ? null
+                : [.. placements.Skip(1).Select(extra => new ShowClipPlacement(
+                    extra.CompositionId.ToString(),
+                    extra.LayerIndex,
+                    Placement(extra)))],
+            // No envelope. A lane is compiled against the cue's PLAYED length and a card has none — it
+            // is one frame held until something stops it. Its fades are the ramps it can have.
+        };
+    }
 
     /// <summary>
     /// One placement, with everything the compositor can act on.
