@@ -265,7 +265,13 @@
                           Headline="No audio lines"
                           Detail="Add one above. A line is a device this show sends to; logical outputs are patched onto its channels." />
             <ListBox IsVisible="{Binding !HasNoLines}" Theme="{StaticResource TableRows}"
-                     ItemsSource="{Binding Lines}" SelectedItem="{Binding SelectedLine}">
+                     ItemsSource="{Binding Lines}" SelectedItem="{Binding SelectedLine}"
+                     KeyDown="OnLinesKeyDown">
+              <ListBox.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Remove…" Click="OnDialog" Tag="line:remove" />
+                </ContextMenu>
+              </ListBox.ContextMenu>
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:AudioLineRow">
                   <Grid ColumnDefinitions="90,*,40,110,150,110" ColumnSpacing="8" Margin="8,4">

@@ -180,8 +180,19 @@ public static class ProjectReferences
             found.Add(new ProjectReference(Snapshot, snapshot.Id.ToString(),
                 $"snapshot “{snapshot.Name}” stores a cell on it"));
 
+        // A patch cue can target a whole LINE ("everything Fold L feeds on the 18i20"), which is a
+        // reference to the line and not only to the channel.
+        foreach (var cue in project.AllCues().OfType<PatchCueNode>()
+                     .Where(cue => cue.Levels.Any(level => level.LineId == id)))
+            found.Add(CueRef(cue, "changes levels on it"));
+
         if (project.AudioPatch.ClockMasterLineId == id)
             found.Add(new ProjectReference("document", null!, "it is the clock master"));
+
+        // The rig monitors THROUGH a line, so deleting that line silently sends audition back to the
+        // bay's default — which is a different pair of speakers, discovered mid-show.
+        if (project.Audition.AudioLineId == id)
+            found.Add(new ProjectReference("document", null!, "the audition rig monitors through it"));
 
         return found;
     }

@@ -104,4 +104,153 @@ public class DevicePickerTests
         Assert.True(new PromptField { Label = "Sidecar", Kind = PromptFieldKind.File }.IsPath);
         Assert.False(new PromptField { Label = "Name" }.IsPath);
     }
+
+    [Fact]
+    public Task RemovingALineAsksFirstAndThenTakesItsPatchWithIt() => ShellFixture.WithShell(shell =>
+    {
+        var audio = shell.Audio;
+        var line = shell.Project.AudioLines[0];
+        audio.SelectedLine = audio.Lines.First(row => row.Id == line.Id);
+
+        var prompt = Dialogs.RemoveAudioLine(audio.Journal, audio.SelectedLine.Id);
+        Assert.NotNull(prompt);
+
+        // A question, not a form: no fields, a REMOVE verb, and the consequences counted in the hint
+        // where the operator is actually looking.
+        Assert.Empty(prompt!.Fields);
+        Assert.Equal("REMOVE", prompt.Confirm);
+        Assert.Contains(line.Name, prompt.Title, StringComparison.Ordinal);
+
+        // Nothing has happened yet — opening the dialog must not be the edit.
+        Assert.Contains(shell.Project.AudioLines, item => item.Id == line.Id);
+
+        prompt.Commit();
+        audio.Refresh();
+
+        Assert.DoesNotContain(shell.Project.AudioLines, item => item.Id == line.Id);
+        Assert.DoesNotContain(shell.Project.AudioPatch.Cells, cell => cell.LineId == line.Id);
+        Assert.DoesNotContain(audio.Lines, row => row.Id == line.Id);
+    });
+
+    [Fact]
+    public Task RemovingWithNothingSelectedOffersNoDialogRatherThanADeadOne() =>
+        ShellFixture.WithShell(shell =>
+            Assert.Null(Dialogs.RemoveAudioLine(shell.Audio.Journal, lineId: null)));
+
+    // ── the video pane's lists ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public Task AddingACompositionMakesItAppear() => ShellFixture.WithShell(shell =>
+    {
+        var video = shell.Video;
+        var before = video.Compositions.Count;
+
+        var prompt = Dialogs.AddComposition(video.Journal);
+        prompt.Fields.Single(f => f.Label == "Name").Value = "Cyc";
+        prompt.Commit();
+        video.Refresh();
+
+        // The panes were built once in the constructor and never rebuilt, so an added composition
+        // simply never appeared — the pane looked broken rather than empty.
+        Assert.Equal(before + 1, video.Compositions.Count);
+        Assert.Contains(video.Compositions, pane => pane.Name == "Cyc");
+    });
+
+    [Fact]
+    public Task AddingAnOutputMakesItAppear() => ShellFixture.WithShell(shell =>
+    {
+        var video = shell.Video;
+        var before = video.Outputs.Count;
+
+        var prompt = Dialogs.AddVideoOutput(video.Journal, VideoOutputKind.Ndi, []);
+        prompt.Fields.Single(f => f.Label == "Name").Value = "Stream feed";
+        prompt.Commit();
+        video.Refresh();
+
+        Assert.Equal(before + 1, video.Outputs.Count);
+        Assert.Contains(video.Outputs, row => row.Name == "Stream feed");
+    });
+
+    [Fact]
+    public Task RenamingACompositionReachesItsPane() => ShellFixture.WithShell(shell =>
+    {
+        var video = shell.Video;
+        var composition = shell.Project.Compositions[0];
+
+        composition.Name = "Renamed";
+        video.Refresh();
+
+        // The pane header is a snapshot of the composition, so an edit that changes it has to rebuild
+        // the pane — otherwise the canvas is labelled with a name the show no longer uses.
+        Assert.Contains(video.Compositions, pane => pane.Name == "Renamed");
+    });
+
+    [Theory]
+    [InlineData("23.976", 23.976)]
+    [InlineData("47,95", 47.95)]
+    [InlineData("30", 30)]
+    public void ACompositionTakesAnyFrameRateNotJustThePresets(string typed, double expected)
+    {
+        var journal = new ProjectJournal(new HaCueProject());
+        var prompt = Dialogs.AddComposition(journal);
+
+        prompt.Fields.Single(f => f.Label == "Name").Value = "Wall";
+        prompt.Fields.Single(f => f.Label == "Rate").Value = typed;
+        prompt.Commit();
+
+        // A dropdown taught the operator that the common rates were the only ones. A projector at
+        // 23.976 or a wall at 47.95 is an ordinary thing to have to match — and a comma is what a
+        // German keyboard types.
+        Assert.Equal(expected, Assert.Single(journal.Project.Compositions).FramesPerSecond, 3);
+    }
+
+    [Fact]
+    public void ALocalOutputCanBeCreatedWindowedWithItsOwnSize()
+    {
+        var journal = new ProjectJournal(new HaCueProject());
+        var prompt = Dialogs.AddVideoOutput(journal, VideoOutputKind.LocalScreen, ["Screen 1"]);
+
+        prompt.Fields.Single(f => f.Label == "Name").Value = "Monitor";
+        var presentation = prompt.Fields.Single(f => f.Label == "Presentation");
+        presentation.SelectedIndex = presentation.Options.ToList().IndexOf("windowed");
+        prompt.Fields.Single(f => f.Label == "Window size").Value = "960×540";
+        prompt.Commit();
+
+        // Fullscreen already existed on the model, defaulted to true, and was unreachable — so every
+        // local output was created fullscreen with no windowed option at all.
+        var output = Assert.Single(journal.Project.VideoOutputs);
+        Assert.False(output.Fullscreen);
+        Assert.Equal(960, output.WindowWidth);
+        Assert.Equal(540, output.WindowHeight);
+    }
+
+    [Theory]
+    [InlineData("960x540", 960, 540)]
+    [InlineData("1280 720", 1280, 720)]
+    [InlineData("", 0, 0)]
+    [InlineData("960", 0, 0)]
+    [InlineData("nonsense", 0, 0)]
+    public void AWindowSizeIsReadHoweverItIsTyped(string typed, int width, int height)
+    {
+        // ×, x or a space, because all three are what somebody types. Anything else is zeros, which
+        // means "the composition's own size" — the same as leaving it empty, so a half-typed value
+        // opens at the canvas size rather than at something arbitrary.
+        Assert.Equal((width, height), Dialogs.WindowSize(typed));
+    }
+
+    [Fact]
+    public void AFullscreenLocalOutputIgnoresATypedWindowSize()
+    {
+        var journal = new ProjectJournal(new HaCueProject());
+        var prompt = Dialogs.AddVideoOutput(journal, VideoOutputKind.LocalScreen, ["Screen 1"]);
+
+        prompt.Fields.Single(f => f.Label == "Name").Value = "Projector";
+        prompt.Fields.Single(f => f.Label == "Window size").Value = "960×540";
+        prompt.Commit();
+
+        // Left fullscreen: the size is stored anyway so switching to windowed later keeps it, but the
+        // presentation is what decides, not the presence of a number.
+        Assert.True(Assert.Single(journal.Project.VideoOutputs).Fullscreen);
+    }
 }
+

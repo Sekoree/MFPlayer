@@ -1,4 +1,5 @@
 using HaCue2.Core.Model;
+using HaCue2.Machine;
 using S.Media.Core.Audio;
 using S.Media.NDI;
 using S.Media.Routing;
@@ -75,6 +76,11 @@ public sealed class ProjectPatchBay : IDisposable
             mixSampleRate: patch.MixSampleRate);
 
         var failures = new List<string>();
+
+        // Enumerated ONCE, and only to turn a name into whatever this backend calls a device. A hint
+        // is a name by design; a backend wants its own id, and PortAudio's is a global index — passing
+        // the name straight through made every configured line refuse to open.
+        var catalog = Catalog(backend);
         var opened = new List<IAudioOutput>();
         var senders = new List<NDIOutput>();
         var openLines = new List<(Guid, int)>();
@@ -103,7 +109,7 @@ public sealed class ProjectPatchBay : IDisposable
                 // NDI feed as a missing interface.
                 var output = line.Kind == AudioLineKind.Ndi
                     ? OpenNdi(line, format, senders)
-                    : backend.CreateOutput(line.DeviceHint.Length > 0 ? line.DeviceHint : null, format);
+                    : backend.CreateOutput(AudioDevices.DeviceIdFor(catalog, line.DeviceHint), format);
 
                 // The clock master paces the whole bay, so it must be a line that natively runs at the
                 // project rate — the document says which, and it is a real decision, not a default.
@@ -142,6 +148,25 @@ public sealed class ProjectPatchBay : IDisposable
         result._open.AddRange(openLines);
         result._senders.AddRange(senders);
         return result;
+    }
+
+    /// <summary>
+    /// The backend's device list, or an empty one when it cannot be asked.
+    /// </summary>
+    /// <remarks>
+    /// A backend that will not enumerate is not a reason to refuse to open anything: every hint then
+    /// resolves to null, which is "the default device" — the same answer a show with no hint gets.
+    /// </remarks>
+    private static IReadOnlyList<AudioDeviceInfo> Catalog(IAudioBackend? backend)
+    {
+        try
+        {
+            return backend?.EnumerateOutputDevices() ?? [];
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            return [];
+        }
     }
 
     /// <summary>Opens an NDI sender's audio side as an ordinary bay terminal.</summary>

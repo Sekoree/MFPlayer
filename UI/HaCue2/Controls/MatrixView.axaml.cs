@@ -41,7 +41,17 @@ public partial class MatrixView : UserControl
     /// <summary>Movement under this is a click, not a drag — hands are not steady on a trackpad.</summary>
     private const double DragThreshold = 3;
 
-    private Border? _pressedCell;
+    /// <summary>
+    /// The cell being dragged, as COORDINATES rather than as the Border that was under the pointer.
+    /// </summary>
+    /// <remarks>
+    /// Every adjustment refreshes the pane, which rebuilds the matrix and lets the items control
+    /// recycle its containers. The Border captured at press then holds a different item's DataContext,
+    /// or none — so a drag emitted its first step and went dead, which reads as one big jump per grab.
+    /// A row and a column cannot go stale.
+    /// </remarks>
+    private (int Row, int Column)? _pressed;
+
     private Point _pressedAt;
     private double _appliedDb;
     private bool _dragging;
@@ -132,9 +142,12 @@ public partial class MatrixView : UserControl
 
         // Right-click mutes immediately: it is a discrete state, so there is nothing to drag and
         // waiting for a release would only make it feel unresponsive.
+        if (cell.DataContext is not MatrixCell data)
+            return;
+
         if (point.Properties.IsRightButtonPressed)
         {
-            Raise(cell, MatrixGestureKind.Mute);
+            Raise(data.Row, data.Column, MatrixGestureKind.Mute);
             e.Handled = true;
             return;
         }
@@ -142,7 +155,7 @@ public partial class MatrixView : UserControl
         if (!point.Properties.IsLeftButtonPressed)
             return;
 
-        _pressedCell = cell;
+        _pressed = (data.Row, data.Column);
         _pressedAt = point.Position;
         _appliedDb = 0;
         _dragging = false;
@@ -152,7 +165,7 @@ public partial class MatrixView : UserControl
 
     private void OnPointerMoved(object? sender, PointerEventArgs e)
     {
-        if (_pressedCell is null)
+        if (_pressed is not { } cell)
             return;
 
         var moved = _pressedAt.Y - e.GetPosition(this).Y;
@@ -168,15 +181,15 @@ public partial class MatrixView : UserControl
         _appliedDb = target;
 
         if (step != 0)
-            Raise(_pressedCell, MatrixGestureKind.Adjust, step);
+            Raise(cell.Row, cell.Column, MatrixGestureKind.Adjust, step);
     }
 
     private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (_pressedCell is { } cell && !_dragging)
-            Raise(cell, MatrixGestureKind.Toggle);
+        if (_pressed is { } cell && !_dragging)
+            Raise(cell.Row, cell.Column, MatrixGestureKind.Toggle);
 
-        _pressedCell = null;
+        _pressed = null;
         _dragging = false;
         e.Pointer.Capture(null);
     }
@@ -187,9 +200,6 @@ public partial class MatrixView : UserControl
             .FirstOrDefault(border => border.Classes.Contains("mxcell"));
 
     /// <summary>Raises the gesture for the cell that was hit, using the coordinates it carries.</summary>
-    private void Raise(Border cell, MatrixGestureKind kind, double deltaDb = 0)
-    {
-        if (cell.DataContext is MatrixCell data)
-            Gesture?.Invoke(this, new MatrixGesture(data.Row, data.Column, kind, deltaDb));
-    }
+    private void Raise(int row, int column, MatrixGestureKind kind, double deltaDb = 0) =>
+        Gesture?.Invoke(this, new MatrixGesture(row, column, kind, deltaDb));
 }

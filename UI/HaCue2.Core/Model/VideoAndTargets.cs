@@ -33,6 +33,18 @@ public sealed record VideoOutputDefinition
 
     public bool Fullscreen { get; set; } = true;
 
+    /// <summary>
+    /// The window's size when it is NOT fullscreen. Zero takes the composition's own size.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the composition because they answer different questions: the composition is what
+    /// the show is authored against, and this is how big the window on this machine happens to be. A
+    /// 4K canvas monitored in a 960×540 window on a laptop is an ordinary way to work.
+    /// </remarks>
+    public int WindowWidth { get; set; }
+
+    public int WindowHeight { get; set; }
+
     /// <summary>Used only when the composition has no idle image of its own (register item 23).</summary>
     public string IdleFallbackPath { get; set; } = "";
 

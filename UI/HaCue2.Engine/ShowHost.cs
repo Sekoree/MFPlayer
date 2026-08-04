@@ -8,6 +8,7 @@ using S.Media.Core.Registry;
 using S.Media.Core.Video;
 using S.Media.Present.SDL3;
 using S.Media.Decode.FFmpeg;
+using S.Media.Decode.FFmpeg.Audio;
 using S.Control;
 using S.Media.Routing;
 using S.Media.Session;
@@ -371,6 +372,11 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         var target = new PatchBayShowProgramAudioTarget(
             bay.Bay,
             bay.LogicalChannelIds,
+            // WITHOUT THIS a 44.1 kHz file in a 48 kHz show throws on the first GO. Media arrives at
+            // whatever rate it was made at and the bus mixes at one rate by definition, so the two
+            // meeting is the normal case and not an edge one — the target refuses rather than guessing,
+            // and this is the caller supplying the answer.
+            ResamplingAudioOutput.Wrap,
             defaultMonitorTerminalId: bay.MonitorTerminalId);
 
         var session = new ShowSession(registry, backend, programAudioTarget: target);
@@ -504,6 +510,11 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             }
 
             foreach (var failure in _bay.Apply(next))
+                Report(failure);
+
+            // Outputs the operator has just ADDED open here, and ones they removed close. Opening only
+            // at start-up meant a screen added mid-session stayed dark with nothing saying why.
+            foreach (var failure in _screens.Sync(next))
                 Report(failure);
 
             await AttachScreensAsync().ConfigureAwait(false);

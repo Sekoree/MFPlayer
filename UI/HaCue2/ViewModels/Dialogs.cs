@@ -1,4 +1,5 @@
 using HaCue2.Core.Journal;
+using HaCue2.Core.Validation;
 using HaCue2.Core.Model;
 using HaCue2.Machine;
 using HaCue2.Core.Patch;
@@ -163,6 +164,42 @@ public static class Dialogs
                 journal.Project.AudioLines.Count,
                 "audio",
                 $"add line “{name.Value.Trim()}”")));
+
+    /// <summary>
+    /// Confirms deleting an audio line, naming everything that goes with it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Confirmed because it CASCADES: the patch cells on it, the snapshot cells that recall them, the
+    /// patch cues that change its levels, and the clock-master or audition-rig role it may hold all go
+    /// too. An operator who only meant to tidy a stale line would otherwise find out at the next
+    /// recall, or when the rig came up on the wrong speakers.
+    /// </para>
+    /// <para>
+    /// The consequences are COUNTED from the document, not described in general terms — "removes 4
+    /// patch cells" is something an operator can weigh, and "may affect the patch" is not.
+    /// </para>
+    /// </remarks>
+    public static PromptViewModel? RemoveAudioLine(ProjectJournal journal, Guid? lineId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        if (lineId is not { } id || journal.Project.FindLine(id) is not { } line)
+            return null;
+
+        var references = ProjectReferences.To(journal.Project, ProjectReferences.AudioLine, id);
+
+        return new PromptViewModel(
+            $"Remove “{line.Name}”?",
+            references.Count == 0
+                ? "nothing in this show points at it"
+                : string.Join(" · ", references.Select(reference => reference.Description)),
+            // No fields: this is a question, not a form. The prompt shell renders title, consequences
+            // and the two buttons, which is the whole of what a confirmation is.
+            [],
+            _ => ProjectEdits.DeleteAudioLine(journal, id),
+            confirm: "REMOVE");
+    }
 
     public static PromptViewModel AddLogicalOutput(ProjectJournal journal)
     {
@@ -421,12 +458,15 @@ public static class Dialogs
                 new PromptField { Label = "Name", Value = "" },
                 new PromptField { Label = "Width", Kind = PromptFieldKind.Number, Value = "1920" },
                 new PromptField { Label = "Height", Kind = PromptFieldKind.Number, Value = "1080" },
+                // TYPED, not picked. The composition pane edits size and rate as free text, so a
+                // dropdown here taught the operator that the common rates were the only ones — and a
+                // projector at 23.976 or a LED wall at 47.95 is an ordinary thing to have to match.
                 new PromptField
                 {
                     Label = "Rate",
-                    Kind = PromptFieldKind.Choice,
-                    Options = ["25", "29.97", "30", "50", "59.94", "60"],
-                    SelectedIndex = 2,
+                    Kind = PromptFieldKind.Text,
+                    Value = "30",
+                    Hint = "frames per second · 23.976 · 25 · 29.97 · 30 · 50 · 59.94 · 60",
                 },
             ],
             prompt => journal.Do(new AddItemCommand<CompositionDefinition>(
@@ -436,11 +476,14 @@ public static class Dialogs
                     Name = prompt["Name"].Value.Trim(),
                     Width = Math.Clamp(prompt["Width"].Number(1920), 16, 16384),
                     Height = Math.Clamp(prompt["Height"].Number(1080), 16, 16384),
+                    // Comma or point, because a keyboard set to German types one and the invariant
+                    // parse wants the other — and a rate silently falling back to 30 is a canvas that
+                    // does not match the screen it was authored for.
                     FramesPerSecond = double.TryParse(
-                        prompt["Rate"].Choice,
+                        prompt["Rate"].Value.Trim().Replace(',', '.'),
                         System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture,
-                        out var rate) ? rate : 30,
+                        out var rate) && rate is > 0 and <= 480 ? rate : 30,
                 },
                 project.Compositions.Count,
                 "video",
@@ -469,7 +512,11 @@ public static class Dialogs
                 Label = "Shows",
                 Kind = PromptFieldKind.Choice,
                 Options = compositions,
-                Hint = compositions.Count == 0 ? "no compositions yet" : "",
+                // The ORDER is a real dependency: an output shows a composition, so with none authored
+                // there is nothing for this to point at and the output is created blind.
+                Hint = compositions.Count == 0
+                    ? "no compositions yet — add one first, or this output will show nothing"
+                    : "",
             },
             new()
             {
@@ -479,6 +526,29 @@ public static class Dialogs
                 Hint = "absent on the night = an error, not a warning",
             },
         ];
+
+        if (kind == VideoOutputKind.LocalScreen)
+        {
+            // Fullscreen ALREADY existed on the model and defaulted to true, with no way to reach it —
+            // so every local output was created fullscreen and there was no windowed option at all.
+            var windowed = new PromptField
+            {
+                Label = "Presentation",
+                Kind = PromptFieldKind.Choice,
+                Options = ["fullscreen", "windowed"],
+                Hint = "a windowed output opens as soon as it is added, if the show is running",
+            };
+
+            var size = new PromptField
+            {
+                Label = "Window size",
+                Value = "",
+                Hint = "e.g. 960×540 · empty takes the composition's own size",
+            };
+
+            fields.Insert(2, windowed);
+            fields.Insert(3, size);
+        }
 
         return new PromptViewModel(
             $"Add {Describe(kind)} output",
@@ -496,10 +566,39 @@ public static class Dialogs
                     CompositionId = project.Compositions
                         .FirstOrDefault(composition => composition.Name == prompt["Shows"].Choice)?.Id,
                     Required = prompt["Required"].IsOn,
+                    Fullscreen = kind != VideoOutputKind.LocalScreen
+                                 || prompt["Presentation"].Choice != "windowed",
+                    WindowWidth = kind == VideoOutputKind.LocalScreen
+                        ? WindowSize(prompt["Window size"].Value).Width
+                        : 0,
+                    WindowHeight = kind == VideoOutputKind.LocalScreen
+                        ? WindowSize(prompt["Window size"].Value).Height
+                        : 0,
                 },
                 project.VideoOutputs.Count,
                 "video",
                 $"add output “{prompt["Name"].Value.Trim()}”")));
+    }
+
+    /// <summary>
+    /// A typed "960×540" as a size, or zeros for anything else.
+    /// </summary>
+    /// <remarks>
+    /// Any of ×, x or a space between them, because all three are what somebody types. Zeros mean "the
+    /// composition's own size", which is also what an empty box means — so a half-typed value opens the
+    /// window at the canvas size rather than at something arbitrary.
+    /// </remarks>
+    public static (int Width, int Height) WindowSize(string text)
+    {
+        var parts = (text ?? "").Split(['×', 'x', 'X', ' ', '*'], StringSplitOptions.RemoveEmptyEntries);
+
+        return parts.Length == 2
+               && int.TryParse(parts[0], out var width)
+               && int.TryParse(parts[1], out var height)
+               && width is > 0 and <= 16384
+               && height is > 0 and <= 16384
+            ? (width, height)
+            : (0, 0);
     }
 
     // ── targets ───────────────────────────────────────────────────────────────────────────────

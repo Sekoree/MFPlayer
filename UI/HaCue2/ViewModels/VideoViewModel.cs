@@ -39,22 +39,7 @@ public partial class VideoViewModel : ObservableObject
         Tabs = [CompositionsTab, MappingTab, OutputsTab, AuditionTab];
         _selectedTab = CompositionsTab;
 
-        // Built ONCE and mutated in place. Re-creating the list on every read would replace the
-        // ItemsControl's containers mid-drag, and a control that is replaced loses the pointer capture
-        // the drag depends on — the box would follow the pointer for exactly one frame.
-        Compositions =
-        [
-            .. project.Compositions.Select(composition => new CompositionPaneViewModel(
-                composition.Id,
-                composition.Name,
-                $"{composition.Width}×{composition.Height} · {composition.FramesPerSecond:0.##} · idle: "
-                + (composition.IdleImagePath.Length == 0 ? "black" : Path.GetFileName(composition.IdleImagePath)),
-                (double)composition.Width / composition.Height)
-            {
-                Layers = VideoPresentation.Layers(project, composition),
-            }),
-        ];
-
+        Compositions = Panes();
         Outputs = VideoPresentation.Outputs(project, runtime);
         // The mapped output is the interesting one to land on: a clean feed has nothing to show here.
         _selectedOutput = Outputs.FirstOrDefault(row => row.Map != "clean") ?? Outputs.FirstOrDefault();
@@ -88,12 +73,52 @@ public partial class VideoViewModel : ObservableObject
     };
 
     // ── 09 · compositions ─────────────────────────────────────────────────────────────────────
-    public IReadOnlyList<CompositionPaneViewModel> Compositions { get; }
 
-    public IReadOnlyList<VideoOutputRow> Outputs { get; }
+    /// <summary>
+    /// One pane per composition.
+    /// </summary>
+    /// <remarks>
+    /// Rebuilt only when the SET of compositions changes, and mutated in place otherwise. Re-creating
+    /// the list on every refresh would replace the items control's containers mid-drag, and a control
+    /// that is replaced loses the pointer capture the drag depends on — a placement box would follow
+    /// the pointer for exactly one frame. Never rebuilding it at all was worse: an added composition
+    /// simply never appeared.
+    /// </remarks>
+    public IReadOnlyList<CompositionPaneViewModel> Compositions { get; private set; }
+
+    public IReadOnlyList<VideoOutputRow> Outputs { get; private set; }
+
+    /// <summary>A pane per composition, reading the document as it stands.</summary>
+    private IReadOnlyList<CompositionPaneViewModel> Panes() =>
+    [
+        .. _project.Compositions.Select(composition => new CompositionPaneViewModel(
+            composition.Id,
+            composition.Name,
+            $"{composition.Width}×{composition.Height} · {composition.FramesPerSecond:0.##} · idle: "
+            + (composition.IdleImagePath.Length == 0 ? "black" : Path.GetFileName(composition.IdleImagePath)),
+            (double)composition.Width / composition.Height)
+        {
+            Layers = VideoPresentation.Layers(_project, composition),
+        }),
+    ];
 
     public bool HasNoCompositions => Compositions.Count == 0;
     public bool HasNoOutputs => Outputs.Count == 0;
+
+    /// <summary>
+    /// What to do first, which depends on whether there is a canvas yet.
+    /// </summary>
+    /// <remarks>
+    /// The order is a real dependency and nothing else on the screen states it: an output SHOWS a
+    /// composition, so with none authored the Shows picker is empty and a new output points at
+    /// nothing. Saying which comes first is cheaper than letting somebody find out.
+    /// </remarks>
+    public string OutputsEmptyDetail =>
+        HasNoCompositions
+            ? "Add a COMPOSITION first — an output shows one, and until there is one there is nothing "
+              + "for an output to point at."
+            : "Nothing receives a composition yet. Add a local screen, an NDI sender, a recorder or a "
+              + "stream below.";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(MappingSource))]
@@ -199,6 +224,35 @@ public partial class VideoViewModel : ObservableObject
                 value == 0 ? $"“{output.Name}” opens anywhere" : $"“{output.Name}” on screen {value}");
         }
     }
+
+    /// <summary>
+    /// The windowed size, as "960×540". Empty means the composition's own.
+    /// </summary>
+    /// <remarks>
+    /// Editable after creation, because how big a monitor window is on THIS machine is exactly the
+    /// kind of thing somebody adjusts once they can see it — and only visible while windowed, since a
+    /// fullscreen output takes the screen's size and the field would be a control that does nothing.
+    /// </remarks>
+    public string OutputWindowSize
+    {
+        get => MappedOutput is { WindowWidth: > 0, WindowHeight: > 0 } output
+            ? $"{output.WindowWidth}×{output.WindowHeight}"
+            : "";
+        set
+        {
+            if (MappedOutput is not { } output)
+                return;
+
+            var (width, height) = Dialogs.WindowSize(value);
+
+            Edit(output, "windowWidth", () => output.WindowWidth, size => output.WindowWidth = size,
+                width, $"set “{output.Name}” window width");
+            Edit(output, "windowHeight", () => output.WindowHeight, size => output.WindowHeight = size,
+                height, $"set “{output.Name}” window size");
+        }
+    }
+
+    public bool IsOutputWindowed => MappedOutput?.Fullscreen == false;
 
     /// <summary>Fullscreen (0) or windowed (1).</summary>
     public int OutputFullscreenIndex
@@ -308,6 +362,8 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(OutputCompositionIndex));
         OnPropertyChanged(nameof(OutputScreenIndex));
         OnPropertyChanged(nameof(OutputFullscreenIndex));
+        OnPropertyChanged(nameof(OutputWindowSize));
+        OnPropertyChanged(nameof(IsOutputWindowed));
         OnPropertyChanged(nameof(OutputIdleFallback));
         OnPropertyChanged(nameof(OutputMappingIndex));
         OnPropertyChanged(nameof(OutputRequired));
@@ -882,12 +938,33 @@ public partial class VideoViewModel : ObservableObject
     /// <summary>Re-reads every canvas from the document — after an edit here, or an undo anywhere.</summary>
     public void Refresh()
     {
+        // The SET first: a composition added, removed or renamed needs new panes, and one only edited
+        // needs its existing pane left alone so a drag in progress keeps its container.
+        var wanted = _project.Compositions.Select(item => item.Id).ToList();
+
+        if (!wanted.SequenceEqual(Compositions.Select(pane => pane.Id))
+            || Compositions.Any(Stale))
+        {
+            Compositions = Panes();
+            OnPropertyChanged(nameof(Compositions));
+            OnPropertyChanged(nameof(HasNoCompositions));
+            OnPropertyChanged(nameof(OutputsEmptyDetail));
+        }
+
         foreach (var pane in Compositions)
         {
             var composition = _project.Compositions.FirstOrDefault(item => item.Id == pane.Id);
             if (composition is not null)
                 pane.Layers = VideoPresentation.Layers(_project, composition);
         }
+
+        // Rows, not panes: nothing drags in this list, so it is rebuilt outright and the selection is
+        // carried across by id.
+        var selected = SelectedOutput?.Id;
+        Outputs = VideoPresentation.Outputs(_project, _runtime);
+        OnPropertyChanged(nameof(Outputs));
+        OnPropertyChanged(nameof(HasNoOutputs));
+        SelectedOutput = Outputs.FirstOrDefault(row => row.Id == selected) ?? Outputs.FirstOrDefault();
 
         // Changing outputs/sections can replace a 5×5 mesh with a 3×3 one. Keep the selected handle
         // inside the new mesh before a keyboard nudge indexes its offset pair.
@@ -902,6 +979,14 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(SectionHeader));
         RaiseSectionFields();
     }
+
+    /// <summary>Whether a pane's header no longer matches the composition it is showing.</summary>
+    private bool Stale(CompositionPaneViewModel pane) =>
+        _project.Compositions.FirstOrDefault(item => item.Id == pane.Id) is { } composition
+        && (composition.Name != pane.Name
+            || !pane.Hint.StartsWith(
+                $"{composition.Width}×{composition.Height} · {composition.FramesPerSecond:0.##}",
+                StringComparison.Ordinal));
 
     private void RaiseSectionFields()
     {

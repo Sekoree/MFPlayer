@@ -44,10 +44,30 @@ public partial class AudioView : UserControl
             "snapshot" => Dialogs.SaveSnapshot(journal),
             "patch" => audio.PatchSelectedToDevice(),
             "relink" => audio.RelinkAbsentLines(),
+            "line:remove" => Dialogs.RemoveAudioLine(journal, audio.SelectedLine?.Id),
             _ => null,
         };
 
         PromptWindow.Show(this, prompt, audio.Refresh);
+    }
+
+    /// <summary>
+    /// Removes the selected audio line, on Delete.
+    /// </summary>
+    /// <remarks>
+    /// The key AND the context menu, because the two habits are different people: one reaches for
+    /// Delete, the other right-clicks. Both land on the same confirmation, which is where the
+    /// consequences are stated — the key must not be a faster way to skip the question.
+    /// </remarks>
+    private void OnLinesKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Delete or Key.Back) || DataContext is not AudioViewModel audio)
+            return;
+
+        // Handled either way: an unhandled Delete on a list is how a keystroke meant for one pane
+        // ends up acting on another.
+        e.Handled = true;
+        PromptWindow.Show(this, Dialogs.RemoveAudioLine(audio.Journal, audio.SelectedLine?.Id), audio.Refresh);
     }
 
     /// <summary>

@@ -115,6 +115,13 @@
                     <ListBoxItem>windowed</ListBoxItem>
                   </ListBox>
                 </HeaderedContentControl>
+                <!-- Only while windowed: a fullscreen output takes the screen's size, so the field
+                     would be a control that does nothing. -->
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Window size"
+                                        IsVisible="{Binding IsOutputWindowed}">
+                  <TextBox Text="{Binding OutputWindowSize}"
+                           PlaceholderText="960×540 · empty takes the composition's size" />
+                </HeaderedContentControl>
                 <!-- Idle images exist at both levels; the composition's wins when it has one
                      (register item 23). -->
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fallback">
@@ -384,6 +391,20 @@
       <!-- ══ OUTPUTS (the same table, given the whole width) ════════════════════════════════ -->
       <Grid IsVisible="{Binding IsOutputsPane}" Margin="7">
         <c:PanelBox Header="Video outputs" Hint="composition · mapping · state, per output">
+          <!-- The add buttons live HERE as well as beside the canvases. This is the pane called
+               OUTPUTS; an operator who comes looking for "add an output" comes here first, and finding
+               no way to add one reads as the feature being missing. -->
+          <c:PanelBox.Footer>
+            <Border Classes="chain">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button Classes="tight" Content="+ LOCAL…" Click="OnDialog" Tag="out:local" />
+                <Button Classes="tight" Content="+ NDI…" Click="OnDialog" Tag="out:ndi" />
+                <Button Classes="tight" Content="+ RECORD…" Click="OnDialog" Tag="out:record" />
+                <Button Classes="tight" Content="+ STREAM…" Click="OnDialog" Tag="out:stream" />
+                <Button Classes="tight" Content="+ COMPOSITION…" Click="OnDialog" Tag="composition" />
+              </StackPanel>
+            </Border>
+          </c:PanelBox.Footer>
           <DockPanel>
             <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                     BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
@@ -395,9 +416,11 @@
                 <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
               </Grid>
             </Border>
+            <!-- The ORDER matters and nothing else says it: an output shows a composition, so there
+                 has to be one before an output can point at anything. -->
             <c:EmptyState IsVisible="{Binding HasNoOutputs}"
                           Headline="No video outputs"
-                          Detail="Nothing receives a composition yet. Add a local screen, an NDI sender, a recorder or a stream." />
+                          Detail="{Binding OutputsEmptyDetail}" />
             <ListBox IsVisible="{Binding !HasNoOutputs}" Theme="{StaticResource TableRows}"
                      ItemsSource="{Binding Outputs}" SelectedItem="{Binding SelectedOutput}">
               <ListBox.ItemTemplate>

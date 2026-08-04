@@ -98,21 +98,35 @@ public partial class AudioViewModel : ObservableObject
 
         var lines = _project.AudioLines;
 
+        // WHERE IT ALREADY IS. The dialog used to open on line 1 / channel 1 whatever the patch said,
+        // so re-patching a cell to the channel it was already on looked like a control that did
+        // nothing — and there was no way to see where the output actually went without leaving.
+        var current = _project.AudioPatch.Cells
+            .FirstOrDefault(cell => cell.LogicalChannelId == channel.Id);
+
+        var atLine = current is null
+            ? 0
+            : Math.Max(0, lines.ToList().FindIndex(line => line.Id == current.LineId));
+
         return new PromptViewModel(
             $"Patch “{channel.Name}”",
-            "which line, and which channel on it",
+            current is null
+                ? "which line, and which channel on it"
+                : $"currently on {lines[atLine].Name} channel {current.LineChannel + 1}",
             [
                 new PromptField
                 {
                     Label = "Line",
                     Kind = PromptFieldKind.Choice,
                     Options = [.. lines.Select(line => $"{line.Name} · {line.Channels}ch")],
+                    SelectedIndex = atLine,
                 },
                 new PromptField
                 {
                     Label = "Channel",
                     Kind = PromptFieldKind.Number,
-                    Value = "1",
+                    Value = ((current?.LineChannel ?? 0) + 1)
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture),
                     Hint = "1-based, as the device numbers its outputs",
                 },
             ],

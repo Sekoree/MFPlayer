@@ -91,6 +91,37 @@ public sealed class AudioDevices
             : DeviceAvailability.Absent;
     }
 
+    /// <summary>
+    /// The BACKEND ID for a line's device hint, or null to take the backend's own default.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A hint is a NAME and a backend wants its own id — PortAudio's is a global device index, and
+    /// handing it "Scarlett 2i2 3rd Gen Pro" makes it refuse the line outright. Every device on the
+    /// rig then fails to open, the bay ends up with no clock master, and the first cue throws.
+    /// </para>
+    /// <para>
+    /// It resolves through <see cref="Matches"/>, the same rule <see cref="Match"/> reports presence
+    /// with, so a line the status pass calls PRESENT is one this can actually open. Two rules here
+    /// would mean a green row and a silent output.
+    /// </para>
+    /// </remarks>
+    public static string? DeviceIdFor(IReadOnlyList<AudioDeviceInfo> devices, string hint)
+    {
+        ArgumentNullException.ThrowIfNull(devices);
+
+        if (hint.Length == 0)
+            return null;
+
+        // An exact name first: two devices can each contain the other's name as a substring, and the
+        // one the operator picked from the list is the one they meant.
+        var exact = devices.FirstOrDefault(device =>
+            string.Equals(device.Name, hint, StringComparison.OrdinalIgnoreCase));
+
+        return exact?.Id
+               ?? devices.FirstOrDefault(device => Matches(device.Name, hint))?.Id;
+    }
+
     private static bool Matches(string deviceName, string hint) =>
         deviceName.Contains(hint, StringComparison.OrdinalIgnoreCase)
         || hint.Contains(deviceName, StringComparison.OrdinalIgnoreCase);

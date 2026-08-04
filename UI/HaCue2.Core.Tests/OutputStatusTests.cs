@@ -173,4 +173,79 @@ public class OutputStatusTests
             Assert.Contains(endpoint.Id, sender.LastSent),
             StringComparison.Ordinal);
     }
+
+    // ── outputs added or removed while the show runs ──────────────────────────────────────────
+
+    [Fact]
+    public void AnOutputAddedAfterTheShowStartedIsOpenedOnTheNextReload()
+    {
+        var composition = new CompositionDefinition { Name = "Cyc" };
+        var project = new HaCueProject { Compositions = [composition] };
+
+        using var outputs = ProjectVideoOutputs.OpenAll(project, headless: true);
+        Assert.Empty(outputs.Unopened);
+
+        var added = new VideoOutputDefinition
+        {
+            Name = "Archive",
+            Kind = VideoOutputKind.Record,
+            CompositionId = composition.Id,
+        };
+
+        project.VideoOutputs.Add(added);
+        outputs.Sync(project);
+
+        // Opening only at start-up meant a screen added mid-session stayed dark with nothing saying
+        // why — and an operator adding a projector during a get-in had no way to find that out.
+        Assert.DoesNotContain(added.Id, outputs.Unopened);
+        Assert.Contains(outputs.Recorders, entry => entry.Key == added.Id);
+    }
+
+    [Fact]
+    public void AnOutputRemovedFromTheDocumentStopsBeingOpen()
+    {
+        var composition = new CompositionDefinition { Name = "Cyc" };
+        var output = new VideoOutputDefinition
+        {
+            Name = "Archive",
+            Kind = VideoOutputKind.Record,
+            CompositionId = composition.Id,
+        };
+
+        var project = new HaCueProject { Compositions = [composition], VideoOutputs = [output] };
+
+        using var outputs = ProjectVideoOutputs.OpenAll(project, headless: true);
+        Assert.Contains(outputs.Recorders, entry => entry.Key == output.Id);
+
+        project.VideoOutputs.Clear();
+        outputs.Sync(project);
+
+        // A window left on a screen with nothing in the show pointing at it is worse than one that
+        // never opened: it looks like part of the show.
+        Assert.Empty(outputs.Recorders);
+        Assert.Empty(outputs.Unopened);
+    }
+
+    [Fact]
+    public void ASyncThatChangesNothingLeavesTheOpenOutputsAlone()
+    {
+        var composition = new CompositionDefinition { Name = "Cyc" };
+        var output = new VideoOutputDefinition
+        {
+            Name = "Archive",
+            Kind = VideoOutputKind.Record,
+            CompositionId = composition.Id,
+        };
+
+        var project = new HaCueProject { Compositions = [composition], VideoOutputs = [output] };
+
+        using var outputs = ProjectVideoOutputs.OpenAll(project, headless: true);
+        var before = outputs.Recorders[output.Id];
+
+        // Every edit reloads. Re-opening an output because an unrelated cue was renamed would close and
+        // re-create the operator's projector window on a keystroke.
+        Assert.Empty(outputs.Sync(project));
+        Assert.Same(before, outputs.Recorders[output.Id]);
+    }
 }
+

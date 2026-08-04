@@ -307,6 +307,70 @@ public static class ProjectEdits
     }
 
     /// <summary>
+    /// Deletes an audio line and everything that pointed at it, as ONE undoable step.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A line is referenced from four places, and every one of them fails differently if it is left
+    /// behind: a patch cell on a missing line silently routes nothing, a snapshot recalls a cell that
+    /// cannot land, a patch cue changes a level on hardware that is gone, and the clock master or the
+    /// audition rig pointing at nothing takes the rig with it. So they go together or not at all.
+    /// </para>
+    /// <para>
+    /// Snapshot cells are removed too rather than left as history. A snapshot is a state the show can
+    /// RECALL, so one holding a cell on a deleted line is a recall that quietly does less than it says.
+    /// </para>
+    /// </remarks>
+    public static void DeleteAudioLine(ProjectJournal journal, Guid lineId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        var project = journal.Project;
+        var line = project.FindLine(lineId);
+
+        if (line is null)
+            return;
+
+        using (journal.Composite($"delete audio line “{line.Name}”", "audio"))
+        {
+            foreach (var cell in project.AudioPatch.Cells.Where(cell => cell.LineId == lineId).ToList())
+                journal.Do(new RemoveItemCommand<PatchCell>(
+                    project.AudioPatch.Cells, cell, "patch", "remove patch cell"));
+
+            foreach (var snapshot in project.PatchSnapshots)
+                foreach (var cell in snapshot.Cells.Where(cell => cell.LineId == lineId).ToList())
+                    journal.Do(new RemoveItemCommand<PatchCell>(
+                        snapshot.Cells, cell, "patch", $"remove cell from snapshot “{snapshot.Name}”"));
+
+            foreach (var cue in project.AllCues().OfType<PatchCueNode>())
+                foreach (var level in cue.Levels.Where(level => level.LineId == lineId).ToList())
+                    journal.Do(new RemoveItemCommand<PatchLevelChange>(
+                        cue.Levels, level, "cues", $"remove level change from Q{cue.Number}"));
+
+            if (project.AudioPatch.ClockMasterLineId == lineId)
+            {
+                var patch = project.AudioPatch;
+                journal.Do(new SetValueCommand<Guid?>(
+                    lineId, "clockMaster", "audio",
+                    () => patch.ClockMasterLineId, value => patch.ClockMasterLineId = value, null,
+                    "clear the clock master"));
+            }
+
+            if (project.Audition.AudioLineId == lineId)
+            {
+                var rig = project.Audition;
+                journal.Do(new SetValueCommand<Guid?>(
+                    lineId, "auditionLine", "audio",
+                    () => rig.AudioLineId, value => rig.AudioLineId = value, null,
+                    "clear the audition rig's line"));
+            }
+
+            journal.Do(new RemoveItemCommand<AudioLineDefinition>(
+                project.AudioLines, line, "audio", $"delete audio line “{line.Name}”"));
+        }
+    }
+
+    /// <summary>
     /// Applies one gain delta across a whole Output Group.
     /// </summary>
     /// <remarks>

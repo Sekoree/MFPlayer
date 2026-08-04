@@ -42,8 +42,12 @@ public sealed class ProjectVideoOutputs : IDisposable
     {
     }
 
+    private readonly List<string> _failures = [];
+    private readonly HashSet<Guid> _unopened = [];
+    private bool _headless;
+
     /// <summary>What could not be opened, and why — joined into the host's problem list.</summary>
-    public IReadOnlyList<string> Failures { get; private init; } = [];
+    public IReadOnlyList<string> Failures => _failures;
 
     /// <summary>
     /// The outputs that are not showing anything, by document id.
@@ -54,7 +58,7 @@ public sealed class ProjectVideoOutputs : IDisposable
     /// deriving one from the other means parsing prose. An output that names no composition is in here
     /// too — it opened nothing and shows nothing, which is what the row has to say.
     /// </remarks>
-    public IReadOnlySet<Guid> Unopened { get; private init; } = new HashSet<Guid>();
+    public IReadOnlySet<Guid> Unopened => _unopened;
 
     internal IReadOnlyList<OpenVideoOutput> Open => _open;
 
@@ -73,14 +77,53 @@ public sealed class ProjectVideoOutputs : IDisposable
     {
         ArgumentNullException.ThrowIfNull(project);
 
+        var result = new ProjectVideoOutputs { _headless = headless };
+        result.Sync(project);
+        return result;
+    }
+
+    /// <summary>
+    /// Opens whatever the project now defines and is not open yet, and closes what it no longer has.
+    /// </summary>
+    /// <remarks>
+    /// Called on every reload, which is what makes adding an output to a RUNNING show do something.
+    /// Before this it opened once at start-up, so a newly added screen stayed dark until the whole show
+    /// was restarted — and an operator adding a projector mid-get-in had no way to know that.
+    /// <para>
+    /// Outputs already open are left ALONE. Re-opening one because an unrelated cue was edited would
+    /// close and re-create the operator's projector window on a keystroke.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<string> Sync(HaCueProject project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+
+        var wanted = project.VideoOutputs.Select(output => output.Id).ToHashSet();
+
+        // Gone from the document: close the window rather than leaving it on a screen with nothing in
+        // the show pointing at it.
+        foreach (var stale in _open.Where(open => !wanted.Contains(open.Id)).ToList())
+        {
+            Close(stale);
+            _open.Remove(stale);
+            _recorders.Remove(stale.Id);
+        }
+
+        _unopened.RemoveWhere(id => !wanted.Contains(id));
+
         var failures = new List<string>();
         var unopened = new HashSet<Guid>();
         var opened = new List<OpenVideoOutput>();
         var recorders = new Dictionary<Guid, RecordVideoOutput>();
         var senders = new List<NDIOutput>();
+        var headless = _headless;
 
         foreach (var output in project.VideoOutputs)
         {
+            // Already open, and deliberately left as it is.
+            if (_open.Any(open => open.Id == output.Id))
+                continue;
+
             if (output.CompositionId is not { } compositionId
                 || project.Compositions.All(item => item.Id != compositionId))
             {
@@ -133,13 +176,13 @@ public sealed class ProjectVideoOutputs : IDisposable
 
             try
             {
-                // Sized to the COMPOSITION, not to a nominal window size: the operator authored
-                // placements against that canvas, and opening at some other aspect would show them a
-                // letterboxed version of their own layout on first launch.
+                // The window's own size when the document gives one, and the COMPOSITION's otherwise:
+                // the operator authored placements against that canvas, so opening at some other aspect
+                // would show them a letterboxed version of their own layout on first launch.
                 var window = new SDL3GLVideoOutput(
                     title: $"HaCue2 · {output.Name}",
-                    initialWidth: composition.Width,
-                    initialHeight: composition.Height);
+                    initialWidth: output.WindowWidth > 0 ? output.WindowWidth : composition.Width,
+                    initialHeight: output.WindowHeight > 0 ? output.WindowHeight : composition.Height);
 
                 // The document says which screen and whether to fill it, so a show carried to a venue
                 // puts its projector feed on the projector rather than on whichever display SDL opened
@@ -160,15 +203,32 @@ public sealed class ProjectVideoOutputs : IDisposable
             }
         }
 
-        var result = new ProjectVideoOutputs { Failures = failures, Unopened = unopened };
-        result._open.AddRange(opened);
+        _open.AddRange(opened);
+        _senders.AddRange(senders);
 
         foreach (var (id, recorder) in recorders)
-            result._recorders[id] = recorder;
+            _recorders[id] = recorder;
 
-        result._senders.AddRange(senders);
+        foreach (var id in unopened)
+            _unopened.Add(id);
 
-        return result;
+        // Only THIS pass's failures are returned, so the host reports a newly broken output once
+        // rather than re-reporting every old one on every edit.
+        _failures.AddRange(failures);
+        return failures;
+    }
+
+    /// <summary>Closes one output's own resources. A window that will not close must not stop the rest.</summary>
+    private void Close(OpenVideoOutput open)
+    {
+        try
+        {
+            (open.Output as IDisposable)?.Dispose();
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // Teardown must not throw out of an edit.
+        }
     }
 
     /// <summary>The leases the session attaches, with each output's mapping resolved to its size.</summary>

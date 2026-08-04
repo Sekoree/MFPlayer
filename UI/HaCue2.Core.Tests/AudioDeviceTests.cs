@@ -181,5 +181,55 @@ public sealed class AudioDeviceTests
         // miniaudio has no such notion, and a picker must read that as "do not offer the control"
         // rather than as "no devices".
         Assert.Empty(new AudioDevices(new FakeBackend()).HostApis);
+
+    // ── resolving a hint to whatever the backend calls a device ───────────────────────────────
+
+    [Fact]
+    public void AHintIsResolvedToTheBACKENDsOwnDeviceId()
+    {
+        var devices = new HostBackend().EnumerateOutputDevices();
+
+        // PortAudio's id is a global device INDEX. Handing it the name instead made it refuse the
+        // line outright — every configured device failed to open, the bay ended up with no clock
+        // master, and the first cue threw.
+        Assert.Equal("2", AudioDevices.DeviceIdFor(devices, "Scarlett 2i2 3rd Gen Pro"));
+        Assert.Equal("1", AudioDevices.DeviceIdFor(devices, "default"));
+    }
+
+    [Fact]
+    public void AnExactNameWinsOverASubstringMatch()
+    {
+        var devices = new FakeBackend("Scarlett", "Scarlett 2i2 3rd Gen Pro").EnumerateOutputDevices();
+
+        // Both contain each other, so substring matching alone would hand back whichever came first.
+        // The one the operator picked from the list is the one they meant.
+        Assert.Equal("1", AudioDevices.DeviceIdFor(devices, "Scarlett 2i2 3rd Gen Pro"));
+        Assert.Equal("0", AudioDevices.DeviceIdFor(devices, "Scarlett"));
+    }
+
+    [Fact]
+    public void AnEmptyHintIsTheBackendsOwnDefault() =>
+        // Null, not the first device: "no hint" means "whatever this machine calls default", and
+        // picking one ourselves would silently disagree with the operator's own sound settings.
+        Assert.Null(AudioDevices.DeviceIdFor(new HostBackend().EnumerateOutputDevices(), ""));
+
+    [Fact]
+    public void AHintNothingMatchesFallsBackToTheDefaultRatherThanRefusing() =>
+        // The status pass reports it ABSENT, which is where an operator should learn about it. Refusing
+        // to open anything would take the rest of the rig down with one missing interface.
+        Assert.Null(AudioDevices.DeviceIdFor(
+            new HostBackend().EnumerateOutputDevices(), "an interface nobody has"));
+
+    [Fact]
+    public void WhatTheStatusPassCallsPresentIsWhatCanBeOpened()
+    {
+        var devices = new AudioDevices(new HostBackend());
+        var line = new AudioLineDefinition { Name = "Main", DeviceHint = "Scarlett 2i2" };
+
+        // Two matching rules — one for reporting presence, one for opening — is a green row over a
+        // silent output. They are the same rule.
+        Assert.Equal(DeviceAvailability.Present, devices.Match(line));
+        Assert.NotNull(AudioDevices.DeviceIdFor(devices.Outputs, line.DeviceHint));
+    }
 }
 

@@ -1,4 +1,5 @@
 using HaCue2.Core.Journal;
+using HaCue2.Core.Validation;
 using HaCue2.Core.Model;
 using HaCue2.Core.Patch;
 using Xunit;
@@ -317,4 +318,92 @@ public sealed class PatchTests
             fixture.Project.AudioPatch.Cells
                 .OrderBy(cell => cell.LogicalChannelId).ThenBy(cell => cell.LineChannel)
                 .Select(cell => $"{cell.LogicalChannelId}:{cell.LineChannel}:{cell.GainDb}:{cell.Muted}"));
+
+    // ── deleting an audio line ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void DeletingALineTakesEverythingThatPointedAtItInOneStep()
+    {
+        var show = new TestProject();
+        var journal = new ProjectJournal(show.Project);
+        var line = show.Interface;
+
+        show.Project.Audition.AudioLineId = line.Id;
+        var cells = show.Project.AudioPatch.Cells.Count(cell => cell.LineId == line.Id);
+        Assert.True(cells > 0);
+        Assert.Equal(line.Id, show.Project.AudioPatch.ClockMasterLineId);
+
+        ProjectEdits.DeleteAudioLine(journal, line.Id);
+
+        // Every one of these fails differently if left behind: a cell on a missing line routes
+        // nothing, a snapshot recalls a cell that cannot land, and a clock master or audition rig
+        // pointing at nothing takes the rig with it.
+        Assert.DoesNotContain(show.Project.AudioLines, item => item.Id == line.Id);
+        Assert.DoesNotContain(show.Project.AudioPatch.Cells, cell => cell.LineId == line.Id);
+        Assert.DoesNotContain(show.Snapshot.Cells, cell => cell.LineId == line.Id);
+        Assert.Null(show.Project.AudioPatch.ClockMasterLineId);
+        Assert.Null(show.Project.Audition.AudioLineId);
+    }
+
+    [Fact]
+    public void UndoingADeleteBringsTheLineAndItsPatchBack()
+    {
+        var show = new TestProject();
+        var journal = new ProjectJournal(show.Project);
+        var before = show.Project.AudioPatch.Cells.Count;
+
+        ProjectEdits.DeleteAudioLine(journal, show.Interface.Id);
+        journal.Undo();
+
+        // ONE step for the whole cascade. Several would mean an operator pressing undo once still had
+        // a patch missing the cells that belonged to the line they just restored.
+        Assert.Contains(show.Project.AudioLines, item => item.Id == show.Interface.Id);
+        Assert.Equal(before, show.Project.AudioPatch.Cells.Count);
+        Assert.Equal(show.Interface.Id, show.Project.AudioPatch.ClockMasterLineId);
+    }
+
+    [Fact]
+    public void DeletingALineNothingUsesStillWorks()
+    {
+        var show = new TestProject();
+        var journal = new ProjectJournal(show.Project);
+
+        ProjectEdits.DeleteAudioLine(journal, show.Wedge.Id);
+
+        Assert.DoesNotContain(show.Project.AudioLines, item => item.Id == show.Wedge.Id);
+    }
+
+    [Fact]
+    public void DeletingALineThatIsAlreadyGoneDoesNothing()
+    {
+        var show = new TestProject();
+        var journal = new ProjectJournal(show.Project);
+
+        ProjectEdits.DeleteAudioLine(journal, Guid.NewGuid());
+
+        // No command, so no undo entry — a stale row double-clicked must not push an empty step onto
+        // the stack and make the next undo do nothing visible.
+        Assert.False(journal.CanUndo);
+        Assert.Equal(2, show.Project.AudioLines.Count);
+    }
+
+    [Fact]
+    public void TheConfirmationCountsWhatWillActuallyGo()
+    {
+        var show = new TestProject();
+        show.Project.Audition.AudioLineId = show.Interface.Id;
+
+        var references = ProjectReferences.To(
+            show.Project, ProjectReferences.AudioLine, show.Interface.Id);
+
+        var described = string.Join(" · ", references.Select(item => item.Description));
+
+        // Counted from the document rather than described in general terms: "removes 4 patch cells" is
+        // something an operator can weigh, and "may affect the patch" is not.
+        Assert.Contains("the patch uses 4 of its channels", described, StringComparison.Ordinal);
+        Assert.Contains("snapshot “Act 1” stores a cell on it", described, StringComparison.Ordinal);
+        Assert.Contains("it is the clock master", described, StringComparison.Ordinal);
+        Assert.Contains("the audition rig monitors through it", described, StringComparison.Ordinal);
+    }
 }
+
