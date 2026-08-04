@@ -116,11 +116,27 @@ public partial class VideoView : UserControl
 
     /// <summary>"Edit ›" beside an output's mapping toggle jumps to the Mapping tab already scoped to
     /// that output — mapping is always the mapping OF one output, never a global mode.</summary>
-    private void OnEditMapping(object? sender, RoutedEventArgs e)
+    /// <summary>Opens the mapping editor over the Outputs pane, on the output it belongs to.</summary>
+    private void OnEditMapping(object? sender, RoutedEventArgs e) => Video?.OpenMapping();
+
+    private void OnCloseMapping(object? sender, RoutedEventArgs e)
     {
         if (DataContext is VideoViewModel video)
-            video.SelectedTab = video.MappingTab;
+            video.ShowMapping = false;
     }
+
+    /// <summary>Opens the output layout over the Compositions pane.</summary>
+    private void OnEditLayout(object? sender, RoutedEventArgs e) => Video?.OpenLayout();
+
+    private void OnCloseLayout(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is VideoViewModel video)
+            video.ShowLayout = false;
+    }
+
+    private void OnLayoutGesture(object? sender, PlacementGesture e) => Video?.ApplyLayoutGesture(e);
+
+    private void OnLayoutOutputSelected(object? sender, int index) => Video?.SelectLayoutOutput(index);
 
     /// <summary>
     /// Selects the composition whose pane was clicked.

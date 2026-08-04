@@ -50,9 +50,13 @@ public partial class VideoViewModel : ObservableObject
 
         OutputsTab = new SectionTab(OutputsKey, "OUTPUTS");
         CompositionsTab = new SectionTab(CompositionsKey, "COMPOSITIONS");
-        MappingTab = new SectionTab(MappingKey, "MAPPING");
         AuditionTab = new SectionTab(AuditionKey, "AUDITION");
-        Tabs = [OutputsTab, CompositionsTab, MappingTab, AuditionTab];
+
+        // Mapping is NOT a tab any more. It is always the mapping OF ONE OUTPUT, so a top-level tab
+        // asked the operator to hold "which output am I looking at" in their head while they were
+        // looking at something else — and a canvas layout is the same question asked of a
+        // composition. Both are opened on the thing they belong to and closed again.
+        Tabs = [OutputsTab, CompositionsTab, AuditionTab];
         _selectedTab = OutputsTab;
         CountTabs();
 
@@ -66,33 +70,70 @@ public partial class VideoViewModel : ObservableObject
 
     public const string OutputsKey = "outputs";
     public const string CompositionsKey = "compositions";
-    public const string MappingKey = "mapping";
     public const string AuditionKey = "audition";
 
     public SectionTab OutputsTab { get; }
     public SectionTab CompositionsTab { get; }
-    public SectionTab MappingTab { get; }
     public SectionTab AuditionTab { get; }
     public IReadOnlyList<SectionTab> Tabs { get; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsCompositionsPane))]
-    [NotifyPropertyChangedFor(nameof(IsMappingPane))]
     [NotifyPropertyChangedFor(nameof(IsOutputsPane))]
     [NotifyPropertyChangedFor(nameof(IsAuditionPane))]
+    [NotifyPropertyChangedFor(nameof(IsMappingOpen))]
+    [NotifyPropertyChangedFor(nameof(IsLayoutOpen))]
     [NotifyPropertyChangedFor(nameof(TabHint))]
     private SectionTab _selectedTab;
 
     public bool IsCompositionsPane => SelectedTab?.Key == CompositionsKey;
-    public bool IsMappingPane => SelectedTab?.Key == MappingKey;
     public bool IsOutputsPane => SelectedTab?.Key == OutputsKey;
     public bool IsAuditionPane => SelectedTab?.Key == AuditionKey;
 
+    /// <summary>
+    /// Whether the selected OUTPUT's mapping editor is open over the Outputs pane.
+    /// </summary>
+    /// <remarks>
+    /// Opened from the output it belongs to and closed again, rather than being a tab of its own: a
+    /// mapping is always the mapping of one output — the same canvas is warped for the projector and
+    /// clean for the lobby screen — so a top-level tab made the operator carry "which output is this"
+    /// while looking at a pane that did not say.
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsMappingOpen))]
+    private bool _showMapping;
+
+    public bool IsMappingOpen => ShowMapping && IsOutputsPane && HasOutput;
+
+    /// <summary>Whether the selected COMPOSITION's output layout is open over the Compositions pane.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsLayoutOpen))]
+    private bool _showLayout;
+
+    public bool IsLayoutOpen => ShowLayout && IsCompositionsPane && HasComposition;
+
+    /// <summary>Opens the mapping editor on the output that is selected right now.</summary>
+    public void OpenMapping()
+    {
+        SelectedTab = OutputsTab;
+        ShowMapping = true;
+    }
+
+    /// <summary>Opens the output layout over the composition that is selected right now.</summary>
+    public void OpenLayout()
+    {
+        SelectedTab = CompositionsTab;
+        ShowLayout = true;
+    }
+
+    /// <summary>Which output's mapping is on screen, since the pane no longer has a tab to say so.</summary>
+    public string MappingScopeNote =>
+        $"{SelectedOutput?.Name ?? "no output"} · source: {MappedCompositionLabel}";
+
     public string TabHint => SelectedTab?.Key switch
     {
-        MappingKey => $"output: {SelectedOutput?.Name ?? "none"} · source: {MappedCompositionLabel}",
         AuditionKey => "same pane appears in Audio · one audition rig",
-        CompositionsKey => "a canvas, and which outputs it feeds",
+        CompositionsKey => "a canvas, which outputs it feeds, and how they divide it",
         _ => "what this machine can put a picture on",
     };
 
@@ -130,7 +171,25 @@ public partial class VideoViewModel : ObservableObject
         {
             Layers = VideoPresentation.Layers(_project, composition),
             Feeds = Feeds(composition.Id),
+            GuidesX = SliceGuides(composition.Id, horizontal: true),
+            GuidesY = SliceGuides(composition.Id, horizontal: false),
         }),
+    ];
+
+    /// <summary>Where the outputs showing this canvas divide it, on one axis.</summary>
+    private IReadOnlyList<double> SliceGuides(Guid compositionId, bool horizontal) =>
+    [
+        .. _project.VideoOutputs
+            .Where(output => output.CompositionId == compositionId)
+            .SelectMany(output =>
+            {
+                var slice = SliceOf(output);
+                return horizontal
+                    ? new[] { slice.X, slice.X + slice.Width }
+                    : [slice.Y, slice.Y + slice.Height];
+            })
+            .Distinct()
+            .Order(),
     ];
 
     /// <summary>The outputs this composition is sent to, in document order.</summary>
@@ -491,6 +550,7 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(OutputRequired));
         OnPropertyChanged(nameof(MappingNote));
         OnPropertyChanged(nameof(HasOutput));
+        OnPropertyChanged(nameof(IsMappingOpen));
     }
 
     /// <summary>Whether the selected output opens a window on this machine.</summary>
@@ -749,6 +809,9 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(CompositionHeader));
         OnPropertyChanged(nameof(CompositionName));
         OnPropertyChanged(nameof(HasComposition));
+        OnPropertyChanged(nameof(IsLayoutOpen));
+        OnPropertyChanged(nameof(IsEditingComposition));
+        OnPropertyChanged(nameof(CompositionEditorHint));
         OnPropertyChanged(nameof(SelectedCompositionFeeds));
         OnPropertyChanged(nameof(AssignableOutputs));
         OnPropertyChanged(nameof(CanAssignOutput));
@@ -827,7 +890,7 @@ public partial class VideoViewModel : ObservableObject
             ? null
             : _project.VideoOutputs.FirstOrDefault(output => output.Id == SelectedOutput.Id);
 
-    private string MappedCompositionLabel
+    internal string MappedCompositionLabel
     {
         get
         {
@@ -1458,6 +1521,177 @@ public partial class VideoViewModel : ObservableObject
     // ── canvas gestures (register item 22: drag · numeric entry · arrow nudge) ─────────────────
 
     /// <summary>A drag or nudge on a composition canvas: moves the placement of the cue it draws.</summary>
+    // ── the composition's output layout ───────────────────────────────────────────────────────
+    // Which PART of the canvas each output shows. The same fact the mapping editor holds, seen from
+    // the composition's end: a section's SOURCE rectangle is the slice, and the layout editor is the
+    // one place all of them can be looked at together. Overlap is a blend zone and canvas nobody
+    // covers is a gap, and neither is visible one output at a time.
+
+    /// <summary>
+    /// What the composition editor is for, said where an empty form used to be.
+    /// </summary>
+    /// <remarks>
+    /// The fields sat there disabled and blank whenever nothing was selected, which reads as a broken
+    /// panel rather than as a form waiting for a subject — and gave no clue that they EDIT the canvas
+    /// rather than describe it. The add dialog says what it wants; so does this now.
+    /// </remarks>
+    public string CompositionEditorHint => SelectedComposition is not { } composition
+        ? "no canvas yet — ADD one, and its name, size, rate and idle image appear here"
+        : $"editing “{composition.Name}” · click another canvas on the left to switch";
+
+    /// <summary>Whether the editor has a subject, so the form can give way to the reason it has not.</summary>
+    public bool IsEditingComposition => SelectedComposition is not null;
+
+    /// <summary>The selected canvas's shape, so the layout is drawn at the ratio the show runs at.</summary>
+    public double CompositionAspect =>
+        SelectedComposition is { Width: > 0, Height: > 0 } composition
+            ? (double)composition.Width / composition.Height
+            : 16d / 9d;
+
+    /// <summary>The outputs showing the selected composition, each as the slice of it they take.</summary>
+    public IReadOnlyList<PlacementBox> LayoutBoxes =>
+    [
+        .. LayoutOutputs.Select((output, index) =>
+        {
+            var slice = SliceOf(output);
+
+            return new PlacementBox
+            {
+                SubjectId = output.Id,
+                LayerIndex = index,
+                Label = output.Name,
+                Left = slice.X,
+                Top = slice.Y,
+                Width = slice.Width,
+                Height = slice.Height,
+                IsSecondary = index % 2 == 1,
+                IsSelected = output.Id == SelectedOutput?.Id,
+            };
+        }),
+    ];
+
+    /// <summary>Every output assigned to the composition being looked at, in document order.</summary>
+    private IReadOnlyList<VideoOutputDefinition> LayoutOutputs =>
+        SelectedComposition is not { } composition
+            ? []
+            : [.. _project.VideoOutputs.Where(output => output.CompositionId == composition.Id)];
+
+    /// <summary>
+    /// The part of the canvas an output shows.
+    /// </summary>
+    /// <remarks>
+    /// Its first mapping section's SOURCE rectangle, because that is what a section means: this piece
+    /// of the canvas goes to this piece of the screen. An output with no mapping shows the whole
+    /// canvas, which is both the honest answer and the one every output starts with.
+    /// </remarks>
+    private static NormalizedRect SliceOf(VideoOutputDefinition output) =>
+        output.Mapping.FirstOrDefault(section => section.Enabled) is { } section
+            ? new NormalizedRect(
+                section.SourceX, section.SourceY, section.SourceWidth, section.SourceHeight)
+            : new NormalizedRect(0, 0, 1, 1);
+
+    /// <summary>
+    /// The slice boundaries, as guides a cue placement can snap to.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes the layout worth having beyond a picture: with the screen edges as snap
+    /// targets, a cue can be dropped exactly onto one projector of a wall without anybody working out
+    /// what fraction that is.
+    /// </remarks>
+    public IReadOnlyList<double> LayoutGuidesX =>
+        [.. LayoutOutputs.SelectMany(output =>
+        {
+            var slice = SliceOf(output);
+            return new[] { slice.X, slice.X + slice.Width };
+        }).Distinct().Order()];
+
+    public IReadOnlyList<double> LayoutGuidesY =>
+        [.. LayoutOutputs.SelectMany(output =>
+        {
+            var slice = SliceOf(output);
+            return new[] { slice.Y, slice.Y + slice.Height };
+        }).Distinct().Order()];
+
+    /// <summary>What the layout adds up to, said plainly rather than left to be read off the picture.</summary>
+    public string LayoutSummary
+    {
+        get
+        {
+            var outputs = LayoutOutputs;
+
+            if (SelectedComposition is null)
+                return "";
+
+            if (outputs.Count == 0)
+                return "no output shows this canvas yet — assign one under FEEDS";
+
+            var whole = outputs.Count(output => SliceOf(output) is { X: 0, Y: 0, Width: 1, Height: 1 });
+
+            return whole == outputs.Count
+                ? $"{outputs.Count} output(s), each showing the whole canvas"
+                : $"{outputs.Count} output(s) · {whole} showing all of it · drag an edge to divide the canvas";
+        }
+    }
+
+    /// <summary>
+    /// Moves or resizes one output's slice of the canvas.
+    /// </summary>
+    /// <remarks>
+    /// Written into the output's own mapping, because that is where the engine reads it from and the
+    /// mapping editor is the other view of the same numbers. An output that had no mapping gets one
+    /// here, with an identity target: it shows its slice FULL FRAME, which is what dividing a canvas
+    /// between screens means before anybody warps anything.
+    /// </remarks>
+    public void ApplyLayoutGesture(PlacementGesture gesture)
+    {
+        if (_project.VideoOutputs.FirstOrDefault(output => output.Id == gesture.SubjectId)
+            is not { } target)
+            return;
+
+        _drag ??= _journal.Composite($"“{target.Name}” canvas slice", "video");
+
+        if (target.Mapping.FirstOrDefault(section => section.Enabled) is not { } section)
+        {
+            section = new MappingSection { Name = "Screen" };
+            _journal.Do(new AddItemCommand<MappingSection>(
+                target.Mapping, section, target.Mapping.Count, "video",
+                $"“{target.Name}” takes part of the canvas"));
+        }
+
+        _journal.Do(RectEdits.MappingSource(section, gesture.Rect));
+
+        // Identity destination: the slice fills the screen. A warp authored later in the mapping
+        // editor lives in the same section and is deliberately left alone.
+        if (section is { TargetX: 0, TargetY: 0, TargetWidth: 1, TargetHeight: 1 } is false)
+            _journal.Do(RectEdits.MappingTarget(section, new NormalizedRect(0, 0, 1, 1)));
+
+        RefreshLayout();
+    }
+
+    /// <summary>Selects the output whose slice was clicked, so the pane beside it follows the canvas.</summary>
+    public void SelectLayoutOutput(int index)
+    {
+        if (index < 0 || index >= LayoutOutputs.Count)
+            return;
+
+        var chosen = LayoutOutputs[index];
+
+        if (Outputs.FirstOrDefault(row => row.Id == chosen.Id) is { } row)
+            SelectedOutput = row;
+
+        RefreshLayout();
+    }
+
+    private void RefreshLayout()
+    {
+        OnPropertyChanged(nameof(LayoutBoxes));
+        OnPropertyChanged(nameof(LayoutGuidesX));
+        OnPropertyChanged(nameof(LayoutGuidesY));
+        OnPropertyChanged(nameof(LayoutSummary));
+        RebuildSections();
+        OnPropertyChanged(nameof(Sections));
+    }
+
     public void ApplyLayerGesture(PlacementGesture gesture)
     {
         if (_project.FindCue(gesture.SubjectId) is not { } cue)
@@ -1530,6 +1764,10 @@ public partial class VideoViewModel : ObservableObject
 
             pane.Layers = VideoPresentation.Layers(_project, composition);
             pane.Feeds = Feeds(composition.Id);
+            // The slice edges too: dividing a canvas between screens changes what a cue placement on
+            // it snaps to, and a pane that kept its first answer would snap to a wall that has moved.
+            pane.GuidesX = SliceGuides(composition.Id, horizontal: true);
+            pane.GuidesY = SliceGuides(composition.Id, horizontal: false);
             pane.IsSelected = SelectedComposition?.Id == pane.Id;
         }
 
@@ -1747,6 +1985,21 @@ public sealed partial class CompositionPaneViewModel(
 
     [ObservableProperty]
     private bool _isSelected;
+
+    /// <summary>
+    /// The edges of the output slices over this canvas, as snap guides for a cue placement.
+    /// </summary>
+    /// <remarks>
+    /// What makes the output layout worth more than a picture: with the screen boundaries as snap
+    /// targets, a cue can be dropped exactly onto one projector of a wall without anybody working out
+    /// what fraction that is. Empty on a canvas nobody has divided, which snaps to its edges and centre
+    /// as every canvas does.
+    /// </remarks>
+    [ObservableProperty]
+    private IReadOnlyList<double> _guidesX = [];
+
+    [ObservableProperty]
+    private IReadOnlyList<double> _guidesY = [];
 
     public bool HasNoFeeds => Feeds.Count == 0;
 

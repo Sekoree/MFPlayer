@@ -59,8 +59,12 @@ public class VideoViewRenderTests
         var (video, _, _) = Rig(shell);
 
         Assert.True(video.IsOutputsPane);
+
+        // Mapping is no longer among them: it is always the mapping of ONE output, so it opens over
+        // the Outputs pane on the output it belongs to rather than asking the operator to remember
+        // which output a tab of its own was about.
         Assert.Equal(
-            ["OUTPUTS", "COMPOSITIONS", "MAPPING", "AUDITION"],
+            ["OUTPUTS", "COMPOSITIONS", "AUDITION"],
             video.Tabs.Select(tab => tab.Key.ToUpperInvariant()));
     });
 
@@ -93,7 +97,7 @@ public class VideoViewRenderTests
 
         output.Mapping[0].SourceWidth = 0.5;
         output.Mapping[0].TargetWidth = 1;
-        video.SelectedTab = video.MappingTab;
+        video.OpenMapping();
         video.Refresh();
 
         var window = Host(new VideoView(), video);
@@ -109,12 +113,12 @@ public class VideoViewRenderTests
         Assert.Contains(1920m, values);
     });
 
-    /// <summary>The splitter is reachable, and pressing it is what an operator does first to a wall.</summary>
+    /// <summary>The splitter is reachable on the mapping editor, which now opens over the output it belongs to.</summary>
     [Fact]
     public Task TheSplitterIsOnTheMappingPane() => ShellFixture.WithShell(shell =>
     {
         var (video, _, _) = Rig(shell);
-        video.SelectedTab = video.MappingTab;
+        video.OpenMapping();
 
         var window = Host(new VideoView(), video);
 
