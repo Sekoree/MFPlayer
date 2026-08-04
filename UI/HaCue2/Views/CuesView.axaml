@@ -39,12 +39,8 @@
         <Button Grid.Column="5" Classes="icon" Content="↓ STBY" Click="OnStandbyDown" />
         <!-- Multi-list transport is v1 (register item 5): the transport acts on the selected list and
              every list keeps its own standby. -->
-        <Border Grid.Column="6" Background="{DynamicResource BoothBg}"
-                BorderBrush="{DynamicResource BoothRule2}" BorderThickness="1"
-                CornerRadius="{StaticResource BoothCorner}" Padding="8,4">
-          <TextBlock Classes="mono" FontSize="{DynamicResource FontSizeMono}"
-                     Text="{Binding ListSelector}" />
-        </Border>
+        <Button Grid.Column="6" Content="{Binding ListSelector}" Click="OnSelectList"
+                ToolTip.Tip="Choose which cue list GO and standby control." />
 
         <ToggleButton Grid.Column="8" Theme="{StaticResource ChipToggle}"
                       IsChecked="{Binding $parent[v:ShellWindow].((vm:ShellViewModel)DataContext).IsExternalInputEnabled}"
@@ -64,8 +60,9 @@
       <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="7">
         <!-- Media first and separate: picking files IS how a show gets built, and burying it in a
              menu behind six cue kinds nobody adds by hand would be the wrong shape. -->
-        <Button Grid.Column="0" Content="+ MEDIA…" Click="OnAddMedia" />
-        <Button Grid.Column="1" Content="+ ADD ▾">
+        <Button Grid.Column="0" Content="+ MEDIA…" Click="OnAddMedia"
+                IsEnabled="{Binding CanEditDocument}" />
+        <Button Grid.Column="1" Content="+ ADD ▾" IsEnabled="{Binding CanEditDocument}">
           <Button.Flyout>
             <MenuFlyout>
               <MenuItem Header="Group" Click="OnAddCue" Tag="Group" />
@@ -87,16 +84,30 @@
             </MenuFlyout>
           </Button.Flyout>
         </Button>
-        <Button Grid.Column="2" Content="DUPLICATE" Click="OnDuplicate" />
-        <Button Grid.Column="3" Content="REMOVE" Click="OnRemove" />
-        <Button Grid.Column="4" Classes="icon" Content="RENUMBER…" Click="OnRenumber" />
+        <Button Grid.Column="2" Content="DUPLICATE" Click="OnDuplicate"
+                IsEnabled="{Binding CanModifySelection}" />
+        <Button Grid.Column="3" Content="REMOVE" Click="OnRemove"
+                IsEnabled="{Binding CanModifySelection}" />
+        <Button Grid.Column="4" Classes="icon" Content="RENUMBER…" Click="OnRenumber"
+                IsEnabled="{Binding CanEditDocument}" />
+        <!-- An import that failed produced no cue and, until now, no word about why. Red, beside the
+             button that started it, and trimmed rather than allowed to push the row wider. -->
+        <TextBlock Grid.Column="5" Classes="mono small" VerticalAlignment="Center"
+                   Foreground="{DynamicResource GelRed}" TextTrimming="CharacterEllipsis"
+                   IsVisible="{Binding HasMediaImportProblem}"
+                   Text="{Binding MediaImportProblem}"
+                   ToolTip.Tip="{Binding MediaImportProblem}" />
         <TextBlock Grid.Column="6" Classes="mono dim3 small" VerticalAlignment="Center"
-                   IsVisible="{Binding !IsPreviewing}"
+                   IsVisible="{Binding ShowsTransportHint}"
                    Text="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).TransportHint}" />
         <!-- An audition is inaudible in the room, so the only way an operator knows it is running is
              to be told. Shown in place of the hint, which is advice they have already read. -->
         <TextBlock Grid.Column="6" Classes="mono small" VerticalAlignment="Center"
-                   IsVisible="{Binding IsPreviewing}" Text="{Binding PreviewHint}" />
+                   IsVisible="{Binding ShowsPreviewHint}" Text="{Binding PreviewHint}" />
+        <!-- A two-second network scan with nothing on screen reads as a click that missed. -->
+        <TextBlock Grid.Column="6" Classes="mono small" VerticalAlignment="Center"
+                   IsVisible="{Binding IsScanningSources}"
+                   Text="looking for NDI senders on the network…" />
       </Grid>
     </Border>
 
@@ -139,15 +150,25 @@
                         CanUserSortColumns="False">
             <TreeDataGrid.ContextMenu>
               <ContextMenu>
-                <MenuItem Header="Fire this cue now" Click="OnFireSelected" />
-                <MenuItem Header="Preview on audition outputs" InputGesture="Ctrl+P" Click="OnPreview" />
-                <MenuItem Header="Move standby here" Click="OnStandbyHere" />
+                <!-- Not edits, so they stay live under Lock — but they need a selected cue, and with
+                     none they used to sit enabled and do nothing. -->
+                <MenuItem Header="Fire this cue now" Click="OnFireSelected"
+                          IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).HasSelection}" />
+                <MenuItem Header="Preview on audition outputs" InputGesture="Ctrl+P" Click="OnPreview"
+                          IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).HasSelection}" />
+                <MenuItem Header="Move standby here" Click="OnStandbyHere"
+                          IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).HasSelection}" />
                 <Separator />
                 <MenuItem Header="Edit source…" Click="OnEditSource"
-                          IsVisible="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanEditSource}" />
-                <MenuItem Header="Open timeline" Click="OnOpenTimeline" />
-                <MenuItem Header="Disable for this performance" Click="OnToggleEnabled" />
-                <MenuItem Header="Renumber from here…" Click="OnRenumber" />
+                          IsVisible="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanEditSource}"
+                          IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanEditDocument}" />
+                <MenuItem Header="Open timeline" Click="OnOpenTimeline"
+                          IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanOpenTimeline}" />
+                <MenuItem Header="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).ToggleEnabledLabel}"
+                          Click="OnToggleEnabled"
+                          IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanModifySelection}" />
+                <MenuItem Header="Renumber from here…" Click="OnRenumber"
+                          IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanEditDocument}" />
               </ContextMenu>
             </TreeDataGrid.ContextMenu>
 

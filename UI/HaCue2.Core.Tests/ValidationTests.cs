@@ -208,6 +208,37 @@ public sealed class ValidationTests
     }
 
     [Fact]
+    public void InvalidTextCueFieldsAreReportedBeforeCompilation()
+    {
+        var fixture = new TestProject();
+        var card = new TextCueNode
+        {
+            Number = "5",
+            Label = "Title",
+            Text = "ACT ONE",
+            FontScale = double.NaN,
+            DurationMs = -1,
+            Placements = [new LayerPlacement { CompositionId = Guid.NewGuid() }],
+            EffectLanes =
+            [
+                new EffectLane
+                {
+                    Kind = EffectLaneKind.Opacity,
+                    Points = [new LanePoint(0, 0), new LanePoint(0.5, 2)],
+                },
+            ],
+        };
+        fixture.List.Cues.Add(card);
+
+        var issues = ProjectValidator.Validate(fixture.Project);
+
+        Assert.Contains(issues, issue => issue.Message.Contains("font size"));
+        Assert.Contains(issues, issue => issue.Message.Contains("negative duration"));
+        Assert.Contains(issues, issue => issue.Message.Contains("composition that no longer exists"));
+        Assert.Contains(issues, issue => issue.Message.Contains("Opacity lane point"));
+    }
+
+    [Fact]
     public void AClockMasterAtTheWrongRateWarns()
     {
         var fixture = new TestProject().WithFoldbackFed();

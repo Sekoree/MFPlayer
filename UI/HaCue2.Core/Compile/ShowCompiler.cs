@@ -169,7 +169,7 @@ public static class ShowCompiler
                         // media cue with no file, and the state every text cue is in between being
                         // added and typed into.
                         if (text.Text.Trim().Length > 0)
-                            clips.Add(TextClip(project, text));
+                            clips.Add(TextClip(project, text, inheritedLanes));
 
                         break;
 
@@ -355,23 +355,25 @@ public static class ShowCompiler
             send.Muted ? 0f : Linear(send.GainDb + media.LevelDb)));
 
     /// <summary>
-    /// A text cue as a clip: its rendered card, held on screen.
+    /// A text cue as a clip: its rendered card, held on screen or shown for an authored duration.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A single-frame picture, so the end arrives immediately and
-    /// <see cref="ClipEndBehavior.FreezeLastFrame"/> is what makes it a CARD rather than a flash. It
-    /// holds until something stops it, which is how a title card, a caption and a holding slate all
-    /// behave; a card that should come off on its own gets a fade cue or a follow, like anything else.
+    /// A duration of zero is an indefinite card and therefore freezes its final frame. A positive
+    /// duration stops naturally, which is what makes Follow and a duration authored in the inspector
+    /// mean what they say.
     /// </para>
     /// <para>
     /// No audio at all — a text cue has no sends and asks the decoder for no audio stream, so a card
     /// standing over a running bed cannot interrupt it.
     /// </para>
     /// </remarks>
-    private static ShowClipBinding TextClip(HaCueProject project, TextCueNode text)
+    private static ShowClipBinding TextClip(
+        HaCueProject project,
+        TextCueNode text,
+        IReadOnlyList<EffectLane>? inheritedLanes = null)
     {
-        var placements = text.Placements;
+        var placements = text.Placements.OrderBy(item => item.LayerIndex).ToList();
         var placement = placements.FirstOrDefault();
         var fadeIn = text.FadeInCurve.Resolve(project);
         var fadeOut = text.FadeOutCurve.Resolve(project);
@@ -391,7 +393,9 @@ public static class ShowCompiler
             FadeOut = TimeSpan.FromMilliseconds(text.FadeOutMs),
             FadeOutCurve = fadeOut.Law,
             FadeOutShape = fadeOut.Custom,
-            EndBehavior = ClipEndBehavior.FreezeLastFrame,
+            EndBehavior = text.DurationMs > 0
+                ? ClipEndBehavior.Stop
+                : ClipEndBehavior.FreezeLastFrame,
             Placement = placement is null ? null : Placement(placement),
             ExtraPlacements = placements.Count < 2
                 ? null
@@ -399,8 +403,13 @@ public static class ShowCompiler
                     extra.CompositionId.ToString(),
                     extra.LayerIndex,
                     Placement(extra)))],
-            // No envelope. A lane is compiled against the cue's PLAYED length and a card has none — it
-            // is one frame held until something stops it. Its fades are the ramps it can have.
+            // An indefinite card has no honest time span for an envelope. Timed cards do, and inherit
+            // their nearest group lane just like media cues.
+            OpacityEnvelope = Envelope(
+                text.EffectLanes,
+                EffectLaneKind.Opacity,
+                text.DurationMs > 0 ? TimeSpan.FromMilliseconds(text.DurationMs) : null,
+                inheritedLanes),
         };
     }
 
@@ -582,20 +591,27 @@ public static class ShowCompiler
         MediaCueNode media,
         EffectLaneKind kind,
         TimeSpan? fileLength,
+        IReadOnlyList<EffectLane>? inheritedLanes = null) =>
+        Envelope(media.EffectLanes, kind, media.TrimmedLength(fileLength), inheritedLanes);
+
+    private static IReadOnlyList<ShowEnvelopePoint>? Envelope(
+        IReadOnlyList<EffectLane> ownLanes,
+        EffectLaneKind kind,
+        TimeSpan? span,
         IReadOnlyList<EffectLane>? inheritedLanes = null)
     {
-        var lane = media.EffectLanes.FirstOrDefault(candidate => candidate.Kind == kind)
+        var lane = ownLanes.FirstOrDefault(candidate => candidate.Kind == kind)
                    ?? inheritedLanes?.FirstOrDefault(candidate => candidate.Kind == kind);
         if (lane is not { Points.Count: > 1 })
             return null;
 
-        if (media.TrimmedLength(fileLength) is not { } span || span <= TimeSpan.Zero)
+        if (span is not { } duration || duration <= TimeSpan.Zero)
             return null;
 
         return
         [
             .. lane.Points.Select(point => new ShowEnvelopePoint(
-                point.X * span,
+                point.X * duration,
                 (float)Math.Clamp(point.Y, 0, 1))),
         ];
     }

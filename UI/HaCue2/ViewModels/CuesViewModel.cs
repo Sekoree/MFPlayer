@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using HaCue2.Controls;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Media;
@@ -61,8 +62,12 @@ public partial class CuesViewModel : ObservableObject
             // other way round, so a click, a keyboard move and a programmatic set all take one path.
             SetProperty(ref _selectedCue, CueSource.RowSelection.SelectedItem, nameof(SelectedCue));
             OnPropertyChanged(nameof(CanEditSource));
+            OnPropertyChanged(nameof(CanOpenTimeline));
+            OnPropertyChanged(nameof(HasSelection));
             Inspector.Facts = FactsFor(CueSource.RowSelection.SelectedItem);
             Inspector.Show([.. CueSource.RowSelection.SelectedItems.OfType<CueRow>().Select(row => row.Id)]);
+            OnPropertyChanged(nameof(CanModifySelection));
+            OnPropertyChanged(nameof(ToggleEnabledLabel));
 
             if (!_restoringSelection
                 && Project.Settings.ClickMovesStandby
@@ -79,9 +84,34 @@ public partial class CuesViewModel : ObservableObject
     /// <summary>The project file used to resolve a relative media root.</summary>
     public Func<string?>? ProjectPath { get; set; }
 
-    /// <summary>The last media import failure. Import continues with the other selected files.</summary>
+    /// <summary>Media import failures. Import continues with the other selected files.</summary>
+    /// <remarks>
+    /// It was written and never shown anywhere — a file that could not be copied into the media root
+    /// produced no cue and no word about why. The add row carries it now.
+    /// </remarks>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasMediaImportProblem))]
     private string _mediaImportProblem = "";
+
+    public bool HasMediaImportProblem => MediaImportProblem.Length > 0;
+
+    /// <summary>
+    /// Whether a source discovery scan is running.
+    /// </summary>
+    /// <remarks>
+    /// NDI discovery is a two-second network scan. It moved off the UI thread so the transport stays
+    /// live through it, which left the click looking like it had done nothing — and let a second click
+    /// start a second scan and stack a second dialog. This says it is happening and gates the verb.
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsTransportHint))]
+    [NotifyPropertyChangedFor(nameof(ShowsPreviewHint))]
+    private bool _isScanningSources;
+
+    /// <summary>The add row shows one line at a time: a scan, an audition, or the standing hint.</summary>
+    public bool ShowsTransportHint => !IsPreviewing && !IsScanningSources;
+
+    public bool ShowsPreviewHint => IsPreviewing && !IsScanningSources;
 
     /// <summary>The journal, for the dialogs the view opens.</summary>
     public ProjectJournal Journal => _journal;
@@ -501,22 +531,59 @@ public partial class CuesViewModel : ObservableObject
             _ = Engine?.FireAsync(row.Id);
     }
 
-    /// <summary>Moves standby without firing — the ↑/↓ keys.</summary>
+    /// <summary>
+    /// Moves standby without firing — the ↑/↓ keys.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The walk is over the WHOLE list and only lands on enabled cues. Standby can legally rest on a
+    /// disabled one — clicking it puts it there when <c>ClickMovesStandby</c> is on, and so does "move
+    /// standby here" — and searching an enabled-only list for it found nothing and clamped to index 0.
+    /// So ↓ STBY from a disabled cue jumped to the TOP of the list, which during a show moves the
+    /// cursor most of an act away from where the operator is.
+    /// </para>
+    /// <para>
+    /// Past either end the cursor HOLDS rather than wrapping: running off the bottom of the list and
+    /// silently arriving back at cue one is not something an operator can see happen.
+    /// </para>
+    /// </remarks>
     public void StepStandby(int delta)
     {
-        if (ScopedList is not { } list)
+        if (ScopedList is not { } list || delta == 0)
             return;
 
-        var order = list.Flatten().Where(cue => cue.Enabled).ToList();
-        if (order.Count == 0)
-            return;
-
+        var order = list.Flatten().ToList();
         var at = list.StandbyCueId is { } standby
             ? order.FindIndex(cue => cue.Id == standby)
             : -1;
 
-        var next = Math.Clamp(at + delta, 0, order.Count - 1);
-        SetStandby(list, order[next].Id);
+        // No cursor yet, or one pointing outside this list: either key lands on the first enabled cue.
+        if (at < 0)
+        {
+            if (order.FindIndex(cue => cue.Enabled) is >= 0 and var first)
+                SetStandby(list, order[first].Id);
+
+            return;
+        }
+
+        var step = Math.Sign(delta);
+        var landed = at;
+
+        for (var remaining = Math.Abs(delta); remaining > 0; remaining--)
+        {
+            var index = landed + step;
+
+            while (index >= 0 && index < order.Count && !order[index].Enabled)
+                index += step;
+
+            if (index < 0 || index >= order.Count)
+                break;
+
+            landed = index;
+        }
+
+        if (landed != at)
+            SetStandby(list, order[landed].Id);
     }
 
     /// <summary>
@@ -558,6 +625,24 @@ public partial class CuesViewModel : ObservableObject
 
     // ── building a show ───────────────────────────────────────────────────────────────────────
 
+    public bool CanEditDocument => !_journal.IsReadOnly;
+
+    public bool CanModifySelection => CanEditDocument && Inspector.Selected.Count > 0;
+
+    /// <summary>
+    /// Whether the row verbs have a cue to act on.
+    /// </summary>
+    /// <remarks>
+    /// Fire, preview and "move standby here" are not EDITS, so they stay available under Lock — but
+    /// with nothing selected they silently did nothing, which reads as a broken menu rather than an
+    /// empty selection.
+    /// </remarks>
+    public bool HasSelection => SelectedCue is not null;
+
+    public string ToggleEnabledLabel => Inspector.Selected.Any(cue => !cue.Enabled)
+        ? "Enable for this performance"
+        : "Disable for this performance";
+
     /// <summary>
     /// Adds a cue of the given kind after the selection.
     /// </summary>
@@ -574,9 +659,15 @@ public partial class CuesViewModel : ObservableObject
     /// </remarks>
     public CueNode? AddCue(CueKind kind, string mediaPath = "")
     {
-        if (ScopedList is not { } list)
+        if (!CanEditDocument || ScopedList is not { } list)
             return null;
 
+        return Insert(list, NewCue(kind, mediaPath), kind.ToString().ToLowerInvariant());
+    }
+
+    /// <summary>A cue of the given kind, with the project's defaults on it and nowhere yet to live.</summary>
+    private CueNode NewCue(CueKind kind, string mediaPath = "")
+    {
         CueNode cue = kind switch
         {
             CueKind.Group => new GroupCueNode { Label = "Group" },
@@ -598,7 +689,7 @@ public partial class CuesViewModel : ObservableObject
             },
         };
 
-        return Insert(list, cue, kind.ToString().ToLowerInvariant());
+        return cue;
     }
 
     /// <summary>
@@ -618,9 +709,13 @@ public partial class CuesViewModel : ObservableObject
     /// </para>
     /// </remarks>
     /// <param name="durationMs">What the source said it runs for, or 0 when it cannot say.</param>
-    public MediaCueNode? AddSourceCue(string uri, string label, int durationMs = 0)
+    public MediaCueNode? AddSourceCue(
+        string uri,
+        string label,
+        int durationMs = 0,
+        IReadOnlyList<SubtitleSelection>? subtitles = null)
     {
-        if (ScopedList is not { } list || uri.Trim().Length == 0)
+        if (!CanEditDocument || ScopedList is not { } list || uri.Trim().Length == 0)
             return null;
 
         var trimmed = uri.Trim();
@@ -633,6 +728,7 @@ public partial class CuesViewModel : ObservableObject
             FadeInMs = Math.Max(0, Project.Settings.DefaultFadeInMs),
             FadeOutMs = Math.Max(0, Project.Settings.DefaultFadeOutMs),
             DisablePreRoll = SourceUri.IsLive(trimmed),
+            Subtitles = CopySubtitles(subtitles),
         };
 
         return Insert(list, cue, "source") as MediaCueNode;
@@ -645,10 +741,17 @@ public partial class CuesViewModel : ObservableObject
     /// The edit path for the same dialogs. Re-adding the cue would lose its number, its placements and
     /// its sends — which is the whole cue — so changing which camera it watches is one field.
     /// </remarks>
-    public void SetSource(Guid cueId, string uri, string label, int durationMs = 0)
+    public bool SetSource(
+        Guid cueId,
+        string uri,
+        string label,
+        int durationMs = 0,
+        IReadOnlyList<SubtitleSelection>? subtitles = null)
     {
-        if (Project.FindCue(cueId) is not MediaCueNode cue || uri.Trim().Length == 0)
-            return;
+        if (!CanEditDocument
+            || Project.FindCue(cueId) is not MediaCueNode cue
+            || uri.Trim().Length == 0)
+            return false;
 
         var trimmed = uri.Trim();
 
@@ -667,10 +770,30 @@ public partial class CuesViewModel : ObservableObject
                 cueId, "sourceDuration", "cues",
                 () => cue.SourceDurationMs, value => cue.SourceDurationMs = value,
                 Math.Max(0, durationMs), "edit source"));
+
+            // null means "this source editor did not manage subtitles"; an empty list is an explicit
+            // choice to remove the old subtitle. Keeping this inside the same composite makes editing
+            // a prepared YouTube source one undoable operation.
+            if (subtitles is not null)
+                _journal.Do(new SetValueCommand<List<SubtitleSelection>>(
+                    cueId, "subtitles", "cues",
+                    () => cue.Subtitles, value => cue.Subtitles = value,
+                    CopySubtitles(subtitles), "edit source subtitles"));
         }
 
         Refresh();
+        return true;
     }
+
+    private static List<SubtitleSelection> CopySubtitles(IReadOnlyList<SubtitleSelection>? subtitles) =>
+        subtitles is null
+            ? []
+            : [.. subtitles.Select(item => new SubtitleSelection
+            {
+                Path = item.Path,
+                StreamIndex = item.StreamIndex,
+                Signature = item.Signature,
+            })];
 
     /// <summary>
     /// The selected cue, when it plays a SOURCE rather than a file.
@@ -693,32 +816,68 @@ public partial class CuesViewModel : ObservableObject
     /// <summary>Numbers a new cue, files it where the operator is looking, and selects it.</summary>
     private CueNode Insert(CueList list, CueNode cue, string what)
     {
+        InsertCore(list, cue, what);
+        Refresh();
+        RestoreSelection(AllRows.FirstOrDefault(row => row.Id == cue.Id));
+        return cue;
+    }
+
+    /// <summary>
+    /// The DOCUMENT half of an insert, without the view rebuild.
+    /// </summary>
+    /// <remarks>
+    /// Split out for bulk import. <see cref="Refresh"/> rebuilds the scope list, the whole cue tree,
+    /// the inspector and the timeline, and running it once per file made importing an album quadratic
+    /// — measured at 5 ms a file into a small list and 26 ms a file into a large one, all of it on the
+    /// UI thread. A caller adding many cues rebuilds once at the end.
+    /// </remarks>
+    /// <param name="after">
+    /// The cue the new one follows, for a run that is adding several. Null means "where the operator
+    /// is looking", which is the single-cue case and cannot be reused mid-run: without a refresh the
+    /// selection has not moved, so every file would land in the same place and the album would come
+    /// out backwards.
+    /// </param>
+    /// <param name="renumber">
+    /// False for a bulk run, which renumbers ONCE at the end instead. Auto-renumber rewrites the whole
+    /// sibling level, so doing it per file is the other half of what made importing an album quadratic.
+    /// </param>
+    private CueNode InsertCore(
+        CueList list, CueNode cue, string what, CueNode? after = null, bool renumber = true)
+    {
         cue.Trigger = Project.Settings.NewCueTrigger;
 
-        var (siblings, at) = InsertionPoint(list);
+        var (siblings, at) = InsertionPoint(list, after);
         cue.Number = AutoNumber(siblings, at);
 
         using (_journal.Composite($"add {what} cue", "cues"))
         {
             _journal.Do(new AddItemCommand<CueNode>(siblings, cue, at, "cues", $"add {what} cue"));
 
-            if (Project.Settings.AutoRenumberOnInsert)
-                Renumber(siblings);
+            if (renumber && Project.Settings.AutoRenumberOnInsert)
+                Renumber(list, siblings);
         }
 
-        Refresh();
-        RestoreSelection(AllRows.FirstOrDefault(row => row.Id == cue.Id));
         return cue;
     }
 
     /// <summary>Adds one media cue per file, as one undo step.</summary>
+    /// <remarks>
+    /// ONE rebuild for the whole run, and each cue anchored on the one before it so the files land in
+    /// the order they were chosen. Rebuilding per file was quadratic in the size of the list.
+    /// </remarks>
     public void AddMedia(IReadOnlyList<string> paths)
     {
-        if (paths.Count == 0 || ScopedList is null)
+        if (!CanEditDocument || paths.Count == 0 || ScopedList is not { } list)
             return;
 
+        CueNode? last = null;
+        var failed = new List<string>();
+
+        // Quiet: an import is a batch, not a gesture. Every journal command otherwise re-runs the
+        // shell's whole project status pass, so a hundred files cost a hundred validation passes over
+        // a project growing under each one.
         using (_journal.Composite(
-            paths.Count == 1 ? "add media cue" : $"add {paths.Count} media cues", "cues"))
+            paths.Count == 1 ? "add media cue" : $"add {paths.Count} media cues", "cues", quiet: true))
         {
             MediaImportProblem = "";
 
@@ -726,7 +885,7 @@ public partial class CuesViewModel : ObservableObject
             {
                 try
                 {
-                    var cue = AddCue(CueKind.Media, ImportMedia(path));
+                    var cue = NewCue(CueKind.Media, ImportMedia(path));
 
                     // A still is an ordinary media cue that would otherwise vanish after one frame:
                     // the decoder delivers a single picture and the clip reaches its end immediately.
@@ -734,16 +893,35 @@ public partial class CuesViewModel : ObservableObject
                     // that way rather than needing the operator to discover the setting.
                     if (cue is MediaCueNode still && IsStill(path))
                         still.EndBehavior = CueEndBehavior.FreezeLastFrame;
+
+                    last = InsertCore(list, cue, "media", last, renumber: false);
                 }
                 catch (Exception failure) when (
                     failure is IOException or UnauthorizedAccessException or ArgumentException)
                 {
-                    MediaImportProblem = $"could not import {Path.GetFileName(path)} — {failure.Message}";
+                    failed.Add($"{Path.GetFileName(path)} — {failure.Message}");
                 }
             }
+
+            // Once for the whole run. Auto-renumber rewrites every sibling, so per file it is O(list)
+            // work repeated per file — the same quadratic the rebuild was.
+            if (last is not null && Project.Settings.AutoRenumberOnInsert)
+                Renumber(list, Owner(list.Cues, last.Id) ?? list.Cues);
         }
 
+        // Every failure, not just the last one: importing forty files and being told about one is how
+        // an operator discovers the other three at the top of a show.
+        MediaImportProblem = failed.Count switch
+        {
+            0 => "",
+            1 => $"could not import {failed[0]}",
+            _ => $"could not import {failed.Count} files — {string.Join("; ", failed)}",
+        };
+
         Refresh();
+
+        if (last is not null)
+            RestoreSelection(AllRows.FirstOrDefault(row => row.Id == last.Id));
     }
 
     /// <summary>
@@ -808,35 +986,43 @@ public partial class CuesViewModel : ObservableObject
         }
     }
 
-    private void Renumber(IReadOnlyList<CueNode> siblings)
-    {
-        for (var index = 0; index < siblings.Count; index++)
-        {
-            var cue = siblings[index];
-            var number = new CueNumber((index + 1).ToString(CultureInfo.InvariantCulture));
-            if (cue.Number == number)
-                continue;
+    /// <summary>
+    /// Renumbers the level a cue was just inserted into, under whatever owns it.
+    /// </summary>
+    /// <remarks>
+    /// Through <see cref="CueRenumber"/>, which is also what the Renumber dialog runs. This used to
+    /// assign bare integers at every depth, so adding one cue inside a group rewrote its children from
+    /// <c>1.1, 1.2, 1.3</c> to <c>1, 2, 3</c> — numbers that then collided with the top level. The
+    /// prefix is what keeps a dotted show dotted.
+    /// </remarks>
+    private void Renumber(CueList list, List<CueNode> siblings) =>
+        CueRenumber.Apply(_journal, siblings, ParentOf(list.Cues, siblings)?.Number ?? CueNumber.Empty);
 
-            _journal.Do(new SetValueCommand<CueNumber>(
-                cue.Id,
-                "number",
-                "cues",
-                () => cue.Number,
-                value => cue.Number = value,
-                number,
-                "renumber cues"));
+    /// <summary>The group whose children this list IS, or null when it is a cue list's top level.</summary>
+    private static GroupCueNode? ParentOf(IReadOnlyList<CueNode> cues, List<CueNode> children)
+    {
+        foreach (var group in cues.OfType<GroupCueNode>())
+        {
+            if (ReferenceEquals(group.Children, children))
+                return group;
+
+            if (ParentOf(group.Children, children) is { } found)
+                return found;
         }
+
+        return null;
     }
 
     /// <summary>Removes every selected cue — a group takes its children with it.</summary>
     public void RemoveSelected()
     {
         var selected = Inspector.Selected;
-        if (selected.Count == 0 || ScopedList is not { } list)
+        if (!CanEditDocument || selected.Count == 0 || ScopedList is not { } list)
             return;
 
         using (_journal.Composite(
-            selected.Count == 1 ? "remove cue" : $"remove {selected.Count} cues", "cues"))
+            selected.Count == 1 ? "remove cue" : $"remove {selected.Count} cues", "cues",
+            quiet: true))
         {
             foreach (var cue in selected)
             {
@@ -858,11 +1044,12 @@ public partial class CuesViewModel : ObservableObject
     public void DuplicateSelected()
     {
         var selected = Inspector.Selected;
-        if (selected.Count == 0 || ScopedList is not { } list)
+        if (!CanEditDocument || selected.Count == 0 || ScopedList is not { } list)
             return;
 
         using (_journal.Composite(
-            selected.Count == 1 ? "duplicate cue" : $"duplicate {selected.Count} cues", "cues"))
+            selected.Count == 1 ? "duplicate cue" : $"duplicate {selected.Count} cues", "cues",
+            quiet: true))
         {
             foreach (var cue in selected)
             {
@@ -882,8 +1069,18 @@ public partial class CuesViewModel : ObservableObject
     }
 
     /// <summary>Where a new cue goes: inside the selected group, or after the selected cue.</summary>
-    private (List<CueNode> Siblings, int At) InsertionPoint(CueList list)
+    /// <param name="after">
+    /// An explicit anchor, for a bulk run. A group anchor is only descended INTO when it is the
+    /// operator's selection — a run anchored on the cue it just added must stay beside it.
+    /// </param>
+    private (List<CueNode> Siblings, int At) InsertionPoint(CueList list, CueNode? after = null)
     {
+        if (after is { } previous)
+        {
+            var host = Owner(list.Cues, previous.Id) ?? list.Cues;
+            return (host, host.IndexOf(previous) + 1);
+        }
+
         if (SelectedCue is not { } row || Project.FindCue(row.Id) is not { } selected)
             return (list.Cues, list.Cues.Count);
 
@@ -927,7 +1124,7 @@ public partial class CuesViewModel : ObservableObject
 
         // Room between them: take a decimal step down from the one before.
         if (!after.IsEmpty && before.CompareTo(after) < 0)
-            return before.Child(1) < after ? before.Child(1) : before;
+            return Between(before, after);
 
         var segments = before.Text.Split('.');
         return int.TryParse(segments[^1], out var last)
@@ -935,14 +1132,104 @@ public partial class CuesViewModel : ObservableObject
             : before.Child(1);
     }
 
+    /// <summary>
+    /// A number strictly between two neighbours.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The obvious answer is a child of the cue before: 12 and 13 give 12.1. When that child is already
+    /// the cue AFTER — 12 followed by 12.1 — the level is full, and the answer is one level deeper:
+    /// 12.0.1 still sorts between them.
+    /// </para>
+    /// <para>
+    /// It used to return <paramref name="before"/> itself when the level was full, which gave the new
+    /// cue the SAME number as the one above it. Two cues answering to Q12 is the one thing a cue number
+    /// exists to prevent, and nothing downstream reported it.
+    /// </para>
+    /// <para>
+    /// The descent always terminates while <paramref name="before"/> sorts below
+    /// <paramref name="after"/>: each step moves the candidate strictly closer to
+    /// <paramref name="before"/>, so it passes below <paramref name="after"/> within that number's
+    /// depth. The bound is a guard against a malformed number, not a real limit.
+    /// </remarks>
+    private static CueNumber Between(CueNumber before, CueNumber after)
+    {
+        var candidate = before.Child(1);
+
+        for (var depth = 0; depth < 16 && candidate >= after; depth++)
+        {
+            before = before.Child(0);
+            candidate = before.Child(1);
+        }
+
+        return candidate;
+    }
+
     private static CueNode Copy(CueNode cue)
     {
-        var copy = cue with { Id = Guid.NewGuid() };
+        // Cue records contain mutable lists several levels deep. A record `with` only copies the
+        // record shell, so changing a duplicated send, subtitle, placement, curve or lane used to
+        // change the original as well. The project serializer is already the canonical deep-copy
+        // boundary used by the runtime; use the same boundary here, then give every local identity a
+        // new id.
+        var envelope = new HaCueProject
+        {
+            CueLists = [new CueList { Cues = [cue] }],
+        };
+        var copy = ProjectSnapshot.Copy(envelope).CueLists[0].Cues[0];
+        var cueIds = new Dictionary<Guid, Guid>();
 
-        if (copy is GroupCueNode group)
-            group.Children = [.. group.Children.Select(Copy)];
+        void Renew(CueNode node)
+        {
+            var oldId = node.Id;
+            node.Id = Guid.NewGuid();
+            cueIds[oldId] = node.Id;
+
+            var lanes = node switch
+            {
+                MediaCueNode media => media.EffectLanes,
+                TextCueNode text => text.EffectLanes,
+                VisualizerCueNode visualizer => visualizer.EffectLanes,
+                GroupCueNode group => group.EffectLanes,
+                _ => [],
+            };
+            foreach (var lane in lanes)
+                lane.Id = Guid.NewGuid();
+
+            foreach (var placement in CuePlacements.Of(node))
+                foreach (var section in placement.VideoFx)
+                    section.Id = Guid.NewGuid();
+
+            if (node is GroupCueNode groupNode)
+                foreach (var child in groupNode.Children)
+                    Renew(child);
+        }
+
+        Renew(copy);
+
+        // References that stay inside the duplicated subtree should stay inside the copy. References
+        // to cues elsewhere in the show deliberately remain external.
+        foreach (var node in Flatten(copy))
+        {
+            if (node is JumpCueNode jump)
+                jump.TargetCueIds = [.. jump.TargetCueIds.Select(id => cueIds.GetValueOrDefault(id, id))];
+            if (node is FadeCueNode fade)
+                fade.TargetCueIds = [.. fade.TargetCueIds.Select(id => cueIds.GetValueOrDefault(id, id))];
+        }
 
         return copy;
+
+        static IEnumerable<CueNode> Flatten(CueNode root)
+        {
+            yield return root;
+
+            if (root is not GroupCueNode group)
+                yield break;
+
+            foreach (var child in group.Children)
+                foreach (var descendant in Flatten(child))
+                    yield return descendant;
+        }
     }
 
     /// <summary>
@@ -955,12 +1242,12 @@ public partial class CuesViewModel : ObservableObject
     public void ToggleEnabled()
     {
         var selected = Inspector.Selected;
-        if (selected.Count == 0)
+        if (!CanEditDocument || selected.Count == 0)
             return;
 
         var enable = selected.Any(cue => !cue.Enabled);
 
-        using (_journal.Composite(enable ? "enable cues" : "disable cues", "cues"))
+        using (_journal.Composite(enable ? "enable cues" : "disable cues", "cues", quiet: true))
         {
             foreach (var cue in selected)
             {
@@ -996,6 +1283,8 @@ public partial class CuesViewModel : ObservableObject
         OnPropertyChanged(nameof(PauseLabel));
         OnPropertyChanged(nameof(IsPreviewing));
         OnPropertyChanged(nameof(PreviewHint));
+        OnPropertyChanged(nameof(ShowsTransportHint));
+        OnPropertyChanged(nameof(ShowsPreviewHint));
     }
 
     /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>
@@ -1019,6 +1308,9 @@ public partial class CuesViewModel : ObservableObject
         OnPropertyChanged(nameof(IsEmpty));
         OnPropertyChanged(nameof(ListSelector));
         OnPropertyChanged(nameof(CanOpenTimeline));
+        OnPropertyChanged(nameof(CanEditDocument));
+        OnPropertyChanged(nameof(CanModifySelection));
+        OnPropertyChanged(nameof(ToggleEnabledLabel));
     }
 
     private void Rebuild()
@@ -1116,6 +1408,8 @@ public partial class CuesViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(Breadcrumb))]
     [NotifyPropertyChangedFor(nameof(TreeHint))]
     [NotifyPropertyChangedFor(nameof(ActivePanelHint))]
+    [NotifyPropertyChangedFor(nameof(ListSelector))]
+    [NotifyPropertyChangedFor(nameof(GroupsHeader))]
     private ScopeEntry? _selectedScope;
 
     partial void OnSelectedScopeChanged(ScopeEntry? value)
@@ -1248,15 +1542,21 @@ public partial class CuesViewModel : ObservableObject
     {
         get
         {
-            var list = SelectedScope is { IsList: true } scope
-                ? Project.CueLists.FirstOrDefault(item => item.Id == scope.Id)
-                : Project.CueLists.FirstOrDefault();
+            var list = ScopedList;
 
             var standby = list?.StandbyCueId is { } id ? Project.FindCue(id) : null;
             return standby is null
                 ? $"{list?.Name ?? "no list"} · at top ▾"
                 : $"{list!.Name} · stby Q{CuePresentation.Number(standby.Number)} ▾";
         }
+    }
+
+    /// <summary>Switches the transport and tree to a cue list chosen from the transport itself.</summary>
+    [RelayCommand]
+    private void SelectTransportList(ScopeEntry? scope)
+    {
+        if (scope is { IsList: true })
+            SelectedScope = _scopes.FirstOrDefault(candidate => candidate.Id == scope.Id) ?? scope;
     }
 
     public string ChaseReadout => _runtime.ChaseReadout;
@@ -1278,9 +1578,11 @@ public partial class CuesViewModel : ObservableObject
     /// </remarks>
     public void OpenTimeline()
     {
-        if (SelectedCue is { } row && Project.FindCue(row.Id) is GroupCueNode group)
-            Timeline.Show(group);
+        if (SelectedCue is not { } row
+            || Project.FindCue(row.Id) is not GroupCueNode { FireMode: GroupFireMode.Timeline } group)
+            return;
 
+        Timeline.Show(group);
         IsTimelineOpen = true;
     }
 
@@ -1570,7 +1872,9 @@ public sealed partial class TimelineViewModel : ObservableObject
     {
         var length = cue is MediaCueNode media
             ? media.TrimmedLength(_runtime.MediaDurations.TryGetValue(cue.Id, out var probed) ? probed : null)
-            : null;
+            : cue is TextCueNode { DurationMs: > 0 } text
+                ? TimeSpan.FromMilliseconds(text.DurationMs)
+                : null;
 
         // An unprobed, untrimmed cue has no honest length. Eight seconds is the same nominal the
         // timeline DRAWS with, so the dip matches the block the operator is looking at.

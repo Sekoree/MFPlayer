@@ -562,12 +562,26 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         {
             var previous = _project;
             var next = alreadyDetached ? project : ProjectSnapshot.Copy(project);
-            _project = next;
-            _compileContext = context;
-            _durations = context.Durations ?? _durations;
-            ForgetDetachedScreens(previous, next);
+            var nextContext = context.Durations is null
+                ? context with { Durations = _durations }
+                : context;
+            var document = ShowCompiler.Compile(next, nextContext);
+            var cueGroups = document.Cues
+                .Where(cue => Guid.TryParse(cue.Id, out _) && cue.GroupId is { Length: > 0 })
+                .ToDictionary(cue => Guid.Parse(cue.Id), cue => cue.GroupId!);
 
-            var document = ShowCompiler.Compile(next, context);
+            // Compile and load before swapping the host's document. A malformed edit must leave the
+            // running project, cue-to-transport map and screens describing the same document rather
+            // than half of the old one and half of the failed new one.
+            await _session.LoadDocumentAsync(
+                document,
+                preserveMatchingCompositions: true,
+                preserveActiveGroups: true).ConfigureAwait(false);
+
+            _project = next;
+            _compileContext = nextContext;
+            _durations = nextContext.Durations;
+            ForgetDetachedScreens(previous, next);
 
             // The compiled document is the ONE place that knows which transport a cue lands on — the
             // rule is not simple (a timeline's children get one each, everything else shares its
@@ -576,18 +590,9 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             lock (_gate)
             {
                 _cueGroups.Clear();
-
-                foreach (var cue in document.Cues)
-                {
-                    if (Guid.TryParse(cue.Id, out var id) && cue.GroupId is { Length: > 0 } group)
-                        _cueGroups[id] = group;
-                }
+                foreach (var (id, group) in cueGroups)
+                    _cueGroups[id] = group;
             }
-
-            await _session.LoadDocumentAsync(
-                document,
-                preserveMatchingCompositions: true,
-                preserveActiveGroups: true).ConfigureAwait(false);
 
             if (!_standbyRestored)
             {

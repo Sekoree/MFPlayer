@@ -305,7 +305,7 @@ public partial class ShellViewModel : ObservableObject
         _reload ??= new DispatcherTimer(ReloadDelay, DispatcherPriority.Background, (_, _) =>
         {
             _reload!.Stop();
-            ReloadEngine();
+            _ = ReloadEngineAsync();
         });
 
         _reload.Stop();
@@ -321,9 +321,12 @@ public partial class ShellViewModel : ObservableObject
             ? "live · editing never blocks playback"
             : $"live · {Host.Problems.Count} line(s) would not open";
 
-    private async void ReloadEngine()
+    private async Task ReloadEngineAsync()
     {
-        if (Host is { } host)
+        if (Host is not { } host)
+            return;
+
+        try
         {
             // Durations go with the document: without them the compiler cannot convert an out-point
             // into the engine's end-offset, and an effect lane on an untrimmed cue has no length to
@@ -331,6 +334,10 @@ public partial class ShellViewModel : ObservableObject
             await host.ReloadAsync(Project, CompileContext()).ConfigureAwait(true);
             await EnsureRemoteApiAsync().ConfigureAwait(true);
             OnPropertyChanged(nameof(TransportHint));
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            FileMessage = $"engine reload failed — {failure.Message}";
         }
     }
 

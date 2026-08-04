@@ -136,7 +136,9 @@ public static class CuePresentation
             var length = state.Length
                 ?? (cue is MediaCueNode media
                     ? media.TrimmedLength(durations.TryGetValue(cue.Id, out var probed) ? probed : null)
-                    : null);
+                    : cue is TextCueNode { DurationMs: > 0 } text
+                        ? TimeSpan.FromMilliseconds(text.DurationMs)
+                        : null);
 
             var remaining = length is { } total
                 ? total - state.Elapsed < TimeSpan.Zero ? TimeSpan.Zero : total - state.Elapsed
@@ -332,11 +334,28 @@ public static class CuePresentation
     private static TimeSpan? Played(CueNode cue, IReadOnlyDictionary<Guid, TimeSpan> durations) =>
         cue is MediaCueNode media
             ? media.TrimmedLength(durations.TryGetValue(cue.Id, out var probed) ? probed : null)
-            : null;
+            : cue is TextCueNode { DurationMs: > 0 } text
+                ? TimeSpan.FromMilliseconds(text.DurationMs)
+                : null;
 
     /// <summary>Where a sounding cue is going, as the Active panel's right-hand column.</summary>
     private static string Destination(HaCueProject project, CueNode cue)
     {
+        if (cue is TextCueNode text)
+        {
+            var compositions = text.Placements
+                .Select(placement => CompositionName(project, placement))
+                .Distinct()
+                .ToList();
+
+            return compositions.Count switch
+            {
+                0 => "not placed",
+                <= 2 => string.Join(", ", compositions),
+                _ => $"{compositions.Count} compositions",
+            };
+        }
+
         if (cue is not MediaCueNode media)
             return "—";
 
@@ -403,7 +422,7 @@ public static class CuePresentation
 
         // The WORDS, trimmed to the column. A card's path is a cache file nobody chose and nobody can
         // read; what identifies it in a list is what it says.
-        TextCueNode { Text.Length: 0 } => "no words yet",
+        TextCueNode text when string.IsNullOrWhiteSpace(text.Text) => "no words yet",
         TextCueNode text => Quote(text.Text),
 
         GroupCueNode group =>
@@ -460,6 +479,7 @@ public static class CuePresentation
     private static string Fade(CueNode cue) => cue switch
     {
         MediaCueNode { FadeInMs: > 0 } media => Seconds(media.FadeInMs),
+        TextCueNode { FadeInMs: > 0 } text => Seconds(text.FadeInMs),
         FadeCueNode fade => Seconds(fade.DurationMs),
         PatchCueNode { FadeMs: > 0 } patch => Seconds(patch.FadeMs),
         VisualizerCueNode visualizer => Seconds(visualizer.BlendMs),
@@ -480,15 +500,22 @@ public static class CuePresentation
     /// </remarks>
     private static string Length(CueNode cue, ShowRuntime runtime)
     {
+        if (cue is TextCueNode text)
+            return text.DurationMs > 0
+                ? FormatDuration(TimeSpan.FromMilliseconds(text.DurationMs))
+                : "hold";
+
         if (!runtime.MediaDurations.TryGetValue(cue.Id, out var duration))
             return "—";
 
         var played = cue is MediaCueNode media ? media.TrimmedLength(duration) ?? duration : duration;
 
-        return played.TotalHours >= 1
-            ? played.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
-            : played.ToString(@"m\:ss", CultureInfo.InvariantCulture);
+        return FormatDuration(played);
     }
+
+    private static string FormatDuration(TimeSpan value) => value.TotalHours >= 1
+        ? value.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
+        : value.ToString(@"m\:ss", CultureInfo.InvariantCulture);
 
     private static string Level(CueNode cue) => cue switch
     {
@@ -517,6 +544,15 @@ public static class CuePresentation
 
             case GroupCueNode group:
                 badges.Add(new Badge(group.FireMode.ToString().ToLowerInvariant()));
+                break;
+
+            case TextCueNode text:
+                if (text.DurationMs == 0)
+                    badges.Add(new Badge("hold"));
+                foreach (var placement in text.Placements)
+                    badges.Add(new Badge(CompositionName(project, placement)));
+                foreach (var lane in text.EffectLanes)
+                    badges.Add(LaneBadge(lane));
                 break;
 
             case ActionCueNode action:

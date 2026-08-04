@@ -159,6 +159,7 @@ internal sealed class OutboundEffects : IAsyncDisposable
         var own = cue switch
         {
             MediaCueNode media => media.EffectLanes,
+            TextCueNode text => text.EffectLanes,
             VisualizerCueNode visualizer => visualizer.EffectLanes,
             GroupCueNode group => group.EffectLanes,
             _ => [],

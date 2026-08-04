@@ -83,7 +83,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         var fired = cue switch
         {
-            MediaCueNode or VisualizerCueNode =>
+            MediaCueNode or TextCueNode or VisualizerCueNode =>
                 await host.PlayAsync(cue, list, crossfade, crossfadeCurve).ConfigureAwait(false),
             GroupCueNode group => await FireGroupAsync(group, depth).ConfigureAwait(false),
             JumpCueNode jump => await JumpAsync(jump, depth).ConfigureAwait(false),
@@ -106,6 +106,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         }
         else if (cue.Trigger == CueTrigger.Follow
                  && cue is not MediaCueNode
+                 && cue is not TextCueNode
                  && cue is not VisualizerCueNode
                  && list is not null)
         {
@@ -387,7 +388,10 @@ public sealed class CueExecutor(ICueExecutionHost host)
             return null;
 
         var index = at + CueOrder.Subtree(order[at]);
-        return index < order.Count && order[index].Enabled ? order[index] : null;
+        // The caller needs to SEE a disabled successor when the show is configured to stop a Follow
+        // chain at one. Returning null here made a disabled cue look like the end of the list, which
+        // could loop the list or continue into the next one instead of stopping.
+        return index < order.Count ? order[index] : null;
     }
 
     /// <summary>
@@ -632,6 +636,9 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// <summary>How long a child occupies the timeline: its TRIMMED length, not the file's.</summary>
     private TimeSpan? Length(CueNode cue)
     {
+        if (cue is TextCueNode { DurationMs: > 0 } text)
+            return TimeSpan.FromMilliseconds(text.DurationMs);
+
         var probed = host.MediaLength(cue.Id);
 
         return cue is MediaCueNode media ? media.TrimmedLength(probed) : probed;

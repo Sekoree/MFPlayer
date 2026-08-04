@@ -154,6 +154,7 @@ public static class ProjectReferences
             var lanes = cue switch
             {
                 MediaCueNode media => media.EffectLanes,
+                TextCueNode text => text.EffectLanes,
                 GroupCueNode group => group.EffectLanes,
                 VisualizerCueNode visualizer => visualizer.EffectLanes,
                 _ => [],
@@ -207,6 +208,7 @@ public static class ProjectReferences
     private static IEnumerable<CurveSpec?> CurvesOf(CueNode cue) => cue switch
     {
         MediaCueNode media => [media.FadeInCurve, media.FadeOutCurve],
+        TextCueNode text => [text.FadeInCurve, text.FadeOutCurve],
         GroupCueNode group => [group.CrossfadeCurve],
         FadeCueNode fade => [fade.Curve],
         PatchCueNode patch => [patch.FadeCurve],

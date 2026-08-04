@@ -125,13 +125,16 @@ public sealed partial class ShowHost
 
     private TimeSpan? PlayedLength(CueNode cue)
     {
-        if (cue is not MediaCueNode media
-            || _durations is null
-            || !_durations.TryGetValue(cue.Id, out var fileLength))
-            return null;
+        if (cue is TextCueNode { DurationMs: > 0 } text)
+            return TimeSpan.FromMilliseconds(text.DurationMs);
 
-        return media.TrimmedLength(fileLength) is { } duration && duration > TimeSpan.Zero
-            ? duration : null;
+        if (cue is MediaCueNode media
+            && _durations is not null
+            && _durations.TryGetValue(cue.Id, out var fileLength))
+            return media.TrimmedLength(fileLength) is { } duration && duration > TimeSpan.Zero
+                ? duration : null;
+
+        return null;
     }
 
     /// <summary>
@@ -237,17 +240,12 @@ public sealed partial class ShowHost
     /// </remarks>
     Task ICueExecutionHost.SeekCueAsync(Guid cueId, TimeSpan position)
     {
-        if (_project.ListOf(cueId) is not { } list)
-            return Task.CompletedTask;
+        // The transport map is the only question worth asking: it is built from the compiled document,
+        // so a cue that has one is by definition in a list. Checking the list separately was a leftover
+        // from deriving the group here, and left an unused binding behind.
+        var groupId = GroupOf(cueId);
 
-        var group = _project.AllCues().OfType<GroupCueNode>()
-            .FirstOrDefault(candidate => candidate.Children.Any(child => child.Id == cueId));
-
-        return _session.SeekAsync(
-            position,
-            group is null
-                ? ShowCompiler.GroupId(list)
-                : ShowCompiler.GroupId(list, group, _project.FindCue(cueId)!));
+        return groupId.Length == 0 ? Task.CompletedTask : _session.SeekAsync(position, groupId);
     }
 
     /// <summary>Runs a cue later, on the show's own clock. Cancelled with the show.</summary>

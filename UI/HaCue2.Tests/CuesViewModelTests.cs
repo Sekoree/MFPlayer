@@ -149,4 +149,120 @@ public class CuesViewModelTests
         shell.Undo();
         Assert.Equal(before, shell.Project.AllCues().Count());
     });
+
+    [Fact]
+    public Task DuplicatingACueDoesNotShareItsEditableChildren() => ShellFixture.WithShell(shell =>
+    {
+        var original = ShellFixture.Bed(shell.Project);
+        var composition = shell.Project.Compositions.First();
+        original.Subtitles = [new SubtitleSelection { Path = "captions.srt" }];
+        original.EffectLanes =
+        [
+            new EffectLane
+            {
+                Kind = EffectLaneKind.Volume,
+                Points = [new LanePoint(0, 1), new LanePoint(1, 0)],
+            },
+        ];
+        original.Placements =
+        [
+            new LayerPlacement
+            {
+                CompositionId = composition.Id,
+                VideoFx = [new MappingSection { Name = "crop" }],
+            },
+        ];
+        ShellFixture.Select(shell.Cues, original.Id);
+
+        shell.Cues.DuplicateSelected();
+
+        var copy = Assert.Single(
+            shell.Project.AllCues().OfType<MediaCueNode>(),
+            cue => cue.Id != original.Id && cue.Label == original.Label);
+        copy.Sends[0].GainDb = -30;
+        copy.Subtitles[0].Path = "different.srt";
+        copy.EffectLanes[0].Points[0] = new LanePoint(0, 0);
+        copy.Placements[0].VideoFx[0].Name = "changed";
+
+        Assert.NotEqual(copy.Sends[0].GainDb, original.Sends[0].GainDb);
+        Assert.Equal("captions.srt", original.Subtitles[0].Path);
+        Assert.Equal(1, original.EffectLanes[0].Points[0].Y);
+        Assert.Equal("crop", original.Placements[0].VideoFx[0].Name);
+        Assert.NotEqual(copy.EffectLanes[0].Id, original.EffectLanes[0].Id);
+        Assert.NotEqual(copy.Placements[0].VideoFx[0].Id, original.Placements[0].VideoFx[0].Id);
+    });
+
+    [Fact]
+    public Task DuplicatingAGroupRetargetsReferencesInsideTheCopy() => ShellFixture.WithShell(shell =>
+    {
+        var group = Assert.IsType<GroupCueNode>(shell.Cues.AddCue(CueKind.Group));
+        group.Label = "Linked group";
+        var child = new MediaCueNode { Number = "90.1", Label = "Inside", MediaPath = "inside.wav" };
+        var jump = new JumpCueNode
+        {
+            Number = "90.2", Label = "Again", TargetCueIds = [child.Id],
+        };
+        group.Children = [child, jump];
+        shell.Cues.Refresh();
+        ShellFixture.Select(shell.Cues, group.Id);
+
+        shell.Cues.DuplicateSelected();
+
+        var copy = Assert.Single(
+            shell.Project.AllCues().OfType<GroupCueNode>(),
+            candidate => candidate.Id != group.Id && candidate.Label == group.Label);
+        var copiedChild = Assert.IsType<MediaCueNode>(copy.Children[0]);
+        var copiedJump = Assert.IsType<JumpCueNode>(copy.Children[1]);
+
+        Assert.NotEqual(child.Id, copiedChild.Id);
+        Assert.Equal([copiedChild.Id], copiedJump.TargetCueIds);
+    });
+
+    [Fact]
+    public Task TransportListSelectorFollowsAGroupScopeAndCanSwitchLists() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var video = shell.Project.CueLists.Single(list => list.Name == "Video");
+            var group = new GroupCueNode { Number = "99", Label = "Video timeline" };
+            video.Cues.Add(group);
+            shell.Cues.Refresh();
+            shell.Cues.SelectedScope = shell.Cues.Groups.First(scope => scope.Id == group.Id);
+
+            Assert.StartsWith("Video ·", shell.Cues.ListSelector);
+
+            var musicScope = shell.Cues.CueLists.First(scope => scope.Name == "Music");
+            shell.Cues.SelectTransportListCommand.Execute(musicScope);
+
+            Assert.Equal(musicScope.Id, shell.Cues.SelectedScope!.Id);
+            Assert.StartsWith("Music ·", shell.Cues.ListSelector);
+        });
+
+    [Fact]
+    public Task TimelineOnlyOpensForASelectedTimelineGroup() => ShellFixture.WithShell(shell =>
+    {
+        ShellFixture.Select(shell.Cues, ShellFixture.Bed(shell.Project).Id);
+        shell.Cues.OpenTimeline();
+        Assert.False(shell.Cues.IsTimelineOpen);
+
+        var group = shell.Project.AllCues().OfType<GroupCueNode>().First();
+        group.FireMode = GroupFireMode.Timeline;
+        shell.Cues.Refresh();
+        ShellFixture.Select(shell.Cues, group.Id);
+        shell.Cues.OpenTimeline();
+
+        Assert.True(shell.Cues.IsTimelineOpen);
+    });
+
+    [Fact]
+    public Task LockedModeBlocksAuthoringBeforeItHasSideEffects() => ShellFixture.WithShell(shell =>
+    {
+        var before = shell.Project.AllCues().Count();
+        shell.IsLocked = true;
+
+        Assert.False(shell.Cues.CanEditDocument);
+        Assert.Null(shell.Cues.AddCue(CueKind.Media));
+        shell.Cues.AddMedia(["/outside/library/file.wav"]);
+
+        Assert.Equal(before, shell.Project.AllCues().Count());
+    });
 }

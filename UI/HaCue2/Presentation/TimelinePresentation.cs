@@ -156,6 +156,8 @@ public static class TimelinePresentation
 
         if (cue is MediaCueNode media)
             return media.TrimmedLength(probed)?.TotalMilliseconds ?? 8_000;
+        if (cue is TextCueNode { DurationMs: > 0 } text)
+            return text.DurationMs;
 
         return probed?.TotalMilliseconds ?? 8_000;
     }
@@ -163,6 +165,7 @@ public static class TimelinePresentation
     private static IReadOnlyList<EffectLane> EffectLanes(CueNode cue) => cue switch
     {
         MediaCueNode media => media.EffectLanes,
+        TextCueNode text => text.EffectLanes,
         GroupCueNode group => group.EffectLanes,
         VisualizerCueNode visualizer => visualizer.EffectLanes,
         _ => [],
@@ -182,7 +185,7 @@ public static class TimelinePresentation
 
     private static string ClipKind(CueNode cue) => CuePresentation.KindOf(cue) switch
     {
-        CueKind.Video or CueKind.Visualizer => "vi",
+        CueKind.Video or CueKind.Visualizer or CueKind.Text => "vi",
         CueKind.Group => "gr",
         CueKind.Media => "au",
         _ => "ac",

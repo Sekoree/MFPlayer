@@ -1,4 +1,5 @@
 using Avalonia.Threading;
+using S.Media.Core.Diagnostics;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Engine;
@@ -145,17 +146,38 @@ public sealed class EngineRuntime : IAsyncDisposable
 
             if (!settled)
                 Changed?.Invoke();
+
+            _lastPollFailure = null;
         }
         catch (ObjectDisposedException)
         {
             // The host went away between the tick and the await. Nothing to report.
             _timer.Stop();
         }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // This is an `async void` running four times a second for the whole performance, so
+            // anything that escapes it reaches the dispatcher unhandled and takes the app down in
+            // front of an audience. Everything else on this seam already guards broadly for the same
+            // reason — ShowHost's lifecycle callbacks and its pre-roll both do.
+            //
+            // The poll keeps running: a snapshot that failed once is a reading nobody got, not a
+            // reason to freeze every clock and meter on screen for the rest of the night. Logged on
+            // CHANGE rather than every tick, so a persistent fault is one line and not four a second.
+            if (!string.Equals(_lastPollFailure, failure.Message, StringComparison.Ordinal))
+            {
+                _lastPollFailure = failure.Message;
+                MediaDiagnostics.LogError(failure, "HaCue2: a show-runtime poll failed");
+            }
+        }
         finally
         {
             _polling = false;
         }
     }
+
+    /// <summary>The last poll fault, so a persistent one is logged once rather than four times a second.</summary>
+    private string? _lastPollFailure;
 
     /// <summary>
     /// Copies the bay's own counters into the runtime the Diagnostics window and drawer read.
@@ -236,8 +258,20 @@ public sealed class EngineRuntime : IAsyncDisposable
 
         _runtime.LastSignal = described;
 
-        if (signal.SourceId != Guid.Empty)
-            _runtime.LastSeen[signal.SourceId] = $"{described} · {DateTime.Now:HH:mm}";
+        if (signal.SourceId == Guid.Empty)
+            return;
+
+        // Copy-on-write, like the monitor above and for the same reason: this runs on the MIDI/OSC
+        // I/O thread while the Targets pane reads the map on the UI thread. Writing into a shared
+        // Dictionary from two threads corrupts its buckets — a fault that shows up as a wrong answer
+        // or a hang rather than an exception. The copy is one entry per trigger input.
+        lock (_monitor)
+        {
+            _runtime.LastSeen = new Dictionary<Guid, string>(_runtime.LastSeen)
+            {
+                [signal.SourceId] = $"{described} · {DateTime.Now:HH:mm}",
+            };
+        }
     }
 
     public async ValueTask DisposeAsync()

@@ -1215,34 +1215,12 @@ public static class Dialogs
                 var start = Math.Max(0, prompt["Start at"].Number(1));
                 var step = Math.Max(1, prompt["Step"].Number(1));
 
-                using var scope = journal.Composite($"renumber “{list.Name}”", "cues");
-                Renumber(journal, list.Cues, prefix: null, start, step);
+                // Quiet: a renumber rewrites every cue in the list, and each command would otherwise
+                // re-run the shell's whole status pass.
+                using var scope = journal.Composite($"renumber “{list.Name}”", "cues", quiet: true);
+                CueRenumber.Apply(journal, list.Cues, start: start, step: step);
             },
             confirm: "RENUMBER");
-    }
-
-    private static void Renumber(
-        ProjectJournal journal, IReadOnlyList<CueNode> cues, CueNumber? prefix, int start, int step)
-    {
-        var next = start;
-
-        foreach (var cue in cues)
-        {
-            var number = prefix is { } parent
-                ? parent.Child(next)
-                : new CueNumber(next.ToString(System.Globalization.CultureInfo.InvariantCulture));
-
-            var target = cue;
-            journal.Do(new SetValueCommand<CueNumber>(
-                cue.Id, "number", "cues",
-                () => target.Number, value => target.Number = value, number,
-                $"renumber to {number}"));
-
-            if (cue is GroupCueNode group)
-                Renumber(journal, group.Children, number, 1, 1);
-
-            next += step;
-        }
     }
 
     /// <summary>A level change on a patch cue: one logical output moved to a level.</summary>

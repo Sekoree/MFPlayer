@@ -60,6 +60,7 @@ public static class ProjectValidator
             var lanes = cue switch
             {
                 MediaCueNode media => media.EffectLanes,
+                TextCueNode text => text.EffectLanes,
                 VisualizerCueNode visualizer => visualizer.EffectLanes,
                 GroupCueNode group => group.EffectLanes,
                 _ => [],
@@ -388,6 +389,8 @@ public static class ProjectValidator
                 // rather than left to the engine, which can only say "a clip had no path".
                 if (cue is MediaCueNode { MediaPath.Length: 0 })
                     issues.Add(Warn("cue", id, $"Q{cue.Number} has no media file yet."));
+                if (cue is TextCueNode text && string.IsNullOrWhiteSpace(text.Text))
+                    issues.Add(Warn("cue", id, $"Q{cue.Number} has no words yet."));
 
                 // A warning, matching the engine: a show with an unlabelled cue should open.
                 if (string.IsNullOrWhiteSpace(cue.Label) && cue is not CommentCueNode)
@@ -410,8 +413,12 @@ public static class ProjectValidator
         switch (cue)
         {
             case MediaCueNode media:
+                ValidateGain(media.LevelDb, "cue", id, $"Q{cue.Number}", issues);
                 foreach (var send in media.Sends)
                 {
+                    if (send.SourceChannel < 0)
+                        issues.Add(Error("cue", id,
+                            $"Q{cue.Number} has a send with a negative source channel."));
                     if (project.FindChannel(send.LogicalChannelId) is null)
                         issues.Add(Error("cue", id,
                             $"Q{cue.Number} sends to a logical output that no longer exists."));
@@ -423,6 +430,37 @@ public static class ProjectValidator
                 ValidateLanes(project, media.EffectLanes, cue, issues);
                 ValidateCurve(project, media.FadeInCurve, cue, issues);
                 ValidateCurve(project, media.FadeOutCurve, cue, issues);
+                ValidateNonNegativeTimes(
+                    cue,
+                    issues,
+                    (media.SourceDurationMs, "source duration"),
+                    (media.TrimInMs, "trim in"),
+                    (media.TrimOutMs, "trim out"),
+                    (media.FadeInMs, "fade in"),
+                    (media.FadeOutMs, "fade out"),
+                    (media.LoopCrossfadeMs, "loop crossfade"));
+                break;
+
+            case TextCueNode text:
+                if (!double.IsFinite(text.FontScale) || text.FontScale is < 0.01 or > 1)
+                    issues.Add(Error("cue", id,
+                        $"Q{cue.Number} has a font size outside the 1–100% range."));
+                if (!double.IsFinite(text.OutlineWidth) || text.OutlineWidth is < 0 or > 0.1)
+                    issues.Add(Error("cue", id,
+                        $"Q{cue.Number} has an outline width outside the 0–10% range."));
+                if (!Enum.IsDefined(text.Align) || !Enum.IsDefined(text.Anchor))
+                    issues.Add(Error("cue", id, $"Q{cue.Number} uses an unknown text alignment."));
+                foreach (var placement in text.Placements)
+                    ValidatePlacement(project, placement, cue, issues);
+                ValidateLanes(project, text.EffectLanes, cue, issues);
+                ValidateCurve(project, text.FadeInCurve, cue, issues);
+                ValidateCurve(project, text.FadeOutCurve, cue, issues);
+                ValidateNonNegativeTimes(
+                    cue,
+                    issues,
+                    (text.DurationMs, "duration"),
+                    (text.FadeInMs, "fade in"),
+                    (text.FadeOutMs, "fade out"));
                 break;
 
             case GroupCueNode group:
@@ -495,6 +533,16 @@ public static class ProjectValidator
                 ValidateCurve(project, patchCue.FadeCurve, cue, issues);
                 break;
         }
+    }
+
+    private static void ValidateNonNegativeTimes(
+        CueNode cue,
+        List<ShowValidationIssue> issues,
+        params (int Value, string Name)[] values)
+    {
+        foreach (var (value, name) in values.Where(item => item.Value < 0))
+            issues.Add(Error("cue", cue.Id.ToString(),
+                $"Q{cue.Number} has a negative {name}."));
     }
 
     private static void ValidatePlacement(

@@ -441,26 +441,11 @@ public sealed record TextCueNode : CueNode
 
     public List<EffectLane> EffectLanes { get; set; } = [];
 
-    /// <summary>
-    /// Everything the picture is drawn FROM, as one string.
-    /// </summary>
-    /// <remarks>
-    /// The cache key. Two cues that would draw the same card share one file, and editing a word
-    /// invalidates it without anything having to track what changed.
-    /// </remarks>
-    [System.Text.Json.Serialization.JsonIgnore]
-    public string RenderKey =>
-        string.Join(
-            '',
-            Text,
-            FontFamily,
-            FontScale.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
-            Bold,
-            Italic,
-            Foreground,
-            Background,
-            Align,
-            Anchor);
+    // There is no render key here any more. It was the cache key for the app-side card renderer,
+    // and that renderer is gone: a card compiles to a `text:` URI carrying its whole spec, so the
+    // framework's own text source draws it and there is nothing left to cache or invalidate. The
+    // key had also drifted out of step with the record — it never covered the outline or the
+    // duration, so two cards differing only in those would have shared one entry.
 }
 
 public enum TextAlign

@@ -57,16 +57,36 @@ public partial class CuesView : UserControl
     /// Adds a cue that watches an NDI sender.
     /// </summary>
     /// <remarks>
-    /// The network scan happens HERE, on the click, rather than inside the view-model factory: it
-    /// blocks for a second or two, and a dialog that opens a beat late having found the cameras is a
-    /// better trade than one that opens instantly with an empty list.
+    /// The network scan happens on a worker so the transport and active-cue controls stay responsive
+    /// during the discovery window — and the add row says it is running, because two seconds of a
+    /// click doing nothing visible is indistinguishable from a click that missed. The latch also stops
+    /// a second click starting a second scan and stacking a second dialog on top of the first.
     /// </remarks>
-    private void OnAddNdi(object? sender, RoutedEventArgs e)
+    private async void OnAddNdi(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not CuesViewModel cues)
             return;
 
-        PromptWindow.Show(this, Dialogs.NdiSourceCue(cues, NdiSources.Discover()), cues.Refresh);
+        if (await DiscoverAsync(cues) is { } scan && ReferenceEquals(DataContext, cues))
+            PromptWindow.Show(this, Dialogs.NdiSourceCue(cues, scan), cues.Refresh);
+    }
+
+    /// <summary>Scans for NDI senders under the busy latch, or nothing when one is already running.</summary>
+    private static async Task<NdiSources.Scan?> DiscoverAsync(CuesViewModel cues)
+    {
+        if (cues.IsScanningSources)
+            return null;
+
+        cues.IsScanningSources = true;
+
+        try
+        {
+            return await Task.Run(() => NdiSources.Discover());
+        }
+        finally
+        {
+            cues.IsScanningSources = false;
+        }
     }
 
     private void OnAddCapture(object? sender, RoutedEventArgs e)
@@ -89,7 +109,7 @@ public partial class CuesView : UserControl
     }
 
     /// <summary>Reopens the dialog that made this cue, on the cue it made.</summary>
-    private void OnEditSource(object? sender, RoutedEventArgs e)
+    private async void OnEditSource(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not CuesViewModel cues || cues.SelectedSourceCue is not { } cue)
             return;
@@ -97,7 +117,8 @@ public partial class CuesView : UserControl
         switch (cues.SelectedSourceKind)
         {
             case SourceKind.Ndi:
-                PromptWindow.Show(this, Dialogs.NdiSourceCue(cues, NdiSources.Discover(), cue), cues.Refresh);
+                if (await DiscoverAsync(cues) is { } scan && ReferenceEquals(DataContext, cues))
+                    PromptWindow.Show(this, Dialogs.NdiSourceCue(cues, scan, cue), cues.Refresh);
                 break;
 
             case SourceKind.Capture:
@@ -177,6 +198,23 @@ public partial class CuesView : UserControl
     private void OnStandbyDown(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.StepStandby(1);
 
+    /// <summary>The list readout is also the list picker, so multi-list GO is visible and reachable.</summary>
+    private void OnSelectList(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not CuesViewModel cues || sender is not Control anchor)
+            return;
+
+        var flyout = new MenuFlyout();
+        foreach (var scope in cues.CueLists)
+        {
+            var item = new MenuItem { Header = scope.Name };
+            item.Click += (_, _) => cues.SelectTransportListCommand.Execute(scope);
+            flyout.Items.Add(item);
+        }
+
+        flyout.ShowAt(anchor);
+    }
+
     private void OnFireSelected(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.FireSelected();
 
@@ -191,7 +229,8 @@ public partial class CuesView : UserControl
     /// It is the one control an operator reaches for without reading, so a mis-click must not take the
     /// show down — but it also must not be behind a confirmation dialog, because the moment somebody
     /// needs it is the moment they have no attention left for a second decision. Holding is the
-    /// compromise: one gesture, unmistakably deliberate, and the button counts down while it happens.
+    /// compromise: one gesture, unmistakably deliberate, and the button reads HOLD… while it happens
+    /// so a press that is working looks like one.
     /// </remarks>
     private void OnPanicPressed(object? sender, PointerPressedEventArgs e)
     {

@@ -1,6 +1,9 @@
 using HaCue2.Core.Compile;
 using HaCue2.Core.Model;
 using HaCue2.Core.Serialization;
+using HaCue2.Engine;
+using HaCue2.Presentation;
+using HaCue2.Session;
 using S.Media.Session;
 using S.Media.Source.Text;
 using Xunit;
@@ -122,11 +125,53 @@ public class TextCueTests
             card.DurationMs = 4_000;
         });
 
-        var spec = TextSourceUri.Decode(Compile(project).MediaPath)!;
+        var clip = Compile(project);
+        var spec = TextSourceUri.Decode(clip.MediaPath)!;
 
         Assert.Equal(2, spec.HAlign);
         Assert.Equal(2, spec.VAlign);
         Assert.Equal(4_000, spec.DurationMs);
+        Assert.Equal(ClipEndBehavior.Stop, clip.EndBehavior);
+    }
+
+    [Fact]
+    public void AnIndefiniteCardHoldsUntilItIsStopped()
+    {
+        var (project, _) = WithCard(card => card.DurationMs = 0);
+
+        Assert.Equal(ClipEndBehavior.FreezeLastFrame, Compile(project).EndBehavior);
+    }
+
+    [Fact]
+    public void ACardUsesLayerOrderAndCompilesItsOpacityLane()
+    {
+        var (project, _) = WithCard(card =>
+        {
+            var composition = card.Placements[0].CompositionId;
+            card.DurationMs = 4_000;
+            card.Placements =
+            [
+                new LayerPlacement { CompositionId = composition, LayerIndex = 8 },
+                new LayerPlacement { CompositionId = composition, LayerIndex = 2 },
+            ];
+            card.EffectLanes =
+            [
+                new EffectLane
+                {
+                    Kind = EffectLaneKind.Opacity,
+                    Points = [new LanePoint(0, 0), new LanePoint(1, 1)],
+                },
+            ];
+        });
+
+        var clip = Compile(project);
+
+        Assert.Equal(2, clip.LayerIndex);
+        Assert.Equal(8, Assert.Single(clip.ExtraPlacements!).LayerIndex);
+        Assert.Collection(
+            clip.OpacityEnvelope!,
+            point => Assert.Equal(TimeSpan.Zero, point.Time),
+            point => Assert.Equal(TimeSpan.FromSeconds(4), point.Time));
     }
 
     [Fact]
@@ -181,5 +226,38 @@ public class TextCueTests
 
         Assert.Single(CuePlacements.Of(card));
         Assert.NotNull(CuePlacements.ListOf(card));
+    }
+
+    [Fact]
+    public void ACardReadsAsVideoWithItsAuthoredTimingAndDestination()
+    {
+        var (project, card) = WithCard(item =>
+        {
+            item.DurationMs = 4_000;
+            item.FadeInMs = 500;
+            item.EffectLanes =
+            [
+                new EffectLane
+                {
+                    Kind = EffectLaneKind.Opacity,
+                    Points = [new LanePoint(0, 0), new LanePoint(1, 1)],
+                },
+            ];
+        });
+        var runtime = new ShowRuntime();
+
+        var row = Assert.Single(CuePresentation.Rows(project.CueLists[0], project, runtime));
+        var active = Assert.Single(CuePresentation.Active(
+            project,
+            [new ActiveCueState(card.Id, project.CueLists[0].Id, TimeSpan.FromSeconds(1), null, false)],
+            runtime.MediaDurations));
+
+        Assert.Equal(HaCue2.ViewModels.CueKind.Text, row.Kind);
+        Assert.Equal("0:04", row.Length);
+        Assert.Equal("0.5", row.Fade);
+        Assert.Contains(row.Badges, badge => badge.Text == "Cyc");
+        Assert.Contains(row.Badges, badge => badge.Text.StartsWith("opac", StringComparison.Ordinal));
+        Assert.Equal("Cyc", active.Destination);
+        Assert.Equal(TimeSpan.FromSeconds(4), active.Duration);
     }
 }

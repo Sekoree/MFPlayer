@@ -206,6 +206,26 @@ public class SourceCueTests
         Assert.Equal("Camera", cue.Label);
     });
 
+    [Fact]
+    public Task EditingAPreparedSourcesSubtitlesIsPartOfTheSameUndoStep() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var cue = shell.Cues.AddSourceCue(
+                "youtube://dQw4w9WgXcQ",
+                "Video",
+                10_000,
+                [new SubtitleSelection { Path = "/cache/old.vtt" }])!;
+
+            shell.Cues.SetSource(cue.Id, "youtube://dQw4w9WgXcQ", "Video edited", 12_000, []);
+            Assert.Empty(cue.Subtitles);
+
+            shell.Undo();
+
+            Assert.Equal("Video", cue.Label);
+            Assert.Equal(10_000, cue.SourceDurationMs);
+            Assert.Equal("/cache/old.vtt", Assert.Single(cue.Subtitles).Path);
+        });
+
     /// <summary>The row names the camera, not the URI — which is unreadable at that width.</summary>
     [Fact]
     public Task TheRowNamesTheSourceAndMarksItLive() => ShellFixture.WithShell(shell =>

@@ -107,7 +107,12 @@ public sealed class ProjectJournal
             // pushes exactly one when it closes. Coalescing applies inside a scope too, so a drag that
             // emits a step per motion event stays a handful of commands rather than hundreds.
             scope.Add(command);
-            Changed?.Invoke();
+
+            // A QUIET scope reports once, when it closes. An ordinary one reports each step, because a
+            // gesture inside a composite wants the views following the pointer.
+            if (!scope.Quiet)
+                Changed?.Invoke();
+
             return;
         }
 
@@ -146,7 +151,24 @@ public sealed class ProjectJournal
     /// what they meant rather than what the code looped over. Also how a delete-with-cleanup stays a
     /// single reversible action (register item 11).
     /// </remarks>
-    public IDisposable Composite(string description, string domain)
+    /// <param name="quiet">
+    /// Withholds <see cref="Changed"/> until the scope closes, so observers see the finished edit and
+    /// not each step of it.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// Opt-in, and deliberately so. An observer of this journal can be expensive — the shell re-runs
+    /// the whole project status pass on every change — and a bulk edit that raises one change per cue
+    /// pays that cost per cue. Importing a hundred files ran a hundred validation passes over a project
+    /// that was growing with each one.
+    /// </para>
+    /// <para>
+    /// NOT the default, because a continuous gesture can be wrapped in a composite too — a patch-gain
+    /// drag, a layer move — and those want the views following the pointer. Only a caller that knows
+    /// its scope is a batch rather than a gesture asks for silence.
+    /// </para>
+    /// </remarks>
+    public IDisposable Composite(string description, string domain, bool quiet = false)
     {
         if (IsReadOnly)
             return NestedScope.Instance;
@@ -158,7 +180,7 @@ public sealed class ProjectJournal
             return NestedScope.Instance;
 
         CloseGroup();
-        var scope = new CompositeScope(this, description, domain);
+        var scope = new CompositeScope(this, description, domain, quiet);
         _scope = scope;
         return scope;
     }
@@ -259,11 +281,16 @@ public sealed class ProjectJournal
         }
     }
 
-    private sealed class CompositeScope(ProjectJournal journal, string description, string domain)
+    private sealed class CompositeScope(
+        ProjectJournal journal, string description, string domain, bool quiet)
         : IDisposable
     {
         public string Description { get; } = description;
         public string Domain { get; } = domain;
+
+        /// <summary>Whether the journal withholds change notification until this scope closes.</summary>
+        public bool Quiet { get; } = quiet;
+
         public List<IProjectCommand> Commands { get; } = [];
 
         public void Add(IProjectCommand command)

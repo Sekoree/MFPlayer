@@ -43,6 +43,24 @@ public class CueExecutorTests
     }
 
     [Fact]
+    public async Task ATextCueIsPlayedAndFollowsOnItsNaturalEnd()
+    {
+        var card = new TextCueNode
+        {
+            Number = "1", Label = "Title", Text = "ACT ONE", DurationMs = 2_000,
+            Trigger = CueTrigger.Follow,
+        };
+        var next = Media("2");
+        var (executor, host, _) = Show(card, next);
+
+        await executor.FireAsync(card.Id);
+        Assert.Equal([card.Id], host.Played);
+
+        await executor.OnNaturalEndAsync(card.Id);
+        Assert.Equal([card.Id, next.Id], host.Played);
+    }
+
+    [Fact]
     public async Task ADisabledCueIsNotFiredFromAnywhere()
     {
         var cue = Media("1");
@@ -176,6 +194,25 @@ public class CueExecutorTests
         await executor.FireAsync(first.Id);
 
         Assert.Contains(TimeSpan.FromMilliseconds(1_500), host.Waits);
+    }
+
+    [Fact]
+    public async Task FollowStopsAtADisabledCueEvenWhenTheListWouldLoop()
+    {
+        var first = Media("1");
+        first.Trigger = CueTrigger.Follow;
+        var disabled = Media("2");
+        disabled.Enabled = false;
+        var (executor, host, project) = Show(first, disabled);
+        project.Settings.DisabledCueFollow = DisabledCueFollow.StopTheChain;
+        project.Settings.AtListEnd = AtListEnd.Loop;
+
+        await executor.FireAsync(first.Id);
+        await executor.OnNaturalEndAsync(first.Id);
+
+        // A disabled successor is a stop, not the end of the list. Treating it as the latter fired Q1
+        // again because this list loops.
+        Assert.Equal([first.Id], host.Played);
     }
 
     [Fact]

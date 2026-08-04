@@ -121,8 +121,16 @@ public sealed class ShowRuntime
     /// </remarks>
     public IReadOnlyList<CompositionStatsRow> CompositionStats { get; set; } = [];
 
-    /// <summary>When each trigger input last spoke, by document id.</summary>
-    public Dictionary<Guid, string> LastSeen { get; set; } = [];
+    /// <summary>
+    /// When each trigger input last spoke, by document id.
+    /// </summary>
+    /// <remarks>
+    /// Read-only and REPLACED rather than written into, like <see cref="LastSent"/>: it is filled from
+    /// the MIDI/OSC I/O thread and read on the UI thread, and a shared mutable dictionary across those
+    /// two is a corruption nobody would trace back here.
+    /// </remarks>
+    public IReadOnlyDictionary<Guid, string> LastSeen { get; set; } =
+        new Dictionary<Guid, string>();
 
     /// <summary>
     /// The most recent thing that arrived on any enabled source, as a binding pattern.

@@ -135,6 +135,49 @@ public sealed class ReferenceTests
     }
 
     [Fact]
+    public void TextCueLanesAndFadeCurvesAreIncludedInReferenceSafety()
+    {
+        var fixture = new TestProject();
+        var endpoint = new ActionEndpoint { Name = "Eos" };
+        var preset = new CurvePreset
+        {
+            Name = "Titles",
+            Points =
+            [
+                new S.Media.Session.FadeCurvePoint(0, 0),
+                new S.Media.Session.FadeCurvePoint(1, 1),
+            ],
+        };
+        var card = new TextCueNode
+        {
+            Number = "5",
+            Label = "Title",
+            Text = "ACT ONE",
+            FadeInCurve = new CurveSpec { PresetId = preset.Id },
+            EffectLanes =
+            [
+                new EffectLane
+                {
+                    Kind = EffectLaneKind.OscRamp,
+                    EndpointId = endpoint.Id,
+                    Address = "/titles/opacity",
+                    Points = [new LanePoint(0, 0), new LanePoint(1, 1)],
+                },
+            ],
+        };
+        fixture.Project.ActionEndpoints.Add(endpoint);
+        fixture.Project.CurvePresets.Add(preset);
+        fixture.List.Cues.Add(card);
+
+        Assert.Contains(
+            ProjectReferences.To(fixture.Project, ProjectReferences.Endpoint, endpoint.Id),
+            reference => reference.SubjectId == card.Id.ToString());
+        Assert.Contains(
+            ProjectReferences.To(fixture.Project, ProjectReferences.CurvePreset, preset.Id),
+            reference => reference.SubjectId == card.Id.ToString());
+    }
+
+    [Fact]
     public void NothingReferencesSomethingNobodyUses()
     {
         var fixture = new TestProject();

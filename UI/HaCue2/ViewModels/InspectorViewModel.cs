@@ -1344,8 +1344,9 @@ public partial class InspectorViewModel : ObservableObject
     private ActionCueNode? Action => Cue as ActionCueNode;
     private PatchCueNode? Patch => Cue as PatchCueNode;
     // ── text cues ─────────────────────────────────────────────────────────────────────────────
-    // The document stores WORDS; the app draws them. Everything here is what the drawing is made
-    // from, and changing any of it invalidates the cached card by content rather than by tracking.
+    // The document stores WORDS; the FRAMEWORK's text source draws them. Everything here is part of
+    // the render spec the compiler packs into the cue's `text:` URI, so an edit here changes the URI
+    // and the next fire opens the new card. There is no cache in the app to invalidate.
 
     private TextCueNode? Card => Cue as TextCueNode;
 
@@ -1481,17 +1482,21 @@ public partial class InspectorViewModel : ObservableObject
                     ? $"held for {card.DurationMs / 1000d:0.##} s, then ends on its own"
                     : "held on screen until something stops it";
 
+    /// <summary>
+    /// A typed colour as "#RRGGBB", or the fallback when it is not one.
+    /// </summary>
+    /// <remarks>
+    /// The DIGITS are checked, not just the length. Anything seven characters long used to be accepted,
+    /// so "#ZZZZZZ" was stored and shown back as though it were a colour — while the compiler quietly
+    /// fell back to white, and the card came up a colour the inspector never displayed.
+    /// </remarks>
     private static string Hex(string? value, string fallback)
     {
-        var text = (value ?? "").Trim();
+        var text = (value ?? "").Trim().TrimStart('#');
 
-        if (text.Length == 0)
-            return fallback;
-
-        if (!text.StartsWith('#'))
-            text = '#' + text;
-
-        return text.Length == 7 ? text.ToUpperInvariant() : fallback;
+        return text.Length == 6 && text.All(char.IsAsciiHexDigit)
+            ? '#' + text.ToUpperInvariant()
+            : fallback;
     }
 
     private void EditCard<T>(

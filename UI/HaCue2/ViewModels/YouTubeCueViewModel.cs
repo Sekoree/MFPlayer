@@ -147,12 +147,13 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
             return;
         }
 
-        var token = Restart();
+        var work = Restart();
         IsBusy = true;
 
         try
         {
-            var manifest = await _gateway.GetManifestAsync(videoId, token).ConfigureAwait(true);
+            var manifest = await _gateway.GetManifestAsync(videoId, work.Token).ConfigureAwait(true);
+            work.Token.ThrowIfCancellationRequested();
             _manifest = manifest;
 
             VideoStreams = [.. manifest.VideoStreams.Select(Describe)];
@@ -201,7 +202,7 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
         }
         finally
         {
-            IsBusy = false;
+            Finish(work);
         }
     }
 
@@ -213,7 +214,7 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
             return;
 
         Problem = "";
-        var token = Restart();
+        var work = Restart();
         IsBusy = true;
         Progress = 0;
         ProgressNote = "starting…";
@@ -230,28 +231,28 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
                     Progress = Math.Clamp(step.Fraction, 0, 1);
                     ProgressNote = $"{Phase(step.Phase)} · {Progress * 100:0}%";
                 }),
-                token).ConfigureAwait(true);
+                work.Token).ConfigureAwait(true);
+            work.Token.ThrowIfCancellationRequested();
 
             // The RESOLVED descriptors, not the requested ones: "best" is a policy that means something
             // different next month, and a show must play the same streams it was built against.
             var uri = YouTubeSourceUri.Build(manifest.VideoId, prepared.ResolvedSelection);
             var duration = (int)Math.Round(manifest.Duration?.TotalMilliseconds ?? 0);
 
-            var cue = _editing;
+            var subtitles = prepared.SubtitlePath is { Length: > 0 } path
+                ? new List<SubtitleSelection> { new() { Path = path } }
+                : [];
 
-            if (cue is null)
-            {
-                cue = Cues.AddSourceCue(uri, Name, duration);
-            }
-            else
-            {
-                Cues.SetSource(cue.Id, uri, Name, duration);
-            }
+            var saved = _editing is null
+                ? Cues.AddSourceCue(uri, Name, duration, subtitles) is not null
+                : Cues.SetSource(_editing.Id, uri, Name, duration, subtitles);
 
-            if (cue is not null && prepared.SubtitlePath is { Length: > 0 } subtitles)
+            if (!saved)
             {
-                cue.Subtitles.Clear();
-                cue.Subtitles.Add(new SubtitleSelection { Path = subtitles });
+                Problem = Cues.CanEditDocument
+                    ? "the cue no longer exists"
+                    : "the show is locked — unlock it to save this prepared cue";
+                return;
             }
 
             Finished?.Invoke();
@@ -266,7 +267,7 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
         }
         finally
         {
-            IsBusy = false;
+            Finish(work);
         }
     }
 
@@ -284,12 +285,23 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
     }
 
     /// <summary>Cancels whatever was running and hands out a token for what is about to.</summary>
-    private CancellationToken Restart()
+    private CancellationTokenSource Restart()
     {
         Cancel();
         _work?.Dispose();
         _work = new CancellationTokenSource();
-        return _work.Token;
+        return _work;
+    }
+
+    /// <summary>Only the operation that still owns the busy latch may release it.</summary>
+    private void Finish(CancellationTokenSource work)
+    {
+        if (!ReferenceEquals(_work, work))
+            return;
+
+        _work = null;
+        work.Dispose();
+        IsBusy = false;
     }
 
     private YouTubeStreamSelection Selection()
