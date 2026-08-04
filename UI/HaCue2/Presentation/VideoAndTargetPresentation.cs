@@ -57,13 +57,21 @@ public static class VideoPresentation
             Kind = $"{KindLabel(output.Kind)} · {output.TargetHint}"
                  + (output.Kind == VideoOutputKind.LocalScreen && output.Fullscreen ? " · fullscreen" : ""),
             Shows = project.Compositions
-                .FirstOrDefault(composition => composition.Id == output.CompositionId)?.Name ?? "—",
+                .FirstOrDefault(composition => composition.Id == output.CompositionId)?.Name
+                // "unassigned" rather than a dash: an output showing nothing is the state EVERY output
+                // starts in now that they are created before any canvas exists, so the row has to say
+                // what to do about it rather than look like a value that failed to load.
+                ?? "unassigned",
             Map = output.IsMapped
-                ? $"warp · {output.Mapping.Count} sect"
+                ? $"{output.Mapping.Count(section => section.Enabled)}/{output.Mapping.Count} sect"
                 : "clean",
-            State = runtime.AbsentVideoOutputs.Contains(output.Id)
-                ? new Status(output.Required ? "absent · required" : "screen absent", Gel.Red)
-                : new Status("live", Gel.Green),
+            State = output.CompositionId is null
+                // Not an error and not "live": an output with nothing on it is a rig that is only half
+                // patched, and reporting it as absent would send somebody to check a cable.
+                ? new Status("no composition", Gel.Amber)
+                : runtime.AbsentVideoOutputs.Contains(output.Id)
+                    ? new Status(output.Required ? "absent · required" : "screen absent", Gel.Red)
+                    : new Status("live", Gel.Green),
         }),
     ];
 
@@ -78,6 +86,7 @@ public static class VideoPresentation
             Width = section.SourceWidth, Height = section.SourceHeight,
             IsSecondary = index % 2 == 1,
             IsSelected = index == selected,
+            IsDisabled = !section.Enabled,
         }),
     ];
 
@@ -87,21 +96,15 @@ public static class VideoPresentation
         .. output.Mapping.Select((section, index) => new PlacementBox
         {
             SubjectId = section.Id,
-            Label = section.WarpGrid > 0
-                ? $"{index + 1} · warp {section.WarpGrid}×{section.WarpGrid}"
+            Label = section.HasMesh
+                ? $"{index + 1} · warp {section.MeshColumns}×{section.MeshRows}"
                 : $"{index + 1}",
             Left = section.TargetX, Top = section.TargetY,
             Width = section.TargetWidth, Height = section.TargetHeight,
             IsSecondary = index % 2 == 1,
             IsSelected = index == selected,
+            IsDisabled = !section.Enabled,
         }),
-    ];
-
-    public static IReadOnlyList<string> SectionLabels(VideoOutputDefinition output) =>
-    [
-        .. output.Mapping.Select((section, index) =>
-            $"▸ {index + 1} · {section.Name}"
-            + (section.WarpGrid > 0 ? $" · warp {section.WarpGrid}×{section.WarpGrid}" : "")),
     ];
 
     private static string KindLabel(VideoOutputKind kind) => kind switch

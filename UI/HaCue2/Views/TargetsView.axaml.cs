@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using HaCue2.Core.Model;
@@ -26,12 +27,77 @@ public partial class TargetsView : UserControl
             "in:osc" => Dialogs.AddTriggerInput(journal, TriggerInputKind.OscIn),
             "in:clock" => Dialogs.AddTriggerInput(journal, TriggerInputKind.Schedule),
             "in:mtc" => Dialogs.AddTriggerInput(journal, TriggerInputKind.Timecode),
+            "in:edit" => Dialogs.EditTriggerInput(journal, targets.SelectedSource?.Id),
+            "in:remove" => Dialogs.RemoveTriggerInput(journal, targets.SelectedSource?.Id),
             "end:osc" => Dialogs.AddEndpoint(journal, EndpointKind.OscOut),
             "end:midi" => Dialogs.AddEndpoint(journal, EndpointKind.MidiOut),
+            "end:edit" => Dialogs.EditEndpoint(journal, targets.SelectedEndpoint?.Id),
+            "end:remove" => Dialogs.RemoveEndpoint(journal, targets.SelectedEndpoint?.Id),
             _ => null,
         };
 
         PromptWindow.Show(this, prompt, targets.Refresh);
+    }
+
+    /// <summary>
+    /// Delete on a list removes what is selected, through the same confirmation the menu opens.
+    /// </summary>
+    /// <remarks>
+    /// The key AND the context menu, because the two habits are different people. Handled either way,
+    /// so an unhandled Delete cannot travel up and act on a different pane.
+    /// </remarks>
+    private void OnEndpointsKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Delete or Key.Back) || DataContext is not TargetsViewModel targets)
+            return;
+
+        e.Handled = true;
+        PromptWindow.Show(
+            this, Dialogs.RemoveEndpoint(targets.Journal, targets.SelectedEndpoint?.Id), targets.Refresh);
+    }
+
+    private void OnSourcesKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Delete or Key.Back) || DataContext is not TargetsViewModel targets)
+            return;
+
+        e.Handled = true;
+        PromptWindow.Show(
+            this, Dialogs.RemoveTriggerInput(targets.Journal, targets.SelectedSource?.Id), targets.Refresh);
+    }
+
+    /// <summary>A binding is removed outright: it is one line, and undo takes it straight back.</summary>
+    private void OnBindingsKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Delete or Key.Back) || DataContext is not TargetsViewModel targets)
+            return;
+
+        e.Handled = true;
+        targets.RemoveBinding(targets.SelectedBindingIndex);
+    }
+
+    /// <summary>Right-clicking a row selects it first, so the menu acts on what was clicked.</summary>
+    /// <remarks>
+    /// Avalonia opens a ListBox's context menu without moving the selection, so without this the menu's
+    /// REMOVE would act on whatever was selected before — the one class of mistake a confirmation
+    /// dialog does not catch, because the dialog names the wrong thing convincingly.
+    /// </remarks>
+    private void OnRowRightPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not ListBox list
+            || !e.GetCurrentPoint(list).Properties.IsRightButtonPressed
+            || (e.Source as Control)?.DataContext is not { } item
+            || list.ItemsSource is not System.Collections.IEnumerable items)
+            return;
+
+        foreach (var candidate in items)
+        {
+            if (!ReferenceEquals(candidate, item))
+                continue;
+
+            list.SelectedItem = item;
+            return;
+        }
     }
 
     /// <summary>Starts listening for the next message on any enabled source.</summary>

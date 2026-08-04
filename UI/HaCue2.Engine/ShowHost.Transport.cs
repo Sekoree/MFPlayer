@@ -16,8 +16,15 @@ namespace HaCue2.Engine;
 /// </remarks>
 public sealed partial class ShowHost
 {
-    /// <summary>A cue that is holding a voice: when it started, and where it came from.</summary>
-    private readonly record struct Sounding(long StartedTicks, Guid ListId, bool IsFading);
+    /// <summary>
+    /// A cue that is holding a voice: when it started, where it came from, and which transport it is on.
+    /// </summary>
+    /// <param name="GroupId">
+    /// The session group whose playhead IS this cue's playhead. Without it the Active panel could only
+    /// count wall time from the fire, which is a different number the moment anything pauses, seeks or
+    /// trims — and there was no way at all to seek, because a seek addresses a group.
+    /// </param>
+    private readonly record struct Sounding(long StartedTicks, Guid ListId, string GroupId, bool IsFading);
 
     /// <summary>What is holding a voice right now, by cue id. Guarded by the host's gate.</summary>
     private readonly Dictionary<Guid, Sounding> _sounding = [];
@@ -160,10 +167,46 @@ public sealed partial class ShowHost
 
     // ── what is sounding ──────────────────────────────────────────────────────────────────────
 
-    private void Remember(Guid cueId, Guid listId)
+    /// <summary>Which transport a cue lands on, as the last compile decided.</summary>
+    private string GroupOf(Guid cueId)
     {
         lock (_gate)
-            _sounding[cueId] = new Sounding(Stopwatch.GetTimestamp(), listId, IsFading: false);
+            return _cueGroups.GetValueOrDefault(cueId, "");
+    }
+
+    private void Remember(Guid cueId, Guid listId, string groupId)
+    {
+        lock (_gate)
+            _sounding[cueId] = new Sounding(Stopwatch.GetTimestamp(), listId, groupId, IsFading: false);
+    }
+
+    /// <summary>
+    /// Moves a sounding cue's playhead.
+    /// </summary>
+    /// <remarks>
+    /// Addressed by CUE because that is what the operator clicked, and resolved to the transport GROUP
+    /// the cue is on, because that is what a seek moves. A cue that is not sounding refuses rather than
+    /// seeking something else — there is no useful meaning for "seek a cue that is not playing", and
+    /// the group it would land on is whatever played there last.
+    /// </remarks>
+    public async Task<string?> SeekCueAsync(Guid cueId, TimeSpan position)
+    {
+        string group;
+
+        lock (_gate)
+        {
+            if (!_sounding.TryGetValue(cueId, out var entry))
+                return "that cue is not playing";
+
+            group = entry.GroupId;
+        }
+
+        if (group.Length == 0)
+            return "that cue has no transport to seek";
+
+        await _session.SeekAsync(position < TimeSpan.Zero ? TimeSpan.Zero : position, group)
+            .ConfigureAwait(false);
+        return null;
     }
 
     private void MarkFading(Guid cueId)
@@ -204,17 +247,33 @@ public sealed partial class ShowHost
         HashSet<Guid> sounding;
         bool paused;
 
+        // The session's own playheads, by transport group. Lock-free and safe to read from any thread,
+        // which is why it is taken OUTSIDE the host's gate. This is what makes the Active panel's clock
+        // and progress bar true: wall time since the fire is a different number as soon as anything is
+        // paused, seeked, trimmed or looped, and it is the number the panel used to show.
+        var playheads = _session.Snapshot()
+            .ToDictionary(snapshot => snapshot.GroupId, StringComparer.Ordinal);
+
         lock (_gate)
         {
             sounding = [.. _sounding.Keys];
             paused = _paused;
             active =
             [
-                .. _sounding.Select(entry => new ActiveCueState(
-                    entry.Key,
-                    entry.Value.ListId,
-                    Stopwatch.GetElapsedTime(entry.Value.StartedTicks),
-                    entry.Value.IsFading)),
+                .. _sounding.Select(entry =>
+                {
+                    var wall = Stopwatch.GetElapsedTime(entry.Value.StartedTicks);
+                    var playhead = playheads.GetValueOrDefault(entry.Value.GroupId);
+
+                    return new ActiveCueState(
+                        entry.Key,
+                        entry.Value.ListId,
+                        // The group's position when it has one, and wall time otherwise — a visualizer
+                        // cue holds no transport at all, and counting up is better than standing still.
+                        playhead is { IsActive: true } ? playhead.ClipPosition : wall,
+                        playhead is { ClipDuration.Ticks: > 0 } ? playhead.ClipDuration : null,
+                        entry.Value.IsFading);
+                }),
             ];
         }
 

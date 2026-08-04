@@ -51,6 +51,10 @@
               <StackPanel Orientation="Horizontal" Spacing="6">
                 <Button Classes="tight" Content="+ OSC OUT…" Click="OnDialog" Tag="end:osc" />
                 <Button Classes="tight" Content="+ MIDI OUT…" Click="OnDialog" Tag="end:midi" />
+                <Button Classes="tight" Content="EDIT…" Click="OnDialog" Tag="end:edit"
+                        IsEnabled="{Binding HasEndpointSelected}" />
+                <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="end:remove"
+                        IsEnabled="{Binding HasEndpointSelected}" />
               </StackPanel>
             </Border>
           </c:PanelBox.Footer>
@@ -69,7 +73,17 @@
             <ListBox Theme="{StaticResource TableRows}"
                      IsVisible="{Binding !HasNoEndpoints}"
                      ItemsSource="{Binding Endpoints}" SelectedItem="{Binding SelectedEndpoint}"
-                     ItemTemplate="{StaticResource SourceRowTemplate}" />
+                     ItemTemplate="{StaticResource SourceRowTemplate}"
+                     KeyDown="OnEndpointsKeyDown" PointerPressed="OnRowRightPressed">
+              <ListBox.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Edit…" Click="OnDialog" Tag="end:edit" />
+                  <MenuItem Header="Send test" Click="OnSendTest" />
+                  <Separator />
+                  <MenuItem Header="Remove…" Click="OnDialog" Tag="end:remove" />
+                </ContextMenu>
+              </ListBox.ContextMenu>
+            </ListBox>
           </DockPanel>
         </c:PanelBox>
 
@@ -115,6 +129,10 @@
                   <!-- The other two ways a cue fires with nobody at the desk. Same master gate. -->
                   <Button Classes="tight" Content="+ SCHEDULE…" Click="OnDialog" Tag="in:clock" />
                   <Button Classes="tight" Content="+ TIMECODE…" Click="OnDialog" Tag="in:mtc" />
+                  <Button Classes="tight" Content="EDIT…" Click="OnDialog" Tag="in:edit"
+                          IsEnabled="{Binding HasSourceSelected}" />
+                  <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="in:remove"
+                          IsEnabled="{Binding HasSourceSelected}" />
                 </StackPanel>
               </Border>
             </c:PanelBox.Footer>
@@ -133,7 +151,16 @@
               <ListBox Theme="{StaticResource TableRows}"
                        IsVisible="{Binding !HasNoSources}"
                        ItemsSource="{Binding Sources}" SelectedItem="{Binding SelectedSource}"
-                       ItemTemplate="{StaticResource SourceRowTemplate}" />
+                       ItemTemplate="{StaticResource SourceRowTemplate}"
+                       KeyDown="OnSourcesKeyDown" PointerPressed="OnRowRightPressed">
+                <ListBox.ContextMenu>
+                  <ContextMenu>
+                    <MenuItem Header="Edit…" Click="OnDialog" Tag="in:edit" />
+                    <Separator />
+                    <MenuItem Header="Remove…" Click="OnDialog" Tag="in:remove" />
+                  </ContextMenu>
+                </ListBox.ContextMenu>
+              </ListBox>
             </DockPanel>
           </c:PanelBox>
 
@@ -158,7 +185,13 @@
                             Detail="Press LEARN, then a button on the controller, choose what it fires, and BIND." />
               <ListBox Theme="{StaticResource TableRows}" IsVisible="{Binding HasBindings}"
                        ItemsSource="{Binding Bindings}"
-                       SelectedIndex="{Binding SelectedBindingIndex}">
+                       SelectedIndex="{Binding SelectedBindingIndex}"
+                       KeyDown="OnBindingsKeyDown" PointerPressed="OnRowRightPressed">
+                <ListBox.ContextMenu>
+                  <ContextMenu>
+                    <MenuItem Header="Remove binding" Click="OnRemoveBinding" />
+                  </ContextMenu>
+                </ListBox.ContextMenu>
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="vm:BindingRow">
                     <Grid ColumnDefinitions="110,*,180" ColumnSpacing="8" Margin="8,4">

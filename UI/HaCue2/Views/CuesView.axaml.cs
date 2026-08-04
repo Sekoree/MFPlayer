@@ -66,6 +66,20 @@ public partial class CuesView : UserControl
     /// <summary>Bare STOP: the selected active cue, not the show.</summary>
     private void OnStop(object? sender, RoutedEventArgs e) => (DataContext as CuesViewModel)?.Stop();
 
+    /// <summary>The × on one Active row: stops THAT cue, whatever the tree has selected.</summary>
+    private void OnStopActive(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is CuesViewModel cues && (sender as Control)?.Tag is Guid cueId)
+            cues.StopCue(cueId);
+    }
+
+    /// <summary>A drag on an Active row's bar moves that cue's playhead.</summary>
+    private void OnSeekActive(object? sender, Controls.SeekEventArgs e)
+    {
+        if (DataContext is CuesViewModel cues && (sender as Control)?.Tag is Guid cueId)
+            _ = cues.SeekActiveAsync(cueId, e.Fraction);
+    }
+
     private void OnStopAll(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not CuesViewModel cues)

@@ -22,14 +22,16 @@ public partial class AudioViewModel : ObservableObject
         _runtime = runtime;
         var project = journal.Project;
 
-        // The counts are the real ones AT CONSTRUCTION and deliberately stay that way: these strings
-        // are also the tab IDENTITIES (IsDevicesPane compares SelectedTab against them), so rewriting a
-        // label when a line is added would leave SelectedTab pointing at a tab that no longer exists
-        // and blank the pane. The live counts are on the lists themselves.
-        OutputsTab = $"LOGICAL OUTPUTS · {project.AudioPatch.LogicalChannels.Count}";
-        DevicesTab = $"DEVICES · {project.AudioLines.Count}";
+        // Keyed, so the labels can carry LIVE counts. They used to be plain strings that doubled as the
+        // tabs' identity, which meant a count could never be rewritten without the selection losing the
+        // tab it pointed at — so the numbers were frozen at construction and quietly went stale.
+        OutputsTab = new SectionTab(OutputsKey, "LOGICAL OUTPUTS");
+        PatchTab = new SectionTab(PatchKey, "PATCH");
+        DevicesTab = new SectionTab(DevicesKey, "DEVICES");
+        AuditionTab = new SectionTab(AuditionKey, "AUDITION");
         Tabs = [OutputsTab, PatchTab, DevicesTab, AuditionTab];
         _selectedTab = OutputsTab;
+        CountTabs();
 
         Outputs = AudioPresentation.LogicalOutputs(project, runtime);
         _selectedOutput = Outputs.FirstOrDefault(row => row.PatchedTo.IsBad) ?? Outputs.FirstOrDefault();
@@ -45,12 +47,16 @@ public partial class AudioViewModel : ObservableObject
         Audition = new AuditionViewModel(journal);
     }
 
-    public const string PatchTab = "PATCH";
-    public const string AuditionTab = "AUDITION";
+    public const string OutputsKey = "outputs";
+    public const string PatchKey = "patch";
+    public const string DevicesKey = "devices";
+    public const string AuditionKey = "audition";
 
-    public string OutputsTab { get; }
-    public string DevicesTab { get; }
-    public IReadOnlyList<string> Tabs { get; }
+    public SectionTab OutputsTab { get; }
+    public SectionTab PatchTab { get; }
+    public SectionTab DevicesTab { get; }
+    public SectionTab AuditionTab { get; }
+    public IReadOnlyList<SectionTab> Tabs { get; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsOutputsPane))]
@@ -58,19 +64,26 @@ public partial class AudioViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsDevicesPane))]
     [NotifyPropertyChangedFor(nameof(IsAuditionPane))]
     [NotifyPropertyChangedFor(nameof(TabHint))]
-    private string _selectedTab;
+    private SectionTab _selectedTab;
 
-    public bool IsOutputsPane => SelectedTab == OutputsTab;
-    public bool IsPatchPane => SelectedTab == PatchTab;
-    public bool IsDevicesPane => SelectedTab == DevicesTab;
-    public bool IsAuditionPane => SelectedTab == AuditionTab;
+    public bool IsOutputsPane => SelectedTab?.Key == OutputsKey;
+    public bool IsPatchPane => SelectedTab?.Key == PatchKey;
+    public bool IsDevicesPane => SelectedTab?.Key == DevicesKey;
+    public bool IsAuditionPane => SelectedTab?.Key == AuditionKey;
 
-    public string TabHint => SelectedTab switch
+    public string TabHint => SelectedTab?.Key switch
     {
-        PatchTab => "rows: device channels · columns: logical outputs",
-        AuditionTab => "same pane appears in Video · one audition rig",
+        PatchKey => "rows: device channels · columns: logical outputs",
+        AuditionKey => "same pane appears in Video · one audition rig",
         _ => $"mix {_project.AudioPatch.MixSampleRate:N0} Hz · clock master {ClockMasterName} · edits apply live",
     };
+
+    /// <summary>Re-labels the counted tabs from the document. Called wherever the lists are re-read.</summary>
+    private void CountTabs()
+    {
+        OutputsTab.Count("LOGICAL OUTPUTS", _project.AudioPatch.LogicalChannels.Count);
+        DevicesTab.Count("DEVICES", _project.AudioLines.Count);
+    }
 
     private HaCueProject _project => _journal.Project;
 
@@ -201,7 +214,11 @@ public partial class AudioViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Senders))]
+    [NotifyPropertyChangedFor(nameof(SelectedGroupId))]
+    [NotifyPropertyChangedFor(nameof(HasGroupToRemove))]
+    [NotifyPropertyChangedFor(nameof(HasSelectedOutput))]
     [NotifyPropertyChangedFor(nameof(SelectedOutputName))]
+    [NotifyPropertyChangedFor(nameof(OutputName))]
     [NotifyPropertyChangedFor(nameof(SelectedOutputLines))]
     [NotifyPropertyChangedFor(nameof(SelectedOutputCarries))]
     [NotifyPropertyChangedFor(nameof(MeterInSummaryIndex))]
@@ -213,6 +230,36 @@ public partial class AudioViewModel : ObservableObject
     private LogicalOutputRow? _selectedOutput;
 
     public string SelectedOutputName => SelectedOutput?.Name ?? "no output selected";
+
+    /// <summary>
+    /// The selected logical output's name, editable in place.
+    /// </summary>
+    /// <remarks>
+    /// The inspector's Name box was bound to <see cref="SelectedOutputName"/>, which has no setter — so
+    /// it accepted typing and threw it away, and the only working rename was the footer button. A field
+    /// that looks editable and is not is worse than no field.
+    /// </remarks>
+    public string OutputName
+    {
+        get => SelectedChannel?.Name ?? "";
+        set
+        {
+            var name = (value ?? "").Trim();
+
+            if (SelectedChannel is not { } channel || name.Length == 0 || channel.Name == name)
+            {
+                OnPropertyChanged(nameof(OutputName));
+                return;
+            }
+
+            _journal.Do(new SetValueCommand<string>(
+                channel.Id, "name", "outputs",
+                () => channel.Name, text => channel.Name = text, name, $"rename to “{name}”"));
+            _journal.CloseGroup();
+
+            Refresh();
+        }
+    }
 
     // ── solo to the monitor (register item 13) ────────────────────────────────────────────────
 
@@ -326,6 +373,20 @@ public partial class AudioViewModel : ObservableObject
         ? ""
         : SelectedOutput.HasGroup ? $"logical output · in group “{SelectedOutput.Group}”" : "logical output";
 
+    /// <summary>The group the selected output belongs to, which is what "remove group" acts on.</summary>
+    /// <remarks>
+    /// Reached through the SELECTION rather than through a list of its own. Groups have no pane —
+    /// membership is shown on the outputs that are in one — so the group an operator means is the one
+    /// belonging to the row they right-clicked, and a second list to select from would be a second
+    /// place to get the selection wrong.
+    /// </remarks>
+    public Guid? SelectedGroupId =>
+        SelectedOutput is { } row ? _project.AudioPatch.GroupOf(row.Id)?.Id : null;
+
+    public bool HasGroupToRemove => SelectedGroupId is not null;
+
+    public bool HasSelectedOutput => SelectedOutput is not null;
+
     public bool IsSelectedOutputUnpatched => SelectedOutput?.PatchedTo.IsBad ?? false;
 
     public IReadOnlyList<string> Senders => SelectedOutput is null
@@ -435,11 +496,14 @@ public partial class AudioViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SelectedLineName))]
+    [NotifyPropertyChangedFor(nameof(HasSelectedLine))]
     private AudioLineRow? _selectedLine;
 
     partial void OnSelectedLineChanged(AudioLineRow? value) => ShowRecordPane();
 
     public string SelectedLineName => SelectedLine?.Name ?? "no line selected";
+
+    public bool HasSelectedLine => SelectedLine is not null;
 
     // ── 08 · the selected line's recording ────────────────────────────────────────────────────
 
@@ -683,6 +747,7 @@ public partial class AudioViewModel : ObservableObject
     {
         Outputs = AudioPresentation.LogicalOutputs(_project, _runtime);
         Lines = AudioPresentation.Lines(_project, _runtime);
+        CountTabs();
 
         OnPropertyChanged(nameof(Outputs));
         OnPropertyChanged(nameof(Lines));
@@ -693,6 +758,11 @@ public partial class AudioViewModel : ObservableObject
         OnPropertyChanged(nameof(PatchColumns));
         OnPropertyChanged(nameof(Senders));
         OnPropertyChanged(nameof(Snapshots));
+        OnPropertyChanged(nameof(OutputName));
+        OnPropertyChanged(nameof(SelectedGroupId));
+        OnPropertyChanged(nameof(HasGroupToRemove));
+        OnPropertyChanged(nameof(SelectedOutputLines));
+        OnPropertyChanged(nameof(SelectedOutputCarries));
         Audition.Refresh();
     }
 

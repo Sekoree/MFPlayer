@@ -1,4 +1,6 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.VisualTree;
@@ -34,8 +36,6 @@ public partial class VideoView : UserControl
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
-    /// <summary>"Edit ›" beside an output's mapping toggle jumps to the Mapping tab already scoped to
-    /// that output — mapping is always the mapping OF one output, never a global mode.</summary>
     /// <summary>Inserts a filename token from the pattern dropdown (register item 30).</summary>
     private void OnInsertToken(object? sender, RoutedEventArgs e)
     {
@@ -82,10 +82,71 @@ public partial class VideoView : UserControl
             video.NoteProblem(problem);
     }
 
+    /// <summary>"Edit ›" beside an output's mapping toggle jumps to the Mapping tab already scoped to
+    /// that output — mapping is always the mapping OF one output, never a global mode.</summary>
     private void OnEditMapping(object? sender, RoutedEventArgs e)
     {
         if (DataContext is VideoViewModel video)
-            video.SelectedTab = VideoViewModel.MappingTab;
+            video.SelectedTab = video.MappingTab;
+    }
+
+    /// <summary>
+    /// Selects the composition whose pane was clicked.
+    /// </summary>
+    /// <remarks>
+    /// The panes are canvases, not list rows, so selection is a click on the pane rather than a
+    /// ListBox. It matters because the inspector beside them — size, rate, idle image, and which
+    /// outputs the canvas feeds — is about ONE composition, and before this the second pane could only
+    /// be reached by selecting an output that happened to be on it.
+    /// </remarks>
+    private void OnSelectComposition(object? sender, PointerPressedEventArgs e)
+    {
+        if (Video is not { } video || (sender as Control)?.DataContext is not CompositionPaneViewModel pane)
+            return;
+
+        video.SelectedCompositionId = pane.Id;
+        video.Refresh();
+    }
+
+    /// <summary>Takes one output off the composition it shows. The output itself survives.</summary>
+    private void OnUnassign(object? sender, RoutedEventArgs e)
+    {
+        if (Video is not { } video || (sender as Control)?.Tag is not Guid outputId)
+            return;
+
+        video.UnassignOutput(outputId);
+    }
+
+    private void OnAssign(object? sender, RoutedEventArgs e) => Video?.AssignSelectedOutput();
+
+    /// <summary>
+    /// Writes a picked size into whichever field its dropdown belongs to.
+    /// </summary>
+    /// <remarks>
+    /// The picker sets the box rather than replacing it, so a preset is a shortcut and never a limit —
+    /// an LED wall of 1408×768 is still typed straight in.
+    /// </remarks>
+    private void OnPickResolution(object? sender, RoutedEventArgs e)
+    {
+        if (Video is not { } video
+            || sender is not Button { Content: string size, Tag: string field })
+            return;
+
+        switch (field)
+        {
+            case "composition":
+                video.CompositionSize = size;
+                break;
+            case "window":
+                video.OutputWindowSize = size;
+                break;
+            case "raster":
+                video.OutputRaster = size;
+                break;
+        }
+
+        // The flyout stays open otherwise, over a field the operator has just finished with.
+        (sender as Control)?.FindAncestorOfType<Popup>()?.Close();
     }
 
     // ── canvas gestures ───────────────────────────────────────────────────────────────────────
@@ -105,16 +166,6 @@ public partial class VideoView : UserControl
 
     private void OnSectionSelected(object? sender, int index) => Video?.SelectSection(index);
 
-    /// <summary>
-    /// Pushes a typed section number into the document when the field loses focus.
-    /// </summary>
-    /// <remarks>
-    /// The default binding commits on LostFocus already; this raises the properties back so a value the
-    /// document clamped (a width past the edge, a negative opacity) is shown as what was actually
-    /// stored rather than as what was typed.
-    /// </remarks>
-    private void OnSectionFieldCommitted(object? sender, RoutedEventArgs e) => Video?.Refresh();
-
     private void OnWarpNudge(object? sender, RoutedEventArgs e)
     {
         if (Video is not { } video || (sender as Control)?.Tag is not string direction)
@@ -128,6 +179,25 @@ public partial class VideoView : UserControl
             _ => (0d, 0d),
         };
         video.NudgeWarp(dx, dy);
+    }
+
+    /// <summary>
+    /// Removes the selected output or composition on Delete, depending on which pane is open.
+    /// </summary>
+    /// <remarks>
+    /// The key AND the context menu, because the two habits are different people: one reaches for
+    /// Delete, the other right-clicks. Both land on the same confirmation, which is where the
+    /// consequences are counted — the key must not be a faster way to skip the question.
+    /// </remarks>
+    private void OnListKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Delete or Key.Back) || Video is null)
+            return;
+
+        // Handled either way: an unhandled Delete on a list is how a keystroke meant for one pane ends
+        // up acting on another.
+        e.Handled = true;
+        OnDialog(sender, e);
     }
 
     /// <summary>Opens whichever dialog the button asked for, by its Tag.</summary>
@@ -151,6 +221,21 @@ public partial class VideoView : UserControl
             case "section:delete":
                 video.DeleteSection();
                 return;
+            case "section:up":
+                video.MoveSection(-1);
+                return;
+            case "section:down":
+                video.MoveSection(1);
+                return;
+            case "section:split":
+                video.SplitIntoGrid();
+                return;
+            case "section:reset":
+                video.ResetToIdentity();
+                return;
+            case "mesh:reset":
+                video.ResetMesh();
+                return;
         }
 
         var prompt = verb switch
@@ -159,11 +244,51 @@ public partial class VideoView : UserControl
             "out:ndi" => Dialogs.AddVideoOutput(journal, VideoOutputKind.Ndi, video.Screens),
             "out:record" => Dialogs.AddVideoOutput(journal, VideoOutputKind.Record, video.Screens),
             "out:stream" => Dialogs.AddVideoOutput(journal, VideoOutputKind.Stream, video.Screens),
+            "out:rename" => video.SelectedOutput is { } output
+                ? Rename(journal, output.Id, output.Name)
+                : null,
+            "out:remove" => Dialogs.RemoveVideoOutput(journal, video.SelectedOutput?.Id),
             "composition" => Dialogs.AddComposition(journal),
+            "composition:remove" => Dialogs.RemoveComposition(journal, video.SelectedCompositionId),
             _ => null,
         };
 
         PromptWindow.Show(this, prompt, video.Refresh);
+    }
+
+    /// <summary>Renames a video output through the journal, by id.</summary>
+    private static PromptViewModel? Rename(
+        HaCue2.Core.Journal.ProjectJournal journal, Guid outputId, string current)
+    {
+        if (journal.Project.VideoOutputs.FirstOrDefault(item => item.Id == outputId) is not { } output)
+            return null;
+
+        return Dialogs.RenameTo(
+            journal, current, "video", () => output.Name, name => output.Name = name, outputId);
+    }
+
+    /// <summary>Right-clicking a row selects it first, so the menu acts on what was clicked.</summary>
+    /// <remarks>
+    /// Avalonia opens a ListBox's context menu without moving the selection, so without this the menu's
+    /// REMOVE would delete whatever happened to be selected before — which is the one class of mistake
+    /// a confirmation dialog does not catch, because the dialog names the wrong thing convincingly.
+    /// </remarks>
+    private void OnRowRightPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not ListBox list
+            || !e.GetCurrentPoint(list).Properties.IsRightButtonPressed
+            || (e.Source as Control)?.DataContext is not { } item
+            || list.ItemsSource is not System.Collections.IEnumerable items)
+            return;
+
+        foreach (var candidate in items)
+        {
+            if (!ReferenceEquals(candidate, item))
+                continue;
+
+            list.SelectedItem = item;
+            return;
+        }
     }
 
     private VideoViewModel? Video => DataContext as VideoViewModel;

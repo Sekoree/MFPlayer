@@ -304,7 +304,9 @@ public static class SampleProject
                 new VideoOutputDefinition
                 {
                     Name = "Projector A", Kind = VideoOutputKind.LocalScreen, CompositionId = cyc.Id,
-                    TargetHint = "screen 2", Required = true,
+                    // A NUMBER, like every other output's hint: "screen 2" parsed as nothing, so the
+                    // demo showed a screen picker sitting on "anywhere" over a document that said 2.
+                    TargetHint = "2", Required = true,
                     Mapping =
                     [
                         new MappingSection
@@ -312,7 +314,7 @@ public static class SampleProject
                             Name = "Left wall", SourceX = 0.02, SourceY = 0.06,
                             SourceWidth = 0.47, SourceHeight = 0.86,
                             TargetX = 0.03, TargetY = 0.10, TargetWidth = 0.44, TargetHeight = 0.80,
-                            WarpGrid = 3, Brightness = 0.92,
+                            MeshColumns = 3, MeshRows = 3, Brightness = 0.92,
                         },
                         new MappingSection
                         {

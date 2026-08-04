@@ -229,7 +229,10 @@ public partial class TargetsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanBind))]
     [NotifyPropertyChangedFor(nameof(LearnState))]
     [NotifyPropertyChangedFor(nameof(LearnConflict))]
+    [NotifyPropertyChangedFor(nameof(HasSourceSelected))]
     private TriggerSourceRow? _selectedSource;
+
+    public bool HasSourceSelected => SelectedSource is not null;
 
     public string BindingsHeader => $"Bindings on {SelectedSource?.Name ?? "—"}";
 

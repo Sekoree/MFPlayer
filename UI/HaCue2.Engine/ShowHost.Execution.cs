@@ -100,7 +100,8 @@ public sealed partial class ShowHost
             if (!_visualizers.Running.Contains(cue.Id))
                 return false;
 
-            Remember(cue.Id, list?.Id ?? Guid.Empty);
+            // A visualizer holds a renderer rather than a transport, so it has no group to seek.
+            Remember(cue.Id, list?.Id ?? Guid.Empty, groupId: "");
             _outbound.Start(cue, TimeSpan.FromMilliseconds(Math.Max(1, visualizer.HoldMs)));
             return true;
         }
@@ -116,7 +117,7 @@ public sealed partial class ShowHost
             return false;
         }
 
-        Remember(cue.Id, list?.Id ?? Guid.Empty);
+        Remember(cue.Id, list?.Id ?? Guid.Empty, GroupOf(cue.Id));
         if (PlayedLength(cue) is { } duration)
             _outbound.Start(cue, duration);
         return true;

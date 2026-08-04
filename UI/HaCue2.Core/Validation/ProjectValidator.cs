@@ -323,6 +323,11 @@ public static class ProjectValidator
                 issues.Add(Error("videoOutput", id,
                     $"“{output.Name}” shows a composition that no longer exists."));
 
+            if (output.MappingWidth is < 0 or > 16384 || output.MappingHeight is < 0 or > 16384)
+                issues.Add(Error("videoOutput", id,
+                    $"“{output.Name}” has an out-of-range output raster "
+                    + $"{output.MappingWidth}×{output.MappingHeight}."));
+
             foreach (var section in output.Mapping)
             {
                 var values = new[]
@@ -341,10 +346,11 @@ public static class ProjectValidator
                 if (section.Opacity is < 0 or > 1 || section.Brightness is < 0 or > 2)
                     issues.Add(Error("videoOutput", id,
                         $"Mapping section “{section.Name}” opacity must be in 0–1 and brightness in 0–2."));
-                if (section.WarpGrid is < 0 or > 32)
+                if (section.MeshColumns is < 0 or > 32 || section.MeshRows is < 0 or > 32)
                     issues.Add(Error("videoOutput", id,
-                        $"Mapping section “{section.Name}” has an unsupported warp grid {section.WarpGrid}."));
-                var wanted = section.WarpGrid == 0 ? 0 : section.WarpGrid * section.WarpGrid * 2;
+                        $"Mapping section “{section.Name}” has an unsupported warp mesh "
+                        + $"{section.MeshColumns}×{section.MeshRows}."));
+                var wanted = section.MeshPointCount * 2;
                 if (section.WarpOffsets.Count is not 0 && section.WarpOffsets.Count != wanted)
                     issues.Add(Error("videoOutput", id,
                         $"Mapping section “{section.Name}” has {section.WarpOffsets.Count} warp values; expected {wanted}."));

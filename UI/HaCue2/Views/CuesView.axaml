@@ -230,7 +230,10 @@
                 <Border Classes="actrow"
                         Classes.grp="{Binding IsGroup}"
                         Classes.near="{Binding IsNearEnd}">
-                  <Grid ColumnDefinitions="3,46,*,96,130,78,20" ColumnSpacing="9" Margin="0,0,10,0">
+                  <!-- Elapsed · remaining · length, which is the set HaPlay's Now Playing shows and the
+                       set somebody driving a show actually reads: where it is, how long they have, and
+                       what the whole thing runs for. -->
+                  <Grid ColumnDefinitions="3,46,*,66,66,52,150,78,22" ColumnSpacing="7" Margin="0,0,10,0">
                     <Border Grid.Column="0" Classes="stripe is-go"
                             Classes.fading="{Binding IsFading}"
                             Classes.grp="{Binding IsGroup}" />
@@ -243,12 +246,26 @@
                                  IsVisible="{Binding HasQualifier}" Text="{Binding Qualifier}" />
                     </StackPanel>
                     <TextBlock Grid.Column="3" Classes="clock" Text="{Binding Clock}" />
-                    <ProgressBar Grid.Column="4" Maximum="1" Value="{Binding Progress}"
-                                 VerticalAlignment="Center"
-                                 Classes.fading="{Binding IsFading}"
-                                 Classes.near="{Binding IsNearEnd}" />
-                    <TextBlock Grid.Column="5" Classes="dest" Text="{Binding Destination}" />
-                    <TextBlock Grid.Column="6" Classes="glyph" Text="×" />
+                    <TextBlock Grid.Column="4" Classes="clock" Text="{Binding Remaining}"
+                               ToolTip.Tip="remaining" />
+                    <TextBlock Grid.Column="5" Classes="clock dim3" Text="{Binding Length}"
+                               ToolTip.Tip="whole clip" />
+                    <!-- Draggable. The bar follows the finger during a gesture and the show follows on
+                         release — a seek per pointer-move would re-buffer the clip on every pixel. -->
+                    <c:SeekBar Grid.Column="6" Maximum="1" Value="{Binding Progress}"
+                               IsSeekable="{Binding CanSeek}"
+                               VerticalAlignment="Center"
+                               Seeked="OnSeekActive"
+                               Tag="{Binding CueId}"
+                               Classes.fading="{Binding IsFading}"
+                               Classes.near="{Binding IsNearEnd}"
+                               ToolTip.Tip="Drag to seek this cue." />
+                    <TextBlock Grid.Column="7" Classes="dest" Text="{Binding Destination}" />
+                    <!-- A real button. It was a TextBlock, so the one obvious way to stop a single
+                         sounding cue did nothing at all. -->
+                    <Button Grid.Column="8" Classes="icon" Content="×" Click="OnStopActive"
+                            Tag="{Binding CueId}"
+                            ToolTip.Tip="Stop this cue." />
                   </Grid>
                 </Border>
               </DataTemplate>

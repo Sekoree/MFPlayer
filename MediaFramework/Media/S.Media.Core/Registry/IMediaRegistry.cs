@@ -102,6 +102,18 @@ public interface IMediaRegistry
     /// <summary>Creates a CPU pixel converter, or <c>null</c> when no module registered one.</summary>
     IVideoCpuFrameConverter? CreateCpuConverter();
 
+    /// <summary>
+    /// Whether a CPU conversion between two pixel formats at this size is possible.
+    /// </summary>
+    /// <remarks>
+    /// The question the video router's fan-out asks while choosing a branch format, before it commits
+    /// to one. False when no module registered a probe, which is the same answer a build with no
+    /// scaler would give — and the reason this is a real member rather than an assumption: a router
+    /// that assumed conversion was always possible would wire a route and then fail on the first
+    /// frame, on the audio thread, mid-cue.
+    /// </remarks>
+    bool CanConvertCpu(PixelFormat source, PixelFormat destination, int width, int height) => false;
+
     /// <summary>Wraps <paramref name="source"/> to resample to <paramref name="targetSampleRate"/>, or <c>null</c> if unavailable.</summary>
     IAudioSource? CreateResampler(IAudioSource source, int targetSampleRate);
 

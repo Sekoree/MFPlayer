@@ -2278,3 +2278,146 @@ source's bindings — there is no per-cue "start at this timecode" field, and no
 
 - **Phase 6 (the HaPlay cutover) should not start until HaCue2 has run a real show.** Nothing above is
   a blocker for that run; they are what the run will make it obvious to prioritise.
+
+---
+
+## Phase 5 progress — 2026-08-04: the video tab, and why an output opened no window
+
+Owner report: the Video tab is "extremely messy to set up", creating a local output "doesnt open the
+window but it should", the `· N` counts on the Audio and Video section tabs never move, and both tabs
+"miss proper context menus with options to properly edit or delete items".
+
+Every one of those turned out to be a real defect with a findable cause, and two of them were the same
+defect wearing different clothes: **a surface that looks finished and is not reachable.**
+
+### Why a new output opened no window
+
+Three causes stacked, none of which reported anything:
+
+1. **The pump only started when a LAYER was added.** `ClipCompositionRuntime.EnsurePumpStarted` is
+   called from `AddLayer`/`AddSurfaceLayer` and from the composition test pattern — never from
+   `AddOutput`. A composition with nothing playing therefore submitted no frames at all.
+2. **A sink is configured by its FIRST SUBMITTED FRAME.** `SDL3GLVideoOutput` creates its SDL window
+   inside `Configure`, which `AcquiredOutput.EnsureConfigured` calls on first submit. No submit, no
+   window — and no error either, because nothing failed.
+3. **`PumpIdleFrames` skips an output with nothing to show.** `testPattern ?? compositionIdle ??
+   outputIdle`, and `continue` when all three are null. A brand-new composition has no idle image, so
+   even with the pump running it submitted nothing.
+
+Fixed as three matching changes:
+
+- `ClipCompositionOutputLease.PresentWhenIdle` (framework, **opt-in**, default false) starts the pump
+  when the output attaches. HaCue2 sets it; HaPlay does not, because the two answers are both right
+  for somebody — a media player attaching an output to show a clip must not light a screen the user
+  never asked for, and a cue player's projector is switched on for the evening.
+- `IdleFrames.Black` in HaCue2.Engine, applied as each output's LAST-RESORT idle. Precedence is
+  unchanged and still register item 23's: composition idle image → output fallback → black. The
+  composition pane has always labelled an empty idle path "black"; this is what makes that true.
+- Idle frames are now rebuilt only when their **signature** (authored path + canvas size + rate)
+  changes. Reloads are debounced at 300 ms, not rare, so the previous code re-decoded every idle image
+  from disk three times a second while somebody typed a cue label. Rate is in the signature because
+  that is what the session keys "composition unchanged" on — a rebuilt composition drops its outputs'
+  idle frames, and a signature without rate would call that unchanged and leave the projector dark.
+
+### The screen picker never reached the window
+
+`Dialogs.AddVideoOutput` wrote the picker's whole LABEL into `TargetHint` — `"2 · 1920×1080"` — while
+`ProjectVideoOutputs.Sync` and `VideoViewModel.OutputScreenIndex` both parsed it with `int.TryParse`.
+So the chosen screen was silently discarded, the window opened wherever SDL answered, and the
+inspector agreed with itself by reading the same hint the same way and showing "anywhere". The dialog
+now stores the display NUMBER (from the selected index, not by re-parsing prose), and
+`ProjectVideoOutputs.ScreenNumber` reads the leading digits so documents authored by the old dialog
+resolve without a migration pass.
+
+### The tab counts were frozen on purpose, for a reason that was fixable
+
+`"DEVICES · 3"` was both what the tab said and how the view-model recognised which pane was open
+(`IsDevicesPane` compared `SelectedTab` against it), so rewriting a label would have left the selection
+pointing at a tab that no longer existed. `SectionTab` gives a tab a stable `Key` and an observable
+`Label`; the counts are re-derived wherever the lists are re-read.
+
+### The order of the work is now the order of the tabs
+
+`OUTPUTS · COMPOSITIONS · MAPPING · AUDITION`, replacing `COMPOSITIONS · MAPPING · OUTPUTS`.
+
+- An **output** is a piece of the rig and is created UNBOUND. The add dialog no longer asks which
+  composition it shows, which on a new project was a question about a canvas that did not exist yet —
+  the picker was empty, the output was created showing nothing, and nothing said the two were meant to
+  be joined later.
+- A **composition** owns the assignment. Its pane lists the outputs it feeds and offers the rest;
+  picking an output already on another canvas MOVES it, and the picker says so before it is pressed.
+  The document still stores the link on the output — only where it is authored changed.
+- The outputs table reports `unassigned` / `no composition` rather than an em dash, because that is now
+  the state every output starts in.
+
+### Mapping: HaPlay's editor, ported
+
+The `%`-suffixed text boxes parsed by stripping non-digits are gone. Source in fractions of the canvas
+(it must survive the composition being resized), destination in **output pixels** (the number written
+on the back of the projector), both as `NumericUpDown`. Plus: split into N cols × M rows, reset to
+identity, per-section enable, inline rename, draw-order reorder, duplicate, and an independent mesh
+`cols × rows` in place of the fixed off/3×3/5×5.
+
+Two additive model changes, both migrating cleanly:
+
+- `MappingSection.Enabled` — the engine's own section spec always had this flag and HaCue2 hardcoded it
+  to `true` with a comment saying the document had none. Switching one panel of a blend off to check
+  the one beside it is an ordinary get-in move, and deleting the section is not the same edit.
+- `VideoOutputDefinition.MappingWidth/MappingHeight` — the output's own raster. `OutputMapping.Spec`
+  used the COMPOSITION's size for every output, so a 1920×2160 stacked canvas split across two
+  1920×1080 projectors could not be expressed: both halves would be described as 2160 tall and land at
+  half height. Zero means "follow the composition", which is the honest fallback on a fullscreen output
+  whose real raster belongs to a machine the show has not reached yet.
+- `MeshColumns`/`MeshRows` replace the square `WarpGrid`. The old key is read through a **write-only**
+  legacy property, so an older document opens with its mesh intact and a document saved by this build
+  carries the two axes and nothing else.
+
+The section rows update **in place** unless the set or the order changed. Rebuilding them on every
+refresh would replace the text box being typed into after each keystroke, so a section could only be
+renamed one letter at a time.
+
+### The deletes that did not exist
+
+`ProjectEdits.DeleteLogicalChannel` — register item 11's cascade, cleaning up patch cells, cue sends,
+snapshot cells, group membership, patch-cue levels and fade targets as ONE undoable edit — had been
+written and **never called from anywhere**, while the pane's own footer advertised the behaviour. An
+operator could add a logical output and never remove one.
+
+Now reachable, along with remove/rename/edit for video outputs, compositions, output groups, patch
+snapshots, audio lines, action endpoints and trigger inputs. Every list answers **both** right-click and
+Delete, because those are different people's habits, and right-clicking a row selects it first — a menu
+that acted on the previous selection is the one mistake a confirmation dialog does not catch, since it
+names the wrong thing convincingly.
+
+Also fixed: the logical-output inspector's Name box was bound to a **get-only** property, so it accepted
+typing and threw it away.
+
+### Two new permanent guards
+
+`MarkupBindingGuardTests` gains the enforcement half of both defects found this session:
+
+- **`EveryTagVerbIsHandledByItsView`** — the Audio/Video/Targets views dispatch every "…" button and
+  menu item through one `OnDialog` switching on `Tag`. A verb whose case nobody wrote falls through to
+  `_ => null`, and a control that opens nothing is indistinguishable from one whose dialog was
+  cancelled. Narrowed to `OnDialog` deliberately: tags elsewhere are enum names and indexes the
+  view-model resolves, and checking those would only measure whether a value was spelled twice.
+- **`EveryListWithAContextMenuAlsoAnswersDelete`** — a list whose menu can Remove but whose Delete key
+  cannot is the half-wired state that keeps happening.
+
+### Verification
+
+Whole solution green: HaCue2.Core.Tests 567, HaCue2.Tests 217, S.Media.Session.Tests 349, HaPlay.Tests
+1025, ~4,100 total. New coverage includes two framework tests that assert an idle output **is**
+configured with `PresentWhenIdle` and **is not** without it — the second is what keeps HaPlay's
+behaviour from moving under it.
+
+**Not verifiable here:** this machine has no X server (see `haplay-launch-verify`), so the SDL window
+opening was proved at the seam — the sink receives `Configure` + `Submit` — rather than by looking at a
+window. Worth one manual check on the owner's rig: add a local output, assign a composition, confirm a
+black window appears on the chosen screen.
+
+### Found in passing, not fixed
+
+`UI/HaCue2.Check` crashes with a raw stack trace on a project it cannot deserialize, rather than
+reporting it the way it reports every other project problem. It exits 134 rather than 0, so CI still
+fails correctly — it is ugly, not dangerous.

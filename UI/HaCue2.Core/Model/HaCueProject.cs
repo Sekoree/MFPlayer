@@ -151,8 +151,19 @@ public sealed record ProjectSettings
     public DisabledCueFollow DisabledCueFollow { get; set; } = DisabledCueFollow.SkipOnward;
 
     public CueTrigger NewCueTrigger { get; set; } = CueTrigger.Manual;
-    public int DefaultFadeInMs { get; set; } = 100;
-    public int DefaultFadeOutMs { get; set; } = 2_000;
+
+    /// <summary>
+    /// What a new cue's fades start at. ZERO — a cue fades because somebody asked it to.
+    /// </summary>
+    /// <remarks>
+    /// It used to be 100 ms in and 2 s out, which is a reasonable house style and the wrong default: a
+    /// cue authored to hit a frame arrives 100 ms late, and one meant to butt-cut into the next
+    /// dissolves under it for two seconds. Neither is visible in the cue list, so the operator finds
+    /// out by listening. A show that wants a house fade sets it here once, deliberately.
+    /// </remarks>
+    public int DefaultFadeInMs { get; set; }
+
+    public int DefaultFadeOutMs { get; set; }
 
     /// <summary>Seeded on from the application-scope New project defaults (register item 20).</summary>
     public bool AutoRenumberOnInsert { get; set; } = true;

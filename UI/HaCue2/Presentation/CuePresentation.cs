@@ -128,11 +128,17 @@ public static class CuePresentation
             if (project.FindCue(state.CueId) is not { } cue)
                 continue;
 
-            var length = cue is MediaCueNode media
-                ? media.TrimmedLength(durations.TryGetValue(cue.Id, out var probed) ? probed : null)
-                : null;
+            // The TRANSPORT's own answer first, and the file probe's only as a fallback. The transport
+            // already accounts for the trim and exists on a machine that has not probed the file; the
+            // probe is what the cue list uses before anything is playing.
+            var length = state.Length
+                ?? (cue is MediaCueNode media
+                    ? media.TrimmedLength(durations.TryGetValue(cue.Id, out var probed) ? probed : null)
+                    : null);
 
-            var remaining = length is { } total ? total - state.Elapsed : (TimeSpan?)null;
+            var remaining = length is { } total
+                ? total - state.Elapsed < TimeSpan.Zero ? TimeSpan.Zero : total - state.Elapsed
+                : (TimeSpan?)null;
 
             rows.Add(new ActiveCueRow
             {
@@ -144,9 +150,13 @@ public static class CuePresentation
                 Qualifier = project.CueLists.Count > 1
                     ? project.CueLists.FirstOrDefault(list => list.Id == state.ListId)?.Name ?? ""
                     : "",
-                Clock = length is { } run
-                    ? $"{Clock(state.Elapsed)} / {Clock(run)}"
-                    : Clock(state.Elapsed),
+                Clock = Clock(state.Elapsed),
+                // Counted DOWN, and marked as such. "How long have I got" is the question somebody
+                // driving a show asks; "how long has it been" is the question they ask afterwards.
+                Remaining = remaining is { } left ? $"−{Clock(left)}" : "",
+                Length = length is { } run ? Clock(run) : "",
+                Position = state.Elapsed,
+                Duration = length,
                 Progress = length is { TotalMilliseconds: > 0 } span
                     ? Math.Clamp(state.Elapsed / span, 0, 1)
                     : 0,
@@ -155,7 +165,7 @@ public static class CuePresentation
                 IsFading = state.IsFading,
                 // Ten seconds, not a fraction: what matters to the person driving is how long they
                 // have, and that is the same ten seconds on a 30-second sting and a 6-minute bed.
-                IsNearEnd = remaining is { } left && left > TimeSpan.Zero && left <= TimeSpan.FromSeconds(10),
+                IsNearEnd = remaining is { } close && close > TimeSpan.Zero && close <= TimeSpan.FromSeconds(10),
             });
         }
 

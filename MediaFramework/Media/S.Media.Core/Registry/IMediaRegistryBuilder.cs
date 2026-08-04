@@ -23,6 +23,19 @@ public interface IMediaRegistryBuilder
     /// <summary>Sets the CPU pixel-format converter factory (swscale-backed when FFmpeg is registered).</summary>
     IMediaRegistryBuilder SetCpuConverterFactory(Func<IVideoCpuFrameConverter> factory);
 
+    /// <summary>
+    /// Sets the probe that answers whether a CPU conversion between two pixel formats is possible.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the factory because the router has to ASK before it commits: picking a branch
+    /// pixel format is a decision made while a route is being wired, and building a scaler to find out
+    /// would mean allocating one per candidate format and discarding all but one. A registry with no
+    /// probe answers "no conversion is possible", which is the honest answer for a build with no
+    /// scaler in it.
+    /// </remarks>
+    IMediaRegistryBuilder SetCpuConverterProbe(Func<PixelFormat, PixelFormat, int, int, bool> probe) =>
+        throw new NotSupportedException("This registry builder does not support a CPU converter probe.");
+
     /// <summary>Sets the audio resample-source factory <c>(inner, targetSampleRate) =&gt; wrapped</c>.</summary>
     IMediaRegistryBuilder SetResamplerFactory(Func<IAudioSource, int, IAudioSource> factory);
 

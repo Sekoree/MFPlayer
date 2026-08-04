@@ -1,4 +1,5 @@
 using Avalonia.Media;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace HaCue2.ViewModels;
 
@@ -34,6 +35,35 @@ public enum Gel
     Green,
     Red,
     Steel,
+}
+
+/// <summary>
+/// One tab in a view's section strip: a stable key, and a label that may carry a live count.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The key exists so the label can change. The strips used to be lists of STRINGS which doubled as the
+/// tabs' identity — "DEVICES · 3" was both what the tab said and how the view-model recognised which
+/// pane was open — so the counts had to be frozen at construction or selecting a tab whose label had
+/// been rewritten would blank the pane. They were frozen, and a project with eight devices spent the
+/// evening insisting it had three.
+/// </para>
+/// <para>
+/// Observable, unlike the other rows in this file, because it is a row that genuinely ticks: adding a
+/// composition has to be visible in the tab strip without rebuilding the strip under the operator's
+/// selection.
+/// </para>
+/// </remarks>
+public sealed partial class SectionTab(string key, string label) : ObservableObject
+{
+    /// <summary>What the view-model matches on. Never shown, never changes.</summary>
+    public string Key { get; } = key;
+
+    [ObservableProperty]
+    private string _label = label;
+
+    /// <summary>Re-labels the tab with its count, e.g. <c>DEVICES · 8</c>.</summary>
+    public void Count(string caption, int count) => Label = $"{caption} · {count}";
 }
 
 /// <summary>A tag on a cue row: "loop", "OSC", "offline", "timeline".</summary>
@@ -145,7 +175,23 @@ public sealed record ActiveCueRow
     /// <summary>List name or group progress, shown after the label in ink-3 ("Preshow", "3 of 28").</summary>
     public string Qualifier { get; init; } = "";
 
+    /// <summary>Where the playhead is, as the transport reports it — not wall time since the fire.</summary>
     public string Clock { get; init; } = "";
+
+    /// <summary>Counting DOWN, with its minus sign. Empty when nothing knows how long the clip runs.</summary>
+    public string Remaining { get; init; } = "";
+
+    /// <summary>The clip's whole length, for the readout beside the bar.</summary>
+    public string Length { get; init; } = "";
+
+    /// <summary>The playhead and the length as VALUES, which is what a seek is computed against.</summary>
+    public TimeSpan Position { get; init; }
+
+    public TimeSpan? Duration { get; init; }
+
+    /// <summary>Whether the bar can be dragged: a cue whose length nobody knows cannot be seeked.</summary>
+    public bool CanSeek => Duration is { TotalMilliseconds: > 0 };
+
     public double Progress { get; init; }
     public string Destination { get; init; } = "—";
     public bool IsGroup { get; init; }
@@ -285,6 +331,16 @@ public sealed record PlacementBox
     public bool IsSecondary { get; init; }
 
     public bool IsSelected { get; init; }
+
+    /// <summary>
+    /// A mapping section that is switched off: drawn, but as an outline.
+    /// </summary>
+    /// <remarks>
+    /// Drawn rather than hidden, because it still HAS geometry the operator is arranging. A disabled
+    /// section that vanished from the canvas would be a section they could no longer drag back into
+    /// place, and the only way to find it again would be to switch it on in front of the audience.
+    /// </remarks>
+    public bool IsDisabled { get; init; }
 }
 
 /// <summary>Screen 11 — an inbound trigger source.</summary>

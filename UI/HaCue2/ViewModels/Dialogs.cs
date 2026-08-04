@@ -201,6 +201,110 @@ public static class Dialogs
             confirm: "REMOVE");
     }
 
+    /// <summary>
+    /// Confirms deleting a logical output, naming everything that goes with it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Register item 11's cascade, finally reachable. <c>ProjectEdits.DeleteLogicalChannel</c> has
+    /// existed — cleaning up patch cells, cue sends, snapshot cells, group membership, patch-cue levels
+    /// and fade targets as ONE undoable edit — with nothing in the app calling it, while the pane's own
+    /// footer advertised the behaviour. An operator could add a logical output and never remove one.
+    /// </para>
+    /// <para>
+    /// The consequences are COUNTED from the document rather than described in general terms: "removes
+    /// 4 patch cells and 2 cue sends" is something an operator can weigh, and "may affect your show" is
+    /// not.
+    /// </para>
+    /// </remarks>
+    public static PromptViewModel? RemoveLogicalOutput(ProjectJournal journal, Guid? channelId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        if (channelId is not { } id || journal.Project.FindChannel(id) is not { } channel)
+            return null;
+
+        var references = ProjectReferences.To(journal.Project, ProjectReferences.LogicalOutput, id);
+
+        return new PromptViewModel(
+            $"Remove “{channel.Name}”?",
+            references.Count == 0
+                ? "nothing in this show points at it"
+                : string.Join(" · ", references.Select(reference => reference.Description)),
+            [],
+            _ =>
+            {
+                ProjectEdits.DeleteLogicalChannel(journal, id);
+                journal.CloseGroup();
+            },
+            confirm: "REMOVE");
+    }
+
+    /// <summary>
+    /// Confirms deleting an output group.
+    /// </summary>
+    /// <remarks>
+    /// Not a cascade, and the dialog says so: grouping is an editing convenience (register item 9) and
+    /// the mix math is strictly per channel, so removing a group leaves every output and every cell
+    /// exactly where it was. Only the linked-nudge behaviour goes.
+    /// </remarks>
+    public static PromptViewModel? RemoveOutputGroup(ProjectJournal journal, Guid? groupId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        var patch = journal.Project.AudioPatch;
+
+        if (groupId is not { } id
+            || patch.Groups.FirstOrDefault(group => group.Id == id) is not { } group)
+            return null;
+
+        return new PromptViewModel(
+            $"Remove group “{group.Name}”?",
+            $"{group.MemberIds.Count} output(s) stay exactly as they are — only the link between them goes",
+            [],
+            _ =>
+            {
+                journal.Do(new RemoveItemCommand<OutputGroup>(
+                    patch.Groups, group, "outputs", $"delete group “{group.Name}”"));
+                journal.CloseGroup();
+            },
+            confirm: "REMOVE");
+    }
+
+    /// <summary>
+    /// Confirms deleting a patch snapshot, counting the cues that recall it.
+    /// </summary>
+    /// <remarks>
+    /// The count is the whole point: a snapshot with a patch cue pointing at it is a cue that will fire
+    /// during the show and do nothing, which is the failure that only shows up in front of an audience.
+    /// </remarks>
+    public static PromptViewModel? RemoveSnapshot(ProjectJournal journal, Guid? snapshotId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        var project = journal.Project;
+
+        if (snapshotId is not { } id
+            || project.PatchSnapshots.FirstOrDefault(snapshot => snapshot.Id == id) is not { } snapshot)
+            return null;
+
+        var references = ProjectReferences.To(project, ProjectReferences.Snapshot, id);
+
+        return new PromptViewModel(
+            $"Remove snapshot “{snapshot.Name}”?",
+            references.Count == 0
+                ? $"{snapshot.Cells.Count} stored cell(s) · no cue recalls it"
+                : string.Join(" · ", references.Select(reference => reference.Description)),
+            [],
+            _ =>
+            {
+                journal.Do(new RemoveItemCommand<PatchSnapshot>(
+                    project.PatchSnapshots, snapshot, "patch", $"delete snapshot “{snapshot.Name}”"));
+                journal.CloseGroup();
+            },
+            confirm: "REMOVE");
+    }
+
     public static PromptViewModel AddLogicalOutput(ProjectJournal journal)
     {
         var patch = journal.Project.AudioPatch;
@@ -490,34 +594,44 @@ public static class Dialogs
                 $"add composition “{prompt["Name"].Value.Trim()}”")));
     }
 
-    /// <summary>A new video output: something a composition is sent to.</summary>
+    /// <summary>
+    /// A new video output: something this machine can put a picture on.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>It asks nothing about compositions.</b> An output is a piece of the RIG — a screen, a sender,
+    /// a recorder — and it exists before any canvas is authored against it. This dialog used to open
+    /// with a "Shows" picker, so the first thing an operator did on a new project was answer a question
+    /// about a composition that did not exist yet; the picker was empty, the output was created showing
+    /// nothing, and there was no hint that the two were meant to be joined later. Assignment now lives
+    /// on the COMPOSITIONS pane, where an operator can see both ends of it.
+    /// </para>
+    /// <para>
+    /// <b>The screen is stored as a number.</b> The picker's labels read "2 · 1920×1080" and the whole
+    /// label used to be written into the hint, which every reader of it then failed to parse — so the
+    /// chosen screen was silently discarded and the window opened wherever SDL felt like.
+    /// </para>
+    /// </remarks>
     public static PromptViewModel AddVideoOutput(
         ProjectJournal journal, VideoOutputKind kind, IReadOnlyList<string> screens)
     {
+        ArgumentNullException.ThrowIfNull(journal);
+        ArgumentNullException.ThrowIfNull(screens);
+
         var project = journal.Project;
-        var compositions = project.Compositions.Select(composition => composition.Name).ToList();
+
+        var target = new PromptField
+        {
+            Label = "Target",
+            Kind = kind == VideoOutputKind.LocalScreen ? PromptFieldKind.Choice : PromptFieldKind.Text,
+            Options = kind == VideoOutputKind.LocalScreen ? screens : [],
+            Hint = Target(kind),
+        };
 
         List<PromptField> fields =
         [
             new() { Label = "Name", Value = Suggest(kind) },
-            new()
-            {
-                Label = "Target",
-                Kind = kind == VideoOutputKind.LocalScreen ? PromptFieldKind.Choice : PromptFieldKind.Text,
-                Options = kind == VideoOutputKind.LocalScreen ? screens : [],
-                Hint = Target(kind),
-            },
-            new()
-            {
-                Label = "Shows",
-                Kind = PromptFieldKind.Choice,
-                Options = compositions,
-                // The ORDER is a real dependency: an output shows a composition, so with none authored
-                // there is nothing for this to point at and the output is created blind.
-                Hint = compositions.Count == 0
-                    ? "no compositions yet — add one first, or this output will show nothing"
-                    : "",
-            },
+            target,
             new()
             {
                 Label = "Required",
@@ -552,7 +666,9 @@ public static class Dialogs
 
         return new PromptViewModel(
             $"Add {Describe(kind)} output",
-            "where a composition is sent",
+            project.Compositions.Count == 0
+                ? "a screen, a sender or a recorder · send a composition to it once you have one"
+                : "a screen, a sender or a recorder · assign it to a composition under COMPOSITIONS",
             fields,
             prompt => journal.Do(new AddItemCommand<VideoOutputDefinition>(
                 project.VideoOutputs,
@@ -560,11 +676,11 @@ public static class Dialogs
                 {
                     Name = prompt["Name"].Value.Trim(),
                     Kind = kind,
-                    TargetHint = prompt["Target"].IsChoice
-                        ? prompt["Target"].Choice
-                        : prompt["Target"].Value.Trim(),
-                    CompositionId = project.Compositions
-                        .FirstOrDefault(composition => composition.Name == prompt["Shows"].Choice)?.Id,
+                    // The chosen screen's NUMBER, which is what every reader of the hint expects, and
+                    // what the picker's label happens to start with.
+                    TargetHint = target.IsChoice
+                        ? ScreenHint(target)
+                        : target.Value.Trim(),
                     Required = prompt["Required"].IsOn,
                     Fullscreen = kind != VideoOutputKind.LocalScreen
                                  || prompt["Presentation"].Choice != "windowed",
@@ -578,6 +694,165 @@ public static class Dialogs
                 project.VideoOutputs.Count,
                 "video",
                 $"add output “{prompt["Name"].Value.Trim()}”")));
+    }
+
+    /// <summary>
+    /// The screen picker's answer as a hint: a one-based display number, or empty for "anywhere".
+    /// </summary>
+    /// <remarks>
+    /// Derived from the SELECTED INDEX rather than parsed back out of the label, because index 0 is
+    /// "anywhere" and every entry after it is display N — so the number is known without reading prose
+    /// that a future relabelling could change.
+    /// </remarks>
+    private static string ScreenHint(PromptField screens) =>
+        screens.SelectedIndex <= 0
+            ? ""
+            : screens.SelectedIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Confirms deleting a video output, naming what goes with it.
+    /// </summary>
+    /// <remarks>
+    /// Its mapping goes too, which is the part worth stating: an operator tidying a stale projector row
+    /// would otherwise lose an evening of warp work with no warning and no way to tell from the row
+    /// that there was any to lose.
+    /// </remarks>
+    public static PromptViewModel? RemoveVideoOutput(ProjectJournal journal, Guid? outputId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        if (outputId is not { } id
+            || journal.Project.VideoOutputs.FirstOrDefault(output => output.Id == id) is not { } output)
+            return null;
+
+        var composition = output.CompositionId is { } on
+            ? journal.Project.Compositions.FirstOrDefault(item => item.Id == on)?.Name
+            : null;
+
+        var consequences = new List<string>();
+
+        if (composition is not null)
+            consequences.Add($"stops showing {composition}");
+
+        if (output.Mapping.Count > 0)
+            consequences.Add($"{output.Mapping.Count} mapping section(s) go with it");
+
+        if (output.Record is not null)
+            consequences.Add("its recording settings go with it");
+
+        return new PromptViewModel(
+            $"Remove “{output.Name}”?",
+            consequences.Count == 0 ? "nothing else in this show points at it" : string.Join(" · ", consequences),
+            [],
+            _ =>
+            {
+                journal.Do(new RemoveItemCommand<VideoOutputDefinition>(
+                    journal.Project.VideoOutputs, output, "video", $"delete output “{output.Name}”"));
+                journal.CloseGroup();
+            },
+            confirm: "REMOVE");
+    }
+
+    /// <summary>
+    /// Confirms deleting a composition, and takes the placements and output bindings with it.
+    /// </summary>
+    /// <remarks>
+    /// One undoable edit, like deleting a logical output is. A composition is referenced from two
+    /// directions — cues placed ON it and outputs fed BY it — and leaving either behind gives the
+    /// validator a dangling reference to a canvas that no longer exists.
+    /// </remarks>
+    public static PromptViewModel? RemoveComposition(ProjectJournal journal, Guid? compositionId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        var project = journal.Project;
+
+        if (compositionId is not { } id
+            || project.Compositions.FirstOrDefault(item => item.Id == id) is not { } composition)
+            return null;
+
+        var placed = project.AllCues()
+            .Where(cue => CuePlacements.ListOf(cue) is not null)
+            .SelectMany(cue => CuePlacements.Of(cue).Select(placement => (cue, placement)))
+            .Where(item => item.placement.CompositionId == id)
+            .ToList();
+
+        var fed = project.VideoOutputs.Where(output => output.CompositionId == id).ToList();
+
+        var consequences = new List<string>();
+
+        if (placed.Count > 0)
+            consequences.Add($"{placed.Count} cue placement(s) removed");
+
+        if (fed.Count > 0)
+            consequences.Add($"{fed.Count} output(s) stop showing anything");
+
+        return new PromptViewModel(
+            $"Remove “{composition.Name}”?",
+            consequences.Count == 0 ? "nothing in this show is on it" : string.Join(" · ", consequences),
+            [],
+            _ =>
+            {
+                using (journal.Composite($"delete composition “{composition.Name}”", "video"))
+                {
+                    foreach (var (cue, placement) in placed)
+                    {
+                        if (CuePlacements.ListOf(cue) is { } placements)
+                            journal.Do(new RemoveItemCommand<LayerPlacement>(
+                                placements, placement, "cues",
+                                $"remove placement from Q{cue.Number}"));
+                    }
+
+                    // The outputs SURVIVE — they are pieces of the rig, not of the canvas. They simply
+                    // stop showing anything, which is the state a freshly added output is already in.
+                    foreach (var output in fed)
+                    {
+                        var target = output;
+                        journal.Do(new SetValueCommand<Guid?>(
+                            target.Id, "composition", "video",
+                            () => target.CompositionId, value => target.CompositionId = value, null,
+                            $"“{target.Name}” shows nothing"));
+                    }
+
+                    journal.Do(new RemoveItemCommand<CompositionDefinition>(
+                        project.Compositions, composition, "video",
+                        $"delete composition “{composition.Name}”"));
+                }
+
+                journal.CloseGroup();
+            },
+            confirm: "REMOVE");
+    }
+
+    /// <summary>Renames anything that has a name and an id, through the journal.</summary>
+    public static PromptViewModel? RenameTo(
+        ProjectJournal journal,
+        string current,
+        string domain,
+        Func<string> read,
+        Action<string> write,
+        Guid id)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+        ArgumentNullException.ThrowIfNull(read);
+        ArgumentNullException.ThrowIfNull(write);
+
+        return new PromptViewModel(
+            "Rename",
+            current,
+            [new PromptField { Label = "Name", Value = current }],
+            prompt =>
+            {
+                var name = prompt["Name"].Value.Trim();
+
+                if (name.Length == 0 || name == read())
+                    return;
+
+                journal.Do(new SetValueCommand<string>(
+                    id, "name", domain, read, write, name, $"rename to “{name}”"));
+                journal.CloseGroup();
+            },
+            confirm: "RENAME");
     }
 
     /// <summary>
@@ -651,6 +926,208 @@ public static class Dialogs
                 project.ActionEndpoints.Count,
                 "targets",
                 $"add endpoint “{prompt["Name"].Value.Trim()}”")));
+    }
+
+    /// <summary>
+    /// Edits an action endpoint's address in place.
+    /// </summary>
+    /// <remarks>
+    /// The add dialog asks four questions and there was no way to revisit any of them: a desk that
+    /// moved to a new IP meant deleting the endpoint and re-pointing every cue that used it.
+    /// </remarks>
+    public static PromptViewModel? EditEndpoint(ProjectJournal journal, Guid? endpointId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        var project = journal.Project;
+
+        if (endpointId is not { } id
+            || project.ActionEndpoints.FirstOrDefault(endpoint => endpoint.Id == id) is not { } endpoint)
+            return null;
+
+        var osc = endpoint.Kind == EndpointKind.OscOut;
+
+        return new PromptViewModel(
+            $"Edit “{endpoint.Name}”",
+            osc ? "OSC output" : "MIDI output",
+            [
+                new PromptField { Label = "Name", Value = endpoint.Name },
+                new PromptField
+                {
+                    Label = "Host",
+                    Value = endpoint.Host,
+                    Hint = osc ? "" : "MIDI device name — matched as a hint, like an audio line",
+                },
+                new PromptField
+                {
+                    Label = "Port",
+                    Kind = PromptFieldKind.Number,
+                    Value = endpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    Hint = osc ? "" : "not used by MIDI",
+                },
+                new PromptField
+                {
+                    Label = "Test",
+                    Value = endpoint.TestMessage,
+                    Hint = "the payload the TEST button sends to THIS endpoint",
+                },
+            ],
+            prompt =>
+            {
+                // ONE undo step for the whole address: a half-applied endpoint — new host, old port —
+                // is a destination that exists on no network.
+                using var scope = journal.Composite($"edit endpoint “{endpoint.Name}”", "targets");
+
+                Set(journal, endpoint.Id, "name", "targets",
+                    () => endpoint.Name, value => endpoint.Name = value, prompt["Name"].Value.Trim());
+                Set(journal, endpoint.Id, "host", "targets",
+                    () => endpoint.Host, value => endpoint.Host = value, prompt["Host"].Value.Trim());
+                Set(journal, endpoint.Id, "test", "targets",
+                    () => endpoint.TestMessage, value => endpoint.TestMessage = value,
+                    prompt["Test"].Value.Trim());
+
+                var port = Math.Clamp(prompt["Port"].Number(), 0, 65535);
+                if (endpoint.Port != port)
+                    journal.Do(new SetValueCommand<int>(
+                        endpoint.Id, "port", "targets",
+                        () => endpoint.Port, value => endpoint.Port = value, port, "set port"));
+            },
+            confirm: "SAVE");
+    }
+
+    /// <summary>Writes one string field, and nothing at all when it did not change.</summary>
+    private static void Set(
+        ProjectJournal journal,
+        Guid id,
+        string field,
+        string domain,
+        Func<string> read,
+        Action<string> write,
+        string value)
+    {
+        if (read() == value)
+            return;
+
+        journal.Do(new SetValueCommand<string>(
+            id, field, domain, read, write, value, $"set {field}"));
+    }
+
+    /// <summary>Confirms deleting an action endpoint, counting the cues aimed at it.</summary>
+    public static PromptViewModel? RemoveEndpoint(ProjectJournal journal, Guid? endpointId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        var project = journal.Project;
+
+        if (endpointId is not { } id
+            || project.ActionEndpoints.FirstOrDefault(endpoint => endpoint.Id == id) is not { } endpoint)
+            return null;
+
+        var aimed = project.AllCues()
+            .Count(cue => cue is ActionCueNode action && action.EndpointId == id);
+
+        return new PromptViewModel(
+            $"Remove “{endpoint.Name}”?",
+            aimed == 0
+                ? "no cue sends to it"
+                : $"{aimed} action cue(s) will have nowhere to send — they are kept, and reported",
+            [],
+            _ =>
+            {
+                journal.Do(new RemoveItemCommand<ActionEndpoint>(
+                    project.ActionEndpoints, endpoint, "targets", $"delete endpoint “{endpoint.Name}”"));
+                journal.CloseGroup();
+            },
+            confirm: "REMOVE");
+    }
+
+    /// <summary>
+    /// Edits a trigger input's device and port in place.
+    /// </summary>
+    /// <remarks>
+    /// A MIDI controller swapped for another model is the ordinary case, and re-adding the input would
+    /// take every binding on it with it.
+    /// </remarks>
+    public static PromptViewModel? EditTriggerInput(ProjectJournal journal, Guid? inputId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        var project = journal.Project;
+
+        if (inputId is not { } id
+            || project.TriggerInputs.FirstOrDefault(input => input.Id == id) is not { } input)
+            return null;
+
+        var wired = input.Kind is TriggerInputKind.MidiIn or TriggerInputKind.OscIn;
+
+        return new PromptViewModel(
+            $"Edit “{input.Name}”",
+            $"{input.Bindings.Count} binding(s) stay with it",
+            wired
+                ?
+                [
+                    new PromptField { Label = "Name", Value = input.Name },
+                    new PromptField
+                    {
+                        Label = "Device",
+                        Value = input.DeviceHint,
+                        Hint = input.Kind == TriggerInputKind.OscIn ? "any sender" : "matched by name",
+                    },
+                    new PromptField
+                    {
+                        Label = "Port",
+                        Kind = PromptFieldKind.Number,
+                        Value = input.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    },
+                ]
+                : [new PromptField { Label = "Name", Value = input.Name }],
+            prompt =>
+            {
+                using var scope = journal.Composite($"edit input “{input.Name}”", "targets");
+
+                Set(journal, input.Id, "name", "targets",
+                    () => input.Name, value => input.Name = value, prompt["Name"].Value.Trim());
+
+                if (!wired)
+                    return;
+
+                Set(journal, input.Id, "deviceHint", "targets",
+                    () => input.DeviceHint, value => input.DeviceHint = value,
+                    prompt["Device"].Value.Trim());
+
+                var port = Math.Clamp(prompt["Port"].Number(), 0, 65535);
+                if (input.Port != port)
+                    journal.Do(new SetValueCommand<int>(
+                        input.Id, "port", "targets",
+                        () => input.Port, value => input.Port = value, port, "set port"));
+            },
+            confirm: "SAVE");
+    }
+
+    /// <summary>Confirms deleting a trigger input, counting the bindings that go with it.</summary>
+    public static PromptViewModel? RemoveTriggerInput(ProjectJournal journal, Guid? inputId)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        var project = journal.Project;
+
+        if (inputId is not { } id
+            || project.TriggerInputs.FirstOrDefault(input => input.Id == id) is not { } input)
+            return null;
+
+        return new PromptViewModel(
+            $"Remove “{input.Name}”?",
+            input.Bindings.Count == 0
+                ? "nothing is bound to it"
+                : $"{input.Bindings.Count} binding(s) go with it — the cues themselves stay",
+            [],
+            _ =>
+            {
+                journal.Do(new RemoveItemCommand<TriggerInputDefinition>(
+                    project.TriggerInputs, input, "targets", $"delete input “{input.Name}”"));
+                journal.CloseGroup();
+            },
+            confirm: "REMOVE");
     }
 
     /// <summary>A new trigger input — something that can fire this show.</summary>

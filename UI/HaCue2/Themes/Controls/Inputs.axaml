@@ -100,6 +100,19 @@
       <Setter Property="Width" Value="150" />
     </Style>
 
+    <!-- An editable value that lives INSIDE a list row: the mapping section's name. It reads as the
+         row's label until you click it, because a row of wells looks like a form and a mapping list
+         with eight of them looks like eight forms. The well appears on hover and focus, so it is still
+         discoverable — an unstyled label that silently accepts typing is worse than either. -->
+    <Style Selector="^.bare">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Padding" Value="2,1" />
+    </Style>
+    <Style Selector="^.bare:pointerover /template/ Border#root">
+      <Setter Property="BorderBrush" Value="{DynamicResource BoothRule2}" />
+    </Style>
+
     <!-- Value wells that carry a state colour (the amber "listening" field on the Learn pane). -->
     <Style Selector="^.warn">
       <Setter Property="BorderBrush" Value="{DynamicResource ChipWarnBorder}" />
@@ -262,6 +275,35 @@
     </Style>
     <Style Selector="^:disabled">
       <Setter Property="Opacity" Value="0.42" />
+    </Style>
+  </ControlTheme>
+
+  <!-- The mapping editor's numeric fields.
+
+       Not a from-scratch template like the others: NumericUpDown's own template already contains a
+       TextBox and a ButtonSpinner, and both pick up this file's themes on their own. What is left is
+       the sizing, which Simple's defaults get wrong for a booth panel — a 32 px-tall spinner in a grid
+       of 10.5 px mono wells makes the whole pane look like a different application.
+
+       Values commit on LOST FOCUS as well as on Enter, which is the behaviour a stage operator
+       expects: tabbing from Dest X to Dest Y has to keep what was typed in the first one. -->
+  <ControlTheme x:Key="{x:Type NumericUpDown}" TargetType="NumericUpDown"
+                BasedOn="{StaticResource {x:Type NumericUpDown}}">
+    <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+    <Setter Property="FontSize" Value="10.5" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="MinWidth" Value="0" />
+    <Setter Property="HorizontalContentAlignment" Value="Left" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+    <Setter Property="ClipValueToMinMax" Value="True" />
+    <!-- Both spin directions AND typing. A projector nudge is one increment at a time and an edge
+         blend is an exact number, and an editor that only offered one of the two would send the
+         operator to the other route for half the values they need. -->
+    <Setter Property="AllowSpin" Value="True" />
+    <Setter Property="ShowButtonSpinner" Value="True" />
+
+    <Style Selector="^:disabled">
+      <Setter Property="Opacity" Value="0.5" />
     </Style>
   </ControlTheme>
 

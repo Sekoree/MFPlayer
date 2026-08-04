@@ -224,4 +224,141 @@ public class MarkupBindingGuardTests
         foreach (var listed in InertButtons.Keys)
             Assert.True(content.Contains(listed), $"“{listed}” is no longer an inert button — remove it");
     }
+
+    // ── the same rule for the Tag verbs ───────────────────────────────────────────────────────
+
+    /// <summary>An element routed to a view's shared <c>OnDialog</c> dispatcher.</summary>
+    /// <remarks>
+    /// <para>
+    /// The Audio, Video and Targets views send every "…" button and menu item through one
+    /// <c>OnDialog</c>, switching on the element's <c>Tag</c>. That is a good pattern — adding a verb is
+    /// a line of markup and a case — with exactly one failure mode: a Tag whose case nobody wrote falls
+    /// through to <c>_ => null</c>, and a control that opens nothing is indistinguishable from one
+    /// whose dialog was cancelled. Nothing warns, at build or at run time.
+    /// </para>
+    /// <para>
+    /// Deliberately narrowed to <c>OnDialog</c>. Tags elsewhere are not verbs to switch on — the cue
+    /// menu's are enum names, the effect-lane menu's are indexes, the curve buttons' are field names
+    /// the VIEW-MODEL resolves — and checking those against the code-behind would only measure whether
+    /// somebody happened to spell the value twice.
+    /// </para>
+    /// </remarks>
+    private static readonly Regex DispatchedElement = new(
+        @"<(?:Button|MenuItem|ListBox)\b[^>]*?/?>",
+        RegexOptions.Singleline);
+
+    [Fact]
+    public void EveryTagVerbIsHandledByItsView()
+    {
+        var offences = new List<string>();
+
+        foreach (var file in MarkupFiles())
+        {
+            var behind = file + ".cs";
+
+            // Themes and templates have no code-behind; their tags belong to whoever hosts them.
+            if (!File.Exists(behind))
+                continue;
+
+            var markup = File.ReadAllText(file);
+            var code = File.ReadAllText(behind);
+            var name = Path.GetFileName(file);
+
+            foreach (Match element in DispatchedElement.Matches(markup))
+            {
+                // Click straight to the dispatcher, or a list whose Delete key forwards to it — both
+                // read the same Tag and both fall silently through the same default arm.
+                var dispatched =
+                    element.Value.Contains(@"Click=""OnDialog""", StringComparison.Ordinal)
+                    || (element.Value.Contains("KeyDown=", StringComparison.Ordinal)
+                        && code.Contains("OnDialog", StringComparison.Ordinal));
+
+                if (!dispatched)
+                    continue;
+
+                var tag = Regex.Match(element.Value, @"\bTag=""([^""]*)""").Groups[1].Value;
+
+                // No tag at all is fine — a list's Delete key can name its own verb. A BOUND tag
+                // carries a run-time value (a filename token, an output id) and cannot be checked here.
+                if (tag.Length == 0 || tag.StartsWith('{'))
+                    continue;
+
+                if (code.Contains($"\"{tag}\"", StringComparison.Ordinal))
+                    continue;
+
+                var line = markup[..element.Index].Count(character => character == '\n') + 1;
+                offences.Add($"{name}({line}): Tag=\"{tag}\" is not handled in {Path.GetFileName(behind)}");
+            }
+        }
+
+        Assert.True(
+            offences.Count == 0,
+            "A control dispatches on a Tag its view never handles, so pressing it does nothing:\n  "
+            + string.Join("\n  ", offences));
+    }
+
+    /// <summary>The guard catches a verb whose case was never written.</summary>
+    /// <remarks>
+    /// A guard nobody has seen fail is a guard nobody knows the shape of. This is the failure, in one
+    /// assertion: markup that dispatches on a tag the code-behind has no case for.
+    /// </remarks>
+    [Fact]
+    public void TheTagGuardWouldCatchAnUnhandledVerb()
+    {
+        const string markup = @"<Button Content=""GO"" Click=""OnDialog"" Tag=""out:teleport"" />";
+        const string code = @"var prompt = verb switch { ""out:local"" => null, _ => null };";
+
+        var element = Assert.Single(DispatchedElement.Matches(markup).Cast<Match>());
+        var tag = Regex.Match(element.Value, @"\bTag=""([^""]*)""").Groups[1].Value;
+
+        Assert.Equal("out:teleport", tag);
+        Assert.False(code.Contains($"\"{tag}\"", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Every list an operator can delete from offers the same two routes into it.
+    /// </summary>
+    /// <remarks>
+    /// Right-click and Delete are different people's habits, and a list that answers only one of them
+    /// reads as a list you cannot delete from. This checks the pairing rather than the presence: a list
+    /// with a context menu but no Delete key, or the reverse, is the half-wired state that keeps
+    /// happening.
+    /// </remarks>
+    [Fact]
+    public void EveryListWithAContextMenuAlsoAnswersDelete()
+    {
+        var offences = new List<string>();
+
+        // The two lists whose menus deliberately carry no destructive verb, so Delete would have
+        // nothing to do: the snapshot menu's RECALL/UPDATE are transport, not edits, and the trigger
+        // monitor is a read-only log.
+        var listOpens = new Regex(@"<ListBox\b.*?(?:/>|</ListBox>)", RegexOptions.Singleline);
+
+        foreach (var file in MarkupFiles())
+        {
+            if (!File.Exists(file + ".cs"))
+                continue;
+
+            var markup = File.ReadAllText(file);
+            var name = Path.GetFileName(file);
+
+            foreach (Match list in listOpens.Matches(markup))
+            {
+                var hasMenu = list.Value.Contains("<ContextMenu", StringComparison.Ordinal);
+                var hasDelete = list.Value.Contains("KeyDown=", StringComparison.Ordinal);
+                var removes = list.Value.Contains("Remove", StringComparison.Ordinal);
+
+                if (!hasMenu || !removes || hasDelete)
+                    continue;
+
+                var line = markup[..list.Index].Count(character => character == '\n') + 1;
+                offences.Add($"{name}({line}): a list whose menu can Remove but whose Delete key cannot");
+            }
+        }
+
+        Assert.True(
+            offences.Count == 0,
+            "Right-click and Delete are different habits; a list must answer both:\n  "
+            + string.Join("\n  ", offences));
+    }
 }

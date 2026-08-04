@@ -129,4 +129,83 @@ public sealed class CompositionIdleFrameTests
         Assert.NotNull(stats);
         Assert.True(await session.SetCompositionIdleFrameAsync("screen", null));
     }
+
+    /// <summary>Counts what a sink was actually told to do - Configure is what opens a real window.</summary>
+    private sealed class CountingVideoOutput : IVideoOutput
+    {
+        private VideoFormat _format;
+        private int _submitted;
+
+        public VideoFormat Format => _format;
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = [PixelFormat.Bgra32];
+        public int Configures { get; private set; }
+        public int Submitted => Volatile.Read(ref _submitted);
+
+        public void Configure(VideoFormat format)
+        {
+            _format = format;
+            Configures++;
+        }
+
+        public void Submit(VideoFrame frame)
+        {
+            Interlocked.Increment(ref _submitted);
+            frame.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// An output that declares <c>PresentWhenIdle</c> starts receiving frames before any cue fires.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes a cue player's projector exist. The pump used to start only when a LAYER was
+    /// added, so a composition with nothing playing submitted nothing at all - and a sink that is
+    /// configured by its first submitted frame (every windowed one) never opened its window. The
+    /// operator saw no window, no error, and concluded the output did not work.
+    /// </remarks>
+    [Fact]
+    public async Task PresentWhenIdle_ConfiguresTheSinkBeforeAnythingPlays()
+    {
+        await using var session = Session();
+        var output = new CountingVideoOutput();
+
+        Assert.True(await session.AddCompositionOutputAsync(
+            "screen",
+            new ClipCompositionOutputLease("projector", "Projector", output, PresentWhenIdle: true)));
+
+        await session.SetOutputIdleFrameAsync("screen", "projector", Frame());
+
+        // 25 fps canvas, so a handful of ticks is ample; polled rather than slept-through so the test
+        // does not spend its whole budget waiting on a pump that already delivered.
+        for (var attempt = 0; attempt < 40 && output.Submitted == 0; attempt++)
+            await Task.Delay(25);
+
+        Assert.True(output.Submitted > 0, "an idle output never received a frame, so its window never opened");
+        Assert.Equal(1, output.Configures);
+        Assert.Equal(64, output.Format.Width);
+    }
+
+    /// <summary>
+    /// Without the flag the pump still waits for a layer — a media player must not light a screen.
+    /// </summary>
+    /// <remarks>
+    /// The two answers are both right for somebody, which is why this is opt-in rather than the new
+    /// default: a player attaches an output to show a clip, and a pump running over an empty canvas
+    /// would put a black window on screen the moment a line was selected.
+    /// </remarks>
+    [Fact]
+    public async Task WithoutTheFlag_AnIdleCompositionStaysQuiet()
+    {
+        await using var session = Session();
+        var output = new CountingVideoOutput();
+
+        Assert.True(await session.AddCompositionOutputAsync(
+            "screen", new ClipCompositionOutputLease("preview", "Preview", output)));
+
+        await session.SetOutputIdleFrameAsync("screen", "preview", Frame());
+        await Task.Delay(200);
+
+        Assert.Equal(0, output.Submitted);
+        Assert.Equal(0, output.Configures);
+    }
 }

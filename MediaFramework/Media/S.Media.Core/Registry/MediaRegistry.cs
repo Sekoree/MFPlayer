@@ -11,6 +11,7 @@ public sealed class MediaRegistryBuilder : IMediaRegistryBuilder
     internal readonly List<IAudioBackend> AudioBackendList = [];
     internal readonly Dictionary<string, Func<string, IVideoSource>> ImageFactories = new(StringComparer.OrdinalIgnoreCase);
     internal Func<IVideoCpuFrameConverter>? CpuConverterFactory;
+    internal Func<PixelFormat, PixelFormat, int, int, bool>? CpuConverterProbe;
     internal Func<IAudioSource, int, IAudioSource>? ResamplerFactory;
     internal Func<IAudioOutput, AudioFormat, IAudioOutput>? ResamplingOutputFactory;
     internal AdaptiveRateOutputFactory? AdaptiveRateFactory;
@@ -42,6 +43,12 @@ public sealed class MediaRegistryBuilder : IMediaRegistryBuilder
     public IMediaRegistryBuilder SetCpuConverterFactory(Func<IVideoCpuFrameConverter> factory)
     {
         CpuConverterFactory = factory ?? throw new ArgumentNullException(nameof(factory));
+        return this;
+    }
+
+    public IMediaRegistryBuilder SetCpuConverterProbe(Func<PixelFormat, PixelFormat, int, int, bool> probe)
+    {
+        CpuConverterProbe = probe ?? throw new ArgumentNullException(nameof(probe));
         return this;
     }
 
@@ -102,6 +109,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     private readonly IReadOnlyList<IMediaDecoderProvider> _decoders;
     private readonly Dictionary<string, Func<string, IVideoSource>> _imageFactories;
     private readonly Func<IVideoCpuFrameConverter>? _cpuConverter;
+    private readonly Func<PixelFormat, PixelFormat, int, int, bool>? _cpuConverterProbe;
     private readonly Func<IAudioSource, int, IAudioSource>? _resampler;
     private readonly Func<IAudioOutput, AudioFormat, IAudioOutput>? _resamplingOutput;
     private readonly AdaptiveRateOutputFactory? _adaptiveRate;
@@ -119,6 +127,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
         AudioBackends = [.. b.AudioBackendList];
         _imageFactories = new Dictionary<string, Func<string, IVideoSource>>(b.ImageFactories, StringComparer.OrdinalIgnoreCase);
         _cpuConverter = b.CpuConverterFactory;
+        _cpuConverterProbe = b.CpuConverterProbe;
         _resampler = b.ResamplerFactory;
         _resamplingOutput = b.ResamplingOutputFactory;
         _adaptiveRate = b.AdaptiveRateFactory;
@@ -286,6 +295,12 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     {
         ThrowIfDisposed();
         return _cpuConverter?.Invoke();
+    }
+
+    public bool CanConvertCpu(PixelFormat source, PixelFormat destination, int width, int height)
+    {
+        ThrowIfDisposed();
+        return _cpuConverterProbe?.Invoke(source, destination, width, height) ?? false;
     }
 
     public IAudioSource? CreateResampler(IAudioSource source, int targetSampleRate)

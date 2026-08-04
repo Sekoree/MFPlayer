@@ -20,7 +20,13 @@
           Background="{DynamicResource BoothPanel}">
       <ListBox Grid.Column="0" Theme="{StaticResource SectionTabs}"
                Background="{DynamicResource BoothPanel}"
-               ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}" />
+               ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:SectionTab">
+            <TextBlock Text="{Binding Label}" />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
       <Border Grid.Column="1" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1">
         <TextBlock Classes="mono dim3 micro" HorizontalAlignment="Right" VerticalAlignment="Center"
                    Margin="10,0" Text="{Binding TabHint}" />
@@ -35,7 +41,7 @@
         <c:PanelBox Grid.Column="0" Header="Logical outputs" Hint="the only destinations cues can see">
           <c:PanelBox.Footer>
             <Border Classes="chain">
-              <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+              <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
                 <Button Grid.Column="0" Classes="tight" Content="+ ADD" Click="OnDialog" Tag="output" />
                 <Button Grid.Column="1" Classes="tight" Content="+ ADD STEREO PAIR" Click="OnDialog" Tag="pair" />
                 <Button Grid.Column="2" Classes="tight" Content="+ NEW GROUP…" Click="OnDialog" Tag="group" />
@@ -43,8 +49,11 @@
                 <Button Grid.Column="4" Classes="tight" Content="REORDER" Click="OnDialog" Tag="reorder" />
                 <!-- Register item 11: no refuse-while-fed gate. Deleting strips the sends from every
                      cue as ONE undoable edit, which is the only version of this that an operator can
-                     safely reverse. -->
-                <TextBlock Grid.Column="5" Classes="mono dim3 small" HorizontalAlignment="Right"
+                     safely reverse. The footer said so for months with no button behind it — the
+                     cascade existed in ProjectEdits and nothing in the app called it. -->
+                <Button Grid.Column="5" Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="output:remove"
+                        IsEnabled="{Binding HasSelectedOutput}" />
+                <TextBlock Grid.Column="6" Classes="mono dim3 small" HorizontalAlignment="Right"
                            VerticalAlignment="Center"
                            Text="delete cleans up its cue sends automatically — one undoable edit" />
               </Grid>
@@ -64,7 +73,22 @@
             </Border>
 
             <ListBox Theme="{StaticResource TableRows}"
-                     ItemsSource="{Binding Outputs}" SelectedItem="{Binding SelectedOutput}">
+                     ItemsSource="{Binding Outputs}" SelectedItem="{Binding SelectedOutput}"
+                     KeyDown="OnOutputsKeyDown" PointerPressed="OnRowRightPressed">
+              <ListBox.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Rename…" Click="OnDialog" Tag="rename" />
+                  <MenuItem Header="Move in bus order…" Click="OnDialog" Tag="reorder" />
+                  <MenuItem Header="Patch to device channels…" Click="OnDialog" Tag="patch"
+                            IsEnabled="{Binding CanPatchToDevice}" />
+                  <Separator />
+                  <MenuItem Header="Group with the selection…" Click="OnDialog" Tag="group" />
+                  <MenuItem Header="Ungroup…" Click="OnDialog" Tag="group:remove"
+                            IsEnabled="{Binding HasGroupToRemove}" />
+                  <Separator />
+                  <MenuItem Header="Remove…" Click="OnDialog" Tag="output:remove" />
+                </ContextMenu>
+              </ListBox.ContextMenu>
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:LogicalOutputRow">
                   <Grid ColumnDefinitions="120,90,70,*,90" ColumnSpacing="8" Margin="8,4">
@@ -104,8 +128,10 @@
 
           <ScrollViewer>
             <StackPanel Margin="0,6,0,8">
+              <!-- A real rename. This was bound to a get-only property, so it took typing and threw
+                   it away — the only working rename was the footer button. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
-                <TextBox Text="{Binding SelectedOutputName}" />
+                <TextBox Text="{Binding OutputName}" IsEnabled="{Binding HasSelectedOutput}" />
               </HeaderedContentControl>
               <!-- With the permanent strip gone, this flag picks what appears in the Output info
                    drawer's compact row and in the status-bar health token. -->
@@ -189,6 +215,8 @@
                             IsEnabled="{Binding HasSnapshot}" />
                     <Button Classes="tight" Content="UPDATE" Click="OnUpdateSnapshot"
                             IsEnabled="{Binding HasSnapshot}" />
+                    <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="snapshot:remove"
+                            IsEnabled="{Binding HasSnapshot}" />
                   </StackPanel>
                 </Border>
                 <TextBlock Margin="10,6,10,2" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
@@ -201,7 +229,16 @@
             </c:PanelBox.Footer>
 
             <ListBox Theme="{StaticResource TableRows}" Margin="4,6"
-                     ItemsSource="{Binding Snapshots}" SelectedItem="{Binding SelectedSnapshot}">
+                     ItemsSource="{Binding Snapshots}" SelectedItem="{Binding SelectedSnapshot}"
+                     KeyDown="OnSnapshotsKeyDown" PointerPressed="OnRowRightPressed">
+              <ListBox.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Recall" Click="OnRecall" />
+                  <MenuItem Header="Update from the live patch" Click="OnUpdateSnapshot" />
+                  <Separator />
+                  <MenuItem Header="Remove…" Click="OnDialog" Tag="snapshot:remove" />
+                </ContextMenu>
+              </ListBox.ContextMenu>
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:SnapshotRow">
                   <TextBlock Classes="mono" FontSize="10.5" Margin="6,3" Text="{Binding Text}" />
@@ -266,9 +303,12 @@
                           Detail="Add one above. A line is a device this show sends to; logical outputs are patched onto its channels." />
             <ListBox IsVisible="{Binding !HasNoLines}" Theme="{StaticResource TableRows}"
                      ItemsSource="{Binding Lines}" SelectedItem="{Binding SelectedLine}"
-                     KeyDown="OnLinesKeyDown">
+                     KeyDown="OnLinesKeyDown" PointerPressed="OnRowRightPressed">
               <ListBox.ContextMenu>
                 <ContextMenu>
+                  <MenuItem Header="Rename…" Click="OnDialog" Tag="line:rename" />
+                  <MenuItem Header="Relink absent lines…" Click="OnDialog" Tag="relink" />
+                  <Separator />
                   <MenuItem Header="Remove…" Click="OnDialog" Tag="line:remove" />
                 </ContextMenu>
               </ListBox.ContextMenu>

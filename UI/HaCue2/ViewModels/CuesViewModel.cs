@@ -304,6 +304,40 @@ public partial class CuesViewModel : ObservableObject
             _ = host.StopCueAsync(cueId);
     }
 
+    /// <summary>Stops one named cue — the × on its Active row.</summary>
+    /// <remarks>
+    /// By id rather than "the selected one", because the row IS the selection here: an operator
+    /// pressing × on the third row means the third row, whatever the cue tree has highlighted.
+    /// </remarks>
+    public void StopCue(Guid cueId) => _ = Engine?.StopCueAsync(cueId);
+
+    /// <summary>
+    /// Moves a sounding cue's playhead to a fraction of its length.
+    /// </summary>
+    /// <remarks>
+    /// A fraction rather than a time, because that is what the bar knows — it is as wide as the clip is
+    /// long and nothing more. Refusals are shown rather than swallowed: seeking a cue that has just
+    /// ended is an ordinary near-miss, and a bar that appeared to work and did not would send somebody
+    /// looking for a broken file.
+    /// </remarks>
+    public async Task SeekActiveAsync(Guid cueId, double fraction)
+    {
+        if (Engine is not { } host)
+            return;
+
+        if (_runtime.ActiveCues.FirstOrDefault(row => row.CueId == cueId) is not { Duration: { } length })
+            return;
+
+        var target = length * Math.Clamp(fraction, 0, 1);
+
+        if (await host.SeekCueAsync(cueId, target).ConfigureAwait(true) is { } problem)
+            TransportProblem = problem;
+    }
+
+    /// <summary>The last refusal from a transport gesture, or nothing.</summary>
+    [ObservableProperty]
+    private string _transportProblem = "";
+
     /// <summary>Stops everything, over the project's stop fade. The split-menu half of STOP.</summary>
     public void StopAll() => _ = Engine?.StopAllAsync();
 

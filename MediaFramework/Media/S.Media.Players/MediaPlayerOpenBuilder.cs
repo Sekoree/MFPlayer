@@ -84,11 +84,26 @@ public sealed class MediaPlayerOpenLiveBuilder : MediaPlayerOpenBuilder
     private readonly IAudioSource? _audio;
     private readonly IVideoSource? _video;
     private bool _disposeSourcesOnPlayerDispose;
+    private IMediaRegistry? _registry;
 
     internal MediaPlayerOpenLiveBuilder(IAudioSource? audio, IVideoSource? video)
     {
         _audio = audio;
         _video = video;
+    }
+
+    /// <summary>
+    /// Supplies the registry whose CPU converter the router may use for fan-out branches.
+    /// </summary>
+    /// <remarks>
+    /// Optional, because this builder exists for callers that own their decoders and may have no
+    /// registry at all. Without it a branch that needs a pixel conversion is refused — the same
+    /// behaviour this path has always had, now stated rather than silent.
+    /// </remarks>
+    public MediaPlayerOpenLiveBuilder WithRegistry(IMediaRegistry registry)
+    {
+        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        return this;
     }
 
     public MediaPlayerOpenLiveBuilder WithOptions(MediaPlayerOpenOptions options)
@@ -122,5 +137,9 @@ public sealed class MediaPlayerOpenLiveBuilder : MediaPlayerOpenBuilder
 
     public override bool TryBuild([NotNullWhen(true)] out MediaPlayer? player, out string? error) =>
         MediaPlayer.TryOpenLive(_audio, _video, OpenOptions, VideoLead, DisposeVideoLeadOnPlayerDispose,
-            _disposeSourcesOnPlayerDispose, resamplerFactory: null, out player, out error, Cancellation);
+            _disposeSourcesOnPlayerDispose, resamplerFactory: null,
+            // With the same conversion hooks the file path gets, when a registry was supplied: an NDI
+            // receiver fanned out to a composition needs them for the same reason a decoded file does.
+            routerOptions: _registry is null ? null : MediaPlayer.VideoRouterOptionsFor(_registry),
+            out player, out error, Cancellation);
 }

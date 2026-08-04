@@ -3,6 +3,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.VisualTree;
+using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Controls;
 using HaCue2.ViewModels;
@@ -40,15 +41,31 @@ public partial class AudioView : UserControl
             "pair" => Dialogs.AddStereoPair(journal),
             "reorder" => Dialogs.Reorder(journal, audio.SelectedOutput?.Id),
             "group" => Dialogs.AddOutputGroup(journal, audio.SelectedOutputIds),
+            "group:remove" => Dialogs.RemoveOutputGroup(journal, audio.SelectedGroupId),
             "rename" => audio.SelectedOutput is { } row ? Dialogs.Rename(journal, row.Id, row.Name, "audio") : null,
             "snapshot" => Dialogs.SaveSnapshot(journal),
+            "snapshot:remove" => Dialogs.RemoveSnapshot(journal, audio.SelectedSnapshot?.Id),
             "patch" => audio.PatchSelectedToDevice(),
             "relink" => audio.RelinkAbsentLines(),
+            "line:rename" => RenameLine(journal, audio.SelectedLine?.Id),
             "line:remove" => Dialogs.RemoveAudioLine(journal, audio.SelectedLine?.Id),
+            // The cascade register item 11 promises: patch cells, cue sends, snapshot cells, group
+            // membership, patch-cue levels and fade targets, as ONE undoable edit.
+            "output:remove" => Dialogs.RemoveLogicalOutput(journal, audio.SelectedOutput?.Id),
             _ => null,
         };
 
         PromptWindow.Show(this, prompt, audio.Refresh);
+    }
+
+    /// <summary>Renames an audio line through the journal, by id.</summary>
+    private static PromptViewModel? RenameLine(ProjectJournal journal, Guid? lineId)
+    {
+        if (lineId is not { } id || journal.Project.FindLine(id) is not { } line)
+            return null;
+
+        return Dialogs.RenameTo(
+            journal, line.Name, "audio", () => line.Name, name => line.Name = name, id);
     }
 
     /// <summary>
@@ -68,6 +85,50 @@ public partial class AudioView : UserControl
         // ends up acting on another.
         e.Handled = true;
         PromptWindow.Show(this, Dialogs.RemoveAudioLine(audio.Journal, audio.SelectedLine?.Id), audio.Refresh);
+    }
+
+    private void OnOutputsKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Delete or Key.Back) || DataContext is not AudioViewModel audio)
+            return;
+
+        e.Handled = true;
+        PromptWindow.Show(
+            this, Dialogs.RemoveLogicalOutput(audio.Journal, audio.SelectedOutput?.Id), audio.Refresh);
+    }
+
+    private void OnSnapshotsKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Delete or Key.Back) || DataContext is not AudioViewModel audio)
+            return;
+
+        e.Handled = true;
+        PromptWindow.Show(
+            this, Dialogs.RemoveSnapshot(audio.Journal, audio.SelectedSnapshot?.Id), audio.Refresh);
+    }
+
+    /// <summary>Right-clicking a row selects it first, so the menu acts on what was clicked.</summary>
+    /// <remarks>
+    /// Avalonia opens a ListBox's context menu without moving the selection, so without this the menu's
+    /// REMOVE would act on whatever was selected before — the one class of mistake a confirmation
+    /// dialog does not catch, because the dialog names the wrong thing convincingly.
+    /// </remarks>
+    private void OnRowRightPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not ListBox list
+            || !e.GetCurrentPoint(list).Properties.IsRightButtonPressed
+            || (e.Source as Control)?.DataContext is not { } item
+            || list.ItemsSource is not System.Collections.IEnumerable items)
+            return;
+
+        foreach (var candidate in items)
+        {
+            if (!ReferenceEquals(candidate, item))
+                continue;
+
+            list.SelectedItem = item;
+            return;
+        }
     }
 
     /// <summary>

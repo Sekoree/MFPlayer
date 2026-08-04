@@ -52,6 +52,26 @@ public sealed record VideoOutputDefinition
     public bool Required { get; set; }
 
     /// <summary>
+    /// The output's own raster, in pixels, for mapping. Zero follows the composition's size.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is what makes a video wall expressible. A 1920×2160 stacked canvas fed to two 1920×1080
+    /// projectors needs each output's destination rectangles measured against 1920×1080 — with the
+    /// composition's size standing in for every output, the top projector's section would be described
+    /// as the top half of a 2160-tall frame and land at half height on a screen that is not 2160 tall.
+    /// </para>
+    /// <para>
+    /// Zero rather than a guess, because on a fullscreen output the real raster is the screen's and this
+    /// machine may not be the one the show runs on. The composition's size is the honest fallback: it is
+    /// the one raster the document actually knows.
+    /// </para>
+    /// </remarks>
+    public int MappingWidth { get; set; }
+
+    public int MappingHeight { get; set; }
+
+    /// <summary>
     /// Per-output mapping (register item 22). Null or empty means a clean feed — the common case, and
     /// the reason mapping is opt-in per output rather than a property of the composition.
     /// </summary>
@@ -97,6 +117,17 @@ public sealed record MappingSection
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = "";
 
+    /// <summary>
+    /// Whether this section is drawn.
+    /// </summary>
+    /// <remarks>
+    /// Separate from deleting it, for the same reason the output's own mapping toggle is: switching one
+    /// panel of a blend off to check the one beside it is an ordinary thing to do at a get-in, and if
+    /// the only way to say it were to delete the section, its geometry would have to be authored again
+    /// to get it back. The engine's own section spec has always had this flag; the document had not.
+    /// </remarks>
+    public bool Enabled { get; set; } = true;
+
     /// <summary>The region of the composition this section samples, in fractions.</summary>
     public double SourceX { get; set; }
 
@@ -115,11 +146,48 @@ public sealed record MappingSection
     public double Opacity { get; set; } = 1;
     public double Brightness { get; set; } = 1;
 
-    /// <summary>0 = no warp; otherwise the mesh is N×N.</summary>
-    public int WarpGrid { get; set; }
+    /// <summary>
+    /// The warp mesh, in control points across and down. Zero on either axis means no warp.
+    /// </summary>
+    /// <remarks>
+    /// Independent because panels are: a three-projector blend across a flat cyc wants 5×2, and forcing
+    /// it to 5×5 gives the operator fifteen handles they have to leave alone and can knock by accident.
+    /// </remarks>
+    public int MeshColumns { get; set; }
+
+    public int MeshRows { get; set; }
+
+    /// <summary>
+    /// The square mesh older documents wrote, read once and folded into <see cref="MeshColumns"/>.
+    /// </summary>
+    /// <remarks>
+    /// Write-only on purpose — it has no getter, so it is read from a file that has it and never
+    /// written back to one. A document saved by this build carries the two axes and nothing else, and a
+    /// document saved by the previous build still opens with its mesh intact.
+    /// </remarks>
+    [System.Text.Json.Serialization.JsonPropertyName("warpGrid")]
+    public int LegacyWarpGrid
+    {
+        set
+        {
+            if (value < 2 || MeshColumns > 0 || MeshRows > 0)
+                return;
+
+            MeshColumns = value;
+            MeshRows = value;
+        }
+    }
 
     /// <summary>Row-major mesh offsets, 2 doubles per point. Empty until the mesh is touched.</summary>
     public List<double> WarpOffsets { get; set; } = [];
+
+    /// <summary>How many offsets a complete mesh for this section holds — zero when it has no warp.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int MeshPointCount => MeshColumns >= 2 && MeshRows >= 2 ? MeshColumns * MeshRows : 0;
+
+    /// <summary>Whether the section carries a mesh the renderer can actually resolve.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasMesh => MeshPointCount > 0 && WarpOffsets.Count == MeshPointCount * 2;
 }
 
 /// <summary>Somewhere action cues send to.</summary>

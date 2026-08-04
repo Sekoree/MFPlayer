@@ -22,7 +22,14 @@ public class OutputStatusTests
     [Fact]
     public void AnOutputThatNamesNoCompositionIsUnopenedAndSaysWhy()
     {
-        var output = new VideoOutputDefinition { Name = "Projector A", CompositionId = null };
+        // A SENDER, not a local screen. Outputs are created unbound now, and a local screen with no
+        // composition deliberately opens anyway showing black — an operator who has just added a
+        // projector needs to see where it landed. An NDI source with no canvas is a name on the
+        // network carrying black, so it stays closed and says so.
+        var output = new VideoOutputDefinition
+        {
+            Name = "NDI program", Kind = VideoOutputKind.Ndi, CompositionId = null,
+        };
         var project = new HaCueProject { VideoOutputs = [output] };
 
         using var outputs = ProjectVideoOutputs.OpenAll(project, headless: true);

@@ -7,7 +7,12 @@ using S.Media.Session;
 namespace HaCue2.Engine;
 
 /// <summary>One output that opened, and what the session knows it as.</summary>
-internal sealed record OpenVideoOutput(Guid Id, Guid CompositionId, IVideoOutput Output)
+/// <param name="CompositionId">
+/// The canvas it shows, or null when it shows none yet — which a LOCAL SCREEN is allowed to be. Its
+/// window still opens, because an operator who has just added a projector needs to see WHERE it landed
+/// before they decide what to put on it.
+/// </param>
+internal sealed record OpenVideoOutput(Guid Id, Guid? CompositionId, IVideoOutput Output)
 {
     /// <summary>The id the session addresses this output by, inside its composition.</summary>
     public string OutputId => Id.ToString("N");
@@ -32,6 +37,14 @@ internal sealed record OpenVideoOutput(Guid Id, Guid CompositionId, IVideoOutput
 /// and a booth box running headless is exactly where an unattended send or capture belongs.
 /// </para>
 /// </remarks>
+/// <summary>An open output whose canvas changed: where it was attached, and where it belongs now.</summary>
+/// <param name="From">Null when it showed nothing yet; the host has no attachment to release.</param>
+/// <param name="To">Null when it now shows nothing; the host paints it black instead.</param>
+internal sealed record RetargetedOutput(Guid Id, Guid? From, Guid? To)
+{
+    public string OutputId => Id.ToString("N");
+}
+
 public sealed class ProjectVideoOutputs : IDisposable
 {
     private readonly List<OpenVideoOutput> _open = [];
@@ -44,6 +57,7 @@ public sealed class ProjectVideoOutputs : IDisposable
 
     private readonly List<string> _failures = [];
     private readonly HashSet<Guid> _unopened = [];
+    private readonly List<RetargetedOutput> _retargeted = [];
     private bool _headless;
 
     /// <summary>What could not be opened, and why — joined into the host's problem list.</summary>
@@ -61,6 +75,19 @@ public sealed class ProjectVideoOutputs : IDisposable
     public IReadOnlySet<Guid> Unopened => _unopened;
 
     internal IReadOnlyList<OpenVideoOutput> Open => _open;
+
+    /// <summary>Outputs whose canvas changed on the last sync, so the host can move their attachment.</summary>
+    internal IReadOnlyList<RetargetedOutput> Retargeted => _retargeted;
+
+    /// <summary>
+    /// Outputs that are OPEN but show no canvas — a local screen created before any composition.
+    /// </summary>
+    /// <remarks>
+    /// Its window exists and has to be painted, and nothing in the session will do it: a composition is
+    /// what submits frames, and this output is on none. The host paints them black itself.
+    /// </remarks>
+    internal IEnumerable<OpenVideoOutput> Unattached =>
+        _open.Where(open => open.CompositionId is null);
 
     /// <summary>The record and stream outputs, for <see cref="ProjectRecorders"/> to arm.</summary>
     internal IReadOnlyDictionary<Guid, RecordVideoOutput> Recorders => _recorders;
@@ -118,16 +145,59 @@ public sealed class ProjectVideoOutputs : IDisposable
         var senders = new List<NDIOutput>();
         var headless = _headless;
 
+        _retargeted.Clear();
+
         foreach (var output in project.VideoOutputs)
         {
-            // Already open, and deliberately left as it is.
-            if (_open.Any(open => open.Id == output.Id))
-                continue;
+            var canvas = output.CompositionId is { } wantedCanvas
+                         && project.Compositions.Any(item => item.Id == wantedCanvas)
+                ? wantedCanvas
+                : (Guid?)null;
 
-            if (output.CompositionId is not { } compositionId
-                || project.Compositions.All(item => item.Id != compositionId))
+            // Already open. Left alone unless the canvas it shows has CHANGED — assigning a
+            // composition to an output that is already on screen has to move it, and before this the
+            // open record kept its original canvas forever, so the assignment did nothing at all.
+            if (_open.FirstOrDefault(open => open.Id == output.Id) is { } existing)
             {
-                failures.Add($"“{output.Name}” shows no composition");
+                if (existing.CompositionId == canvas)
+                    continue;
+
+                _retargeted.Add(new RetargetedOutput(output.Id, existing.CompositionId, canvas));
+                _open[_open.IndexOf(existing)] = existing with { CompositionId = canvas };
+                continue;
+            }
+
+            if (canvas is not { } compositionId)
+            {
+                // A LOCAL SCREEN opens anyway, showing black. An output is a piece of this machine and
+                // exists before any canvas is authored against it, so leaving it invisible until one
+                // is assigned means the operator's only evidence that they created anything is a table
+                // row. The other kinds do not: an NDI sender with nothing to send is a name on the
+                // network that carries black, and a recorder with nothing to record is a file of it.
+                if (output.Kind != VideoOutputKind.LocalScreen)
+                {
+                    failures.Add($"“{output.Name}” shows no composition");
+                    unopened.Add(output.Id);
+                    continue;
+                }
+
+                if (headless)
+                {
+                    // The honest reason, and a different one: on a box with a display this window
+                    // would have opened. Reporting "shows no composition" here would describe a
+                    // decision this build no longer makes.
+                    failures.Add($"“{output.Name}” not opened — no display");
+                    unopened.Add(output.Id);
+                    continue;
+                }
+
+                if (OpenWindow(output, output.WindowWidth, output.WindowHeight) is { } dark)
+                {
+                    opened.Add(new OpenVideoOutput(output.Id, null, dark));
+                    continue;
+                }
+
+                failures.Add($"“{output.Name}” could not open a window");
                 unopened.Add(output.Id);
                 continue;
             }
@@ -174,33 +244,17 @@ public sealed class ProjectVideoOutputs : IDisposable
 
             var composition = project.Compositions.First(item => item.Id == compositionId);
 
-            try
+            // The window's own size when the document gives one, and the COMPOSITION's otherwise: the
+            // operator authored placements against that canvas, so opening at some other aspect would
+            // show them a letterboxed version of their own layout on first launch.
+            if (OpenWindow(output, composition.Width, composition.Height) is { } screen)
             {
-                // The window's own size when the document gives one, and the COMPOSITION's otherwise:
-                // the operator authored placements against that canvas, so opening at some other aspect
-                // would show them a letterboxed version of their own layout on first launch.
-                var window = new SDL3GLVideoOutput(
-                    title: $"HaCue2 · {output.Name}",
-                    initialWidth: output.WindowWidth > 0 ? output.WindowWidth : composition.Width,
-                    initialHeight: output.WindowHeight > 0 ? output.WindowHeight : composition.Height);
-
-                // The document says which screen and whether to fill it, so a show carried to a venue
-                // puts its projector feed on the projector rather than on whichever display SDL opened
-                // first. An unparseable or absent hint leaves the window where it is rather than
-                // guessing — moving a feed to the wrong screen is worse than not moving it.
-                if (int.TryParse(output.TargetHint, out var display) && display > 0)
-                    window.ApplyWindowPlacement(display - 1, output.Fullscreen, null, null);
-                else if (output.Fullscreen)
-                    window.ApplyWindowPlacement(0, fullscreen: true, null, null);
-
-                opened.Add(new OpenVideoOutput(output.Id, compositionId, window));
+                opened.Add(new OpenVideoOutput(output.Id, compositionId, screen));
+                continue;
             }
-            catch (Exception failure) when (failure is not OutOfMemoryException)
-            {
-                // Reported, not thrown: one screen that will not open must not take the show down.
-                failures.Add($"“{output.Name}”: {failure.Message}");
-                unopened.Add(output.Id);
-            }
+
+            failures.Add($"“{output.Name}” could not open a window");
+            unopened.Add(output.Id);
         }
 
         _open.AddRange(opened);
@@ -216,6 +270,60 @@ public sealed class ProjectVideoOutputs : IDisposable
         // rather than re-reporting every old one on every edit.
         _failures.AddRange(failures);
         return failures;
+    }
+
+    /// <summary>
+    /// Opens one local screen's window, placed where the document says. Null when it would not open.
+    /// </summary>
+    /// <remarks>
+    /// The window's size falls back to <paramref name="fallbackWidth"/>×<paramref name="fallbackHeight"/>
+    /// — the composition's, when it shows one, and a plain 1280×720 when it does not yet. Reported
+    /// rather than thrown: one screen that will not open must not take the show down.
+    /// </remarks>
+    private SDL3GLVideoOutput? OpenWindow(
+        VideoOutputDefinition output, int fallbackWidth, int fallbackHeight)
+    {
+        try
+        {
+            var window = new SDL3GLVideoOutput(
+                title: $"HaCue2 · {output.Name}",
+                initialWidth: output.WindowWidth > 0 ? output.WindowWidth : Math.Max(160, fallbackWidth),
+                initialHeight: output.WindowHeight > 0 ? output.WindowHeight : Math.Max(90, fallbackHeight));
+
+            // The document says which screen and whether to fill it, so a show carried to a venue puts
+            // its projector feed on the projector rather than on whichever display SDL opened first. An
+            // unparseable or absent hint leaves the window where it is rather than guessing — moving a
+            // feed to the wrong screen is worse than not moving it.
+            if (ScreenNumber(output.TargetHint) is { } display)
+                window.ApplyWindowPlacement(display - 1, output.Fullscreen, null, null);
+            else if (output.Fullscreen)
+                window.ApplyWindowPlacement(0, fullscreen: true, null, null);
+
+            return window;
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            _failures.Add($"“{output.Name}”: {failure.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Which screen a local output's hint names, one-based, or null for "wherever it opens".
+    /// </summary>
+    /// <remarks>
+    /// The hint is a NUMBER, and the leading number of a picker label is the same number: the add-output
+    /// dialog used to store the whole label ("2 · 1920×1080"), so every output authored through it
+    /// silently opened on whichever display SDL answered with. Reading the leading digits rescues those
+    /// documents without a migration pass, and rejects anything else rather than guessing — moving a
+    /// feed to the wrong screen is worse than not moving it.
+    /// </remarks>
+    public static int? ScreenNumber(string? hint)
+    {
+        var text = (hint ?? "").TrimStart();
+        var digits = new string([.. text.TakeWhile(char.IsAsciiDigit)]);
+
+        return int.TryParse(digits, out var display) && display > 0 ? display : null;
     }
 
     /// <summary>Closes one output's own resources. A window that will not close must not stop the rest.</summary>
@@ -239,13 +347,13 @@ public sealed class ProjectVideoOutputs : IDisposable
         {
             var definition = project.VideoOutputs.FirstOrDefault(item => item.Id == open.Id);
 
-            if (definition is null)
+            if (definition is null || open.CompositionId is not { } canvasId)
                 continue;
 
-            var composition = project.Compositions.First(item => item.Id == open.CompositionId);
+            var composition = project.Compositions.First(item => item.Id == canvasId);
 
             yield return (
-                open.CompositionId.ToString(),
+                canvasId.ToString(),
                 new ClipCompositionOutputLease(
                     open.OutputId,
                     definition.Name,
@@ -254,7 +362,11 @@ public sealed class ProjectVideoOutputs : IDisposable
                     // the document on every edit, and an output disposed by a reload would close the
                     // operator's projector window on a keystroke.
                     DisposeOutputOnRuntimeDispose: false,
-                    Mapping: OutputMapping.Spec(definition, composition.Width, composition.Height)));
+                    Mapping: OutputMapping.Spec(definition, composition.Width, composition.Height),
+                    // A show's outputs are on for the evening, not for the duration of a cue. Without
+                    // this the composition only starts pumping when something plays on it, so a
+                    // freshly added projector shows nothing — and never opens its window at all.
+                    PresentWhenIdle: true));
         }
     }
 

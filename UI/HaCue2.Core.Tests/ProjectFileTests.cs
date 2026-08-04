@@ -88,6 +88,89 @@ public sealed class ProjectFileTests
         Assert.Equal(DisabledCueFollow.SkipOnward, project.Settings.DisabledCueFollow);
     }
 
+    /// <summary>
+    /// A square warp mesh written by an older build opens as its two-axis equivalent.
+    /// </summary>
+    /// <remarks>
+    /// The mesh was a single <c>warpGrid</c> — always N×N — because the picker only offered off, 3×3
+    /// and 5×5. Panels are not square, so the two axes are independent now; a document that predates
+    /// that must not open with its warp silently switched off, which is a projector that has quietly
+    /// lost its alignment.
+    /// </remarks>
+    [Fact]
+    public void ASquareWarpGridFromAnOlderBuildBecomesATwoAxisMesh()
+    {
+        const string json = """
+            {
+              "schemaVersion": 1,
+              "title": "old show",
+              "videoOutputs": [
+                {
+                  "name": "Projector",
+                  "mapping": [ { "name": "Left wall", "warpGrid": 3 } ]
+                }
+              ]
+            }
+            """;
+
+        var section = HaCueProjectFile.Deserialize(json).VideoOutputs[0].Mapping[0];
+
+        Assert.Equal(3, section.MeshColumns);
+        Assert.Equal(3, section.MeshRows);
+
+        // And it does not travel back out: the legacy key is read-only, so a document saved by this
+        // build carries the two axes and nothing else.
+        Assert.DoesNotContain("warpGrid", HaCueProjectFile.Serialize(HaCueProjectFile.Deserialize(json)));
+    }
+
+    /// <summary>The two-axis form wins when both are present, whatever order they appear in.</summary>
+    [Fact]
+    public void AnExplicitMeshIsNotOverwrittenByTheLegacyKey()
+    {
+        const string json = """
+            {
+              "schemaVersion": 1,
+              "videoOutputs": [
+                {
+                  "name": "Projector",
+                  "mapping": [ { "warpGrid": 5, "meshColumns": 5, "meshRows": 2 } ]
+                }
+              ]
+            }
+            """;
+
+        var section = HaCueProjectFile.Deserialize(json).VideoOutputs[0].Mapping[0];
+
+        Assert.Equal(5, section.MeshColumns);
+        Assert.Equal(2, section.MeshRows);
+    }
+
+    /// <summary>
+    /// A mapping section with no <c>enabled</c> key is DRAWN.
+    /// </summary>
+    /// <remarks>
+    /// The flag is new, so every section in every existing show lacks it — and defaulting the other way
+    /// would open a warped projector with every panel switched off.
+    /// </remarks>
+    [Fact]
+    public void AMappingSectionWithoutTheEnabledKeyIsDrawn()
+    {
+        const string json = """
+            {
+              "schemaVersion": 1,
+              "videoOutputs": [ { "name": "Projector", "mapping": [ { "name": "Left" } ] } ]
+            }
+            """;
+
+        var output = HaCueProjectFile.Deserialize(json).VideoOutputs[0];
+
+        Assert.True(output.Mapping[0].Enabled);
+        // And with no raster stated, mapping still resolves against the composition — zero is
+        // "follow the canvas", not "an output of no size".
+        Assert.Equal(0, output.MappingWidth);
+        Assert.Equal(0, output.MappingHeight);
+    }
+
     [Fact]
     public void ANewerSchemaIsRefusedWithAMessageThatSaysWhy()
     {

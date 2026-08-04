@@ -49,8 +49,9 @@ public sealed class EngineRuntime : IAsyncDisposable
         _runtime = runtime;
         _project = project;
 
-        // Fixed for the life of the show: these are the windows that did not open when it started, and
-        // an output added by a later edit has no window either — which is what the row then says.
+        // The first reading; the tick keeps it current. Copied ONCE was the bug: outputs open and close
+        // on every reload, so an output added mid-show reported "live" before any window existed for
+        // it, and one that failed to open never turned red.
         runtime.AbsentVideoOutputs = [.. host.AbsentVideoOutputs];
 
         // Every inbound message, matched or not. Raised on the I/O thread, so nothing here does more
@@ -169,6 +170,11 @@ public sealed class EngineRuntime : IAsyncDisposable
     {
         var bay = _host.Diagnostics();
         var compositions = _host.CompositionStats();
+
+        // Re-read every tick, not once: a reload opens outputs the operator has just added and closes
+        // ones they removed, and the Video screen's STATE column is the only place that says whether a
+        // window actually appeared.
+        _runtime.AbsentVideoOutputs = [.. _host.AbsentVideoOutputs];
 
         _runtime.BayRows = BayPresentation.Rows(_project, bay);
         _runtime.Meters = BayPresentation.Meters(_project, bay);

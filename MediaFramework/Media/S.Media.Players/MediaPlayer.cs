@@ -626,6 +626,7 @@ public sealed class MediaPlayer : IDisposable
                     (source, targetRate) => registry.CreateResampler(source, targetRate)
                         ?? throw new InvalidOperationException(
                             $"no audio resampler is registered for {source.Format.SampleRate} Hz → {targetRate} Hz"),
+                    VideoRouterOptionsFor(registry),
                     out player, out error, cancellationToken))
             {
                 player.RegisterOwnedCompanion(result); // the player owns the atomic asset; disposes it on dispose
@@ -794,6 +795,36 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
+    /// <summary>
+    /// The router's CPU-conversion hooks, taken from a registry.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Both halves matter and only together. The FACTORY builds the scaler a branch actually converts
+    /// with; the PROBE answers whether a candidate branch format is reachable at all, which the router
+    /// asks while it is still choosing and before it commits. A router with neither — which is what
+    /// every player got, because nothing ever passed these — answers "no conversion is possible" for
+    /// every pair, and rejects any fan-out branch whose format differs from the negotiated one.
+    /// </para>
+    /// <para>
+    /// That is not an edge case. A player's PRIMARY video output is the discard sink it negotiates
+    /// against, so a composition layer is always a BRANCH — and the negotiated format is whatever the
+    /// decoder produces natively, which for planar YUV sources is never the compositor's BGRA. It went
+    /// unnoticed because most clips negotiate to a format the compositor already takes; a JPEG album
+    /// cover in <c>yuvj420p</c> does not, and killed the cue it was placed on.
+    /// </para>
+    /// </remarks>
+    internal static VideoRouterOptions VideoRouterOptionsFor(IMediaRegistry registry)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+
+        return new VideoRouterOptions(
+            VideoCpuFrameConverterFactory: () => registry.CreateCpuConverter()
+                ?? throw new InvalidOperationException(
+                    "no CPU pixel converter is registered — add FFmpegModule to the media registry."),
+            VideoCpuFrameCanConvertProbe: registry.CanConvertCpu);
+    }
+
     /// <summary>Opens a local media file path (not a URI string - use <see cref="OpenUri"/> for <c>http:</c> / <c>rtsp:</c>).</summary>
     internal static bool TryOpenLive(
         IAudioSource? audioSource,
@@ -812,6 +843,7 @@ public sealed class MediaPlayer : IDisposable
             disposeNegotiationLead,
             disposeSourcesOnDispose: true,
             resamplerFactory: null,
+            routerOptions: null,
             out player,
             out errorMessage,
             cancellationToken);
@@ -830,6 +862,7 @@ public sealed class MediaPlayer : IDisposable
         bool disposeNegotiationLead,
         bool disposeSourcesOnDispose,
         Func<IAudioSource, int, IAudioSource>? resamplerFactory,
+        VideoRouterOptions? routerOptions,
         [NotNullWhen(true)] out MediaPlayer? player,
         out string? errorMessage,
         CancellationToken cancellationToken = default)
@@ -924,7 +957,12 @@ public sealed class MediaPlayer : IDisposable
                 throw new TimeoutException(
                     $"live video source delivered no frame within {LiveFirstFrameTimeout.TotalSeconds:0}s.");
 
-            router = new VideoRouter(null);
+            // WITH the registry's converter behind it. Without one the router's can-convert probe
+            // answers "no" for every pair, so every fan-out branch that needs a pixel conversion — which
+            // is every composition layer whose source is not already BGRA — is rejected and the route is
+            // rolled back, taking the whole cue with it. The options existed and their own doc comment
+            // said to wire them from the registry; nothing ever did.
+            router = new VideoRouter(null, routerOptions);
             string primaryOutputId;
             if (videoNegotiationLead is null)
             {

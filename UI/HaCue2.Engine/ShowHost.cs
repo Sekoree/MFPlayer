@@ -16,9 +16,18 @@ using S.Media.Session;
 namespace HaCue2.Engine;
 
 /// <summary>One cue that is holding a voice, and how far into it the show is.</summary>
-/// <param name="Elapsed">Wall time since it fired — the clock the Active panel counts up.</param>
+/// <param name="Elapsed">
+/// The transport's own playhead — where the clip actually IS. It used to be wall time since the fire,
+/// which is a different number the moment anything is paused, seeked, trimmed or loops.
+/// </param>
+/// <param name="Length">
+/// What the transport says the clip runs for, or null when the cue holds no transport (a visualizer) or
+/// none has been reported yet. Preferred over the file probe's answer because it already accounts for
+/// the trim, and because it exists on a machine that has not probed the file.
+/// </param>
 /// <param name="IsFading">Whether something has asked it to come down.</param>
-public sealed record ActiveCueState(Guid CueId, Guid ListId, TimeSpan Elapsed, bool IsFading);
+public sealed record ActiveCueState(
+    Guid CueId, Guid ListId, TimeSpan Elapsed, TimeSpan? Length, bool IsFading);
 
 /// <summary>What the show is doing right now, as one snapshot.</summary>
 /// <param name="Sounding">Cue ids currently playing.</param>
@@ -93,6 +102,10 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     private readonly ProjectVisualizers _visualizers;
 
     private readonly List<string> _runtimeProblems = [];
+
+    /// <summary>Which transport group each cue lands on, from the last compile. Guarded by the gate.</summary>
+    private readonly Dictionary<Guid, string> _cueGroups = [];
+
     private readonly Lock _gate = new();
 
     /// <summary>
@@ -243,9 +256,9 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// Video outputs that are not showing anything on this machine.
     /// </summary>
     /// <remarks>
-    /// Fixed at start-up, because that is when the windows are opened. An output added by an edit is
-    /// therefore not in here until the show is restarted — which is the truth: nothing opened a window
-    /// for it either.
+    /// Live, because outputs are opened and closed by every reload rather than only at start-up. It
+    /// used to be described as fixed, and the shell copied it once — so an output added mid-show read
+    /// "live" whether or not a window had opened for it, and one that failed to open never turned red.
     /// </remarks>
     public IReadOnlySet<Guid> AbsentVideoOutputs => _screens.Unopened;
 
@@ -496,8 +509,25 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             _durations = context.Durations ?? _durations;
             ForgetDetachedScreens(previous, next);
 
+            var document = ShowCompiler.Compile(next, context);
+
+            // The compiled document is the ONE place that knows which transport a cue lands on — the
+            // rule is not simple (a timeline's children get one each, everything else shares its
+            // outermost group's), and re-deriving it here would be a second implementation of it. The
+            // Active panel's playhead and the seek verb both address a group.
+            lock (_gate)
+            {
+                _cueGroups.Clear();
+
+                foreach (var cue in document.Cues)
+                {
+                    if (Guid.TryParse(cue.Id, out var id) && cue.GroupId is { Length: > 0 } group)
+                        _cueGroups[id] = group;
+                }
+            }
+
             await _session.LoadDocumentAsync(
-                ShowCompiler.Compile(next, context),
+                document,
                 preserveMatchingCompositions: true,
                 preserveActiveGroups: true).ConfigureAwait(false);
 
@@ -547,6 +577,18 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </remarks>
     private async Task AttachScreensAsync()
     {
+        // An output whose canvas CHANGED comes off the old one first. Without this, assigning a
+        // composition to an output that was already on screen did nothing at all: the host still
+        // believed it was attached where it used to be, and skipped it forever.
+        foreach (var moved in _screens.Retargeted)
+        {
+            if (moved.From is { } previous)
+                await _session.RemoveCompositionOutputAsync(previous.ToString(), moved.OutputId)
+                    .ConfigureAwait(false);
+
+            _attached.Remove(moved.OutputId);
+        }
+
         foreach (var (compositionId, lease) in _screens.Leases(_project))
         {
             if (_attached.Contains(lease.OutputId))
@@ -561,7 +603,51 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             Report($"“{lease.DisplayName}” could not be attached to its composition");
         }
 
+        PaintUnattachedScreens();
     }
+
+    /// <summary>
+    /// Paints black on every window that is open but shows no canvas.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A local screen opens as soon as it exists, before any composition is assigned to it — an
+    /// operator who has just added a projector needs to see WHERE it landed. Nothing in the session
+    /// will paint it, because a composition is what submits frames and this output is on none, so the
+    /// host does it: one black frame, which the window then holds.
+    /// </para>
+    /// <para>
+    /// Also on the way BACK. Taking a composition off an output leaves whatever it last composited
+    /// frozen on the glass, which in front of an audience is the last frame of the previous cue.
+    /// </para>
+    /// </remarks>
+    private void PaintUnattachedScreens()
+    {
+        foreach (var open in _screens.Unattached)
+        {
+            if (!_darkened.Add(open.OutputId))
+                continue;
+
+            try
+            {
+                var frame = IdleFrames.Black(1280, 720);
+                open.Output.Configure(frame.Format);
+                open.Output.Submit(frame);
+            }
+            catch (Exception failure) when (failure is not OutOfMemoryException)
+            {
+                Report($"a video output showing no composition could not be blacked out — {failure.Message}");
+            }
+        }
+
+        // Anything that has since gained a canvas has to be forgotten, or taking that canvas away
+        // again would find it "already black" and leave the last composited frame on the glass.
+        var dark = _screens.Unattached.Select(open => open.OutputId).ToHashSet(StringComparer.Ordinal);
+        _darkened.RemoveWhere(id => !dark.Contains(id));
+    }
+
+    /// <summary>Windows that have already been painted black, so it is done once rather than per reload.</summary>
+    private readonly HashSet<string> _darkened = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Takes down visualizers whose cue the operator has deleted.
@@ -600,8 +686,12 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     {
         foreach (var open in _screens.Open)
         {
-            var before = previous.Compositions.FirstOrDefault(item => item.Id == open.CompositionId);
-            var after = current.Compositions.FirstOrDefault(item => item.Id == open.CompositionId);
+            // An output showing nothing has no attachment to lose; PaintUnattachedScreens owns it.
+            if (open.CompositionId is not { } canvas)
+                continue;
+
+            var before = previous.Compositions.FirstOrDefault(item => item.Id == canvas);
+            var after = current.Compositions.FirstOrDefault(item => item.Id == canvas);
 
             // Size and rate are what the session keys "unchanged" on; a renamed composition is
             // preserved and keeps its outputs.

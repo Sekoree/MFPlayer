@@ -100,10 +100,17 @@ public sealed record AppSettings
     /// <summary>What a NEW project's first audio line and mix rate are seeded with.</summary>
     public int NewProjectMixRate { get; set; } = 48_000;
 
-    /// <summary>A new cue's default fade in/out, in ms.</summary>
-    public int NewProjectFadeInMs { get; set; } = 100;
+    /// <summary>
+    /// A new cue's default fade in/out, in ms. Zero: a cue fades because somebody asked it to.
+    /// </summary>
+    /// <remarks>
+    /// The machine-scope seed for <c>ProjectSettings.DefaultFadeInMs</c>. Set them here to give every
+    /// new project a house fade; leave them at zero and cues start hard, which is what a cue list of
+    /// stings and stabs wants and what a butt-cut requires.
+    /// </remarks>
+    public int NewProjectFadeInMs { get; set; }
 
-    public int NewProjectFadeOutMs { get; set; } = 2_000;
+    public int NewProjectFadeOutMs { get; set; }
 
     // ── new project defaults (register item 20) ───────────────────────────────────────────────
     public bool AutoRenumberDefault { get; set; } = true;

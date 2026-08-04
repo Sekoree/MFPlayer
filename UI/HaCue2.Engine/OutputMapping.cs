@@ -38,17 +38,36 @@ public static class OutputMapping
         if (!output.IsMapped || width <= 0 || height <= 0)
             return null;
 
-        var sections = output.Mapping.Select(section => Section(section, width, height)).ToList();
+        var (rasterWidth, rasterHeight) = Raster(output, width, height);
+        var sections = output.Mapping
+            .Select(section => Section(section, rasterWidth, rasterHeight))
+            .ToList();
 
-        return new ClipOutputMappingSpec(sections, width, height);
+        return new ClipOutputMappingSpec(sections, rasterWidth, rasterHeight);
+    }
+
+    /// <summary>
+    /// The pixel raster this output's destination rectangles are measured in.
+    /// </summary>
+    /// <remarks>
+    /// The output's own when the document states one, and the composition's otherwise. The distinction
+    /// is what a video wall is made of: a 1920×2160 stacked canvas split across two 1920×1080 projectors
+    /// has to resolve each half against 1080, and against the canvas both halves would be described as
+    /// 2160 tall and land at half height.
+    /// </remarks>
+    public static (int Width, int Height) Raster(VideoOutputDefinition output, int width, int height)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        return (
+            output.MappingWidth > 0 ? output.MappingWidth : width,
+            output.MappingHeight > 0 ? output.MappingHeight : height);
     }
 
     private static ClipOutputMappingSection Section(MappingSection section, int width, int height) =>
         new(
             Id: section.Id.ToString("N"),
-            // Every authored section is enabled: the document has no disable flag, and inventing one
-            // that is always true would suggest the UI could turn a section off when it cannot.
-            Enabled: true,
+            Enabled: section.Enabled,
             SrcX: section.SourceX,
             SrcY: section.SourceY,
             SrcWidth: section.SourceWidth,
@@ -62,20 +81,9 @@ public static class OutputMapping
             RotationDegrees: section.RotationDegrees,
             Opacity: Math.Clamp(section.Opacity, 0, 1),
             Brightness: Math.Clamp(section.Brightness, 0, 1),
-            MeshColumns: Mesh(section) ? section.WarpGrid : 0,
-            MeshRows: Mesh(section) ? section.WarpGrid : 0,
-            MeshPoints: Mesh(section) ? Points(section) : null);
-
-    /// <summary>
-    /// Whether this section actually carries a warp.
-    /// </summary>
-    /// <remarks>
-    /// A grid of 0 or 1 is not a mesh, and a grid whose offsets have never been touched is an identity
-    /// the resolver would discard anyway. Both cases are reported as no-mesh so the affine path is
-    /// taken, which every backend supports — the warp path is GL-only.
-    /// </remarks>
-    private static bool Mesh(MappingSection section) =>
-        section.WarpGrid >= 2 && section.WarpOffsets.Count == section.WarpGrid * section.WarpGrid * 2;
+            MeshColumns: section.HasMesh ? section.MeshColumns : 0,
+            MeshRows: section.HasMesh ? section.MeshRows : 0,
+            MeshPoints: section.HasMesh ? Points(section) : null);
 
     /// <summary>
     /// The mesh control points, in normalized destination-rect space.
@@ -87,18 +95,19 @@ public static class OutputMapping
     /// </remarks>
     private static List<ClipMeshPoint> Points(MappingSection section)
     {
-        var grid = section.WarpGrid;
-        var points = new List<ClipMeshPoint>(grid * grid);
+        var columns = section.MeshColumns;
+        var rows = section.MeshRows;
+        var points = new List<ClipMeshPoint>(columns * rows);
 
-        for (var row = 0; row < grid; row++)
+        for (var row = 0; row < rows; row++)
         {
-            for (var column = 0; column < grid; column++)
+            for (var column = 0; column < columns; column++)
             {
-                var at = ((row * grid) + column) * 2;
+                var at = ((row * columns) + column) * 2;
 
                 points.Add(new ClipMeshPoint(
-                    ((double)column / (grid - 1)) + section.WarpOffsets[at],
-                    ((double)row / (grid - 1)) + section.WarpOffsets[at + 1]));
+                    ((double)column / (columns - 1)) + section.WarpOffsets[at],
+                    ((double)row / (rows - 1)) + section.WarpOffsets[at + 1]));
             }
         }
 

@@ -21,13 +21,23 @@ public sealed record ClipCompositionDefinition(
     int FrameRateNum,
     int FrameRateDen);
 
+/// <param name="PresentWhenIdle">
+/// Start the composition's pump as soon as this output attaches, rather than waiting for a layer.
+/// <para>Opt-in because it decides what an output DOES between cues, and the two answers are both
+/// right for somebody. A media player attaches an output to show a clip, and a pump running over an
+/// empty canvas would light a screen the user never asked for. A cue player's projector is switched
+/// on for the evening: it has to show the idle image — or black — from the moment it is patched, and
+/// with no pump it shows nothing at all, which on most sinks means the window is never even created
+/// (an <c>IVideoOutput</c> is configured by its first submit).</para>
+/// </param>
 public sealed record ClipCompositionOutputLease(
     string OutputId,
     string DisplayName,
     IVideoOutput Output,
     Action? Release = null,
     bool DisposeOutputOnRuntimeDispose = false,
-    ClipOutputMappingSpec? Mapping = null);
+    ClipOutputMappingSpec? Mapping = null,
+    bool PresentWhenIdle = false);
 
 /// <summary>A host-provided audio output for a clip route's device - the audio analogue of
 /// <see cref="ClipCompositionOutputLease"/>. Lets the host route a clip's audio to a sink the session's
@@ -461,6 +471,14 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         acquired.SubscribePumpPressure(this);
         ReevaluateIntegratedWarp();
+
+        // A cue player's output is on for the evening, so it has to be receiving frames before the
+        // first cue rather than from it: the pump otherwise starts with the first layer, and until
+        // then nothing is submitted at all - which on a windowed sink means the window is never
+        // created, because an IVideoOutput is configured by its first submit.
+        if (output.PresentWhenIdle)
+            EnsurePumpStarted();
+
         return true;
     }
 
