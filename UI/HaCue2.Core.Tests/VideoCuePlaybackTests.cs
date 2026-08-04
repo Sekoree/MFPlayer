@@ -115,7 +115,7 @@ public sealed class VideoCuePlaybackTests
     }
 
     /// <summary>An audio file carrying album art, which is a video stream with `attached_pic` set.</summary>
-    private static string? MakeAudioWithCover(string directory)
+    private static string? MakeAudioWithCover(string directory, int seconds = 1)
     {
         var cover = Path.Combine(directory, "cover.jpg");
         var path = Path.Combine(directory, "song.flac");
@@ -136,7 +136,7 @@ public sealed class VideoCuePlaybackTests
             {
                 FileName = "ffmpeg",
                 Arguments =
-                    "-v error -f lavfi -i sine=frequency=440:duration=1 "
+                    $"-v error -f lavfi -i sine=frequency=440:duration={seconds} "
                     + $"-i \"{cover}\" -map 0:a -map 1:v -c:a flac -c:v copy "
                     + $"-disposition:v attached_pic \"{path}\" -y",
                 UseShellExecute = false,
@@ -202,6 +202,79 @@ public sealed class VideoCuePlaybackTests
             }
 
             Assert.Fail("a cue whose media carries album art never became active");
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A cover-art cue keeps playing PAST the single frame the still is made of.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The other cover-art test proves the cue starts. This one proves it does not stop, which is a
+    /// different failure with the same symptom: an <c>attached_pic</c> stream is one frame, and the
+    /// demuxer reports its video track exhausted the moment that frame is out. If the clip's life were
+    /// taken from the video track, every album-art cue would end almost immediately and the audio would
+    /// go with it — silently, a second after GO.
+    /// </para>
+    /// <para>
+    /// The stream is named EXPLICITLY here, which is what "place on composition" writes for a
+    /// cover-art-only file: automatic election skips attached pictures, so the default path never opens
+    /// the still at all and cannot exercise this.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task ACoverArtCueKeepsPlayingAfterTheStillHasBeenDelivered()
+    {
+        var directory = Directory.CreateTempSubdirectory("hacue2-cover-art-life");
+
+        try
+        {
+            if (MakeAudioWithCover(directory.FullName, seconds: 4) is not { } song)
+                return;
+
+            using var registry = MediaRegistry.Build(builder => builder.Use(new FFmpegModule()));
+            await using var session = new ShowSession(registry);
+
+            var screen = new CountingVideoOutput();
+            var endedEarly = 0;
+            session.ClipNaturallyEnded += _ => Interlocked.Increment(ref endedEarly);
+
+            session.LoadDocument(new ShowDocument(
+                Version: 1,
+                Cues: [new CueDefinition("q1", 1, "Song")],
+                Clips:
+                [
+                    new ShowClipBinding("q1", song, CompositionId: "screen", LayerIndex: 0)
+                    {
+                        VideoStreamIndex = 1,
+                    },
+                ],
+                Compositions: [new ShowComposition("screen", "Screen", 640, 480, 25, 1)],
+                Routes: []));
+
+            Assert.True(await session.AttachCompositionOutputAsync("screen", screen, "projector"));
+            await session.FireCueAsync("q1");
+
+            // Well past the one frame the still is, and well short of the file's own end.
+            await Task.Delay(1_500);
+
+            var state = (await session.SnapshotAsync()).FirstOrDefault();
+
+            Assert.NotNull(state);
+            Assert.True(state!.IsActive, "the cue stopped holding a voice once the still was delivered");
+            Assert.True(state.IsRunning, "the clock stopped once the still was delivered");
+            Assert.True(
+                state.ClipPosition > TimeSpan.FromMilliseconds(700),
+                $"the playhead only reached {state.ClipPosition.TotalMilliseconds:0} ms");
+            Assert.Equal(0, Volatile.Read(ref endedEarly));
+
+            // And the still is HELD rather than shown once: a card that vanished after one frame is
+            // the same defect seen from the canvas.
+            Assert.True(screen.Submitted > 1, $"the canvas received {screen.Submitted} frame(s)");
         }
         finally
         {

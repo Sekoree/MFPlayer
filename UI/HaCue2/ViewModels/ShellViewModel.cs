@@ -10,6 +10,7 @@ using HaCue2.Core.Validation;
 using HaCue2.Engine;
 using HaCue2.Machine;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using HaCue2.Sample;
 using HaCue2.Session;
 
@@ -904,20 +905,50 @@ public partial class ShellViewModel : ObservableObject
             Refresh();
     }
 
+    /// <summary>
+    /// Re-reads everything that depends on the document, for every edit.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// GUARDED, and that is the important part. This is the FIRST subscriber to
+    /// <see cref="ProjectJournal.Changed"/> and <see cref="ScheduleReload"/> is a later one — and a
+    /// multicast delegate stops at the first handler that throws. So anything escaping here did not
+    /// merely lose a refresh: it stopped the ENGINE ever being told about that edit, or any edit after
+    /// it, for the rest of the session. The document and what the rig was playing then diverged
+    /// silently, which is how a cue that had just been edited stopped behaving like the cue on screen.
+    /// </para>
+    /// <para>
+    /// Worse, the journal is usually driven from a binding setter, where Avalonia catches the throw and
+    /// files it as a validation error — so the whole failure was invisible. Reported here instead.
+    /// </para>
+    /// </remarks>
     private void OnJournalChanged()
     {
-        // Re-running the status pass on every keystroke would be wasteful on a big show; it is cheap
-        // here and the honest behaviour, and the real app debounces it the same way it debounces save.
-        Status = ProjectStatus.Run(Project, ProjectPath, Environment);
+        try
+        {
+            // Re-running the status pass on every keystroke would be wasteful on a big show; it is
+            // cheap here and the honest behaviour, and a bulk edit asks the journal for one quiet
+            // composite rather than making this run per cue.
+            Status = ProjectStatus.Run(Project, ProjectPath, Environment);
 
-        // An edit can ADD media, and until this the runtime only learned what a file was at load and
-        // after a save — so a cue added at 19:50 read "—" for its length until the show was saved. The
-        // adopt is a dictionary walk over what is already known (which is where a source's own stated
-        // duration arrives), and the probe skips every path it has already looked at.
-        AdoptProbeResults();
-        Machine.Media.Refresh(Project, ProjectPath);
+            // An edit can ADD media, and until this the runtime only learned what a file was at load
+            // and after a save — so a cue added at 19:50 read "—" for its length until the show was
+            // saved. The adopt is a dictionary walk over what is already known (which is where a
+            // source's own stated duration arrives), and the probe skips every path it has already
+            // looked at.
+            AdoptProbeResults();
+            Machine.Media.Refresh(Project, ProjectPath);
 
-        Refresh();
+            Refresh();
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // Swallowed only in the sense that the OTHER subscribers still run: the operator is told,
+            // and the engine still gets its reload. A stale panel is recoverable; a rig that stopped
+            // hearing about edits is not.
+            FileMessage = $"the project view could not be refreshed — {failure.Message}";
+            MediaDiagnostics.LogError(failure, "HaCue2: refreshing the shell after an edit failed");
+        }
     }
 
     private void Refresh()

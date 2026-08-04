@@ -288,11 +288,32 @@
                    of one. The engine fans ONE decoded source to all of them, so this costs nothing
                    beyond the compositing; playing the file twice would double the decode and let the
                    copies drift. The picker only appears when there is more than one to choose. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Placement"
-                                      IsVisible="{Binding HasSeveralPlacements}">
-                <ComboBox ItemsSource="{Binding PlacementNames}"
-                          SelectedIndex="{Binding SelectedPlacement}" />
-              </HeaderedContentControl>
+              <!-- One row per placement, opened to edit. A picker over a single editor meant a cue on
+                   three canvases was three screens of settings reachable only by remembering which
+                   entry was which; a closed row still says where its picture goes and what is on it.
+                   Only shown when there IS more than one — a single placement needs no chooser. -->
+              <ItemsControl ItemsSource="{Binding PlacementHeaders}" Margin="10,2,10,4"
+                            IsVisible="{Binding HasSeveralPlacements}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:PlacementHeader">
+                    <RadioButton Theme="{StaticResource PlacementRow}"
+                                 GroupName="placement"
+                                 IsChecked="{Binding IsOpen, Mode=OneWay}"
+                                 IsCheckedChanged="OnPlacementRowChosen"
+                                 Tag="{Binding Index}">
+                      <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="7">
+                        <Border Grid.Row="0" Grid.Column="0" Classes="badge">
+                          <TextBlock Text="{Binding Layer}" />
+                        </Border>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Classes="cuelabel"
+                                   VerticalAlignment="Center" Text="{Binding Composition}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="mono dim3 micro"
+                                   TextTrimming="CharacterEllipsis" Text="{Binding Summary}" />
+                      </Grid>
+                    </RadioButton>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Composition">
                 <ComboBox ItemsSource="{Binding PlacementCompositions}"
                           SelectedIndex="{Binding PlacementCompositionIndex}" />

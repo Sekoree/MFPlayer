@@ -210,6 +210,39 @@
     </Style>
   </ControlTheme>
 
+  <!-- ══ the inspector's placement rows ═══════════════════════════════════════════════════
+       A radio button rather than a list: exactly one placement is open at a time, which is what the
+       single editor below it can show, and the exclusivity is the control's own rather than something
+       the view-model has to police. Styled as a row, not as a dial. -->
+  <ControlTheme x:Key="PlacementRow" TargetType="RadioButton">
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="Cursor" Value="Hand" />
+    <Setter Property="Margin" Value="0,0,0,3" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="root"
+                Background="{DynamicResource BoothPanel2}"
+                BorderBrush="{DynamicResource BoothRule2}"
+                BorderThickness="1"
+                CornerRadius="{StaticResource BoothCorner}"
+                Padding="7,5">
+          <ContentPresenter Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+    <Style Selector="^:pointerover /template/ Border#root">
+      <Setter Property="BorderBrush" Value="{DynamicResource BoothInk3}" />
+    </Style>
+    <!-- The OPEN row, which is the one the fields below belong to. Amber, like every other
+         "this is the thing you are editing" mark in the app. -->
+    <Style Selector="^:checked /template/ Border#root">
+      <Setter Property="BorderBrush" Value="{DynamicResource GelAmber}" />
+      <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
+    </Style>
+  </ControlTheme>
+
   <!-- Horizontal strips reuse one panel template. -->
   <ItemsPanelTemplate x:Key="HorizontalItemsPanel">
     <StackPanel Orientation="Horizontal" />

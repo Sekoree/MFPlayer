@@ -129,6 +129,18 @@ public partial class InspectorPane : UserControl
             inspector.PlaceOnComposition();
     }
 
+    /// <summary>Opening a placement's row is what selects it for the editor below.</summary>
+    /// <remarks>
+    /// Only the row being CHECKED acts. The group unchecks the previous one in the same gesture, and
+    /// acting on that too would select whichever row happened to be unchecked last.
+    /// </remarks>
+    private void OnPlacementRowChosen(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector
+            && sender is RadioButton { IsChecked: true, Tag: int index })
+            inspector.ExpandPlacement(index);
+    }
+
     private void OnRemovePlacement(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector)

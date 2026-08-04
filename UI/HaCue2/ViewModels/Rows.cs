@@ -619,3 +619,23 @@ public enum RowWash
     Standby,
     Group,
 }
+
+/// <summary>
+/// One placement's collapsed row in the inspector.
+/// </summary>
+/// <remarks>
+/// A placement carries the better part of a screen of settings, so a cue on three canvases used to be
+/// three screens deep behind a picker. This is what a closed row says about the one it stands for:
+/// where the picture goes, and which of the optional stages are in force.
+/// </remarks>
+/// <param name="Index">Its position in the cue's placement list — what selecting it sets.</param>
+/// <param name="Composition">The canvas name, or a plain statement that it has none.</param>
+/// <param name="Layer">"L0", "L1" — short enough to sit beside the name.</param>
+/// <param name="Summary">Geometry, and whichever of crop, key, grade and mapping are on.</param>
+/// <param name="IsOpen">Whether this is the placement the editor below is currently showing.</param>
+public readonly record struct PlacementHeader(
+    int Index,
+    string Composition,
+    string Layer,
+    string Summary,
+    bool IsOpen);

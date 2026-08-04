@@ -164,6 +164,7 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(PlacementList));
         OnPropertyChanged(nameof(PlacementNames));
         OnPropertyChanged(nameof(HasSeveralPlacements));
+        OnPropertyChanged(nameof(PlacementHeaders));
         OnPropertyChanged(nameof(PlacementCompositions));
         OnPropertyChanged(nameof(PlacementCompositionIndex));
         OnPropertyChanged(nameof(LayerValue));
@@ -1182,6 +1183,7 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(PlacementList));
         OnPropertyChanged(nameof(PlacementNames));
         OnPropertyChanged(nameof(HasSeveralPlacements));
+        OnPropertyChanged(nameof(PlacementHeaders));
         OnPropertyChanged(nameof(PlacementCompositions));
         OnPropertyChanged(nameof(PlacementCompositionIndex));
         OnPropertyChanged(nameof(LayerValue));
@@ -2180,6 +2182,59 @@ public partial class InspectorViewModel : ObservableObject
 
     /// <summary>More than one canvas: the picker only earns its space then.</summary>
     public bool HasSeveralPlacements => PlacementList.Count > 1;
+
+    /// <summary>
+    /// One header per placement, so several can be carried without scrolling past all of them.
+    /// </summary>
+    /// <remarks>
+    /// A placement carries geometry, a fit, an opacity, a crop, a chroma key and a colour adjust — the
+    /// better part of a screen each. With a picker above one editor, a cue on three canvases meant
+    /// three screens of settings reachable only by remembering which entry was which. Each is a row
+    /// that opens instead, and opening one is what selects it: the editor below follows the open row,
+    /// so there is still exactly one set of fields and no second copy of this logic to drift.
+    /// </remarks>
+    public IReadOnlyList<PlacementHeader> PlacementHeaders =>
+    [
+        .. PlacementList.Select((placement, index) => new PlacementHeader(
+            index,
+            Project.Compositions.FirstOrDefault(item => item.Id == placement.CompositionId)?.Name
+            ?? "no composition",
+            $"L{placement.LayerIndex}",
+            Summarize(placement),
+            index == SelectedPlacement)),
+    ];
+
+    /// <summary>Where the layer sits, as the one line a collapsed row can afford.</summary>
+    private static string Summarize(LayerPlacement placement)
+    {
+        var full = placement is { X: 0, Y: 0, Width: 1, Height: 1 };
+        var geometry = full
+            ? "full frame"
+            : $"{placement.X:0.##}, {placement.Y:0.##} · {placement.Width:0.##}×{placement.Height:0.##}";
+
+        var extras = new List<string>();
+        if (placement.Opacity < 1)
+            extras.Add($"{placement.Opacity:0.##} opacity");
+        if (placement.RotationDegrees != 0)
+            extras.Add($"{placement.RotationDegrees:0.#}°");
+        if (placement is { CropLeft: > 0 } or { CropTop: > 0 } or { CropRight: > 0 } or { CropBottom: > 0 })
+            extras.Add("cropped");
+        if (placement is { ChromaKeyEnabled: true, ChromaKey: not null })
+            extras.Add("keyed");
+        if (placement is { ColorAdjustEnabled: true, ColorAdjust: not null })
+            extras.Add("graded");
+        if (placement.HasVideoFx)
+            extras.Add("mapped");
+
+        return extras.Count == 0 ? geometry : $"{geometry} · {string.Join(" · ", extras)}";
+    }
+
+    /// <summary>Opens one placement's row, which is also how it becomes the one being edited.</summary>
+    public void ExpandPlacement(int index)
+    {
+        if (index >= 0 && index < PlacementList.Count)
+            SelectedPlacement = index;
+    }
 
 
 
