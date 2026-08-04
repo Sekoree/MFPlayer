@@ -22,7 +22,11 @@ namespace HaCue2.Engine;
 /// </remarks>
 public sealed class CueExecutor(ICueExecutionHost host)
 {
-    private sealed record PlaylistRun(Guid GroupId, IReadOnlyList<Guid> Order, int Index);
+    /// <param name="Pass">
+    /// Which pass through the list this is, one-based. Counted so <c>LoopCount</c> can end the run —
+    /// "play this twice and then hold" needs a pass number, and there was nowhere to keep one.
+    /// </param>
+    private sealed record PlaylistRun(Guid GroupId, IReadOnlyList<Guid> Order, int Index, int Pass = 1);
 
     private readonly Lock _stateGate = new();
     private readonly Dictionary<Guid, PlaylistRun> _playlistRuns = [];
@@ -250,8 +254,17 @@ public sealed class CueExecutor(ICueExecutionHost host)
                 if (children.Count == 0)
                     return true;
 
-                var order = PlaylistOrder(group, children);
-                var next = new PlaylistRun(group.Id, order, 0);
+                // LoopCount is passes, and zero is forever. It is separate from AtEnd, which says what
+                // happens AFTER the last pass — "play this twice and then hold" needs both.
+                if (group.LoopCount > 0 && completed.Pass >= group.LoopCount)
+                {
+                    lock (_stateGate)
+                        _playlistRuns.Remove(group.Id);
+                    return true;
+                }
+
+                var order = PlaylistOrder(group, children, completed.Order.LastOrDefault());
+                var next = new PlaylistRun(group.Id, order, 0, completed.Pass + 1);
                 lock (_stateGate)
                     _playlistRuns[group.Id] = next;
                 await FireAsync(order[0], depth: 1).ConfigureAwait(false);
@@ -272,7 +285,13 @@ public sealed class CueExecutor(ICueExecutionHost host)
         }
     }
 
-    private IReadOnlyList<Guid> PlaylistOrder(GroupCueNode group, IReadOnlyList<CueNode> children)
+    /// <param name="closedPreviousPass">
+    /// The item that ended the pass before this one, or null on the first. A shuffled bed that opens a
+    /// pass with the track that just closed the last one plays it twice in a row, which in front of an
+    /// audience reads as a fault rather than as chance.
+    /// </param>
+    private IReadOnlyList<Guid> PlaylistOrder(
+        GroupCueNode group, IReadOnlyList<CueNode> children, Guid? closedPreviousPass = null)
     {
         if (!group.Shuffle)
             return [.. children.Select(cue => cue.Id)];
@@ -287,6 +306,14 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
             var shuffled = children.Select(cue => cue.Id).ToArray();
             Random.Shared.Shuffle(shuffled);
+
+            // Swap the head with a neighbour rather than reshuffling until it differs: one swap always
+            // works, and a reshuffle loop on a two-item list can run a long time before it does.
+            if (group.AvoidImmediateRepeat
+                && shuffled.Length > 1
+                && closedPreviousPass is { } last
+                && shuffled[0] == last)
+                (shuffled[0], shuffled[^1]) = (shuffled[^1], shuffled[0]);
 
             if (!group.ReshuffleEachPass)
                 _stableShuffleOrders[group.Id] = shuffled;

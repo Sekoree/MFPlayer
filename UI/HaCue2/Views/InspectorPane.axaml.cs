@@ -135,6 +135,20 @@ public partial class InspectorPane : UserControl
             inspector.RemovePlacement();
     }
 
+    /// <summary>A quick destination layout — full, halves, quadrants.</summary>
+    private void OnLayout(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is string preset)
+            inspector.ApplyLayout(preset);
+    }
+
+    /// <summary>A quick source crop, including the one that takes them all off again.</summary>
+    private void OnCrop(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is string preset)
+            inspector.ApplyCrop(preset);
+    }
+
     private void OnPlacementGesture(object? sender, Controls.PlacementGesture gesture)
     {
         if (DataContext is InspectorViewModel inspector)

@@ -165,7 +165,25 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(PlacementCompositionIndex));
         OnPropertyChanged(nameof(LayerValue));
         OnPropertyChanged(nameof(FitIndex));
-        OnPropertyChanged(nameof(PlacementOpacityValue));
+        OnPropertyChanged(nameof(PlacementOpacity));
+        OnPropertyChanged(nameof(PlacementX));
+        OnPropertyChanged(nameof(PlacementY));
+        OnPropertyChanged(nameof(PlacementWidth));
+        OnPropertyChanged(nameof(PlacementHeight));
+        OnPropertyChanged(nameof(PlacementRotation));
+        OnPropertyChanged(nameof(CropLeft));
+        OnPropertyChanged(nameof(CropTop));
+        OnPropertyChanged(nameof(CropRight));
+        OnPropertyChanged(nameof(CropBottom));
+        OnPropertyChanged(nameof(HasChromaKey));
+        OnPropertyChanged(nameof(ChromaKeyOn));
+        OnPropertyChanged(nameof(ChromaColour));
+        OnPropertyChanged(nameof(ChromaSimilarity));
+        OnPropertyChanged(nameof(ChromaSmoothness));
+        OnPropertyChanged(nameof(ChromaSpill));
+        OnPropertyChanged(nameof(ColorAdjustOn));
+        OnPropertyChanged(nameof(LayerBrightness));
+        OnPropertyChanged(nameof(LayerContrast));
         OnPropertyChanged(nameof(EffectLanes));
         OnPropertyChanged(nameof(HasEffectLanes));
         OnPropertyChanged(nameof(CanCarryLanes));
@@ -189,6 +207,12 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(ChildCount));
         OnPropertyChanged(nameof(ShuffleValue));
         OnPropertyChanged(nameof(ReshuffleValue));
+        OnPropertyChanged(nameof(AvoidRepeatValue));
+        OnPropertyChanged(nameof(LoopCountValue));
+        OnPropertyChanged(nameof(EndBehaviourIndex));
+        OnPropertyChanged(nameof(IsLooping));
+        OnPropertyChanged(nameof(LoopCrossfadeValue));
+        OnPropertyChanged(nameof(ColorTagIndex));
         OnPropertyChanged(nameof(CrossfadeValue));
         OnPropertyChanged(nameof(AtEndIndex));
         OnPropertyChanged(nameof(SubtitlePicker));
@@ -332,9 +356,80 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     public bool LoopValue
     {
-        get => Cue is MediaCueNode { Loop: true };
+        get => Cue is MediaCueNode { Loop: true } or MediaCueNode { EndBehavior: CueEndBehavior.Loop };
         set => EditMedia("loop", media => media.Loop, (media, on) => media.Loop = on, value);
     }
+
+    /// <summary>
+    /// What the cue does at its trimmed end.
+    /// </summary>
+    /// <remarks>
+    /// Every cue stopped before this existed. FREEZE is what a title card wants; FADE OUT gives a cue
+    /// its own out-ramp without a fade cue aimed at it.
+    /// </remarks>
+    public IReadOnlyList<string> EndBehaviours { get; } =
+        ["stop", "freeze last frame", "loop", "fade out and stop"];
+
+    public int EndBehaviourIndex
+    {
+        get => Cue is MediaCueNode media ? (int)media.EndBehavior : -1;
+        set
+        {
+            if (Cue is not MediaCueNode media || value < 0 || (CueEndBehavior)value == media.EndBehavior)
+                return;
+
+            EditMedia("endBehavior",
+                item => item.EndBehavior, (item, behaviour) => item.EndBehavior = behaviour,
+                (CueEndBehavior)value);
+        }
+    }
+
+    /// <summary>Whether the loop-overlap field has anything to act on.</summary>
+    public bool IsLooping =>
+        Cue is MediaCueNode { Loop: true } or MediaCueNode { EndBehavior: CueEndBehavior.Loop };
+
+    /// <summary>
+    /// The overlap when a loop wraps, in milliseconds. Zero is a hard cut.
+    /// </summary>
+    /// <remarks>
+    /// A seamless loop is made of this. Without it the only way to get one was to author the crossfade
+    /// into the file.
+    /// </remarks>
+    public int LoopCrossfadeValue
+    {
+        get => Cue is MediaCueNode media ? media.LoopCrossfadeMs : 0;
+        set
+        {
+            if (Cue is not MediaCueNode media || value < 0 || value == media.LoopCrossfadeMs)
+                return;
+
+            EditMedia("loopCrossfade",
+                item => item.LoopCrossfadeMs, (item, ms) => item.LoopCrossfadeMs = ms,
+                Math.Clamp(value, 0, 30_000));
+        }
+    }
+
+    /// <summary>
+    /// A colour band on the cue's row: 0 is none, 1–8 index the palette.
+    /// </summary>
+    /// <remarks>
+    /// The fastest thing to read in a list of six hundred rows — an operator finds "the blue block"
+    /// before they find Q412.
+    /// </remarks>
+    public int ColorTagIndex
+    {
+        get => Cue?.ColorTag ?? 0;
+        set
+        {
+            if (Cue is not { } cue || value < 0 || value == cue.ColorTag)
+                return;
+
+            Edit("colorTag", "cues", () => cue.ColorTag, tag => cue.ColorTag = tag,
+                Math.Clamp(value, 0, CueColors.Names.Count - 1), "set colour tag");
+        }
+    }
+
+    public IReadOnlyList<string> ColorTags => CueColors.Names;
 
     /// <summary>What the trim fields accept, and what the file runs for.</summary>
     /// <remarks>
@@ -609,7 +704,9 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
-    public IReadOnlyList<string> FitModes { get; } = ["contain", "cover", "stretch"];
+    /// <summary>The six the compositor can do. It offered three, so half of them were unreachable.</summary>
+    public IReadOnlyList<string> FitModes { get; } =
+        ["contain", "cover", "stretch", "center", "fill width", "fill height"];
 
     public int FitIndex
     {
@@ -625,21 +722,366 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
-    public string PlacementOpacityValue
+    public double PlacementOpacity
     {
-        get => Placement is { } placement ? $"{placement.Opacity * 100:0.#} %" : "—";
+        get => Placement?.Opacity ?? 1;
+        set => Write("opacity", 0, 1,
+            placement => placement.Opacity, (placement, number) => placement.Opacity = number, value,
+            "set layer opacity");
+    }
+
+    // ── the destination rectangle, as numbers ─────────────────────────────────────────────────
+    // The same four a drag moves. A canvas cannot hit exactly half, and half is what a split screen
+    // is made of.
+
+    public double PlacementX
+    {
+        get => Placement?.X ?? 0;
+        set => Write("destX", -1, 2,
+            placement => placement.X, (placement, number) => placement.X = number, value, "move layer");
+    }
+
+    public double PlacementY
+    {
+        get => Placement?.Y ?? 0;
+        set => Write("destY", -1, 2,
+            placement => placement.Y, (placement, number) => placement.Y = number, value, "move layer");
+    }
+
+    public double PlacementWidth
+    {
+        get => Placement?.Width ?? 1;
+        set => Write("destWidth", 0.001, 2,
+            placement => placement.Width, (placement, number) => placement.Width = number, value,
+            "resize layer");
+    }
+
+    public double PlacementHeight
+    {
+        get => Placement?.Height ?? 1;
+        set => Write("destHeight", 0.001, 2,
+            placement => placement.Height, (placement, number) => placement.Height = number, value,
+            "resize layer");
+    }
+
+    public double PlacementRotation
+    {
+        get => Placement?.RotationDegrees ?? 0;
+        set => Write("rotation", -360, 360,
+            placement => placement.RotationDegrees,
+            (placement, number) => placement.RotationDegrees = number, value, "rotate layer");
+    }
+
+    // ── the source crop ───────────────────────────────────────────────────────────────────────
+    // Which part of the PICTURE to use, which is a different question from where to put it. Baked-in
+    // letterbox bars come off with this; shrinking the destination instead would move the picture too.
+
+    public double CropLeft
+    {
+        get => Placement?.CropLeft ?? 0;
+        set => Write("cropLeft", 0, 0.49,
+            placement => placement.CropLeft, (placement, number) => placement.CropLeft = number, value,
+            "crop layer");
+    }
+
+    public double CropTop
+    {
+        get => Placement?.CropTop ?? 0;
+        set => Write("cropTop", 0, 0.49,
+            placement => placement.CropTop, (placement, number) => placement.CropTop = number, value,
+            "crop layer");
+    }
+
+    public double CropRight
+    {
+        get => Placement?.CropRight ?? 0;
+        set => Write("cropRight", 0, 0.49,
+            placement => placement.CropRight, (placement, number) => placement.CropRight = number, value,
+            "crop layer");
+    }
+
+    public double CropBottom
+    {
+        get => Placement?.CropBottom ?? 0;
+        set => Write("cropBottom", 0, 0.49,
+            placement => placement.CropBottom, (placement, number) => placement.CropBottom = number,
+            value, "crop layer");
+    }
+
+    /// <summary>Writes one placement number through the journal, clamped to what it can mean.</summary>
+    private void Write(
+        string property,
+        double minimum,
+        double maximum,
+        Func<LayerPlacement, double> read,
+        Action<LayerPlacement, double> write,
+        double value,
+        string description)
+    {
+        if (Placement is not { } placement || !double.IsFinite(value))
+            return;
+
+        var clamped = Math.Clamp(value, minimum, maximum);
+
+        if (Math.Abs(read(placement) - clamped) < 0.000001)
+            return;
+
+        Edit(property, "video",
+            () => read(placement), number => write(placement, number), clamped, description);
+    }
+
+    /// <summary>
+    /// Quick destination layouts: the rectangles a split screen is actually made of.
+    /// </summary>
+    /// <remarks>
+    /// Exact by construction. Half is 0.5 and a quadrant is 0.25, and neither is reachable by dragging
+    /// — which is why HaPlay grew the same set of buttons and why they are the fastest correct route to
+    /// a two-up or a four-up.
+    /// </remarks>
+    public void ApplyLayout(string preset)
+    {
+        if (Placement is not { } placement || Cue is null)
+            return;
+
+        var (x, y, width, height) = preset switch
+        {
+            "full" => (0d, 0d, 1d, 1d),
+            "left" => (0d, 0d, 0.5d, 1d),
+            "right" => (0.5d, 0d, 0.5d, 1d),
+            "top" => (0d, 0d, 1d, 0.5d),
+            "bottom" => (0d, 0.5d, 1d, 0.5d),
+            "tl" => (0d, 0d, 0.5d, 0.5d),
+            "tr" => (0.5d, 0d, 0.5d, 0.5d),
+            "bl" => (0d, 0.5d, 0.5d, 0.5d),
+            "br" => (0.5d, 0.5d, 0.5d, 0.5d),
+            _ => (double.NaN, 0d, 0d, 0d),
+        };
+
+        if (double.IsNaN(x))
+            return;
+
+        // ONE undo step for the whole rectangle: a layout half-applied is a rectangle nobody chose.
+        using (_journal.Composite($"layout: {preset}", "video"))
+        {
+            _journal.Do(RectEdits.Placement(Cue, placement, new NormalizedRect(x, y, width, height)));
+        }
+
+        _journal.CloseGroup();
+        Reload();
+    }
+
+    /// <summary>Quick source crops, including the one that takes them all off again.</summary>
+    public void ApplyCrop(string preset)
+    {
+        if (Placement is not { } placement)
+            return;
+
+        var (left, top, right, bottom) = preset switch
+        {
+            "none" => (0d, 0d, 0d, 0d),
+            "wide" => (0.25d, 0d, 0.25d, 0d),
+            "tall" => (0d, 0.25d, 0d, 0.25d),
+            "centre" => (0.25d, 0.25d, 0.25d, 0.25d),
+            _ => (double.NaN, 0d, 0d, 0d),
+        };
+
+        if (double.IsNaN(left))
+            return;
+
+        using (_journal.Composite($"crop: {preset}", "video"))
+        {
+            _journal.Do(new SetValueCommand<double>(
+                Cue!.Id, "cropLeft", "video",
+                () => placement.CropLeft, n => placement.CropLeft = n, left, "crop"));
+            _journal.Do(new SetValueCommand<double>(
+                Cue.Id, "cropTop", "video",
+                () => placement.CropTop, n => placement.CropTop = n, top, "crop"));
+            _journal.Do(new SetValueCommand<double>(
+                Cue.Id, "cropRight", "video",
+                () => placement.CropRight, n => placement.CropRight = n, right, "crop"));
+            _journal.Do(new SetValueCommand<double>(
+                Cue.Id, "cropBottom", "video",
+                () => placement.CropBottom, n => placement.CropBottom = n, bottom, "crop"));
+        }
+
+        _journal.CloseGroup();
+        Reload();
+    }
+
+    // ── the two layer effects ─────────────────────────────────────────────────────────────────
+    // Both follow the app's rule for effects: OFF IS NOT DELETE. Switching a key off keeps the colour
+    // and the tolerances, so checking a shot against an unkeyed one costs nothing to undo.
+
+    public bool HasChromaKey => Placement?.ChromaKey is not null;
+
+    public bool ChromaKeyOn
+    {
+        get => Placement is { ChromaKeyEnabled: true, ChromaKey: not null };
         set
         {
-            if (Placement is not { } placement
-                || !double.TryParse(
-                    new string([.. value.Where(c => char.IsDigit(c) || c is '.' or ',')]),
-                    NumberStyles.Float, CultureInfo.CurrentCulture, out var typed))
+            if (Placement is not { } placement || Cue is null)
                 return;
 
-            Edit("opacity", "video",
-                () => placement.Opacity, opacity => placement.Opacity = opacity,
-                Math.Clamp(typed / 100, 0, 1), "set layer opacity");
+            using (_journal.Composite(value ? "chroma key on" : "chroma key off", "video"))
+            {
+                // Created on first use, and never destroyed by switching off.
+                if (value && placement.ChromaKey is null)
+                    _journal.Do(new SetValueCommand<ChromaKeySpec?>(
+                        Cue.Id, "chromaKey", "video",
+                        () => placement.ChromaKey, spec => placement.ChromaKey = spec,
+                        new ChromaKeySpec(), "add chroma key"));
+
+                _journal.Do(new SetValueCommand<bool>(
+                    Cue.Id, "chromaKeyEnabled", "video",
+                    () => placement.ChromaKeyEnabled, flag => placement.ChromaKeyEnabled = flag, value,
+                    value ? "chroma key on" : "chroma key off"));
+            }
+
+            _journal.CloseGroup();
+            Reload();
         }
+    }
+
+    public double ChromaSimilarity
+    {
+        get => Placement?.ChromaKey?.Similarity ?? 0.4;
+        set => WriteKey("similarity", 0, 1, key => key.Similarity, (key, n) => key.Similarity = n, value);
+    }
+
+    public double ChromaSmoothness
+    {
+        get => Placement?.ChromaKey?.Smoothness ?? 0.1;
+        set => WriteKey("smoothness", 0, 1, key => key.Smoothness, (key, n) => key.Smoothness = n, value);
+    }
+
+    public double ChromaSpill
+    {
+        get => Placement?.ChromaKey?.SpillReduction ?? 0.1;
+        set => WriteKey("spill", 0, 1,
+            key => key.SpillReduction, (key, n) => key.SpillReduction = n, value);
+    }
+
+    /// <summary>The key colour as "#RRGGBB" — what a designer is given on a call sheet.</summary>
+    public string ChromaColour
+    {
+        get => Placement?.ChromaKey is { } key
+            ? $"#{Channel(key.Red)}{Channel(key.Green)}{Channel(key.Blue)}"
+            : "#00FF00";
+        set
+        {
+            if (Placement?.ChromaKey is not { } key || Cue is null || !TryColour(value, out var rgb))
+                return;
+
+            using (_journal.Composite("chroma key colour", "video"))
+            {
+                _journal.Do(new SetValueCommand<double>(
+                    Cue.Id, "keyRed", "video", () => key.Red, n => key.Red = n, rgb.Red, "key colour"));
+                _journal.Do(new SetValueCommand<double>(
+                    Cue.Id, "keyGreen", "video",
+                    () => key.Green, n => key.Green = n, rgb.Green, "key colour"));
+                _journal.Do(new SetValueCommand<double>(
+                    Cue.Id, "keyBlue", "video", () => key.Blue, n => key.Blue = n, rgb.Blue, "key colour"));
+            }
+
+            _journal.CloseGroup();
+            Reload();
+        }
+    }
+
+    private static string Channel(double value) =>
+        ((int)Math.Round(Math.Clamp(value, 0, 1) * 255)).ToString("X2", CultureInfo.InvariantCulture);
+
+    private static bool TryColour(string text, out (double Red, double Green, double Blue) rgb)
+    {
+        rgb = default;
+        var hex = (text ?? "").Trim().TrimStart('#');
+
+        if (hex.Length != 6
+            || !int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var packed))
+            return false;
+
+        rgb = (((packed >> 16) & 0xFF) / 255d, ((packed >> 8) & 0xFF) / 255d, (packed & 0xFF) / 255d);
+        return true;
+    }
+
+    private void WriteKey(
+        string property,
+        double minimum,
+        double maximum,
+        Func<ChromaKeySpec, double> read,
+        Action<ChromaKeySpec, double> write,
+        double value)
+    {
+        if (Placement?.ChromaKey is not { } key || !double.IsFinite(value))
+            return;
+
+        var clamped = Math.Clamp(value, minimum, maximum);
+
+        if (Math.Abs(read(key) - clamped) < 0.000001)
+            return;
+
+        Edit(property, "video", () => read(key), number => write(key, number), clamped, "adjust key");
+    }
+
+    public bool ColorAdjustOn
+    {
+        get => Placement is { ColorAdjustEnabled: true, ColorAdjust: not null };
+        set
+        {
+            if (Placement is not { } placement || Cue is null)
+                return;
+
+            using (_journal.Composite(value ? "colour adjust on" : "colour adjust off", "video"))
+            {
+                if (value && placement.ColorAdjust is null)
+                    _journal.Do(new SetValueCommand<ColorAdjustSpec?>(
+                        Cue.Id, "colorAdjust", "video",
+                        () => placement.ColorAdjust, spec => placement.ColorAdjust = spec,
+                        new ColorAdjustSpec(), "add colour adjust"));
+
+                _journal.Do(new SetValueCommand<bool>(
+                    Cue.Id, "colorAdjustEnabled", "video",
+                    () => placement.ColorAdjustEnabled, flag => placement.ColorAdjustEnabled = flag,
+                    value, value ? "colour adjust on" : "colour adjust off"));
+            }
+
+            _journal.CloseGroup();
+            Reload();
+        }
+    }
+
+    public double LayerBrightness
+    {
+        get => Placement?.ColorAdjust?.Brightness ?? 0;
+        set => WriteColour("brightness", -1, 1,
+            colour => colour.Brightness, (colour, n) => colour.Brightness = n, value);
+    }
+
+    public double LayerContrast
+    {
+        get => Placement?.ColorAdjust?.Contrast ?? 1;
+        set => WriteColour("contrast", 0, 4,
+            colour => colour.Contrast, (colour, n) => colour.Contrast = n, value);
+    }
+
+    private void WriteColour(
+        string property,
+        double minimum,
+        double maximum,
+        Func<ColorAdjustSpec, double> read,
+        Action<ColorAdjustSpec, double> write,
+        double value)
+    {
+        if (Placement?.ColorAdjust is not { } colour || !double.IsFinite(value))
+            return;
+
+        var clamped = Math.Clamp(value, minimum, maximum);
+
+        if (Math.Abs(read(colour) - clamped) < 0.000001)
+            return;
+
+        Edit(property, "video", () => read(colour), number => write(colour, number), clamped,
+            "adjust layer colour");
     }
 
     private void Edit<T>(
@@ -682,7 +1124,25 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(PlacementCompositionIndex));
         OnPropertyChanged(nameof(LayerValue));
         OnPropertyChanged(nameof(FitIndex));
-        OnPropertyChanged(nameof(PlacementOpacityValue));
+        OnPropertyChanged(nameof(PlacementOpacity));
+        OnPropertyChanged(nameof(PlacementX));
+        OnPropertyChanged(nameof(PlacementY));
+        OnPropertyChanged(nameof(PlacementWidth));
+        OnPropertyChanged(nameof(PlacementHeight));
+        OnPropertyChanged(nameof(PlacementRotation));
+        OnPropertyChanged(nameof(CropLeft));
+        OnPropertyChanged(nameof(CropTop));
+        OnPropertyChanged(nameof(CropRight));
+        OnPropertyChanged(nameof(CropBottom));
+        OnPropertyChanged(nameof(HasChromaKey));
+        OnPropertyChanged(nameof(ChromaKeyOn));
+        OnPropertyChanged(nameof(ChromaColour));
+        OnPropertyChanged(nameof(ChromaSimilarity));
+        OnPropertyChanged(nameof(ChromaSmoothness));
+        OnPropertyChanged(nameof(ChromaSpill));
+        OnPropertyChanged(nameof(ColorAdjustOn));
+        OnPropertyChanged(nameof(LayerBrightness));
+        OnPropertyChanged(nameof(LayerContrast));
     }
 
     /// <summary>Closes the drag's undo step. Called when the pointer is released or a nudge lands.</summary>
@@ -744,6 +1204,38 @@ public partial class InspectorViewModel : ObservableObject
                 Edit("reshuffle", "cues",
                     () => group.ReshuffleEachPass, on => group.ReshuffleEachPass = on, value,
                     "reshuffle each pass");
+        }
+    }
+
+    /// <summary>
+    /// Never open a pass with the item that closed the previous one.
+    /// </summary>
+    /// <remarks>
+    /// Only meaningful while shuffling — an in-order playlist repeats by construction, and hiding the
+    /// checkbox is clearer than offering one that does nothing.
+    /// </remarks>
+    public bool AvoidRepeatValue
+    {
+        get => Group is not { AvoidImmediateRepeat: false };
+        set
+        {
+            if (Group is { } group && value != group.AvoidImmediateRepeat)
+                Edit("avoidRepeat", "cues",
+                    () => group.AvoidImmediateRepeat, on => group.AvoidImmediateRepeat = on, value,
+                    value ? "avoid immediate repeats" : "allow immediate repeats");
+        }
+    }
+
+    /// <summary>Passes through the list. Zero is forever, which is what the field's zero means.</summary>
+    public int LoopCountValue
+    {
+        get => Group?.LoopCount ?? 1;
+        set
+        {
+            if (Group is { } group && value >= 0 && value != group.LoopCount)
+                Edit("loopCount", "cues",
+                    () => group.LoopCount, count => group.LoopCount = count, Math.Clamp(value, 0, 999),
+                    value == 0 ? "loop forever" : $"play {value} pass(es)");
         }
     }
 

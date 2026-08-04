@@ -68,6 +68,16 @@ public abstract record CueNode
     public int PostWaitMs { get; set; }
 
     /// <summary>
+    /// A colour band on the cue's row: 0 is none, 1–8 index a fixed palette.
+    /// </summary>
+    /// <remarks>
+    /// An INDEX rather than a colour, so the palette can be restyled with the theme and so a show does
+    /// not carry hex codes that clash with whatever skin it is opened under. It is the fastest thing to
+    /// read in a list of six hundred rows — an operator finds "the blue block" before they find Q412.
+    /// </remarks>
+    public int ColorTag { get; set; }
+
+    /// <summary>
     /// Where this cue starts inside a TIMELINE group, in milliseconds from the group's own start.
     /// </summary>
     /// <remarks>
@@ -97,6 +107,26 @@ public sealed record MediaCueNode : CueNode
     public string MediaPath { get; set; } = "";
     public double LevelDb { get; set; }
     public bool Loop { get; set; }
+
+    /// <summary>
+    /// What happens when the cue reaches its trimmed end.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Loop"/> stays for documents that already carry it and means the same thing as
+    /// <see cref="CueEndBehavior.Loop"/>; either is honoured. The other two are what could not be said
+    /// before: FREEZE holds the last frame, which is what a title card wants, and FADE OUT gives the
+    /// cue its own out-ramp without a fade cue aimed at it.
+    /// </remarks>
+    public CueEndBehavior EndBehavior { get; set; } = CueEndBehavior.Stop;
+
+    /// <summary>
+    /// The overlap when a looping cue wraps, in milliseconds. Zero is a hard cut.
+    /// </summary>
+    /// <remarks>
+    /// A seamless loop is made of this. Without it a bed loops with an audible seam at the join, and
+    /// the only workaround is to author the crossfade into the file.
+    /// </remarks>
+    public int LoopCrossfadeMs { get; set; }
 
     /// <summary>
     /// Where playback starts inside the file, in milliseconds. HaPlay's <c>startOffsetMs</c>.
@@ -182,6 +212,25 @@ public sealed record GroupCueNode : CueNode
 
     public bool Shuffle { get; set; }
     public bool ReshuffleEachPass { get; set; }
+
+    /// <summary>
+    /// Never open a pass with the item that closed the previous one.
+    /// </summary>
+    /// <remarks>
+    /// The difference between a shuffle that sounds random and one that sounds broken: without it a
+    /// shuffled bed can play the same track twice across a pass boundary, which in front of an
+    /// audience reads as a fault rather than as chance.
+    /// </remarks>
+    public bool AvoidImmediateRepeat { get; set; } = true;
+
+    /// <summary>
+    /// How many passes the playlist makes. Zero is forever.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="AtEnd"/>, which says what happens AFTER the last pass. "Play this
+    /// twice and then hold" needs both, and could not be said with either alone.
+    /// </remarks>
+    public int LoopCount { get; set; } = 1;
 
     /// <summary>
     /// The playlist's default crossfade. Per-transition overrides live on the CHILD
@@ -297,6 +346,96 @@ public sealed record LayerPlacement
 
     /// <summary>The AUTHORED opacity. Fades and automation multiply over it; they never replace it.</summary>
     public double Opacity { get; set; } = 1;
+
+    /// <summary>
+    /// Per-edge source crop, as fractions of the SOURCE. Zero on every edge is no crop.
+    /// </summary>
+    /// <remarks>
+    /// A crop and a destination rectangle answer different questions and are both needed: the crop says
+    /// which part of the picture to use, the rectangle says where to put it. Letterbox bars baked into a
+    /// 4:3 transfer come off with a crop; the same clip still has to be placed. Cropping by shrinking the
+    /// destination instead would move the picture as well as trim it.
+    /// </remarks>
+    public double CropLeft { get; set; }
+
+    public double CropTop { get; set; }
+    public double CropRight { get; set; }
+    public double CropBottom { get; set; }
+
+    /// <summary>
+    /// Clockwise rotation about the destination rectangle's centre, in degrees.
+    /// </summary>
+    /// <remarks>
+    /// A rotated layer OVERFLOWS its rectangle rather than being trimmed to it — which is what a
+    /// portrait screen hung sideways needs, and the opposite of what the unrotated fit does.
+    /// </remarks>
+    public double RotationDegrees { get; set; }
+
+    /// <summary>
+    /// A mapping applied to this LAYER's own picture, before it is placed.
+    /// </summary>
+    /// <remarks>
+    /// The same shape as an output's mapping and for a different stage: an output's mapping warps what
+    /// reaches one screen, and this warps one clip before it joins the canvas. Splitting a single video
+    /// across two halves of a set piece is this, not the output's.
+    /// </remarks>
+    public List<MappingSection> VideoFx { get; set; } = [];
+
+    /// <summary>
+    /// Whether <see cref="VideoFx"/> is in force. Geometry is kept while it is off.
+    /// </summary>
+    /// <remarks>
+    /// The rule the whole app follows for effects: off is not delete. An operator checking a warp
+    /// against an unwarped feed must not have to author it again to get it back.
+    /// </remarks>
+    public bool VideoFxEnabled { get; set; } = true;
+
+    /// <summary>Green-screen keying for this layer, or null when it has none.</summary>
+    public ChromaKeySpec? ChromaKey { get; set; }
+
+    public bool ChromaKeyEnabled { get; set; } = true;
+
+    /// <summary>Brightness and contrast for this layer, or null when it has none.</summary>
+    public ColorAdjustSpec? ColorAdjust { get; set; }
+
+    public bool ColorAdjustEnabled { get; set; } = true;
+
+    /// <summary>Whether the layer carries a mapping the renderer will actually apply.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasVideoFx => VideoFxEnabled && VideoFx.Count > 0;
+}
+
+/// <summary>
+/// Green-screen settings for one layer.
+/// </summary>
+/// <remarks>
+/// Defaults are the framework's own, so a key added and left alone behaves the way the compositor's
+/// documentation describes rather than the way whoever typed this file guessed.
+/// </remarks>
+public sealed record ChromaKeySpec
+{
+    /// <summary>The key colour, as 0–1 red/green/blue. Default is a broadcast green.</summary>
+    public double Red { get; set; }
+
+    public double Green { get; set; } = 1;
+    public double Blue { get; set; }
+
+    /// <summary>How far from the key colour still counts as background.</summary>
+    public double Similarity { get; set; } = 0.4;
+
+    /// <summary>How soft the edge between kept and keyed is.</summary>
+    public double Smoothness { get; set; } = 0.1;
+
+    /// <summary>How much of the key colour is pulled out of what remains — the green fringe.</summary>
+    public double SpillReduction { get; set; } = 0.1;
+}
+
+/// <summary>Brightness and contrast for one layer. Brightness is an offset, contrast a multiplier.</summary>
+public sealed record ColorAdjustSpec
+{
+    public double Brightness { get; set; }
+
+    public double Contrast { get; set; } = 1;
 }
 
 /// <summary>
@@ -339,11 +478,54 @@ public static class CuePlacements
     };
 }
 
+/// <summary>
+/// What a media cue does when it reaches its trimmed end.
+/// </summary>
+/// <remarks>
+/// Mirrors the framework's <c>ClipEndBehavior</c> by NAME, so the compiler converts without a table
+/// that could drift. It was not expressible at all before: every cue stopped.
+/// </remarks>
+public enum CueEndBehavior
+{
+    Stop,
+
+    /// <summary>Hold the last frame. What a title card or a holding slate wants.</summary>
+    FreezeLastFrame,
+
+    /// <summary>Back to the trim-in point, over <see cref="MediaCueNode.LoopCrossfadeMs"/>.</summary>
+    Loop,
+
+    /// <summary>Ramp itself down over the cue's own fade-out, then stop.</summary>
+    FadeOutAndStop,
+}
+
+/// <summary>
+/// How a layer's picture fills its destination rectangle.
+/// </summary>
+/// <remarks>
+/// Six, matching what the compositor can actually do — it was three, so half the fits the renderer
+/// supports could not be authored. <see cref="Contain"/> and <see cref="Center"/> both letterbox; they
+/// differ in whether the picture is scaled to the rectangle at all.
+/// </remarks>
 public enum LayerFit
 {
+    /// <summary>Fit inside, letterboxing. The safe default: nothing is lost.</summary>
     Contain,
+
+    /// <summary>Fill the rectangle, cropping the overflow. What a full-screen backdrop wants.</summary>
     Cover,
+
+    /// <summary>Fill the rectangle exactly, ignoring the aspect ratio.</summary>
     Stretch,
+
+    /// <summary>Placed at its own size in the middle, neither scaled up nor cropped.</summary>
+    Center,
+
+    /// <summary>Match the rectangle's width; the height falls where it falls.</summary>
+    FillWidth,
+
+    /// <summary>Match the rectangle's height; the width falls where it falls.</summary>
+    FillHeight,
 }
 
 /// <summary>

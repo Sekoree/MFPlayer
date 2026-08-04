@@ -260,7 +260,17 @@ public static class ShowCompiler
             FadeOut = TimeSpan.FromMilliseconds(media.FadeOutMs),
             FadeOutCurve = fadeOut.Law,
             FadeOutShape = fadeOut.Custom,
-            Loop = media.Loop,
+            // Either says it: the flag predates the enum, and a document carrying only the flag must
+            // keep looping. The engine reads both the same way.
+            Loop = media.Loop || media.EndBehavior == CueEndBehavior.Loop,
+            EndBehavior = media.EndBehavior switch
+            {
+                CueEndBehavior.FreezeLastFrame => ClipEndBehavior.FreezeLastFrame,
+                CueEndBehavior.Loop => ClipEndBehavior.Loop,
+                CueEndBehavior.FadeOutAndStop => ClipEndBehavior.FadeOutAndStop,
+                _ => media.Loop ? ClipEndBehavior.Loop : ClipEndBehavior.Stop,
+            },
+            LoopCrossfade = TimeSpan.FromMilliseconds(Math.Max(0, media.LoopCrossfadeMs)),
             Placement = placement is null ? null : Placement(placement),
             ExtraPlacements = placements.Count < 2
                 ? null
@@ -331,6 +341,15 @@ public static class ShowCompiler
             send.LogicalChannelId.ToString(),
             send.Muted ? 0f : Linear(send.GainDb + media.LevelDb)));
 
+    /// <summary>
+    /// One placement, with everything the compositor can act on.
+    /// </summary>
+    /// <remarks>
+    /// The crop, the rotation, the layer mapping and the two colour effects all existed on
+    /// <see cref="ShowVideoPlacement"/> and were never filled — the document had nowhere to say them.
+    /// The fit name is passed as TEXT the framework maps by name, so the two enums can be read side by
+    /// side rather than through a table that drifts.
+    /// </remarks>
     private static ShowVideoPlacement Placement(LayerPlacement placement) =>
         new(
             DestX: placement.X,
@@ -342,8 +361,88 @@ public static class ShowCompiler
             {
                 LayerFit.Cover => "Cover",
                 LayerFit.Stretch => "Stretch",
+                LayerFit.Center => "Center",
+                LayerFit.FillWidth => "FillWidth",
+                LayerFit.FillHeight => "FillHeight",
                 _ => "Contain",
-            });
+            },
+            RotationDegrees: placement.RotationDegrees,
+            CropLeft: Fraction(placement.CropLeft),
+            CropTop: Fraction(placement.CropTop),
+            CropRight: Fraction(placement.CropRight),
+            CropBottom: Fraction(placement.CropBottom),
+            VideoFx: LayerMapping(placement),
+            ChromaKey: placement is { ChromaKeyEnabled: true, ChromaKey: { } key }
+                ? new S.Media.Compositor.ChromaKeySettings(
+                    (float)key.Red, (float)key.Green, (float)key.Blue,
+                    (float)key.Similarity, (float)key.Smoothness, (float)key.SpillReduction)
+                : null,
+            ColorAdjust: placement is { ColorAdjustEnabled: true, ColorAdjust: { } colour }
+                ? new S.Media.Compositor.Effects.BrightnessContrastSettings(
+                    (float)colour.Brightness, (float)colour.Contrast)
+                : null);
+
+    /// <summary>A crop inset, clamped so opposite edges can never cross and erase the picture.</summary>
+    private static double Fraction(double value) => Math.Clamp(value, 0, 0.49);
+
+    /// <summary>
+    /// A placement's own mapping, resolved against the SOURCE video rather than an output.
+    /// </summary>
+    /// <remarks>
+    /// The destination is measured in the same normalized space the section stores, because a layer
+    /// mapping has no output raster to resolve against — it happens before the layer is placed, and the
+    /// destination rectangle does the placing afterwards.
+    /// </remarks>
+    private static ClipOutputMappingSpec? LayerMapping(LayerPlacement placement)
+    {
+        if (!placement.HasVideoFx)
+            return null;
+
+        var sections = placement.VideoFx
+            .Where(section => section.Enabled)
+            .Select(section => new ClipOutputMappingSection(
+                Id: section.Id.ToString("N"),
+                Enabled: true,
+                SrcX: section.SourceX,
+                SrcY: section.SourceY,
+                SrcWidth: section.SourceWidth,
+                SrcHeight: section.SourceHeight,
+                DestX: section.TargetX,
+                DestY: section.TargetY,
+                DestWidth: section.TargetWidth,
+                DestHeight: section.TargetHeight,
+                RotationDegrees: section.RotationDegrees,
+                Opacity: Math.Clamp(section.Opacity, 0, 1),
+                Brightness: Math.Clamp(section.Brightness, 0, 1),
+                MeshColumns: section.HasMesh ? section.MeshColumns : 0,
+                MeshRows: section.HasMesh ? section.MeshRows : 0,
+                MeshPoints: section.HasMesh ? MeshPoints(section) : null))
+            .ToList();
+
+        // Every section switched off is the same as no mapping — and NOT the same as a mapping with
+        // nothing in it, which would render the layer black.
+        return sections.Count == 0 ? null : new ClipOutputMappingSpec(sections, 1, 1);
+    }
+
+    /// <summary>The mesh as absolute points, adding back the even grid the document stores offsets from.</summary>
+    private static List<ClipMeshPoint> MeshPoints(MappingSection section)
+    {
+        var points = new List<ClipMeshPoint>(section.MeshPointCount);
+
+        for (var row = 0; row < section.MeshRows; row++)
+        {
+            for (var column = 0; column < section.MeshColumns; column++)
+            {
+                var at = ((row * section.MeshColumns) + column) * 2;
+
+                points.Add(new ClipMeshPoint(
+                    ((double)column / (section.MeshColumns - 1)) + section.WarpOffsets[at],
+                    ((double)row / (section.MeshRows - 1)) + section.WarpOffsets[at + 1]));
+            }
+        }
+
+        return points;
+    }
 
     /// <summary>
     /// One automation lane as engine keyframes, or null when the cue has none.

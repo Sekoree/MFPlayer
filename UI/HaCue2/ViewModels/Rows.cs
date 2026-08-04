@@ -85,6 +85,14 @@ public sealed record CueRow
     public required string Number { get; init; }
     public required string Label { get; init; }
     public CueKind Kind { get; init; } = CueKind.Media;
+
+    /// <summary>The colour band's palette index; 0 is untagged.</summary>
+    public int ColorTag { get; init; }
+
+    /// <summary>The band itself, resolved once here rather than by a converter per row per repaint.</summary>
+    public IBrush ColorBrush => HaCue2.Presentation.CueColors.Brush(ColorTag);
+
+    public bool HasColorTag => ColorTag > 0;
     public string Source { get; init; } = "";
     public string Fade { get; init; } = "—";
     public string Length { get; init; } = "—";
@@ -204,6 +212,50 @@ public sealed record ActiveCueRow
     public bool HasQualifier => Qualifier.Length > 0;
     public Thickness NumberIndent => new(IsChild ? 18 : 8, 0, 0, 0);
 }
+
+/// <summary>
+/// A group with something sounding inside it, as the Active panel's header row.
+/// </summary>
+/// <remarks>
+/// Mutable and observable, unlike the flat rows: it is built in two passes — children collected, then
+/// the aggregate computed over them — and its expander is operator state that must survive the 4 Hz
+/// rebuild. <see cref="IsExpanded"/> starts TRUE, because a group that hid its children by default
+/// would be a panel that shows less than the flat list it replaced.
+/// </remarks>
+public sealed partial class ActiveGroupRow : ObservableObject
+{
+    public Guid GroupId { get; init; }
+
+    public required string Number { get; init; }
+    public required string Label { get; init; }
+
+    /// <summary>"playlist", "timeline" or "together" — what firing it did.</summary>
+    public required string Mode { get; init; }
+
+    /// <summary>The sounding children, in the order the flat panel would have listed them.</summary>
+    public List<ActiveCueRow> Children { get; } = [];
+
+    /// <summary>The rest of the chain, each with how long until it starts.</summary>
+    public List<UpcomingCueRow> Upcoming { get; } = [];
+
+    /// <summary>The WHOLE group's remaining and total — what somebody waiting for the list wants.</summary>
+    public string Clock { get; set; } = "";
+
+    /// <summary>"item 3/12", the position called out over talkback.</summary>
+    public string Position { get; set; } = "";
+
+    public double Progress { get; set; }
+    public bool IsNearEnd { get; set; }
+
+    public bool HasUpcoming => Upcoming.Count > 0;
+
+    [ObservableProperty]
+    private bool _isExpanded = true;
+}
+
+/// <summary>One cue the group has not reached yet, and the countdown to it.</summary>
+/// <param name="Countdown">"in 2:14" — measured from what is playing now, through the chain.</param>
+public sealed record UpcomingCueRow(string Number, string Label, string Length, string Countdown);
 
 /// <summary>A generic status word plus its gel — used across every table's result column.</summary>
 public sealed record Status(string Text, Gel Gel = Gel.Neutral)

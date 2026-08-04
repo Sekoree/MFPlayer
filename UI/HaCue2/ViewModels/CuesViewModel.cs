@@ -312,6 +312,23 @@ public partial class CuesViewModel : ObservableObject
     public void StopCue(Guid cueId) => _ = Engine?.StopCueAsync(cueId);
 
     /// <summary>
+    /// Stops everything a group is holding.
+    /// </summary>
+    /// <remarks>
+    /// Scoped to the group, never to the show: an operator pressing × on a playlist header means that
+    /// playlist, not the bed running underneath it from another list. Only what is actually SOUNDING is
+    /// stopped, so a group whose chain has not reached a cue does not get a stop it never started.
+    /// </remarks>
+    public void StopGroup(Guid groupId)
+    {
+        if (Engine is not { } host || Project.FindCue(groupId) is not GroupCueNode group)
+            return;
+
+        foreach (var child in group.Children.Where(child => _runtime.Sounding.Contains(child.Id)))
+            _ = host.StopCueAsync(child.Id);
+    }
+
+    /// <summary>
     /// Moves a sounding cue's playhead to a fraction of its length.
     /// </summary>
     /// <remarks>
@@ -573,7 +590,14 @@ public partial class CuesViewModel : ObservableObject
             {
                 try
                 {
-                    AddCue(CueKind.Media, ImportMedia(path));
+                    var cue = AddCue(CueKind.Media, ImportMedia(path));
+
+                    // A still is an ordinary media cue that would otherwise vanish after one frame:
+                    // the decoder delivers a single picture and the clip reaches its end immediately.
+                    // Holding it is what makes a title card a title card, so an imported image starts
+                    // that way rather than needing the operator to discover the setting.
+                    if (cue is MediaCueNode still && IsStill(path))
+                        still.EndBehavior = CueEndBehavior.FreezeLastFrame;
                 }
                 catch (Exception failure) when (
                     failure is IOException or UnauthorizedAccessException or ArgumentException)
@@ -585,6 +609,18 @@ public partial class CuesViewModel : ObservableObject
 
         Refresh();
     }
+
+    /// <summary>
+    /// Whether a path is a still picture rather than something with a duration.
+    /// </summary>
+    /// <remarks>
+    /// By EXTENSION, because this runs at import — before anything has probed the file, and the point
+    /// is to get the new cue's default right at the moment it is created. A wrong guess costs one
+    /// setting the operator can change; probing first would cost them the wait.
+    /// </remarks>
+    private static bool IsStill(string path) =>
+        Path.GetExtension(path).ToLowerInvariant()
+            is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".webp" or ".tif" or ".tiff";
 
     private string ImportMedia(string path)
     {
@@ -817,6 +853,8 @@ public partial class CuesViewModel : ObservableObject
         foreach (var row in _runtime.ActiveCues)
             ActiveCues.Add(row);
 
+        RebuildActivePanel();
+
         OnPropertyChanged(nameof(ActivePanelHint));
         OnPropertyChanged(nameof(IsPaused));
         OnPropertyChanged(nameof(PauseLabel));
@@ -1003,6 +1041,44 @@ public partial class CuesViewModel : ObservableObject
     // ── the Active panel ──────────────────────────────────────────────────────────────────────
     // Scope is a view filter, never a transport boundary: this list always shows everything sounding.
     public ObservableCollection<ActiveCueRow> ActiveCues { get; }
+
+    /// <summary>
+    /// The same cues, with a group's sounding children gathered under one header.
+    /// </summary>
+    /// <remarks>
+    /// A separate collection from <see cref="ActiveCues"/>, which stays flat because the transport
+    /// reads it — bare STOP wants "the one running longest" and the seek wants a cue by id, and
+    /// neither should have to walk a tree to find one.
+    /// </remarks>
+    public ObservableCollection<object> ActivePanelRows { get; } = [];
+
+    /// <summary>
+    /// Rebuilds the panel, keeping each group's expander where the operator left it.
+    /// </summary>
+    /// <remarks>
+    /// The rows are rebuilt four times a second, so a header replaced wholesale would spring back open
+    /// — or shut — under the pointer every 250 ms. Only the EXPANDER is operator state; everything else
+    /// on the row is a measurement and is meant to be replaced.
+    /// </remarks>
+    private void RebuildActivePanel()
+    {
+        var expansion = ActivePanelRows
+            .OfType<ActiveGroupRow>()
+            .ToDictionary(group => group.GroupId, group => group.IsExpanded);
+
+        var rebuilt = CuePresentation.ActivePanel(Project, [.. ActiveCues], _runtime.MediaDurations);
+
+        foreach (var group in rebuilt.OfType<ActiveGroupRow>())
+        {
+            if (expansion.TryGetValue(group.GroupId, out var open))
+                group.IsExpanded = open;
+        }
+
+        ActivePanelRows.Clear();
+
+        foreach (var row in rebuilt)
+            ActivePanelRows.Add(row);
+    }
 
     public string ActivePanelHint => IsScoped
         ? "includes cues outside the scope"

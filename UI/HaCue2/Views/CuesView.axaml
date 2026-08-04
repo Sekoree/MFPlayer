@@ -154,6 +154,13 @@
 
               <DataTemplate x:Key="NumberCell" x:DataType="vm:CueRow">
                 <StackPanel Orientation="Horizontal" Spacing="7" Margin="0,0,6,0" VerticalAlignment="Center">
+                  <!-- The colour tag, beside the number and before the glyph. The fastest thing to
+                       read in a list of six hundred rows: an operator finds "the blue block" before
+                       they find Q412. Collapsed entirely when untagged, so an unused feature costs
+                       the row no width. -->
+                  <Border Width="4" VerticalAlignment="Stretch" CornerRadius="1"
+                          IsVisible="{Binding HasColorTag}"
+                          Background="{Binding ColorBrush}" />
                   <TextBlock Classes="qnum" Classes.off="{Binding IsDisabled}"
                              Width="46" TextAlignment="Right" Text="{Binding Number}" />
                   <TextBlock Classes="glyph"
@@ -224,9 +231,65 @@
         <c:PanelBox Grid.Row="2" MinHeight="120"
                     Header="Active" Subhead="{Binding ActiveCues.Count}"
                     Hint="{Binding ActivePanelHint}">
-          <ListBox ItemsSource="{Binding ActiveCues}" ItemContainerTheme="{StaticResource ReadonlyRowItem}">
-            <ListBox.ItemTemplate>
-              <DataTemplate x:DataType="vm:ActiveCueRow">
+          <!-- Two row shapes, templated by TYPE: a lone sounding cue, and a GROUP that owns the ones
+               inside it. A playlist of twelve used to fill this panel with twelve equal rows and
+               nothing saying they were one thing. -->
+          <ListBox ItemsSource="{Binding ActivePanelRows}"
+                   ItemContainerTheme="{StaticResource ReadonlyRowItem}">
+            <ListBox.DataTemplates>
+
+              <DataTemplate DataType="vm:ActiveGroupRow">
+                <Border Classes="actrow grp" Classes.near="{Binding IsNearEnd}">
+                  <StackPanel Margin="0,0,10,0">
+                    <Grid ColumnDefinitions="3,22,46,*,52,120,150,22" ColumnSpacing="7">
+                      <Border Grid.Column="0" Classes="stripe is-go grp" />
+                      <!-- Expanded by default: a group that hid its children would show LESS than the
+                           flat list it replaced. -->
+                      <ToggleButton Grid.Column="1" Classes="tight" MinWidth="20" Padding="3,0"
+                                    IsChecked="{Binding IsExpanded}" Content="▾"
+                                    ToolTip.Tip="Show the cues inside this group" />
+                      <TextBlock Grid.Column="2" Classes="qnum" Text="{Binding Number}" />
+                      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6"
+                                  VerticalAlignment="Center">
+                        <TextBlock Classes="cuelabel" Text="{Binding Label}" />
+                        <TextBlock Classes="mono dim3" FontSize="{DynamicResource FontSizeMonoSmall}"
+                                   Text="{Binding Mode}" />
+                      </StackPanel>
+                      <TextBlock Grid.Column="4" Classes="mono dim3 small" VerticalAlignment="Center"
+                                 Text="{Binding Position}" ToolTip.Tip="where the group is in its chain" />
+                      <TextBlock Grid.Column="5" Classes="clock" Text="{Binding Clock}"
+                                 ToolTip.Tip="the WHOLE group's remaining and total" />
+                      <ProgressBar Grid.Column="6" Maximum="1" Value="{Binding Progress}"
+                                   VerticalAlignment="Center"
+                                   Classes.near="{Binding IsNearEnd}" />
+                      <Button Grid.Column="7" Classes="icon" Content="×" Click="OnStopGroup"
+                              Tag="{Binding GroupId}"
+                              ToolTip.Tip="Stop everything in this group." />
+                    </Grid>
+
+                    <StackPanel Margin="24,2,0,0" IsVisible="{Binding IsExpanded}">
+                      <ItemsControl ItemsSource="{Binding Children}" />
+                      <!-- The rest of the chain, each with a countdown. What the group has committed
+                           the show to next, which is the other half of "what is happening". -->
+                      <ItemsControl ItemsSource="{Binding Upcoming}" IsVisible="{Binding HasUpcoming}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:UpcomingCueRow">
+                            <Grid ColumnDefinitions="46,*,66,90" ColumnSpacing="7" Margin="0,1">
+                              <TextBlock Grid.Column="0" Classes="qnum dim3" Text="{Binding Number}" />
+                              <TextBlock Grid.Column="1" Classes="mono dim3 small ellipsis"
+                                         VerticalAlignment="Center" Text="{Binding Label}" />
+                              <TextBlock Grid.Column="2" Classes="clock dim3" Text="{Binding Length}" />
+                              <TextBlock Grid.Column="3" Classes="clock dim3" Text="{Binding Countdown}" />
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+
+              <DataTemplate DataType="vm:ActiveCueRow">
                 <Border Classes="actrow"
                         Classes.grp="{Binding IsGroup}"
                         Classes.near="{Binding IsNearEnd}">
@@ -269,7 +332,7 @@
                   </Grid>
                 </Border>
               </DataTemplate>
-            </ListBox.ItemTemplate>
+            </ListBox.DataTemplates>
           </ListBox>
         </c:PanelBox>
       </Grid>

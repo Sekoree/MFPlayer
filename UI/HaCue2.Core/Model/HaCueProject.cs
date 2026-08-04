@@ -150,6 +150,23 @@ public sealed record ProjectSettings
     /// </summary>
     public DisabledCueFollow DisabledCueFollow { get; set; } = DisabledCueFollow.SkipOnward;
 
+    /// <summary>
+    /// How many upcoming cues have their media opened before anybody presses GO.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The difference between a GO that plays and a GO that opens a file first. Two is enough for the
+    /// ordinary case — the next cue and the one after it — and the cost is decoders held open, which is
+    /// why it is a number rather than a switch: a booth machine with little memory and 4 K media can
+    /// turn it down, and zero turns it off.
+    /// </para>
+    /// <para>
+    /// A PROJECT setting rather than a machine one, because how much a show pre-rolls is a property of
+    /// the show's media, and a show carried to another booth should behave the same way there.
+    /// </para>
+    /// </remarks>
+    public int PreRollCount { get; set; } = 2;
+
     public CueTrigger NewCueTrigger { get; set; } = CueTrigger.Manual;
 
     /// <summary>

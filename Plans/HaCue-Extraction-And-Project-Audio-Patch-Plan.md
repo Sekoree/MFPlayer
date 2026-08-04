@@ -2421,3 +2421,98 @@ black window appears on the chosen screen.
 `UI/HaCue2.Check` crashes with a raw stack trace on a project it cannot deserialize, rather than
 reporting it the way it reports every other project problem. It exits 134 rather than 0, so CI still
 fails correctly — it is ugly, not dangerous.
+
+---
+
+## Phase 5 progress — 2026-08-04 (second pass): a framework routing bug, and closing the parity gaps
+
+A first real run on the owner's own project turned up four defects; the parity audit they asked for
+(`Plans/HaCue2-vs-HaPlay-CuePlayer-Parity.md`) turned up nine more. All are closed except text cues.
+
+### The framework bug: no video fan-out branch could ever convert
+
+`VideoRouterOptions` carries the router's CPU-conversion hooks — a converter FACTORY and a can-convert
+PROBE — and **nothing ever passed them**. `MediaPlayer` did `new VideoRouter(null)`, both hooks
+defaulted to null, so the probe answered *false* for every pixel-format pair and any fan-out branch
+needing a conversion was rejected, the route rolled back, and the exception escaped as an unobserved
+task killing the cue's AUDIO along with its video.
+
+It hid because a player's PRIMARY video output is the discard sink it negotiates against, so a
+composition layer is always a BRANCH, and most clips happen to negotiate to a format the compositor
+already accepts. A JPEG album cover in `yuvj420p` does not. **HaPlay was exposed to the same bug.**
+
+Fixed with `IMediaRegistry.CanConvertCpu` + `IMediaRegistryBuilder.SetCpuConverterProbe` (FFmpegModule
+registers `VideoCpuFrameConverter.CanConvert`, which had existed as a public static for exactly this
+purpose and had no caller), threaded through `MediaPlayer.VideoRouterOptionsFor(registry)`.
+
+**Method note worth keeping:** a synthetic attached-picture FLAC did NOT reproduce it. The owner's real
+file did. When a format bug is suspected, test the actual file.
+
+### Outputs that showed nothing
+
+Outputs are created unbound now, and `ProjectVideoOutputs.Sync` skipped anything with no composition —
+so the first thing an operator does produced a table row and no window. A LOCAL SCREEN now opens
+regardless and `ShowHost.PaintUnattachedScreens` blacks it out; NDI and record still stay closed, since
+a sender with no canvas is a name on the network carrying black. Separately, assigning a composition to
+an ALREADY-OPEN output never worked: the open record kept the canvas it was created with. Handled by
+`ProjectVideoOutputs.Retargeted`.
+
+### The Active panel was measuring the wrong thing
+
+Its clock was `Stopwatch.GetElapsedTime(startedTicks)` — wall time since the fire, which is a different
+number the moment anything pauses, seeks, trims or loops, and which cannot support a seek at all. It
+now reads `ShowSession.Snapshot()`'s per-group `ClipPosition`/`ClipDuration`. `ShowHost` keeps a
+cueId → groupId map built from the COMPILED document, because the grouping rule is not simple (a
+timeline's children get one transport each; everything else shares its outermost group's).
+
+Added: elapsed / remaining / length, a draggable `SeekBar` (a ProgressBar with a pointer contract, NOT
+a Slider — a slider's two-way `Value` fights a 4 Hz poll), and a real ✕ button, which had been a
+`TextBlock`.
+
+### Group aggregation
+
+`ActiveGroupRow` gathers a group's sounding children under one header carrying the WHOLE group's
+remaining and total, "item 3/12", a per-group ✕, and the rest of the chain with time-until-start
+countdowns. **Expanded by default** (owner's call, and correct: a group that hid its children would
+show less than the flat list it replaced). Only the expander survives the 4 Hz rebuild — everything
+else on the row is a measurement and is meant to be replaced.
+
+### The placement port
+
+Every field was already on the framework's `ShowVideoPlacement` and never filled by the compiler.
+`LayerPlacement` gained crop ×4, rotation, a per-layer `VideoFx` mapping, chroma key and colour adjust
+— each effect stored as `X` + `XEnabled` so **off is not delete**, which is the rule the output mapping
+and its sections already follow. `LayerFit` went from 3 modes to the 6 the compositor can actually do;
+the other 3 were unreachable. The inspector gained numeric dest/crop fields, nine quick layouts and
+four crop presets.
+
+### Pre-roll
+
+`ShowSession.WarmUpcomingAsync` existed and nothing called it, so every GO paid for its own open.
+`ShowHost` now warms after a GO, after a standby move, and once at start-up, to a depth of
+`ProjectSettings.PreRollCount` (default 2, zero turns it off). Fire-and-forget by contract: pre-roll
+must never delay the verb that triggered it.
+
+### The rest
+
+- `CueEndBehavior` (stop / freeze / loop / fade-out) and `LoopCrossfadeMs` — both honoured by the
+  session for a long time and unreachable from the document. The old `Loop` flag still loops.
+- Playlist `LoopCount` (passes; 0 = forever) and `AvoidImmediateRepeat`. The repeat guard swaps the
+  head with a neighbour rather than reshuffling until it differs — one swap always terminates, and a
+  reshuffle loop on a two-item list can run a long time before it does.
+- `CueNode.ColorTag`, an index into a nine-entry palette (`CueColors`) so it restyles with the theme
+  and a travelling show carries no hex codes.
+- The cue list's LEN column showed the FILE's duration rather than the trimmed one, so a ten-second
+  sting cut from a four-minute track read as four minutes.
+- Default fades 100 ms / 2 s → **zero**. A cue fades because somebody asked it to.
+- Resolution pickers: a text box plus a "▾" flyout of presets, this machine's screens first. Avalonia's
+  ComboBox has no `IsEditable`; the flyout matches the app's existing token-picker pattern.
+- Image cues needed no new cue KIND — FFmpeg decodes a still as a one-frame container, and
+  `FreezeLastFrame` is what makes it a title card. An imported image now gets that automatically.
+
+### Still open
+
+- **Text cues.** They need a text renderer, which is a genuinely different piece of work.
+- **Per-cue `DisablePreRoll`.** The session's warm picks the next N itself and has no per-cue veto.
+- **A seek lock** on the Active panel. HaPlay gates scrubbing behind a toggle so a show cannot be
+  dragged by accident; HaCue2's bar is always live.

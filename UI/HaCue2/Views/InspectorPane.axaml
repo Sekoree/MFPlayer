@@ -59,6 +59,12 @@
                 <TextBox Grid.Column="1" Text="{Binding PostWaitValue}" LostFocus="OnFieldCommitted" />
               </Grid>
             </HeaderedContentControl>
+            <!-- A band on the row, addressed by palette index rather than by colour so it restyles
+                 with the theme and a travelling show carries no hex codes. -->
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Colour">
+              <ComboBox ItemsSource="{Binding ColorTags}" SelectedIndex="{Binding ColorTagIndex}"
+                        ToolTip.Tip="A band at the left of this cue's row. The fastest thing to find in a long list." />
+            </HeaderedContentControl>
             <!-- A disabled cue stays visible and is skipped by GO and by auto-follow — deleting a cue
                  to drop it for one performance is how shows lose cues. -->
             <CheckBox Margin="10,6,10,0" IsChecked="{Binding IsEnabled}"
@@ -132,6 +138,18 @@
             </ContentControl>
             <CheckBox Margin="10,2,10,4" IsChecked="{Binding LoopValue}"
                       Content="Loop until stopped" />
+
+            <!-- Every cue simply STOPPED before this existed. Freeze is what a title card wants; fade
+                 out gives a cue its own out-ramp without a fade cue aimed at it. -->
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="At end">
+              <ComboBox ItemsSource="{Binding EndBehaviours}" SelectedIndex="{Binding EndBehaviourIndex}" />
+            </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Loop overlap"
+                                    IsVisible="{Binding IsLooping}">
+              <NumericUpDown Minimum="0" Maximum="30000" Increment="100" FormatString="0"
+                             Value="{Binding LoopCrossfadeValue}"
+                             ToolTip.Tip="Milliseconds of overlap when the loop wraps. A seamless loop is made of this; zero is a hard cut." />
+            </HeaderedContentControl>
 
             <ContentControl Theme="{StaticResource Subhead}" Content="Sends → logical outputs" />
             <!-- The bottom padding is for the horizontal scrollbar: it is an overlay, so without room
@@ -267,7 +285,113 @@
                 <ComboBox ItemsSource="{Binding FitModes}" SelectedIndex="{Binding FitIndex}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Opacity">
-                <TextBox Classes="short" Text="{Binding PlacementOpacityValue}" LostFocus="OnFieldCommitted" />
+                <NumericUpDown Minimum="0" Maximum="1" Increment="0.05" FormatString="0.##"
+                               Value="{Binding PlacementOpacity}" />
+              </HeaderedContentControl>
+
+              <!-- The destination rectangle as NUMBERS. A drag cannot hit exactly half, and half is
+                   what a split screen is made of. -->
+              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Dest x / y">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Grid.Column="0" Minimum="-1" Maximum="2" Increment="0.01"
+                                 FormatString="0.###" Value="{Binding PlacementX}" />
+                  <NumericUpDown Grid.Column="1" Minimum="-1" Maximum="2" Increment="0.01"
+                                 FormatString="0.###" Value="{Binding PlacementY}" />
+                </Grid>
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Dest w / h">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Grid.Column="0" Minimum="0.001" Maximum="2" Increment="0.01"
+                                 FormatString="0.###" Value="{Binding PlacementWidth}" />
+                  <NumericUpDown Grid.Column="1" Minimum="0.001" Maximum="2" Increment="0.01"
+                                 FormatString="0.###" Value="{Binding PlacementHeight}" />
+                </Grid>
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Rotation">
+                <NumericUpDown Minimum="-360" Maximum="360" Increment="1" FormatString="0.##"
+                               Value="{Binding PlacementRotation}"
+                               ToolTip.Tip="Clockwise, about the rectangle's centre. A rotated layer overflows its rectangle rather than being trimmed to it." />
+              </HeaderedContentControl>
+
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <WrapPanel ItemSpacing="4" LineSpacing="4">
+                  <Button Classes="tight" Content="FULL" Click="OnLayout" Tag="full" />
+                  <Button Classes="tight" Content="◧" Click="OnLayout" Tag="left" ToolTip.Tip="Left half" />
+                  <Button Classes="tight" Content="◨" Click="OnLayout" Tag="right" ToolTip.Tip="Right half" />
+                  <Button Classes="tight" Content="⬒" Click="OnLayout" Tag="top" ToolTip.Tip="Top half" />
+                  <Button Classes="tight" Content="⬓" Click="OnLayout" Tag="bottom" ToolTip.Tip="Bottom half" />
+                  <Button Classes="tight" Content="◰" Click="OnLayout" Tag="tl" ToolTip.Tip="Top left" />
+                  <Button Classes="tight" Content="◳" Click="OnLayout" Tag="tr" ToolTip.Tip="Top right" />
+                  <Button Classes="tight" Content="◱" Click="OnLayout" Tag="bl" ToolTip.Tip="Bottom left" />
+                  <Button Classes="tight" Content="◲" Click="OnLayout" Tag="br" ToolTip.Tip="Bottom right" />
+                </WrapPanel>
+              </ContentControl>
+
+              <!-- The CROP, which is a different question from the destination: which part of the
+                   picture to use, not where to put it. Baked-in letterbox bars come off here. -->
+              <ContentControl Theme="{StaticResource Subhead}" Content="Source crop" />
+              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Left / top">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Grid.Column="0" Minimum="0" Maximum="0.49" Increment="0.01"
+                                 FormatString="0.###" Value="{Binding CropLeft}" />
+                  <NumericUpDown Grid.Column="1" Minimum="0" Maximum="0.49" Increment="0.01"
+                                 FormatString="0.###" Value="{Binding CropTop}" />
+                </Grid>
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Right / bottom">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Grid.Column="0" Minimum="0" Maximum="0.49" Increment="0.01"
+                                 FormatString="0.###" Value="{Binding CropRight}" />
+                  <NumericUpDown Grid.Column="1" Minimum="0" Maximum="0.49" Increment="0.01"
+                                 FormatString="0.###" Value="{Binding CropBottom}" />
+                </Grid>
+              </HeaderedContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <WrapPanel ItemSpacing="4" LineSpacing="4">
+                  <Button Classes="tight" Content="NO CROP" Click="OnCrop" Tag="none" />
+                  <Button Classes="tight" Content="CENTRE ½ WIDE" Click="OnCrop" Tag="wide" />
+                  <Button Classes="tight" Content="CENTRE ½ TALL" Click="OnCrop" Tag="tall" />
+                  <Button Classes="tight" Content="CENTRE BOX" Click="OnCrop" Tag="centre" />
+                </WrapPanel>
+              </ContentControl>
+
+              <!-- Both effects follow the app's rule: OFF IS NOT DELETE. The settings survive the
+                   toggle, so checking a shot against an unkeyed one costs nothing to undo. -->
+              <ContentControl Theme="{StaticResource Subhead}" Content="Chroma key" />
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Key">
+                <CheckBox IsChecked="{Binding ChromaKeyOn}" Content="key this layer" />
+              </HeaderedContentControl>
+              <StackPanel IsVisible="{Binding HasChromaKey}">
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Colour">
+                  <TextBox Text="{Binding ChromaColour}" PlaceholderText="#00FF00" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Similar / soft">
+                  <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                    <NumericUpDown Grid.Column="0" Minimum="0" Maximum="1" Increment="0.02"
+                                   FormatString="0.##" Value="{Binding ChromaSimilarity}" />
+                    <NumericUpDown Grid.Column="1" Minimum="0" Maximum="1" Increment="0.02"
+                                   FormatString="0.##" Value="{Binding ChromaSmoothness}" />
+                  </Grid>
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Spill">
+                  <NumericUpDown Minimum="0" Maximum="1" Increment="0.02" FormatString="0.##"
+                                 Value="{Binding ChromaSpill}"
+                                 ToolTip.Tip="How much of the key colour is pulled out of what remains — the green fringe." />
+                </HeaderedContentControl>
+              </StackPanel>
+
+              <ContentControl Theme="{StaticResource Subhead}" Content="Colour" />
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Adjust">
+                <CheckBox IsChecked="{Binding ColorAdjustOn}" Content="brightness and contrast" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Bright / contrast"
+                                      IsVisible="{Binding ColorAdjustOn}">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                  <NumericUpDown Grid.Column="0" Minimum="-1" Maximum="1" Increment="0.05"
+                                 FormatString="0.##" Value="{Binding LayerBrightness}" />
+                  <NumericUpDown Grid.Column="1" Minimum="0" Maximum="4" Increment="0.05"
+                                 FormatString="0.##" Value="{Binding LayerContrast}" />
+                </Grid>
               </HeaderedContentControl>
 
               <c:AspectBox Margin="10,6" VerticalAlignment="Top">
@@ -378,9 +502,21 @@
 
             <StackPanel IsVisible="{Binding IsPlaylistGroup}">
               <CheckBox Margin="10,3" IsChecked="{Binding ShuffleValue}"
-                        Content="Shuffle, avoid immediate repeat" />
+                        Content="Shuffle" />
               <CheckBox Margin="10,3" IsChecked="{Binding ReshuffleValue}"
                         Content="Reshuffle each pass" />
+              <!-- Only while shuffling: an in-order playlist repeats by construction, and a checkbox
+                   that does nothing is worse than one that is not there. -->
+              <CheckBox Margin="10,3" IsChecked="{Binding AvoidRepeatValue}"
+                        IsVisible="{Binding ShuffleValue}"
+                        Content="Never repeat across a pass boundary"
+                        ToolTip.Tip="Without this a shuffled bed can play the same item twice in a row when a pass wraps — which reads as a fault rather than as chance." />
+
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Passes">
+                <NumericUpDown Minimum="0" Maximum="999" Increment="1" FormatString="0"
+                               Value="{Binding LoopCountValue}"
+                               ToolTip.Tip="How many times through the list. 0 is forever. What happens AFTER the last pass is the At end setting below." />
+              </HeaderedContentControl>
 
               <ContentControl Theme="{StaticResource Subhead}" Content="Crossfade between items" />
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Default">

@@ -53,6 +53,9 @@ public sealed partial class ShowHost
 
         await Executor.AdvanceAsync(runtimeList, id).ConfigureAwait(false);
         await Executor.FireAsync(id).ConfigureAwait(false);
+
+        // The cursor has moved; open what it now points at, so the NEXT go is instant.
+        WarmStandby(runtimeList);
         return id;
     }
 
@@ -66,8 +69,60 @@ public sealed partial class ShowHost
         var moved = await _session.SetStandbyCueAsync(
             cueId?.ToString(), ShowCompiler.GroupId(runtimeList)).ConfigureAwait(false);
         if (moved)
+        {
             runtimeList.StandbyCueId = cueId;
+            WarmStandby(runtimeList);
+        }
+
         return moved;
+    }
+
+    // ── pre-roll ──────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Opens the next few cues' media before anybody presses GO.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The difference between a GO that plays and a GO that opens a file first. Opening a 4 K clip off a
+    /// slow disk takes long enough to be seen, and until now HaCue2 did it at the moment the operator
+    /// pressed the button — the one moment it must not.
+    /// </para>
+    /// <para>
+    /// Fired and NOT awaited, deliberately: pre-roll is best-effort and must never delay the transport
+    /// verb that triggered it. The session swallows its own failures for the same reason; a warm that
+    /// did not happen costs the next GO an open, which is exactly where it was before.
+    /// </para>
+    /// </remarks>
+    private void WarmStandby(CueList list)
+    {
+        var count = _project.Settings.PreRollCount;
+
+        if (count <= 0)
+            return;
+
+        _ = WarmAsync(ShowCompiler.GroupId(list), count);
+    }
+
+    private async Task WarmAsync(string groupId, int count)
+    {
+        try
+        {
+            await _session.WarmUpcomingAsync(groupId, count).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // Best-effort by contract. Reported once rather than swallowed silently, because a rig
+            // where pre-roll always fails is a rig where every GO pays for an open.
+            Report($"pre-roll could not warm the next cue — {failure.Message}");
+        }
+    }
+
+    /// <summary>Warms every list's cursor — what a freshly opened show wants before the first GO.</summary>
+    internal void WarmAllStandby()
+    {
+        foreach (var list in _project.CueLists)
+            WarmStandby(list);
     }
 
     /// <summary>

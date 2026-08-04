@@ -62,6 +62,7 @@ public static class CuePresentation
             Number = Number(cue.Number),
             Label = cue.Label,
             Kind = KindOf(cue),
+            ColorTag = cue.ColorTag,
             Source = Source(cue, project, runtime),
             Fade = Fade(cue),
             Length = Length(cue, runtime),
@@ -171,6 +172,166 @@ public static class CuePresentation
 
         return rows;
     }
+
+    /// <summary>
+    /// The Active panel's rows, with a group's sounding children gathered under one header.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A playlist group of twelve used to fill the panel with twelve equal rows and nothing saying they
+    /// were one thing. Now the group is one row that owns them — with the whole group's remaining time,
+    /// which is the number an operator actually wants ("how long until this is done"), and the rest of
+    /// the chain underneath with a countdown to each.
+    /// </para>
+    /// <para>
+    /// Cues that are not in a group stay top-level rows, unchanged. A group appears only when something
+    /// inside it is sounding; the panel is still strictly "what is holding a voice", plus what that
+    /// commits the show to next.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<object> ActivePanel(
+        HaCueProject project,
+        IReadOnlyList<ActiveCueRow> active,
+        IReadOnlyDictionary<Guid, TimeSpan> durations)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(active);
+        ArgumentNullException.ThrowIfNull(durations);
+
+        // Which group owns each cue, gathered once rather than walked per row.
+        var owner = new Dictionary<Guid, GroupCueNode>();
+
+        foreach (var group in project.AllCues().OfType<GroupCueNode>())
+        {
+            foreach (var child in group.Children)
+                owner[child.Id] = group;
+        }
+
+        var rows = new List<object>();
+        var placed = new Dictionary<Guid, ActiveGroupRow>();
+
+        foreach (var row in active)
+        {
+            if (!owner.TryGetValue(row.CueId, out var group))
+            {
+                rows.Add(row);
+                continue;
+            }
+
+            if (!placed.TryGetValue(group.Id, out var header))
+            {
+                header = new ActiveGroupRow
+                {
+                    GroupId = group.Id,
+                    Number = Number(group.Number),
+                    Label = group.Label,
+                    Mode = group.FireMode switch
+                    {
+                        GroupFireMode.Playlist => "playlist",
+                        GroupFireMode.Timeline => "timeline",
+                        _ => "together",
+                    },
+                };
+
+                placed[group.Id] = header;
+                rows.Add(header);
+            }
+
+            header.Children.Add(row);
+        }
+
+        foreach (var (groupId, header) in placed)
+        {
+            if (project.FindCue(groupId) is not GroupCueNode group)
+                continue;
+
+            Aggregate(group, header, durations);
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// Fills a group header's clock, progress and upcoming chain from what its children will do.
+    /// </summary>
+    /// <remarks>
+    /// The whole group's remaining, not the current item's: a playlist's operator is waiting for the
+    /// LIST to finish. Lengths come from the probe, so a group whose files nobody has looked at shows a
+    /// count and no clock rather than a number that would be a guess.
+    /// </remarks>
+    private static void Aggregate(
+        GroupCueNode group,
+        ActiveGroupRow header,
+        IReadOnlyDictionary<Guid, TimeSpan> durations)
+    {
+        var sounding = header.Children.Select(child => child.CueId).ToHashSet();
+
+        // Everything the group still owes: what is playing now, plus the chain after it. An
+        // ALL-TOGETHER group owes nothing beyond what is already up — they all started at once.
+        var chained = group.FireMode is GroupFireMode.Playlist or GroupFireMode.Timeline;
+        var reached = false;
+        var ahead = TimeSpan.Zero;
+        var total = TimeSpan.Zero;
+        var remaining = TimeSpan.Zero;
+        var known = true;
+
+        foreach (var child in group.Children.Where(child => child.Enabled))
+        {
+            var length = Played(child, durations);
+
+            if (length is null)
+                known = false;
+
+            total += length ?? TimeSpan.Zero;
+
+            if (sounding.Contains(child.Id))
+            {
+                reached = true;
+                var row = header.Children.First(item => item.CueId == child.Id);
+                var left = row.Duration is { } span ? span - row.Position : TimeSpan.Zero;
+                remaining += left > TimeSpan.Zero ? left : TimeSpan.Zero;
+                ahead = remaining;
+                continue;
+            }
+
+            // Only what comes AFTER something that is playing counts as upcoming; a playlist that has
+            // passed an item is not going to play it again this pass.
+            if (!reached || !chained)
+                continue;
+
+            header.Upcoming.Add(new UpcomingCueRow(
+                Number(child.Number),
+                child.Label,
+                length is { } run ? Clock(run) : "—",
+                $"in {Clock(ahead)}"));
+
+            remaining += length ?? TimeSpan.Zero;
+            ahead += length ?? TimeSpan.Zero;
+        }
+
+        header.Clock = known && total > TimeSpan.Zero
+            ? $"−{Clock(remaining)} / {Clock(total)}"
+            : $"{header.Children.Count} playing";
+
+        header.Progress = known && total.TotalMilliseconds > 0
+            ? Math.Clamp(1 - (remaining / total), 0, 1)
+            : 0;
+
+        header.IsNearEnd = known && remaining > TimeSpan.Zero && remaining <= TimeSpan.FromSeconds(10);
+
+        // "item 3/12" is the position an operator calls out over talkback.
+        var playable = group.Children.Count(child => child.Enabled);
+        var at = group.Children.Where(child => child.Enabled).ToList()
+            .FindIndex(child => sounding.Contains(child.Id));
+
+        header.Position = at >= 0 && chained ? $"item {at + 1}/{playable}" : $"{playable} cues";
+    }
+
+    /// <summary>How long a cue will play for, or null when nothing has looked at its file.</summary>
+    private static TimeSpan? Played(CueNode cue, IReadOnlyDictionary<Guid, TimeSpan> durations) =>
+        cue is MediaCueNode media
+            ? media.TrimmedLength(durations.TryGetValue(cue.Id, out var probed) ? probed : null)
+            : null;
 
     /// <summary>Where a sounding cue is going, as the Active panel's right-hand column.</summary>
     private static string Destination(HaCueProject project, CueNode cue)
@@ -289,12 +450,25 @@ public static class CuePresentation
     /// A media file's duration is a MACHINE fact — it comes from probing the file, not from the
     /// document — so it arrives through the runtime and reads "—" until something has looked.
     /// </summary>
-    private static string Length(CueNode cue, ShowRuntime runtime) =>
-        runtime.MediaDurations.TryGetValue(cue.Id, out var duration)
-            ? duration.TotalHours >= 1
-                ? duration.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
-                : duration.ToString(@"m\:ss", CultureInfo.InvariantCulture)
-            : "—";
+    /// <summary>
+    /// How long the cue PLAYS for, which is the trimmed length rather than the file's.
+    /// </summary>
+    /// <remarks>
+    /// It showed the raw file duration, so a cue trimmed to a ten-second sting out of a four-minute
+    /// track read as four minutes — the one number in the row an operator uses to plan, wrong by the
+    /// whole of the trim.
+    /// </remarks>
+    private static string Length(CueNode cue, ShowRuntime runtime)
+    {
+        if (!runtime.MediaDurations.TryGetValue(cue.Id, out var duration))
+            return "—";
+
+        var played = cue is MediaCueNode media ? media.TrimmedLength(duration) ?? duration : duration;
+
+        return played.TotalHours >= 1
+            ? played.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
+            : played.ToString(@"m\:ss", CultureInfo.InvariantCulture);
+    }
 
     private static string Level(CueNode cue) => cue switch
     {

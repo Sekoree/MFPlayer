@@ -433,6 +433,10 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         };
 
         await host.ReloadAsync(runtimeProject, context, alreadyDetached: true).ConfigureAwait(false);
+
+        // Before the operator has pressed anything: the FIRST go is the one most likely to be the
+        // performance's first, and the one that would otherwise pay for an open.
+        host.WarmAllStandby();
         return host;
     }
 

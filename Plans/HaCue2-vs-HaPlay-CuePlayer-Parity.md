@@ -203,3 +203,24 @@ Four of the reported defects, with their causes:
 5. **Colour tags** (§6), **attached-picture flag** (§8).
 6. **Image and text cues** (§4).
 7. Chroma key / colour adjust (§1) — behind the layer-effects system.
+
+---
+
+## 10. Closed on 2026-08-04 (the same day)
+
+The owner asked for all of it, so items 1–7 above were built in one pass. What each turned out to be:
+
+| Item | What it was |
+| --- | --- |
+| **Pre-roll** | `ShowSession.WarmUpcomingAsync` already existed and nothing called it. `ShowHost` now warms after every GO, after a standby move, and once at start-up; `ProjectSettings.PreRollCount` (default 2, 0 = off) is the depth. Fire-and-forget by contract — pre-roll must never delay the verb that triggered it. |
+| **Placement** | Every field was already on the framework's `ShowVideoPlacement` and never filled. `LayerPlacement` gained crop ×4, rotation, `VideoFx` + enabled, `ChromaKey` + enabled, `ColorAdjust` + enabled; `LayerFit` went 3 → 6. Inspector gained numeric dest/crop fields, nine quick layouts, four crop presets, and both effect panes. |
+| **Group aggregation** | `ActiveGroupRow` with the WHOLE group's remaining/total, "item 3/12", a per-group ✕, and the rest of the chain with countdowns. **Expanded by default** — a group that hid its children would show less than the flat list it replaced. The expander survives the 4 Hz rebuild; everything else on the row is a measurement and is meant to be replaced. |
+| **Playlist** | `AvoidImmediateRepeat` (head-swap rather than reshuffle-until-different — one swap always terminates) and `LoopCount` passes, counted on `PlaylistRun`. |
+| **End behaviour** | `CueEndBehavior` (stop / freeze / loop / fade out) and `LoopCrossfadeMs`, both already honoured by the session and unreachable from the document. The old `Loop` flag still loops, so older shows are unchanged. |
+| **Colour tags** | `CueNode.ColorTag`, an index into a nine-entry palette resolved in `CueColors` so it restyles with the theme and a travelling show carries no hex codes. |
+| **Trimmed LEN** | The cue list showed the FILE's duration, so a ten-second sting cut from a four-minute track read as four minutes. |
+| **Image cues** | Did not need a new cue kind: FFmpeg decodes a still as a one-frame container, and `FreezeLastFrame` is what makes it a title card. An imported image now gets that end behaviour automatically. |
+
+**Still open after this pass:** TEXT cues (§4) — they need a text renderer, which is a genuinely
+different piece of work from everything above. The per-cue `DisablePreRoll` opt-out (§3) is also not
+there: the session's warm picks the next N itself and has no per-cue veto.

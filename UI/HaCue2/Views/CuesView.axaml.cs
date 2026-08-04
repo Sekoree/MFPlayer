@@ -73,6 +73,13 @@ public partial class CuesView : UserControl
             cues.StopCue(cueId);
     }
 
+    /// <summary>The × on a group header: everything the group is holding, in one press.</summary>
+    private void OnStopGroup(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is CuesViewModel cues && (sender as Control)?.Tag is Guid groupId)
+            cues.StopGroup(groupId);
+    }
+
     /// <summary>A drag on an Active row's bar moves that cue's playhead.</summary>
     private void OnSeekActive(object? sender, Controls.SeekEventArgs e)
     {
