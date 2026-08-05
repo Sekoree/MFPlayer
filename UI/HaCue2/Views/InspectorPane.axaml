@@ -65,6 +65,11 @@
               <ComboBox ItemsSource="{Binding ColorTags}" SelectedIndex="{Binding ColorTagIndex}"
                         ToolTip.Tip="A band at the left of this cue's row. The fastest thing to find in a long list." />
             </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="At media end"
+                                    IsVisible="{Binding HasMediaCue}">
+              <ComboBox ItemsSource="{Binding EndTargetOptions}" SelectedIndex="{Binding EndTargetIndex}"
+                        ToolTip.Tip="An explicit target overrides ordinary Follow. Playlist and armed-list ownership still wins." />
+            </HeaderedContentControl>
             <!-- A source cue's media is a URI, not a file, so there is no path to read here and no
                  file picker that could change it. Named rather than shown raw: the URI is mostly
                  punctuation, and what identifies the cue is the camera or the device. -->
@@ -111,6 +116,8 @@
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Level">
               <TextBox Classes="short" Text="{Binding LevelValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
+            <CheckBox Margin="10,2,10,4" IsChecked="{Binding SendToVisualizerValue}"
+                      Content="Send to selective visualizer feeds" />
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Fade in">
               <Grid ColumnDefinitions="62,*,Auto" ColumnSpacing="6">
                 <TextBox Grid.Column="0" Text="{Binding FadeValue}" LostFocus="OnFieldCommitted" />
@@ -182,6 +189,7 @@
               <!-- The same gesture vocabulary as the patch: an operator who learns it on one matrix
                    must find it true on the other. -->
               <c:MatrixView Columns="{Binding SendColumns}" Rows="{Binding SendRows}"
+                            AutomationProperties.Name="Cue audio send matrix"
                             RowHeaderWidth="44"
                             Gesture="OnSendGesture"
                             PointerReleased="OnSendGestureEnded"
@@ -359,15 +367,15 @@
 
               <ContentControl Theme="{StaticResource FieldWide}">
                 <WrapPanel ItemSpacing="4" LineSpacing="4">
-                  <Button Classes="tight" Content="FULL" Click="OnLayout" Tag="full" />
-                  <Button Classes="tight" Content="◧" Click="OnLayout" Tag="left" ToolTip.Tip="Left half" />
-                  <Button Classes="tight" Content="◨" Click="OnLayout" Tag="right" ToolTip.Tip="Right half" />
-                  <Button Classes="tight" Content="⬒" Click="OnLayout" Tag="top" ToolTip.Tip="Top half" />
-                  <Button Classes="tight" Content="⬓" Click="OnLayout" Tag="bottom" ToolTip.Tip="Bottom half" />
-                  <Button Classes="tight" Content="◰" Click="OnLayout" Tag="tl" ToolTip.Tip="Top left" />
-                  <Button Classes="tight" Content="◳" Click="OnLayout" Tag="tr" ToolTip.Tip="Top right" />
-                  <Button Classes="tight" Content="◱" Click="OnLayout" Tag="bl" ToolTip.Tip="Bottom left" />
-                  <Button Classes="tight" Content="◲" Click="OnLayout" Tag="br" ToolTip.Tip="Bottom right" />
+                  <Button Classes="tight" Content="FULL" Click="OnLayout" Tag="full" AutomationProperties.Name="Place full frame" />
+                  <Button Classes="tight" Content="◧" Click="OnLayout" Tag="left" ToolTip.Tip="Left half" AutomationProperties.Name="Place in left half" />
+                  <Button Classes="tight" Content="◨" Click="OnLayout" Tag="right" ToolTip.Tip="Right half" AutomationProperties.Name="Place in right half" />
+                  <Button Classes="tight" Content="⬒" Click="OnLayout" Tag="top" ToolTip.Tip="Top half" AutomationProperties.Name="Place in top half" />
+                  <Button Classes="tight" Content="⬓" Click="OnLayout" Tag="bottom" ToolTip.Tip="Bottom half" AutomationProperties.Name="Place in bottom half" />
+                  <Button Classes="tight" Content="◰" Click="OnLayout" Tag="tl" ToolTip.Tip="Top left" AutomationProperties.Name="Place in top left" />
+                  <Button Classes="tight" Content="◳" Click="OnLayout" Tag="tr" ToolTip.Tip="Top right" AutomationProperties.Name="Place in top right" />
+                  <Button Classes="tight" Content="◱" Click="OnLayout" Tag="bl" ToolTip.Tip="Bottom left" AutomationProperties.Name="Place in bottom left" />
+                  <Button Classes="tight" Content="◲" Click="OnLayout" Tag="br" ToolTip.Tip="Bottom right" AutomationProperties.Name="Place in bottom right" />
                 </WrapPanel>
               </ContentControl>
 
@@ -445,6 +453,8 @@
                    here rather than its own boxes fed back to it. -->
               <c:AspectBox Margin="10,6" VerticalAlignment="Top">
                 <c:PlacementCanvas Boxes="{Binding Placements}"
+                                   AutomationProperties.Name="Video placement canvas"
+                                   AutomationProperties.HelpText="Drag or resize the selected placement. Exact numeric fields are above."
                                    GuidesX="{Binding PlacementGuidesX}"
                                    GuidesY="{Binding PlacementGuidesY}"
                                    Gesture="OnPlacementGesture"
@@ -551,7 +561,7 @@
               <Button Classes="block" Content="OPEN TIMELINE ›" Click="OnOpenTimeline" />
             </ContentControl>
 
-            <StackPanel IsVisible="{Binding IsPlaylistGroup}">
+            <StackPanel IsVisible="{Binding IsSequencedGroup}">
               <CheckBox Margin="10,3" IsChecked="{Binding ShuffleValue}"
                         Content="Shuffle" />
               <CheckBox Margin="10,3" IsChecked="{Binding ReshuffleValue}"
@@ -563,25 +573,33 @@
                         Content="Never repeat across a pass boundary"
                         ToolTip.Tip="Without this a shuffled bed can play the same item twice in a row when a pass wraps — which reads as a fault rather than as chance." />
 
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Passes">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Play count">
                 <NumericUpDown Minimum="0" Maximum="999" Increment="1" FormatString="0"
                                Value="{Binding LoopCountValue}"
                                ToolTip.Tip="How many times through the list. 0 is forever. What happens AFTER the last pass is the At end setting below." />
               </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Items per pass">
+                <NumericUpDown Minimum="1" Maximum="999" Increment="1" FormatString="0"
+                               Value="{Binding PlayCountValue}"
+                               ToolTip.Tip="Leave blank to play every enabled child; set a number to use only that many from each ordered or shuffled pass." />
+              </HeaderedContentControl>
 
-              <ContentControl Theme="{StaticResource Subhead}" Content="Crossfade between items" />
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Default">
-                <TextBox Classes="short" Text="{Binding CrossfadeValue}" LostFocus="OnFieldCommitted" />
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Curve">
-                <ComboBox ItemsSource="{Binding CrossfadeCurve.Curves}"
-                          SelectedIndex="{Binding CrossfadeCurve.SelectedIndex}"
-                          ItemTemplate="{StaticResource CurveItemTemplate}"
-                          SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
-              </HeaderedContentControl>
+              <StackPanel IsVisible="{Binding IsPlaylistGroup}">
+                <ContentControl Theme="{StaticResource Subhead}" Content="Crossfade between items" />
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Default">
+                  <TextBox Classes="short" Text="{Binding CrossfadeValue}" LostFocus="OnFieldCommitted" />
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Curve">
+                  <ComboBox ItemsSource="{Binding CrossfadeCurve.Curves}"
+                            SelectedIndex="{Binding CrossfadeCurve.SelectedIndex}"
+                            ItemTemplate="{StaticResource CurveItemTemplate}"
+                            SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
+                </HeaderedContentControl>
+              </StackPanel>
             </StackPanel>
 
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="At end">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="At end"
+                                    IsVisible="{Binding IsSequencedGroup}">
               <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding AtEndOptions}"
                        SelectedIndex="{Binding AtEndIndex}" />
             </HeaderedContentControl>
@@ -773,8 +791,15 @@
               <TextBox Classes="short" Text="{Binding VisualizerBlendValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Audio feed">
-              <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                         Text="program bus · upstream of per-line inserts" />
+              <StackPanel>
+                <CheckBox IsChecked="{Binding VisualizerFeedAllValue}"
+                          Content="All sounding media" />
+                <TextBox IsVisible="{Binding !VisualizerFeedAllValue}"
+                         Text="{Binding VisualizerFeedCueNumbers}" LostFocus="OnFieldCommitted"
+                         PlaceholderText="cue numbers, e.g. 12, 14.2" />
+                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap"
+                           Text="{Binding VisualizerFeedHint}" />
+              </StackPanel>
             </HeaderedContentControl>
             <CheckBox Margin="10,4" IsChecked="{Binding VisualizerLocksPresetValue}"
                       Content="Lock to this preset (no auto-advance)" />

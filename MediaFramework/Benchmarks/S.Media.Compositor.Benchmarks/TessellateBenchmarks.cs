@@ -6,9 +6,9 @@ using S.Media.Core.Video;
 namespace S.Media.Compositor.Benchmarks;
 
 /// <summary>
-/// Measures <see cref="WarpMeshTessellator.Tessellate"/>. A <see cref="CompositorLayer.Mesh"/> layer
-/// currently re-tessellates (and re-allocates the vertex/index arrays) every frame per layer in
-/// <c>GlVideoCompositor.DrawLayerMesh</c>; this quantifies what caching per-mesh buffers would save.
+/// Measures <see cref="WarpMeshTessellator.Tessellate"/>. The GL compositor caches the resulting
+/// vertex/index buffers per mesh, so this benchmark quantifies cache-miss and live mesh-edit cost,
+/// not steady-state per-frame rendering cost.
 /// </summary>
 [MemoryDiagnoser]
 public class TessellateBenchmarks

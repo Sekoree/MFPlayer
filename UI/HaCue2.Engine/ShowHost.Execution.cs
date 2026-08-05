@@ -55,6 +55,7 @@ public sealed partial class ShowHost
         _outbound.Interrupt(cueId);
         await _visualizers.StopAsync(cueId).ConfigureAwait(false);
         await _session.StopCueAsync(cueId.ToString()).ConfigureAwait(false);
+        Executor.OnStopped(cueId);
     }
 
     Task<string?> ICueExecutionHost.SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint) =>

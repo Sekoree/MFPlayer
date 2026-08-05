@@ -83,6 +83,17 @@ public sealed class ProjectVisualizers : IAsyncDisposable
 
         var attached = new List<(string, ProjectMVisualSource)>();
         string? firstFailure = null;
+        Func<string, bool>? feedFilter = null;
+        if (!cue.FeedAll)
+        {
+            var allowed = cue.FeedCueIds
+                .Concat(project.AllCues().OfType<MediaCueNode>()
+                    .Where(media => media.SendToVisualizer)
+                    .Select(media => media.Id))
+                .Select(id => id.ToString())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            feedFilter = allowed.Contains;
+        }
 
         // Grouped by composition: one renderer per canvas, however many sections of it the cue fills.
         foreach (var group in cue.Placements.GroupBy(placement => placement.CompositionId))
@@ -109,6 +120,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                     compositionId,
                     source,
                     placements: placements,
+                    audioFeedFilter: feedFilter,
                     // The composition is rebuilt whenever its size or rate changes, and every edit
                     // reloads the document. Without this a visualizer would go black on an unrelated
                     // keystroke and stay black.

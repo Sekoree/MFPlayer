@@ -132,7 +132,8 @@ public class OutputPresentationTests
         Guid compositionId,
         long composited = 0,
         long behind = 0,
-        int layers = 0) =>
+        int layers = 0,
+        string backend = "OpenGL") =>
         new(
             compositionId.ToString(),
             FramesComposited: composited,
@@ -144,7 +145,8 @@ public class OutputPresentationTests
             FramesBehindMaster: behind,
             ClockMastered: true,
             LayerCount: layers,
-            CanvasPeriod: TimeSpan.FromSeconds(1d / 30));
+            CanvasPeriod: TimeSpan.FromSeconds(1d / 30),
+            CompositorBackend: backend);
 
     [Fact]
     public void ACompositionNobodyHasTimedYetShowsADashRatherThanZero()
@@ -162,6 +164,20 @@ public class OutputPresentationTests
         // same, or the column is noise for the first quarter-second of every show.
         Assert.Equal("— / 30", row.Fps.Text);
         Assert.Equal("3", row.Layers);
+        Assert.Equal("OpenGL", row.Gpu);
+    }
+
+    [Fact]
+    public void CpuFallbackIsShownRatherThanClaimedAsGpu()
+    {
+        var show = new TestProject();
+
+        var row = Assert.Single(OutputPresentation.Compositions(
+            show.Project,
+            [Stats(show.Cyc.Id, backend: "CPU")],
+            new Dictionary<string, double>()));
+
+        Assert.Equal("CPU", row.Gpu);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Diagnostics;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Threading;
@@ -25,6 +26,16 @@ public partial class CuesViewModel : ObservableObject
 
     private readonly ProjectJournal _journal;
     private readonly ShowRuntime _runtime;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RightPanelWidth))]
+    [NotifyPropertyChangedFor(nameof(RightSplitterWidth))]
+    [NotifyPropertyChangedFor(nameof(RightPanelToggleLabel))]
+    private bool _isRightPanelOpen = true;
+
+    public GridLength RightPanelWidth => new(IsRightPanelOpen ? 316 : 0);
+    public GridLength RightSplitterWidth => new(IsRightPanelOpen ? 4 : 0);
+    public string RightPanelToggleLabel => IsRightPanelOpen ? "HIDE INSPECTOR" : "SHOW INSPECTOR";
 
     public CuesViewModel(ProjectJournal journal, ShowRuntime runtime)
     {
@@ -360,8 +371,20 @@ public partial class CuesViewModel : ObservableObject
     /// <summary>Optional persistence hook used by Save-on-GO.</summary>
     public Func<Task>? AfterGo { get; set; }
 
+    private ShowHost? _engine;
+
     /// <summary>The running show, when there is one. Set by the shell after it starts the engine.</summary>
-    public ShowHost? Engine { get; set; }
+    public ShowHost? Engine
+    {
+        get => _engine;
+        set
+        {
+            _engine = value;
+            SyncActiveCueList();
+        }
+    }
+
+    private void SyncActiveCueList() => Engine?.SetActiveCueList(ScopedList?.Id);
 
     /// <summary>What the transport row says about itself.</summary>
     public string TransportHint => Engine is null
@@ -649,12 +672,11 @@ public partial class CuesViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Puts standby on the selected cue — the Esc key, and "move standby here".
+    /// Puts standby on the selected cue without firing it.
     /// </summary>
     /// <remarks>
-    /// Esc is "get me back to where I am looking", which during a show is the selected row. It never
-    /// stops anything: there is a PANIC button for that, and an Esc that stopped the show because
-    /// somebody reached for it out of habit would be unforgivable.
+    /// This remains an explicit row/menu verb. Escape is reserved for the conventional Stop, then
+    /// double-Escape Panic safety sequence.
     /// </remarks>
     public void StandbyHere()
     {
@@ -1496,6 +1518,7 @@ public partial class CuesViewModel : ObservableObject
 
     partial void OnSelectedScopeChanged(ScopeEntry? value)
     {
+        SyncActiveCueList();
         Rebuild();
         SelectedCue = null;
         OnPropertyChanged(nameof(TreeHint));
@@ -1564,6 +1587,9 @@ public partial class CuesViewModel : ObservableObject
     /// </remarks>
     public ObservableCollection<object> ActivePanelRows { get; } = [];
 
+    /// <summary>Shows sounding cues without group headers when the operator prefers a flat run list.</summary>
+    public bool FlatActiveList { get; set; }
+
     /// <summary>
     /// Rebuilds the panel, keeping each group's expander where the operator left it.
     /// </summary>
@@ -1578,7 +1604,9 @@ public partial class CuesViewModel : ObservableObject
             .OfType<ActiveGroupRow>()
             .ToDictionary(group => group.GroupId, group => group.IsExpanded);
 
-        var rebuilt = CuePresentation.ActivePanel(Project, [.. ActiveCues], _runtime.MediaDurations);
+        IReadOnlyList<object> rebuilt = FlatActiveList
+            ? [.. ActiveCues.Cast<object>()]
+            : CuePresentation.ActivePanel(Project, [.. ActiveCues], _runtime.MediaDurations);
 
         foreach (var group in rebuilt.OfType<ActiveGroupRow>())
         {

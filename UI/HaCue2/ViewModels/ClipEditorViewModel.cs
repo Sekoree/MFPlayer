@@ -35,6 +35,7 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
     private readonly ProjectJournal? _journal;
     private readonly MediaCueNode? _cue;
     private readonly string _cacheRoot;
+    private readonly long? _waveformCacheBytes;
     private CancellationTokenSource? _scan;
     private CancellationTokenSource? _frame;
     private IDisposable? _drag;
@@ -48,7 +49,8 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
     }
 
     public ClipEditorViewModel(
-        ProjectJournal journal, MediaCueNode cue, string resolvedPath, TimeSpan? length, string cacheRoot)
+        ProjectJournal journal, MediaCueNode cue, string resolvedPath, TimeSpan? length, string cacheRoot,
+        long? waveformCacheBytes = null)
     {
         ArgumentNullException.ThrowIfNull(journal);
         ArgumentNullException.ThrowIfNull(cue);
@@ -56,6 +58,7 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
         _journal = journal;
         _cue = cue;
         _cacheRoot = cacheRoot;
+        _waveformCacheBytes = waveformCacheBytes;
         Path = resolvedPath;
         Length = length;
         Title = $"Clip · Q{CuePresentation.Number(cue.Number)} {cue.Label}";
@@ -142,7 +145,7 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
             Peaks = peaks;
 
             if (peaks is not null)
-                WaveformCache.Write(_cacheRoot, Path, peaks);
+                WaveformCache.Write(_cacheRoot, Path, peaks, _waveformCacheBytes);
         }
         finally
         {

@@ -20,6 +20,8 @@ namespace HaCue2.Views;
 /// </remarks>
 public partial class CuesView : UserControl
 {
+    private bool _collapsedForWidth;
+
     public CuesView()
     {
         InitializeComponent();
@@ -36,6 +38,32 @@ public partial class CuesView : UserControl
             panic.AddHandler(PointerPressedEvent, OnPanicPressed, handledEventsToo: true);
             panic.AddHandler(PointerReleasedEvent, OnPanicReleased, handledEventsToo: true);
             panic.AddHandler(PointerCaptureLostEvent, OnPanicCaptureLost, handledEventsToo: true);
+        }
+        SizeChanged += (_, _) => ApplyResponsiveLayout();
+    }
+
+    private void ApplyResponsiveLayout()
+    {
+        if (DataContext is not CuesViewModel cues)
+            return;
+        if (Bounds.Width < 1_040 && cues.IsRightPanelOpen)
+        {
+            cues.IsRightPanelOpen = false;
+            _collapsedForWidth = true;
+        }
+        else if (Bounds.Width >= 1_180 && _collapsedForWidth)
+        {
+            cues.IsRightPanelOpen = true;
+            _collapsedForWidth = false;
+        }
+    }
+
+    private void OnToggleRightPanel(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is CuesViewModel cues)
+        {
+            cues.IsRightPanelOpen = !cues.IsRightPanelOpen;
+            _collapsedForWidth = false;
         }
     }
 

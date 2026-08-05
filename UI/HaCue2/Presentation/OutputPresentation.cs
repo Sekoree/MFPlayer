@@ -164,6 +164,7 @@ public static class OutputPresentation
                     : new Status(item.FramesBehindMaster.ToString(CultureInfo.InvariantCulture), Gel.Amber),
                 Dropped = (item.SlotOverflowFrames + item.PumpOverruns)
                     .ToString(CultureInfo.InvariantCulture),
+                Gpu = item.CompositorBackend,
             }),
         ];
     }

@@ -58,7 +58,7 @@
         <c:PanelBox Grid.Column="0" Header="Video outputs" Hint="what this machine can put a picture on">
           <c:PanelBox.Footer>
             <Border Classes="chain">
-              <StackPanel Orientation="Horizontal" Spacing="6">
+              <StackPanel Orientation="Horizontal" Spacing="6" IsEnabled="{Binding CanAuthor}">
                 <Button Classes="tight" Content="+ LOCAL…" Click="OnDialog" Tag="out:local" />
                 <Button Classes="tight" Content="+ NDI…" Click="OnDialog" Tag="out:ndi" />
                 <Button Classes="tight" Content="+ RECORD…" Click="OnDialog" Tag="out:record" />
@@ -314,7 +314,7 @@
 
           <!-- ADD / REMOVE at the foot, exactly where the outputs pane puts them. -->
           <Border DockPanel.Dock="Bottom" Classes="chain">
-            <StackPanel Orientation="Horizontal" Spacing="6">
+            <StackPanel Orientation="Horizontal" Spacing="6" IsEnabled="{Binding CanAuthor}">
               <Button Classes="tight" Content="+ ADD…" Click="OnDialog" Tag="composition" />
               <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="composition:remove"
                       IsEnabled="{Binding HasComposition}" />
@@ -357,7 +357,8 @@
                         </Grid>
                       </Expander.Header>
 
-                      <StackPanel Spacing="6">
+                      <StackPanel Spacing="6"
+                                  IsEnabled="{Binding $parent[v:VideoView].((vm:VideoViewModel)DataContext).CanAuthor}">
 
                         <!-- The OUTPUT LAYOUT, and the EDITOR of it rather than a picture of one:
                              which screen covers which part of this canvas, where two overlap and
@@ -376,6 +377,7 @@
                              done correctly. The pane's guides remain what a CUE placement snaps to. -->
                         <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding Aspect}">
                           <c:PlacementCanvas Boxes="{Binding OutputBoxes}"
+                                             AutomationProperties.Name="Composition output layout"
                                              Gesture="OnLayoutGesture"
                                              GestureCompleted="OnGestureCompleted"
                                              BoxSelected="OnLayoutOutputSelected" />
@@ -573,11 +575,16 @@
                  Background="{DynamicResource BoothBg}">
 
         <Border DockPanel.Dock="Top" Classes="chain" Margin="0,0,0,7">
-          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="7">
+          <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="7">
             <Border Grid.Column="0" Classes="badge"><TextBlock Text="MAPPING" /></Border>
             <TextBlock Grid.Column="1" Classes="mono small" VerticalAlignment="Center"
                        Text="{Binding MappingScopeNote}" />
-            <Button Grid.Column="2" Classes="tight" Content="✕ CLOSE" Click="OnCloseMapping" />
+            <ToggleButton Grid.Column="2" Classes="tight" Content="CALIBRATION GRID"
+                          IsChecked="{Binding IsCalibrationOn}" Click="OnCalibration"
+                          AutomationProperties.Name="Toggle persistent output calibration grid"
+                          ToolTip.Tip="Shows orientation corners, a ten-by-ten warp grid and section boundaries on this output until the mapping editor closes." />
+            <Button Grid.Column="3" Classes="tight" Content="✕ CLOSE" Click="OnCloseMapping"
+                    AutomationProperties.Name="Close mapping editor" />
           </Grid>
         </Border>
 
@@ -690,6 +697,7 @@
               </Border>
               <c:AspectBox Margin="10,8" VerticalAlignment="Top">
                 <c:PlacementCanvas Boxes="{Binding MappingSource}"
+                                   AutomationProperties.Name="Mapping source sections"
                                    Gesture="OnMappingSourceGesture"
                                    GestureCompleted="OnGestureCompleted"
                                    BoxSelected="OnSectionSelected" />
@@ -744,6 +752,15 @@
 
                   <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4" Spacing="4"
                               IsVisible="{Binding HasWarp}">
+                    <c:WarpMeshCanvas Height="190" MinWidth="260"
+                                      Columns="{Binding MeshColumns}" Rows="{Binding MeshRows}"
+                                      Offsets="{Binding WarpOffsets}"
+                                      SelectedIndex="{Binding SelectedWarpPoint}"
+                                      PointMoved="OnWarpPointMoved"
+                                      PointSelected="OnWarpPointSelected"
+                                      GestureCompleted="OnWarpGestureCompleted"
+                                      AutomationProperties.Name="Warp mesh editor"
+                                      AutomationProperties.HelpText="Drag a control point. Arrow keys nudge; Shift plus arrow nudges coarsely." />
                     <Grid ColumnDefinitions="Auto,*,Auto,*" ColumnSpacing="5">
                       <TextBlock Grid.Column="0" Classes="mono dim3 small" VerticalAlignment="Center"
                                  Text="Point" />
@@ -760,10 +777,14 @@
                       </Grid>
                     </Grid>
                     <WrapPanel HorizontalAlignment="Center" ItemSpacing="4">
-                      <Button Classes="icon" Content="←" Click="OnWarpNudge" Tag="left" />
-                      <Button Classes="icon" Content="↑" Click="OnWarpNudge" Tag="up" />
-                      <Button Classes="icon" Content="↓" Click="OnWarpNudge" Tag="down" />
-                      <Button Classes="icon" Content="→" Click="OnWarpNudge" Tag="right" />
+                      <Button Classes="icon" Content="←" Click="OnWarpNudge" Tag="left"
+                              AutomationProperties.Name="Nudge warp point left" />
+                      <Button Classes="icon" Content="↑" Click="OnWarpNudge" Tag="up"
+                              AutomationProperties.Name="Nudge warp point up" />
+                      <Button Classes="icon" Content="↓" Click="OnWarpNudge" Tag="down"
+                              AutomationProperties.Name="Nudge warp point down" />
+                      <Button Classes="icon" Content="→" Click="OnWarpNudge" Tag="right"
+                              AutomationProperties.Name="Nudge warp point right" />
                     </WrapPanel>
                   </StackPanel>
                 </Grid>
@@ -771,6 +792,7 @@
               <c:AspectBox Margin="10,8" VerticalAlignment="Top">
                 <!-- No grid on the output half: the reference here is the wall, not a nominal frame. -->
                 <c:PlacementCanvas Boxes="{Binding MappingTarget}" ShowGrid="False"
+                                   AutomationProperties.Name="Mapping destination sections"
                                    Gesture="OnMappingTargetGesture"
                                    GestureCompleted="OnGestureCompleted"
                                    BoxSelected="OnSectionSelected" />

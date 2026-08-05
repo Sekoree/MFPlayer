@@ -104,6 +104,12 @@ public static class ProjectReferences
                 case FadeCueNode fade when fade.TargetCueIds.Contains(id):
                     found.Add(CueRef(cue, "fades it"));
                     break;
+                case MediaCueNode media when media.EndTargetCueId == id:
+                    found.Add(CueRef(cue, "fires it at media end"));
+                    break;
+                case VisualizerCueNode visualizer when visualizer.FeedCueIds.Contains(id):
+                    found.Add(CueRef(cue, "uses its audio in the visualizer feed"));
+                    break;
             }
 
         foreach (var list in project.CueLists.Where(list => list.StandbyCueId == id))

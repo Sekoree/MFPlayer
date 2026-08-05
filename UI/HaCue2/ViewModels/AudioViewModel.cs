@@ -16,6 +16,9 @@ public partial class AudioViewModel : ObservableObject
     private readonly ProjectJournal _journal;
     private readonly ShowRuntime _runtime;
 
+    /// <summary>Authoring is disabled by the shell's lock; live audition and recorder controls remain available.</summary>
+    public bool CanAuthor => !_journal.IsReadOnly;
+
     public AudioViewModel(ProjectJournal journal, ShowRuntime runtime)
     {
         _journal = journal;
@@ -763,6 +766,7 @@ public partial class AudioViewModel : ObservableObject
         OnPropertyChanged(nameof(HasGroupToRemove));
         OnPropertyChanged(nameof(SelectedOutputLines));
         OnPropertyChanged(nameof(SelectedOutputCarries));
+        OnPropertyChanged(nameof(CanAuthor));
         Audition.Refresh();
     }
 

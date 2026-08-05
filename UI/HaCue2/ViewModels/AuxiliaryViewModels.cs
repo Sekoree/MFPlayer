@@ -490,6 +490,7 @@ public partial class SettingsViewModel : ObservableObject
 
     private readonly AppSettings _app;
     private readonly Action? _applicationChanged;
+    private readonly string _activeCacheRoot;
 
     public SettingsViewModel() : this(SampleProject.Create())
     {
@@ -506,6 +507,7 @@ public partial class SettingsViewModel : ObservableObject
         _journal = journal;
         _app = app ?? new AppSettings();
         _applicationChanged = applicationChanged;
+        _activeCacheRoot = MediaCache.RootFor(_app);
 
         // The Remote API row says "project" only when this project actually overrides it. It used to
         // say so on every project, including ones with no override at all.
@@ -566,21 +568,22 @@ public partial class SettingsViewModel : ObservableObject
         _ballistic = _app.MeterBallistics;
         _clipReset = _app.ClipReset;
         _rememberInspectorTab = _app.RememberInspectorTab;
-        _rememberTimelineDock = _app.RememberTimelineDock;
         _flatActiveList = _app.FlatActiveList;
         _openDrawerOnLaunch = _app.OpenDrawerOnLaunch;
         _spaceRule = _app.SpaceRule;
         _doubleGoGuard = _app.DoubleGoGuard;
         _confirmStopAll = _app.ConfirmStopAll;
         _standbyFollowsClickDefault = _app.StandbyFollowsClick;
+        _hotkeyProfile = AppHotkeys.Profiles.Contains(_app.HotkeyProfile) ? _app.HotkeyProfile : AppHotkeys.Profiles[0];
+        RebuildHotkeys();
         _autoRenumberDefault = _app.AutoRenumberDefault;
         _remoteDefault = _app.RemoteDefault;
         _remotePort = _app.RemotePort;
         _remoteLanAllowed = _app.RemoteLanAllowed;
         _audioBackend = _app.AudioBackend;
-        _cacheRoot = _app.CacheRoot.Length > 0 ? _app.CacheRoot : "(shared framework cache)";
+        _cacheRoot = MediaCache.RootFor(_app);
         _waveformBudget = _app.WaveformBudget;
-        _thumbnailBudget = _app.ThumbnailBudget;
+        _youTubeBudget = _app.YouTubeBudget;
         _fileLogLevel = _app.FileLogLevel;
         _logDirectory = _app.LogDirectory.Length > 0 ? _app.LogDirectory : StoragePaths.LogRoot;
         _logRetention = _app.LogRetention;
@@ -604,14 +607,25 @@ public partial class SettingsViewModel : ObservableObject
             return;
 
         change(_app);
-        AppSettingsStore.Save(_app);
+        SettingsProblem = AppSettingsStore.Save(_app)
+            ? ""
+            : "settings could not be saved — check the profile directory and free disk space";
         _applicationChanged?.Invoke();
     }
+
+    /// <summary>A save failure is visible; machine preferences must never pretend to have persisted.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSettingsProblem))]
+    private string _settingsProblem = "";
+
+    public bool HasSettingsProblem => SettingsProblem.Length > 0;
+
+    /// <summary>Project controls are visibly disabled when the shell's journal is locked.</summary>
+    public bool CanEditProject => _journal is null || !_journal.IsReadOnly;
 
     partial void OnBallisticChanged(string value) => WriteApp(app => app.MeterBallistics = value);
     partial void OnClipResetChanged(string value) => WriteApp(app => app.ClipReset = value);
     partial void OnRememberInspectorTabChanged(bool value) => WriteApp(app => app.RememberInspectorTab = value);
-    partial void OnRememberTimelineDockChanged(bool value) => WriteApp(app => app.RememberTimelineDock = value);
     partial void OnFlatActiveListChanged(bool value) => WriteApp(app => app.FlatActiveList = value);
     partial void OnOpenDrawerOnLaunchChanged(bool value) => WriteApp(app => app.OpenDrawerOnLaunch = value);
     partial void OnSpaceRuleChanged(string value) => WriteApp(app => app.SpaceRule = value);
@@ -623,7 +637,11 @@ public partial class SettingsViewModel : ObservableObject
     partial void OnRemotePortChanged(string value) => WriteApp(app => app.RemotePort = value);
     partial void OnRemoteLanAllowedChanged(bool value) => WriteApp(app => app.RemoteLanAllowed = value);
     partial void OnWaveformBudgetChanged(string value) => WriteApp(app => app.WaveformBudget = value);
-    partial void OnThumbnailBudgetChanged(string value) => WriteApp(app => app.ThumbnailBudget = value);
+    partial void OnYouTubeBudgetChanged(string value) => WriteApp(app => app.YouTubeBudget = value);
+    partial void OnCacheRootChanged(string value) => WriteApp(app =>
+        app.CacheRoot = string.Equals(value.Trim(), MediaCache.RootFor(new AppSettings()), StringComparison.Ordinal)
+            ? ""
+            : value.Trim());
     /// <summary>
     /// Records the backend choice WITHOUT changing the running one.
     /// </summary>
@@ -639,6 +657,10 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     partial void OnFileLogLevelChanged(string value) => WriteApp(app => app.FileLogLevel = value);
+    partial void OnLogDirectoryChanged(string value) => WriteApp(app =>
+        app.LogDirectory = string.Equals(value.Trim(), StoragePaths.LogRoot, StringComparison.Ordinal)
+            ? ""
+            : value.Trim());
     partial void OnLogRetentionChanged(string value) => WriteApp(app => app.LogRetention = value);
     partial void OnCrashDumpsChanged(bool value) => WriteApp(app => app.CrashDumps = value);
 
@@ -947,7 +969,6 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _ballistic = "PPM fast";
     [ObservableProperty] private string _clipReset = "on click";
     [ObservableProperty] private bool _rememberInspectorTab = true;
-    [ObservableProperty] private bool _rememberTimelineDock = true;
     [ObservableProperty] private bool _flatActiveList;
     [ObservableProperty] private bool _openDrawerOnLaunch;
 
@@ -1174,20 +1195,59 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _standbyFollowsClickDefault;
 
     // ── hotkeys ───────────────────────────────────────────────────────────────────────────────
-    /// <summary>
-    /// Deliberately a stub. The round-3 decision was that the hotkey grid stays WIP until most other
-    /// parts are built and the command list is stable — a binding surface over a command list that is
-    /// still moving would have to be redone, and worse, would look settled while it wasn't.
-    /// </summary>
-    public IReadOnlyList<HotkeyRow> Hotkeys { get; } =
-    [
-        new("GO", "Space", "transport", ""),
-        new("Stop", "Esc", "transport", ""),
-        new("Panic", "Ctrl+Esc", "transport", ""),
-        new("Standby up / down", "↑ / ↓", "transport", ""),
-        new("Output info drawer", "F9", "shell", ""),
-        new("Preview on audition", "Ctrl+P", "cue", "Ctrl+Shift+P"),
-    ];
+    public IReadOnlyList<string> HotkeyProfiles => AppHotkeys.Profiles;
+
+    [ObservableProperty] private string _hotkeyProfile = "Cue standard";
+
+    [ObservableProperty] private IReadOnlyList<HotkeyRow> _hotkeys = [];
+
+    partial void OnHotkeyProfileChanged(string value)
+    {
+        if (_loading || !AppHotkeys.Profiles.Contains(value))
+            return;
+        WriteApp(app =>
+        {
+            app.HotkeyProfile = value;
+            AppHotkeys.Reset(app);
+        });
+        RebuildHotkeys();
+    }
+
+    private void RebuildHotkeys()
+    {
+        Hotkeys = [.. AppHotkeys.Commands.Select(command =>
+            new HotkeyRow(command.Id, command.Name, AppHotkeys.Gesture(_app, command.Id), command.Group,
+                gesture =>
+                {
+                    WriteApp(app => app.HotkeyBindings[command.Id] = gesture);
+                    OnPropertyChanged(nameof(HotkeyCollisionNote));
+                }))];
+        OnPropertyChanged(nameof(HotkeyCollisionNote));
+    }
+
+    public void ResetHotkeys()
+    {
+        WriteApp(AppHotkeys.Reset);
+        RebuildHotkeys();
+    }
+
+    public string HotkeyCollisionNote
+    {
+        get
+        {
+            var reserved = Hotkeys.FirstOrDefault(row =>
+                string.Equals(row.Gesture, "Esc", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(row.Gesture, "Esc×2", StringComparison.OrdinalIgnoreCase));
+            if (reserved is not null)
+                return $"Reserved: Esc / Esc×2 is the fixed Stop/Panic safety sequence; {reserved.Command} will not intercept it.";
+            var duplicate = Hotkeys.Where(row => row.Gesture.Length > 0)
+                .GroupBy(row => row.Gesture, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            return duplicate is null
+                ? "Esc stops; a second Esc within 700 ms panics. These safety keys are reserved."
+                : $"Conflict: {duplicate.Key} is assigned to {string.Join(" and ", duplicate.Select(row => row.Command))}.";
+        }
+    }
 
     // ── new project defaults ──────────────────────────────────────────────────────────────────
     [ObservableProperty] private bool _autoRenumberDefault = true;
@@ -1219,24 +1279,33 @@ public partial class SettingsViewModel : ObservableObject
             : "restart HaCue2 for this to take effect";
 
     // ── media cache ───────────────────────────────────────────────────────────────────────────
-    [ObservableProperty] private string _cacheRoot = "~/.local/share/hacue2/cache";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CacheRootNote))]
+    private string _cacheRoot = "~/.local/share/hacue2/cache";
     [ObservableProperty] private string _waveformBudget = "2.0 GB";
-    [ObservableProperty] private string _thumbnailBudget = "512 MB";
+    [ObservableProperty] private string _youTubeBudget = "20 GB";
     /// <summary>What the cache is actually using. Measured, not stated.</summary>
-    public string CacheInUse => MediaCache.Describe(_app);
+    public string CacheInUse => MediaCache.DescribeRoot(_activeCacheRoot);
+
+    public string CacheRootNote => string.Equals(CacheRoot, _activeCacheRoot, StringComparison.Ordinal)
+        ? "waveforms and prepared YouTube media share this root"
+        : $"restart HaCue2 to move the active cache from {_activeCacheRoot}";
+
+    public string LoggingActivationNote =>
+        "file level, directory, retention and crash-report changes take effect after restarting HaCue2";
 
     /// <summary>What the last clear freed, beside the buttons that did it.</summary>
     [ObservableProperty]
     private string _cacheNote = "";
 
-    /// <summary>Deletes the waveform and probe caches — both re-derive from the media.</summary>
-    public void ClearWaveformCache() => ClearCache("waveforms", "probes");
+    /// <summary>Deletes waveform peaks, which re-derive from the source media.</summary>
+    public void ClearWaveformCache() => ClearCache("waveforms");
 
-    public void ClearThumbnailCache() => ClearCache("thumbnails");
+    public void ClearYouTubeCache() => ClearCache("youtube");
 
     private void ClearCache(params string[] kinds)
     {
-        CacheNote = MediaCache.Clear(_app, kinds);
+        CacheNote = MediaCache.ClearRoot(_activeCacheRoot, kinds);
         OnPropertyChanged(nameof(CacheInUse));
     }
 
@@ -1535,7 +1604,7 @@ public partial class ProjectStatusViewModel : ObservableObject
     public string ConsolidateNote { get; private set; } = "";
 
     /// <summary>Whether there is a journal behind this window — false in a preview.</summary>
-    public bool CanEdit => _journal is not null;
+    public bool CanEdit => _journal is { IsReadOnly: false };
 
     [ObservableProperty] private string _missingFile;
     [ObservableProperty] private string _consolidateInto = "";
@@ -1698,6 +1767,7 @@ public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = 
     /// <summary>Forgets the accumulated problem lines. The counters themselves belong to the bay.</summary>
     public void ResetCounters()
     {
+        host?.ResetMeterClips();
         host?.ClearProblems();
         AppLogging.Current?.Ring.Clear();
         Refresh();

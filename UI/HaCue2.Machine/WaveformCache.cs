@@ -46,6 +46,7 @@ public static class WaveformCache
 
             var peaks = new float[count];
             Buffer.BlockCopy(bytes, 8, peaks, 0, count * 4);
+            File.SetLastWriteTimeUtc(file, DateTime.UtcNow);
             return peaks;
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
@@ -57,7 +58,7 @@ public static class WaveformCache
     }
 
     /// <summary>Stores a scan. Silent on failure, for the same reason a read is.</summary>
-    public static void Write(string cacheRoot, string mediaPath, float[] peaks)
+    public static void Write(string cacheRoot, string mediaPath, float[] peaks, long? maxCacheBytes = null)
     {
         ArgumentNullException.ThrowIfNull(peaks);
 
@@ -80,6 +81,7 @@ public static class WaveformCache
             var temporary = file + ".part";
             File.WriteAllBytes(temporary, bytes);
             File.Move(temporary, file, overwrite: true);
+            MediaCache.EnforceBudget(cacheRoot, "waveforms", maxCacheBytes, file);
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
         {

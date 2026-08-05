@@ -5,11 +5,10 @@ namespace HaCue2.Machine;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Per-app settings and recovery, one SHARED media cache.</b> Two applications re-downloading the
-/// same video and re-baking the same physics is a worse outcome than a shared directory, so the cache
-/// root deliberately points at the framework's own <c>MFPLAYER_CACHE_ROOT</c> location rather than
-/// under this app's root — while settings and recovery, which are about this app's own state, do not
-/// travel between apps at all.
+/// <b>Per-app settings, recovery, logs and unified derived-media cache.</b> HaCue2 keeps its waveform
+/// and prepared YouTube data under one policy root so the Settings screen can measure, budget and clear
+/// all of it truthfully. The cache itself can still be moved to a dedicated volume with the
+/// machine-scope cache-root setting.
 /// </para>
 /// <para>
 /// HaPlay proves the naming policy with its own resolver, and the architecture rules correctly forbid

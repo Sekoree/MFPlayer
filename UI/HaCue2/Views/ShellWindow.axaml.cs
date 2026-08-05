@@ -4,6 +4,7 @@ using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
 using HaCue2.Session;
+using HaCue2.Presentation;
 using HaCue2.ViewModels;
 
 namespace HaCue2.Views;
@@ -14,6 +15,7 @@ public partial class ShellWindow : Window
     private SettingsWindow? _settings;
     private ProjectStatusWindow? _projectStatus;
     private OutputInfoWindow? _outputInfo;
+    private readonly EmergencyKeySequence _emergencyKeys = new();
 
     public ShellWindow() => InitializeComponent();
 
@@ -61,73 +63,65 @@ public partial class ShellWindow : Window
         // point of a single journal: ⌘Z means the same thing whether the last edit was a cue label or
         // a patch cell, and the toast says which surface it changed so an undo cannot silently alter a
         // screen the operator is not looking at.
-        var control = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        var gesture = KeyboardGestureText.Format(e.Key, e.KeyModifiers);
 
-        switch (e.Key)
+        // Learn owns the next gesture, including a normally reserved transport key. Nothing fires
+        // while the operator is deliberately teaching the project what that key is.
+        if (shell.Targets.CaptureKeyboardGesture(gesture))
         {
-            // Register item 3: GO always works. It is deliberately NOT gated on focus being anywhere
-            // in particular, and deliberately not swallowed while a text box has focus either — see
-            // the guard below, which is the one exception.
-            case Key.Space when !control && shell.AllowsSpaceGo(IsTyping()):
-                shell.Cues.Go();
-                e.Handled = true;
-                return;
+            e.Handled = true;
+            return;
+        }
 
-            case Key.Escape:
-                shell.Cues.StandbyHere();
-                e.Handled = true;
-                return;
+        // Esc is a cue-software safety convention, deliberately outside editable profiles: one press
+        // stops, a second within 700 ms panics. A settings typo must never make emergency stop vanish.
+        if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None)
+        {
+            if (_emergencyKeys.Press() == EscapeAction.Panic)
+                shell.Cues.Panic();
+            else
+                shell.Cues.Stop();
+            e.Handled = true;
+            return;
+        }
 
-            case Key.Up when !control && !IsTyping():
-                shell.Cues.StepStandby(-1);
-                e.Handled = true;
-                return;
+        var typing = IsTyping();
+        if (AppHotkeys.Matches(shell.Settings, AppHotkeys.Go, gesture)
+            && (gesture == "Space" ? shell.AllowsSpaceGo(typing) : !typing))
+            shell.Cues.Go();
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.StandbyUp, gesture) && !typing)
+            shell.Cues.StepStandby(-1);
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.StandbyDown, gesture) && !typing)
+            shell.Cues.StepStandby(1);
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.Preview, gesture))
+            shell.Cues.PreviewSelected();
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.StopPreview, gesture))
+            shell.Cues.StopPreview();
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.OutputInfo, gesture))
+            shell.IsOutputInfoOpen = !shell.IsOutputInfoOpen;
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.Undo, gesture))
+            shell.Undo();
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.Redo, gesture))
+            shell.Redo();
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.Save, gesture))
+            _ = SaveAsync(shell);
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.SaveAs, gesture))
+            _ = SaveAsAsync(shell);
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.NewProject, gesture))
+            _ = NewProjectAsync();
+        else if (AppHotkeys.Matches(shell.Settings, AppHotkeys.OpenProject, gesture))
+            _ = OpenProjectAsync();
+        else
+            goto projectTriggers;
 
-            case Key.Down when !control && !IsTyping():
-                shell.Cues.StepStandby(1);
-                e.Handled = true;
-                return;
+        e.Handled = true;
+        return;
 
-            // Register item 15: audition is a first-class verb, not a mode. Ctrl+P so it cannot be hit
-            // instead of Space during a show.
-            case Key.P when control && !shift:
-                shell.Cues.PreviewSelected();
-                e.Handled = true;
-                return;
-
-            case Key.P when control && shift:
-                shell.Cues.StopPreview();
-                e.Handled = true;
-                return;
-
-            case Key.F9:
-                shell.IsOutputInfoOpen = !shell.IsOutputInfoOpen;
-                e.Handled = true;
-                return;
-
-            case Key.Z when control && !shift:
-                shell.Undo();
-                e.Handled = true;
-                return;
-
-            case Key.Z when control && shift:
-            case Key.Y when control:
-                shell.Redo();
-                e.Handled = true;
-                return;
-
-            // Save is a window key for the same reason undo is: it is about the DOCUMENT, and which
-            // view happens to be focused has nothing to do with it.
-            case Key.S when control && !shift:
-                _ = SaveAsync(shell);
-                e.Handled = true;
-                return;
-
-            case Key.S when control && shift:
-                _ = SaveAsAsync(shell);
-                e.Handled = true;
-                return;
+    projectTriggers:
+        if (shell.Host?.FeedKeyboard(gesture, IsTyping()) == true)
+        {
+            e.Handled = true;
+            return;
         }
 
         base.OnKeyDown(e);
@@ -210,8 +204,10 @@ public partial class ShellWindow : Window
 
     private void OnFileSaveAs(object? sender, RoutedEventArgs e) => _ = SaveAsAsync(Shell);
 
-    private async void OnFileNew(object? sender, RoutedEventArgs e) =>
-        await LeaveThenAsync(() =>
+    private async void OnFileNew(object? sender, RoutedEventArgs e) => await NewProjectAsync();
+
+    private Task NewProjectAsync() =>
+        LeaveThenAsync(() =>
         {
             // The launcher's own New-project prompt, reused rather than reimplemented: what a new
             // project is seeded with is one decision and it already lives there.
@@ -229,8 +225,10 @@ public partial class ShellWindow : Window
             return Task.CompletedTask;
         });
 
-    private async void OnFileOpen(object? sender, RoutedEventArgs e) =>
-        await LeaveThenAsync(async () =>
+    private async void OnFileOpen(object? sender, RoutedEventArgs e) => await OpenProjectAsync();
+
+    private Task OpenProjectAsync() =>
+        LeaveThenAsync(async () =>
         {
             var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
             {
@@ -372,6 +370,12 @@ public partial class ShellWindow : Window
     {
         if (DataContext is ShellViewModel shell)
             shell.IsOutputInfoOpen = false;
+    }
+
+    private void OnProgramMeterPressed(object? sender, PointerPressedEventArgs e)
+    {
+        Shell.ResetMeterClips();
+        e.Handled = true;
     }
 
     /// <summary>Pop the drawer out for a second monitor, and close the in-shell copy behind it —

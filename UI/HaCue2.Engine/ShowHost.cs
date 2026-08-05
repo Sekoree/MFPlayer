@@ -93,6 +93,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     private readonly MediaRegistry _registry;
     private readonly ProjectPatchBay _bay;
     private readonly ProjectVideoOutputs _screens;
+    private readonly HashSet<Guid> _calibrationOutputs = [];
     private readonly ShowSession _session;
     private readonly HashSet<string> _attached = [];
     private readonly ActionSender _actions = new();
@@ -240,6 +241,9 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </remarks>
     public AudioPatchBayDiagnostics Diagnostics() => _bay.Bay.SnapshotDiagnostics();
 
+    /// <summary>Clears sticky program clip indicators without changing audio or transport.</summary>
+    public void ResetMeterClips() => _bay.Bay.ProgramMeter?.ResetClip();
+
     /// <summary>The show's recorders and streams — what is armed, where it is writing, and how it fares.</summary>
     public ProjectRecorders Recorders => _recorders;
 
@@ -308,7 +312,47 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             // blue card is worse than one showing nothing.
         }
 
-        await _session.SetOutputTestPatternAsync(id, lease, null).ConfigureAwait(false);
+        bool persistent;
+        lock (_gate)
+            persistent = _calibrationOutputs.Contains(outputId);
+        await _session.SetOutputTestPatternAsync(
+            id, lease, persistent
+                ? IdentifyPattern.Render(output.Name, composition.Width, composition.Height, output.Mapping)
+                : null).ConfigureAwait(false);
+        return null;
+    }
+
+    /// <summary>Shows or clears a persistent, mapped calibration grid on one physical output.</summary>
+    public async Task<string?> SetCalibrationAsync(Guid outputId, bool enabled)
+    {
+        if (!enabled)
+        {
+            lock (_gate)
+                _calibrationOutputs.Remove(outputId);
+            if (_project.VideoOutputs.FirstOrDefault(item => item.Id == outputId) is not { } existing
+                || existing.CompositionId is not { } existingComposition)
+                return null;
+            await _session.SetOutputTestPatternAsync(
+                existingComposition.ToString(), outputId.ToString("N"), null).ConfigureAwait(false);
+            return null;
+        }
+
+        if (_project.VideoOutputs.FirstOrDefault(item => item.Id == outputId) is not { } output)
+            return "that output is no longer in this show";
+        if (output.CompositionId is not { } compositionId
+            || _project.Compositions.FirstOrDefault(item => item.Id == compositionId) is not { } composition)
+            return $"“{output.Name}” shows no composition, so there is nothing to calibrate";
+        if (_screens.Unopened.Contains(outputId))
+            return $"“{output.Name}” is not open on this machine";
+
+        if (!await _session.SetOutputTestPatternAsync(
+                compositionId.ToString(), outputId.ToString("N"),
+                IdentifyPattern.Render(output.Name, composition.Width, composition.Height, output.Mapping))
+            .ConfigureAwait(false))
+            return $"“{output.Name}” could not show a calibration pattern";
+
+        lock (_gate)
+            _calibrationOutputs.Add(outputId);
         return null;
     }
 
@@ -393,8 +437,14 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             ResamplingAudioOutput.Wrap,
             defaultMonitorTerminalId: bay.MonitorTerminalId);
 
-        var session = new ShowSession(registry, backend, programAudioTarget: target);
+        var session = new ShowSession(
+            registry,
+            backend,
+            ShowSessionWiring.CreateSubtitleOverlay,
+            programAudioTarget: target,
+            compositorFactory: ShowSessionWiring.CreateCompositor);
         var host = new ShowHost(registry, bay, screens, session, runtimeProject);
+        host.SetActiveCueList(runtimeProject.CueLists.FirstOrDefault()?.Id);
 
         // External input drives the show through the SAME verbs the buttons do — a triggered GO is a
         // GO, not a second code path that can drift from the one an operator tested with.
@@ -612,6 +662,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
 
             await AttachScreensAsync().ConfigureAwait(false);
             await ApplyIdleFramesAsync(next, context.ProjectPath).ConfigureAwait(false);
+            await RestoreCalibrationPatternsAsync().ConfigureAwait(false);
             await RetireDeletedVisualizersAsync(next).ConfigureAwait(false);
             await _triggers.ReloadAsync(next).ConfigureAwait(false);
             _recorders.Adopt(next);
@@ -620,6 +671,23 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         finally
         {
             _reloading.Release();
+        }
+    }
+
+    private async Task RestoreCalibrationPatternsAsync()
+    {
+        Guid[] active;
+        lock (_gate)
+            active = [.. _calibrationOutputs];
+        foreach (var outputId in active)
+        {
+            if (_project.VideoOutputs.All(output => output.Id != outputId))
+            {
+                lock (_gate)
+                    _calibrationOutputs.Remove(outputId);
+                continue;
+            }
+            await SetCalibrationAsync(outputId, true).ConfigureAwait(false);
         }
     }
 

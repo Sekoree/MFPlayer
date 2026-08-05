@@ -15,6 +15,34 @@ namespace HaCue2.Tests;
 public class InspectorViewModelTests
 {
     [Fact]
+    public Task EndTargetsAndSelectiveVisualizerFeedsReachTheDocument() => ShellFixture.WithShell(shell =>
+    {
+        var list = shell.Project.CueLists[0];
+        var source = new MediaCueNode { Number = "901", Label = "Source", MediaPath = "source.mov" };
+        var target = new MediaCueNode { Number = "902", Label = "Target", MediaPath = "target.mov" };
+        var visualizer = new VisualizerCueNode { Number = "903", Label = "Viz" };
+        list.Cues.AddRange([source, target, visualizer]);
+
+        shell.Cues.Inspector.Show([source.Id]);
+        var targetOption = shell.Cues.Inspector.EndTargetOptions
+            .Select((text, index) => (text, index))
+            .Single(item => item.text.Contains("902", StringComparison.Ordinal)).index;
+        shell.Cues.Inspector.EndTargetIndex = targetOption;
+        shell.Cues.Inspector.Show([source.Id]);
+        shell.Cues.Inspector.SendToVisualizerValue = true;
+
+        shell.Cues.Inspector.Show([visualizer.Id]);
+        shell.Cues.Inspector.VisualizerFeedAllValue = false;
+        shell.Cues.Inspector.Show([visualizer.Id]);
+        shell.Cues.Inspector.VisualizerFeedCueNumbers = "901";
+
+        Assert.Equal(target.Id, source.EndTargetCueId);
+        Assert.True(source.SendToVisualizer);
+        Assert.False(visualizer.FeedAll);
+        Assert.Equal([source.Id], visualizer.FeedCueIds);
+    });
+
+    [Fact]
     public Task PreAndPostWaitRoundTrip() => ShellFixture.WithShell(shell =>
     {
         var bed = ShellFixture.Bed(shell.Project);

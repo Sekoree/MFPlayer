@@ -16,12 +16,15 @@
          never gates GO. -->
     <Border Classes="transport" DockPanel.Dock="Top">
       <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="7">
-        <Button Grid.Column="0" Classes="go" Content="GO" Click="OnGo" />
-        <Button Grid.Column="1" Content="{Binding PauseLabel}" Click="OnPause" />
+        <Button Grid.Column="0" Classes="go" Content="GO" Click="OnGo"
+                AutomationProperties.Name="Go current cue list" />
+        <Button Grid.Column="1" Content="{Binding PauseLabel}" Click="OnPause"
+                AutomationProperties.Name="Pause or resume all active cues" />
         <!-- Bare STOP takes down the selected active cue; stop-all is the split menu, because a
              single button that sometimes stops one cue and sometimes stops the show is a button
              nobody can press with confidence during a performance. -->
         <Button Grid.Column="2" Content="STOP ▾" Click="OnStop"
+                AutomationProperties.Name="Stop selected active cue"
                 ToolTip.Tip="Stops the selected active cue. Right-click, or the arrow, for stop-all.">
           <Button.ContextFlyout>
             <MenuFlyout>
@@ -35,15 +38,20 @@
              PointerReleased handled in its own class handler, so a handler declared in markup is
              never called and PANIC did nothing at all. See CuesView's constructor. -->
         <Button Grid.Column="3" Classes="panic" Name="PanicButton" Content="{Binding PanicLabel}"
+                AutomationProperties.Name="Panic; hold to stop everything"
                 ToolTip.Tip="Hold to stop everything." />
-        <Button Grid.Column="4" Classes="icon" Content="↑ STBY" Click="OnStandbyUp" />
-        <Button Grid.Column="5" Classes="icon" Content="↓ STBY" Click="OnStandbyDown" />
+        <Button Grid.Column="4" Classes="icon" Content="↑ STBY" Click="OnStandbyUp"
+                AutomationProperties.Name="Move standby up" />
+        <Button Grid.Column="5" Classes="icon" Content="↓ STBY" Click="OnStandbyDown"
+                AutomationProperties.Name="Move standby down" />
         <!-- Multi-list transport is v1 (register item 5): the transport acts on the selected list and
              every list keeps its own standby. -->
         <Button Grid.Column="6" Content="{Binding ListSelector}" Click="OnSelectList"
+                AutomationProperties.Name="Choose current cue list"
                 ToolTip.Tip="Choose which cue list GO and standby control." />
 
         <ToggleButton Grid.Column="8" Theme="{StaticResource ChipToggle}"
+                      AutomationProperties.Name="External input master enable"
                       IsChecked="{Binding $parent[v:ShellWindow].((vm:ShellViewModel)DataContext).IsExternalInputEnabled}"
                       ToolTip.Tip="MIDI/OSC/hotkey triggers, wall-clock schedules and MTC chase. Off when a project opens; never gates GO.">
           <StackPanel Orientation="Horizontal" Spacing="5">
@@ -54,6 +62,10 @@
         </ToggleButton>
 
         <Border Grid.Column="9" Classes="chip"><TextBlock Text="{Binding ChaseReadout}" /></Border>
+        <ToggleButton Grid.Column="7" HorizontalAlignment="Right" Classes="tight"
+                      IsChecked="{Binding IsRightPanelOpen}" Click="OnToggleRightPanel"
+                      Content="{Binding RightPanelToggleLabel}"
+                      AutomationProperties.Name="Show or hide cue inspector" />
       </Grid>
     </Border>
 
@@ -129,7 +141,12 @@
          and how wide the right column is, are decisions that change per show and per operator. The
          minimums stop either side being dragged to nothing, which is the one way a splitter can lose
          a panel for good. -->
-    <Grid ColumnDefinitions="*,4,316" Margin="7">
+    <Grid Margin="7">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="{Binding RightSplitterWidth}" />
+        <ColumnDefinition Width="{Binding RightPanelWidth}" />
+      </Grid.ColumnDefinitions>
 
       <Grid Grid.Column="0" RowDefinitions="2*,4,Auto" MinWidth="420">
 
@@ -148,7 +165,8 @@
                happened to be nested — which is what this replaced. -->
           <TreeDataGrid IsVisible="{Binding !IsEmpty}" Source="{Binding CueSource}"
                         CanUserResizeColumns="True"
-                        CanUserSortColumns="False">
+                        CanUserSortColumns="False"
+                        AutomationProperties.Name="Cue list tree">
             <TreeDataGrid.ContextMenu>
               <ContextMenu>
                 <!-- Not edits, so they stay live under Lock — but they need a selected cue, and with
@@ -296,6 +314,7 @@
                            flat list it replaced. -->
                       <ToggleButton Grid.Column="1" Classes="tight" MinWidth="20" Padding="3,0"
                                     IsChecked="{Binding IsExpanded}" Content="▾"
+                                    AutomationProperties.Name="Expand active group"
                                     ToolTip.Tip="Show the cues inside this group" />
                       <TextBlock Grid.Column="2" Classes="qnum" Text="{Binding Number}" />
                       <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6"
@@ -313,6 +332,7 @@
                                    Classes.near="{Binding IsNearEnd}" />
                       <Button Grid.Column="7" Classes="icon" Content="×" Click="OnStopGroup"
                               Tag="{Binding GroupId}"
+                              AutomationProperties.Name="Stop active group"
                               ToolTip.Tip="Stop everything in this group." />
                     </Grid>
 
@@ -365,6 +385,7 @@
                     <!-- Draggable. The bar follows the finger during a gesture and the show follows on
                          release — a seek per pointer-move would re-buffer the clip on every pixel. -->
                     <c:SeekBar Grid.Column="6" Maximum="1" Value="{Binding Progress}"
+                               AutomationProperties.Name="Seek active cue"
                                IsSeekable="{Binding CanSeek}"
                                IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).SeekUnlocked}"
                                VerticalAlignment="Center"
@@ -378,6 +399,7 @@
                          sounding cue did nothing at all. -->
                     <Button Grid.Column="8" Classes="icon" Content="×" Click="OnStopActive"
                             Tag="{Binding CueId}"
+                            AutomationProperties.Name="Stop active cue"
                             ToolTip.Tip="Stop this cue." />
                   </Grid>
                 </Border>
@@ -388,10 +410,13 @@
       </Grid>
 
       <GridSplitter Grid.Column="1" Width="4" VerticalAlignment="Stretch"
+                    IsVisible="{Binding IsRightPanelOpen}"
+                    AutomationProperties.Name="Resize cue inspector"
                     Background="Transparent" ResizeDirection="Columns" />
 
       <!-- ── right column: Cue properties | Lists & groups, tabs on the BOTTOM edge ───────── -->
       <c:PanelBox Grid.Column="2" MinWidth="240"
+                  IsVisible="{Binding IsRightPanelOpen}"
                   Header="{Binding RightPanelHeader}" Hint="{Binding RightPanelHint}">
         <c:PanelBox.Footer>
           <ListBox Theme="{StaticResource BottomTabs}"

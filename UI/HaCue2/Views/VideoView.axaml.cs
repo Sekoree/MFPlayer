@@ -130,7 +130,28 @@ public partial class VideoView : UserControl
     private void OnCloseMapping(object? sender, RoutedEventArgs e)
     {
         if (DataContext is VideoViewModel video)
+        {
+            if (video.IsCalibrationOn)
+                _ = SetCalibrationAsync(video, false);
             video.ShowMapping = false;
+        }
+    }
+
+    private async void OnCalibration(object? sender, RoutedEventArgs e)
+    {
+        if (Video is { } video)
+            await SetCalibrationAsync(video, !video.IsCalibrationOn);
+    }
+
+    private async Task SetCalibrationAsync(VideoViewModel video, bool enabled)
+    {
+        if (video.SelectedOutput is not { } output
+            || this.FindAncestorOfType<ShellWindow>()?.DataContext is not ShellViewModel shell)
+            return;
+        if (await shell.SetCalibrationAsync(output.Id, enabled) is { } problem)
+            video.NoteProblem(problem);
+        else
+            video.NoteCalibration(output.Id, enabled);
     }
 
     private void OnLayoutGesture(object? sender, PlacementGesture e) => Video?.ApplyLayoutGesture(e);
@@ -243,6 +264,14 @@ public partial class VideoView : UserControl
         };
         video.NudgeWarp(dx, dy);
     }
+
+    private void OnWarpPointMoved(object? sender, WarpPointGesture e) => Video?.MoveWarpPoint(e);
+    private void OnWarpPointSelected(object? sender, int index)
+    {
+        if (Video is { } video)
+            video.SelectedWarpPoint = index;
+    }
+    private void OnWarpGestureCompleted(object? sender, EventArgs e) => Video?.EndWarpGesture();
 
     /// <summary>
     /// Removes the selected output or composition on Delete, depending on which pane is open.

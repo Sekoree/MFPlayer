@@ -22,7 +22,7 @@
                    LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" />
         <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" Margin="14,0,0,0"
                    Text="Diagnostics" VerticalAlignment="Center" />
-        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="RESET COUNTERS" Click="OnReset" />
+        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="CLEAR PROBLEMS + CLIPS" Click="OnReset" />
         <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="COPY REPORT" Click="OnCopyReport" />
         <Button Grid.Column="5" Theme="{StaticResource ChipButton}" Content="CLOSE" Click="OnClose" />
       </Grid>
@@ -108,19 +108,19 @@
           <DockPanel>
             <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                     BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
-              <Grid ColumnDefinitions="*,66,60,50,66,50" ColumnSpacing="6">
+              <Grid ColumnDefinitions="*,66,60,50,66,70" ColumnSpacing="6">
                 <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="COMPOSITION" />
                 <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="FPS" />
                 <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="LAYERS" />
                 <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="LATE" />
                 <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="DROPPED" />
-                <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="GPU" />
+                <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="BACKEND" />
               </Grid>
             </Border>
             <ListBox Theme="{StaticResource ReadonlyRows}" ItemsSource="{Binding Compositions}">
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:CompositionStatsRow">
-                  <Grid ColumnDefinitions="*,66,60,50,66,50" ColumnSpacing="6" Margin="8,4">
+                  <Grid ColumnDefinitions="*,66,60,50,66,70" ColumnSpacing="6" Margin="8,4">
                     <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding Name}" />
                     <!-- The target rate, not an achieved one: achieved fps is a delta over wall time
                          that only the caller can compute, and inventing it here would be a lie. -->

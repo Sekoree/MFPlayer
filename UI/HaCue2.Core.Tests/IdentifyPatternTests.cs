@@ -1,4 +1,5 @@
 using HaCue2.Engine;
+using HaCue2.Core.Model;
 using S.Media.Core.Video;
 using Xunit;
 
@@ -74,6 +75,30 @@ public class IdentifyPatternTests
         // Just inside the border, above the letters. A frame that came back all-ink would pass every
         // other assertion here and be useless on a screen.
         Assert.False(IsInk(pixels, stride, width / 2, height / 8));
+    }
+
+    [Fact]
+    public void CalibrationCarriesOrientationColoursGridAndSectionBoundaries()
+    {
+        using var frame = IdentifyPattern.Render("A", 400, 300,
+        [
+            new MappingSection { SourceX = .25, SourceY = .25, SourceWidth = .5, SourceHeight = .5 },
+        ]);
+        var pixels = frame.Planes[0].ToArray();
+        var stride = frame.Strides[0];
+
+        // Inside the four coloured corner patches (the outermost pixel is the white overscan border).
+        Assert.NotEqual(Pixel(pixels, stride, 10, 10), Pixel(pixels, stride, 390, 10));
+        Assert.NotEqual(Pixel(pixels, stride, 10, 10), Pixel(pixels, stride, 10, 290));
+        // Ten-by-ten reference grid and cyan source-section edge both differ from the field.
+        Assert.NotEqual(Pixel(pixels, stride, 41, 41), Pixel(pixels, stride, 70, 41));
+        Assert.NotEqual(Pixel(pixels, stride, 80, 80), Pixel(pixels, stride, 100, 80));
+    }
+
+    private static (byte B, byte G, byte R) Pixel(byte[] pixels, int stride, int x, int y)
+    {
+        var at = y * stride + x * 4;
+        return (pixels[at], pixels[at + 1], pixels[at + 2]);
     }
 
     [Fact]

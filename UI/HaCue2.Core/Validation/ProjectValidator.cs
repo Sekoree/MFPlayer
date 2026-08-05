@@ -414,6 +414,17 @@ public static class ProjectValidator
         {
             case MediaCueNode media:
                 ValidateGain(media.LevelDb, "cue", id, $"Q{cue.Number}", issues);
+                if (media.EndTargetCueId == media.Id)
+                    issues.Add(Error("cue", id, $"Q{cue.Number} targets itself at media end."));
+                else if (media.EndTargetCueId is { } endTarget)
+                {
+                    if (!cueIds.Contains(endTarget))
+                        issues.Add(Error("cue", id,
+                            $"Q{cue.Number} has an end target that is no longer in the show."));
+                    else if (project.FindCue(endTarget) is CommentCueNode)
+                        issues.Add(Error("cue", id,
+                            $"Q{cue.Number} targets a comment at media end; comments cannot be fired."));
+                }
                 foreach (var send in media.Sends)
                 {
                     if (send.SourceChannel < 0)
@@ -507,6 +518,12 @@ public static class ProjectValidator
                 break;
 
             case VisualizerCueNode visualizer:
+                foreach (var feedId in visualizer.FeedCueIds)
+                {
+                    if (project.FindCue(feedId) is not MediaCueNode)
+                        issues.Add(Error("cue", id,
+                            $"Q{cue.Number} has a visualizer feed source that is not a live media cue."));
+                }
                 foreach (var placement in visualizer.Placements)
                     ValidatePlacement(project, placement, cue, issues);
                 ValidateLanes(project, visualizer.EffectLanes, cue, issues);

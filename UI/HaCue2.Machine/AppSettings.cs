@@ -71,7 +71,6 @@ public sealed record AppSettings
     public string MeterBallistics { get; set; } = "PPM fast";
     public string ClipReset { get; set; } = "on click";
     public bool RememberInspectorTab { get; set; } = true;
-    public bool RememberTimelineDock { get; set; } = true;
     public bool FlatActiveList { get; set; }
     public bool OpenDrawerOnLaunch { get; set; }
 
@@ -80,6 +79,12 @@ public sealed record AppSettings
     public string DoubleGoGuard { get; set; } = "250 ms";
     public string ConfirmStopAll { get; set; } = "3 cues";
     public bool StandbyFollowsClick { get; set; }
+
+    /// <summary>The base command layout; per-command entries below are edits to that profile.</summary>
+    public string HotkeyProfile { get; set; } = "Cue standard";
+
+    /// <summary>Canonical command id to gesture text. Empty disables an editable command.</summary>
+    public Dictionary<string, string> HotkeyBindings { get; set; } = [];
 
     /// <summary>
     /// The machine's panic fade, in milliseconds. A project may override it (register item 26).
@@ -141,11 +146,11 @@ public sealed record AppSettings
 
     // ── media cache & logging ─────────────────────────────────────────────────────────────────
 
-    /// <summary>Empty means the shared framework cache root, which is the intended default.</summary>
+    /// <summary>Empty means HaCue2's unified derived-media cache root, which is the intended default.</summary>
     public string CacheRoot { get; set; } = "";
 
     public string WaveformBudget { get; set; } = "2.0 GB";
-    public string ThumbnailBudget { get; set; } = "512 MB";
+    public string YouTubeBudget { get; set; } = "20 GB";
     public string FileLogLevel { get; set; } = "Information";
 
     /// <summary>Empty means <see cref="StoragePaths.LogRoot"/>.</summary>

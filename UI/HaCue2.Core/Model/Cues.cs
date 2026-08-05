@@ -163,6 +163,17 @@ public sealed record MediaCueNode : CueNode
     public bool DisablePreRoll { get; set; }
 
     /// <summary>
+    /// An explicit cue to fire when this media reaches its natural end. Null keeps the ordinary
+    /// Follow/Continue rules. Playlist ownership takes precedence so a child cannot escape its group.
+    /// </summary>
+    public Guid? EndTargetCueId { get; set; }
+
+    /// <summary>
+    /// Include this cue in visualizer feeds that opt into selected media rather than the whole bus.
+    /// </summary>
+    public bool SendToVisualizer { get; set; }
+
+    /// <summary>
     /// Where playback starts inside the file, in milliseconds. HaPlay's <c>startOffsetMs</c>.
     /// </summary>
     public int TrimInMs { get; set; }
@@ -266,6 +277,9 @@ public sealed record GroupCueNode : CueNode
     /// </remarks>
     public int LoopCount { get; set; } = 1;
 
+    /// <summary>Items selected from each ordered/shuffled pass; null plays every enabled child.</summary>
+    public int? PlayCount { get; set; }
+
     /// <summary>
     /// The playlist's default crossfade. Per-transition overrides live on the CHILD
     /// (<see cref="MediaCueNode.FadeInMs"/> and its own crossfade), so "one integer for the whole
@@ -285,6 +299,8 @@ public enum GroupFireMode
     AllTogether,
     Playlist,
     Timeline,
+    FirstCueOnly,
+    ArmedList,
 }
 
 /// <summary>An outbound message to another system.</summary>
@@ -336,6 +352,12 @@ public sealed record VisualizerCueNode : CueNode
     public int HoldMs { get; set; } = 24_000;
     public int BlendMs { get; set; } = 3_000;
     public bool LockPreset { get; set; }
+
+    /// <summary>Listen to every sounding cue. False uses <see cref="FeedCueIds"/> plus media opt-ins.</summary>
+    public bool FeedAll { get; set; } = true;
+
+    /// <summary>Media cues explicitly included when <see cref="FeedAll"/> is false.</summary>
+    public List<Guid> FeedCueIds { get; set; } = [];
 
     /// <summary>Where the visualizer appears. A list, for the same reason a media cue's is.</summary>
     public List<LayerPlacement> Placements { get; set; } = [];

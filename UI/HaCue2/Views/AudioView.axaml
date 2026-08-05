@@ -41,7 +41,8 @@
         <c:PanelBox Grid.Column="0" Header="Logical outputs" Hint="the only destinations cues can see">
           <c:PanelBox.Footer>
             <Border Classes="chain">
-              <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+              <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6"
+                    IsEnabled="{Binding CanAuthor}">
                 <Button Grid.Column="0" Classes="tight" Content="+ ADD" Click="OnDialog" Tag="output" />
                 <Button Grid.Column="1" Classes="tight" Content="+ ADD STEREO PAIR" Click="OnDialog" Tag="pair" />
                 <Button Grid.Column="2" Classes="tight" Content="+ NEW GROUP…" Click="OnDialog" Tag="group" />
@@ -127,7 +128,7 @@
           </c:PanelBox.Footer>
 
           <ScrollViewer>
-            <StackPanel Margin="0,6,0,8">
+            <StackPanel Margin="0,6,0,8" IsEnabled="{Binding CanAuthor}">
               <!-- A real rename. This was bound to a get-only property, so it took typing and threw
                    it away — the only working rename was the footer button. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
@@ -196,6 +197,9 @@
           <ScrollViewer HorizontalScrollBarVisibility="Auto" Padding="9,7,9,16">
             <!-- Register item 13: click toggles at unity, drag adjusts gain, right-click mutes. -->
             <c:MatrixView Columns="{Binding PatchColumns}" Rows="{Binding PatchRows}"
+                          AutomationProperties.Name="Audio patch matrix"
+                          AutomationProperties.HelpText="Click routes at unity, drag adjusts gain, and right click mutes."
+                          IsEnabled="{Binding CanAuthor}"
                           RowHeaderWidth="118"
                           Gesture="OnPatchGesture"
                           PointerReleased="OnPatchGestureEnded"
@@ -209,7 +213,7 @@
             <c:PanelBox.Footer>
               <StackPanel>
                 <Border Classes="chain">
-                  <StackPanel Orientation="Horizontal" Spacing="6">
+                  <StackPanel Orientation="Horizontal" Spacing="6" IsEnabled="{Binding CanAuthor}">
                     <Button Classes="tight" Content="SAVE…" Click="OnDialog" Tag="snapshot" />
                     <Button Classes="tight" Content="RECALL" Click="OnRecall"
                             IsEnabled="{Binding HasSnapshot}" />
@@ -275,7 +279,8 @@
         <c:PanelBox Grid.Column="0" Header="Audio lines" Hint="machine-side · adding/removing is an edit">
           <c:PanelBox.Footer>
             <Border Classes="chain">
-              <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="6">
+              <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="6"
+                    IsEnabled="{Binding CanAuthor}">
                 <Button Grid.Column="0" Classes="tight" Content="+ LOCAL AUDIO…" Click="OnDialog" Tag="line:device" />
                 <Button Grid.Column="1" Classes="tight" Content="+ NDI AUDIO…" Click="OnDialog" Tag="line:ndi" />
                 <Button Grid.Column="2" Classes="tight" Content="+ RECORD…" Click="OnDialog" Tag="line:record" />
@@ -335,7 +340,7 @@
         <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
 
           <c:PanelBox Grid.Row="0" Header="Project mix">
-            <StackPanel Margin="0,6,0,8">
+            <StackPanel Margin="0,6,0,8" IsEnabled="{Binding CanAuthor}">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Mix rate">
                 <ComboBox ItemsSource="{Binding MixRates}" SelectedIndex="{Binding MixRateIndex}" />
               </HeaderedContentControl>

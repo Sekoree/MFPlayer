@@ -25,6 +25,7 @@ public partial class TargetsView : UserControl
         {
             "in:midi" => Dialogs.AddTriggerInput(journal, TriggerInputKind.MidiIn),
             "in:osc" => Dialogs.AddTriggerInput(journal, TriggerInputKind.OscIn),
+            "in:key" => Dialogs.AddTriggerInput(journal, TriggerInputKind.Keyboard),
             "in:clock" => Dialogs.AddTriggerInput(journal, TriggerInputKind.Schedule),
             "in:mtc" => Dialogs.AddTriggerInput(journal, TriggerInputKind.Timecode),
             "in:edit" => Dialogs.EditTriggerInput(journal, targets.SelectedSource?.Id),

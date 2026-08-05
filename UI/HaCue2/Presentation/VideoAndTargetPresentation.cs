@@ -281,6 +281,9 @@ public static class TargetPresentation
         if (binding.NoRepeatMs > 0)
             parts.Add($"no-repeat {binding.NoRepeatMs} ms");
 
+        if (binding.AllowWhileTyping)
+            parts.Add("global while typing");
+
         return parts.Count == 0 ? "—" : string.Join(" · ", parts);
     }
 }

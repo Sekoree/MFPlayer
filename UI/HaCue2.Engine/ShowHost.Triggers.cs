@@ -19,6 +19,22 @@ public sealed partial class ShowHost
     /// <summary>The program master trim in decibels, as the parameter registry reads and writes it.</summary>
     private double _masterTrimDb;
     private int _externalTriggerDepth;
+    private Guid? _activeCueListId;
+
+    /// <summary>The list shared by UI, keyboard, MIDI, OSC, and remote generic GO.</summary>
+    public void SetActiveCueList(Guid? listId)
+    {
+        lock (_gate)
+            _activeCueListId = _project.CueLists.Any(list => list.Id == listId)
+                ? listId
+                : _project.CueLists.FirstOrDefault()?.Id;
+    }
+
+    /// <summary>Feeds a normalized local keyboard gesture into project keyboard bindings.</summary>
+    public bool FeedKeyboard(string gesture, bool isTyping) => _triggers.FeedKeyboard(gesture, isTyping);
+
+    /// <summary>Narrow test seam for proving external actions use the same transport path.</summary>
+    internal Task ApplyExternalTriggerAsync(TriggerAction action) => ApplyAsync(action);
 
     /// <summary>Carries out what a trigger asked for.</summary>
     /// <remarks>
@@ -107,11 +123,13 @@ public sealed partial class ShowHost
         switch (verb.Trim().ToLowerInvariant())
         {
             case "go":
-                foreach (var list in _project.CueLists)
-                {
+                Guid? active;
+                lock (_gate)
+                    active = _activeCueListId;
+                var list = _project.CueLists.FirstOrDefault(candidate => candidate.Id == active)
+                           ?? _project.CueLists.FirstOrDefault();
+                if (list is not null)
                     await GoAsync(list).ConfigureAwait(false);
-                    break;
-                }
 
                 break;
 

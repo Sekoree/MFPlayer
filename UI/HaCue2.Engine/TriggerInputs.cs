@@ -288,6 +288,59 @@ public sealed class TriggerInputs : IAsyncDisposable
         }
     }
 
+    /// <summary>Feeds one application key gesture into every enabled Keyboard source.</summary>
+    /// <returns>True when at least one binding accepted the gesture.</returns>
+    /// <remarks>
+    /// Keyboard sources are local operator input and therefore are not behind the external-device
+    /// master gate. They are still individually enabled, and ordinary bindings yield while a text box
+    /// owns focus unless the author explicitly marked the binding global.
+    /// </remarks>
+    public bool FeedKeyboard(string gesture, bool isTyping)
+    {
+        if (string.IsNullOrWhiteSpace(gesture))
+            return false;
+
+        Observed?.Invoke(new TriggerSignal(
+            Guid.Empty,
+            IsMidi: false,
+            Address: gesture,
+            MidiType: ControlMIDIMessageType.Unknown,
+            Channel: 0,
+            Number: 0,
+            Value: null,
+            IsKeyboard: true));
+
+        var matched = false;
+        foreach (var input in _project.TriggerInputs.Where(source =>
+                     source.Enabled && source.Kind == TriggerInputKind.Keyboard))
+        {
+            foreach (var binding in input.Bindings)
+            {
+                if (isTyping && !binding.AllowWhileTyping
+                    || !TriggerMatching.MatchesKeyboard(gesture, binding.Input)
+                    || !Admit(binding))
+                    continue;
+
+                var signal = new TriggerSignal(
+                    input.Id,
+                    IsMidi: false,
+                    Address: gesture,
+                    MidiType: ControlMIDIMessageType.Unknown,
+                    Channel: 0,
+                    Number: 0,
+                    Value: null,
+                    IsKeyboard: true);
+                if (Resolve(binding, signal) is { } action)
+                {
+                    matched = true;
+                    Triggered?.Invoke(action);
+                }
+            }
+        }
+
+        return matched;
+    }
+
     /// <summary>
     /// The no-repeat filter.
     /// </summary>

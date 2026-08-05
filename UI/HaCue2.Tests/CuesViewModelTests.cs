@@ -265,4 +265,21 @@ public class CuesViewModelTests
 
         Assert.Equal(before, shell.Project.AllCues().Count());
     });
+
+    [Fact]
+    public Task OpenLockedAppliesBeforeAnyAuthoringPaneIsBuilt() => ShellFixture.Session.DispatchGuarded(() =>
+    {
+        var project = ShellFixture.Project();
+        project.Settings.OpenLocked = true;
+
+        var shell = new ShellViewModel(project);
+
+        Assert.True(shell.IsLocked);
+        Assert.True(shell.Journal.IsReadOnly);
+        Assert.False(shell.CanEdit);
+        Assert.False(shell.Cues.CanEditDocument);
+        Assert.False(shell.Audio.CanAuthor);
+        Assert.False(shell.Video.CanAuthor);
+        Assert.False(shell.Targets.CanAuthor);
+    });
 }

@@ -50,6 +50,8 @@ public partial class ShellViewModel : ObservableObject
         Settings = settings ?? new AppSettings();
         Path = path;
         Journal = new ProjectJournal(project);
+        _isLocked = project.Settings.OpenLocked;
+        Journal.IsReadOnly = _isLocked;
         Machine = machine;
 
         // Real answers where this machine can give one, invented ones where it cannot — yet. Media
@@ -58,7 +60,9 @@ public partial class ShellViewModel : ObservableObject
         Runtime = SampleRuntime.For(project);
         AdoptProbeResults();
 
-        Environment = machine.Environment ?? new RuntimeEnvironment(Runtime, project, () => ProjectPath);
+        Environment = new ShellProjectEnvironment(
+            machine.Environment,
+            new RuntimeEnvironment(Runtime, project, () => ProjectPath));
 
         Cues = new CuesViewModel(Journal, Runtime)
         {
@@ -68,21 +72,29 @@ public partial class ShellViewModel : ObservableObject
             MediaFacts = media => machine.Media.Facts(MediaPaths.Resolve(project, media.MediaPath, ProjectPath)),
             ProjectPath = () => ProjectPath,
         };
+        Cues.Inspector.CacheRoot = MediaCache.RootFor(Settings);
+        Cues.Inspector.WaveformCacheBytes = MediaCache.ParseBudget(Settings.WaveformBudget);
+        Cues.Inspector.RememberTabs = Settings.RememberInspectorTab;
+        Cues.FlatActiveList = Settings.FlatActiveList;
         Cues.Inspector.ProjectPath = () => ProjectPath;
-        Cues.DoubleGoGuard = TimeSpan.FromMilliseconds(ParseSettingNumber(Settings.DoubleGoGuard, 250));
-        Cues.ConfirmStopAllThreshold = ParseSettingNumber(Settings.ConfirmStopAll, 3);
+        Cues.DoubleGoGuard = TimeSpan.FromMilliseconds(ParseDurationMilliseconds(Settings.DoubleGoGuard, 250));
+        Cues.ConfirmStopAllThreshold = ParseCount(Settings.ConfirmStopAll, 3);
         Cues.AfterGo = SaveAfterGoAsync;
         Audio = new AudioViewModel(Journal, Runtime);
         Video = new VideoViewModel(project, Runtime, Journal) { Audition = Audio.Audition };
         Targets = new TargetsViewModel(project, Runtime, Journal, Settings);
         OutputInfo = new OutputInfoViewModel(Runtime);
+        OutputInfo.ResetClips = ResetMeterClips;
+        _isOutputInfoOpen = Settings.OpenDrawerOnLaunch;
 
         // A project as loaded is clean, whatever its contents. The dirty flag answers "does this
         // differ from the file", not "is anything wrong with it".
         Journal.MarkSaved();
         Journal.Changed += OnJournalChanged;
 
-        _status = ProjectStatus.Run(project, ProjectPath, Environment);
+        _status = project.Settings.RunStatusChecksOnOpen
+            ? ProjectStatus.Run(project, ProjectPath, Environment)
+            : ProjectStatus.NotRun();
 
         // Fire and forget: the views draw now and the answers arrive later. Until a file has been
         // looked at its length reads "—", which is the truth rather than a guess.
@@ -96,10 +108,23 @@ public partial class ShellViewModel : ObservableObject
     /// <summary>The machine-scope settings, for the panes and windows that read them.</summary>
     public AppSettings Settings { get; init; } = new();
 
-    private static int ParseSettingNumber(string value, int fallback)
+    private static int ParseCount(string value, int fallback)
     {
         var digits = new string([.. value.Where(char.IsAsciiDigit)]);
         return int.TryParse(digits, out var parsed) ? Math.Max(0, parsed) : fallback;
+    }
+
+    private static int ParseDurationMilliseconds(string value, int fallback)
+    {
+        var trimmed = value.Trim();
+        var milliseconds = trimmed.EndsWith("ms", StringComparison.OrdinalIgnoreCase);
+        var number = trimmed.TrimEnd('s', 'S', 'm', 'M', ' ').Replace(',', '.');
+
+        return double.TryParse(number, System.Globalization.NumberStyles.Float,
+                   System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+               && parsed >= 0
+            ? (int)Math.Clamp(Math.Round(milliseconds ? parsed : parsed * 1_000), 0, 60_000)
+            : fallback;
     }
 
     private async Task SaveAfterGoAsync()
@@ -230,7 +255,7 @@ public partial class ShellViewModel : ObservableObject
         Host.MachinePanicFadeMs = Settings.PanicFadeMs;
         Audio.NoteAudioStarted();
 
-        _engine = new EngineRuntime(Host, Runtime, Project);
+        _engine = new EngineRuntime(Host, Runtime, Project, Settings);
         _engine.Changed += () =>
         {
             Cues.Refresh();
@@ -395,6 +420,13 @@ public partial class ShellViewModel : ObservableObject
         return await engine.IdentifyAsync(outputId).ConfigureAwait(true);
     }
 
+    public async Task<string?> SetCalibrationAsync(Guid outputId, bool enabled)
+    {
+        if (_engine is not { } engine)
+            return "the show is not running — start it before calibrating an output";
+        return await engine.SetCalibrationAsync(outputId, enabled).ConfigureAwait(true);
+    }
+
     /// <summary>
     /// Runs a timeline group from the sheet's playhead, reporting why it could not.
     /// </summary>
@@ -481,10 +513,18 @@ public partial class ShellViewModel : ObservableObject
     /// <summary>Applies machine settings that affect an already-open transport.</summary>
     public void ApplyApplicationSettings()
     {
-        Cues.DoubleGoGuard = TimeSpan.FromMilliseconds(ParseSettingNumber(Settings.DoubleGoGuard, 250));
-        Cues.ConfirmStopAllThreshold = ParseSettingNumber(Settings.ConfirmStopAll, 3);
+        Cues.DoubleGoGuard = TimeSpan.FromMilliseconds(ParseDurationMilliseconds(Settings.DoubleGoGuard, 250));
+        Cues.ConfirmStopAllThreshold = ParseCount(Settings.ConfirmStopAll, 3);
+        Cues.Inspector.RememberTabs = Settings.RememberInspectorTab;
+        Cues.FlatActiveList = Settings.FlatActiveList;
+        Cues.Tick();
+        if (Host is { } host)
+            host.MachinePanicFadeMs = Settings.PanicFadeMs;
         _ = ApplyRemoteSettingsAsync();
     }
+
+    /// <summary>Clears the program-bus clip latch; invoked by meter clicks and Diagnostics.</summary>
+    public void ResetMeterClips() => Host?.ResetMeterClips();
 
     private async Task ApplyRemoteSettingsAsync()
     {
@@ -804,8 +844,8 @@ public partial class ShellViewModel : ObservableObject
     private string _selectedView = CuesView;
 
     /// <summary>
-    /// The Lock latch (register item 2): opt-in, never the launch state, read-only document, and GO
-    /// untouched.
+    /// The Lock latch (register item 2): read-only document and GO untouched. Projects whose own
+    /// OpenLocked setting is on start in this state.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ModeLabel))]
@@ -874,7 +914,9 @@ public partial class ShellViewModel : ObservableObject
         ? "● outputs failing"
         : OutputChecks().Any(check => check.Outcome == CheckOutcome.Warning)
             ? "● outputs degraded"
-            : "● outputs ok";
+            : OutputChecks().Any(check => check.Outcome == CheckOutcome.NotChecked)
+                ? "○ outputs not checked"
+                : "● outputs ok";
 
     public bool HasIssues => Status.Errors + Status.Warnings > 0;
 
@@ -970,10 +1012,12 @@ public partial class ShellViewModel : ObservableObject
         OnPropertyChanged(nameof(UndoSummary));
         OnPropertyChanged(nameof(CanUndo));
         OnPropertyChanged(nameof(CanRedo));
+        OnPropertyChanged(nameof(CanEdit));
         Cues.Refresh();
         // One journal, every view: an undo made in the patch has to reach the cue tree too.
         Audio.Refresh();
         Video.Refresh();
+        Targets.Refresh();
     }
 
     private IEnumerable<StatusCheck> OutputChecks() =>
@@ -989,6 +1033,10 @@ public partial class ShellViewModel : ObservableObject
 /// </remarks>
 public sealed class OutputInfoViewModel(ShowRuntime runtime) : ObservableObject
 {
+    public Action? ResetClips { get; set; }
+
+    public void ResetMeterClips() => ResetClips?.Invoke();
+
     public IReadOnlyList<ProgramMeter> Meters => runtime.Meters;
     public IReadOnlyList<OutputLineChip> Lines => runtime.LineChips;
     public string BaySummary => runtime.BaySummary.Length > 0 ? runtime.BaySummary : "no session";

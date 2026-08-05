@@ -98,6 +98,9 @@ public static class MediaEdits
     {
         ArgumentNullException.ThrowIfNull(journal);
 
+        if (journal.IsReadOnly)
+            return new MediaEditResult([], ["project is locked — no media was relinked"]);
+
         var references = MediaPaths.ReferencesIn(journal.Project)
             .Where(reference => reference.Path == oldPath)
             .ToList();
@@ -125,6 +128,10 @@ public static class MediaEdits
         string? projectPath = null,
         IMediaStore? store = null)
     {
+        ArgumentNullException.ThrowIfNull(journal);
+        if (journal.IsReadOnly)
+            return new MediaEditResult([], ["project is locked — no media was relinked"]);
+
         store ??= FileSystemMediaStore.Instance;
         var project = journal.Project;
 
@@ -186,6 +193,10 @@ public static class MediaEdits
         string? projectPath = null,
         IMediaStore? store = null)
     {
+        ArgumentNullException.ThrowIfNull(journal);
+        if (journal.IsReadOnly)
+            return new MediaEditResult([], ["project is locked — no files were copied"]);
+
         store ??= FileSystemMediaStore.Instance;
         var project = journal.Project;
 

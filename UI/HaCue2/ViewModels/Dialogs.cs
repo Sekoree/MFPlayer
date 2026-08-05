@@ -1272,6 +1272,7 @@ public static class Dialogs
             kind switch
             {
                 TriggerInputKind.OscIn => "Add OSC listener",
+                TriggerInputKind.Keyboard => "Add keyboard input",
                 TriggerInputKind.Schedule => "Add schedule",
                 TriggerInputKind.Timecode => "Add timecode",
                 _ => "Add MIDI input",
@@ -1282,6 +1283,8 @@ public static class Dialogs
                     "fires on the wall clock · " + TriggerTimes.ScheduleSyntax,
                 TriggerInputKind.Timecode =>
                     "fires on incoming MTC · " + TriggerTimes.TimecodeSyntax,
+                TriggerInputKind.Keyboard =>
+                    "local key gestures · learned from the main window",
                 _ => "external input never gates GO (register item 3)",
             },
             wired

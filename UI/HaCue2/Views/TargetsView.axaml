@@ -48,7 +48,7 @@
         <c:PanelBox Grid.Column="0" Header="Action endpoints" Hint="outbound · cues send here">
           <c:PanelBox.Footer>
             <Border Classes="chain">
-              <StackPanel Orientation="Horizontal" Spacing="6">
+              <StackPanel Orientation="Horizontal" Spacing="6" IsEnabled="{Binding CanAuthor}">
                 <Button Classes="tight" Content="+ OSC OUT…" Click="OnDialog" Tag="end:osc" />
                 <Button Classes="tight" Content="+ MIDI OUT…" Click="OnDialog" Tag="end:midi" />
                 <Button Classes="tight" Content="EDIT…" Click="OnDialog" Tag="end:edit"
@@ -90,15 +90,15 @@
         <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
           <c:PanelBox Grid.Row="0" Header="{Binding SelectedEndpointName}" Hint="selected endpoint">
             <StackPanel Margin="0,6,0,8" IsEnabled="{Binding HasEndpointSelected}">
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Host">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Host" IsEnabled="{Binding CanAuthor}">
                 <TextBox Text="{Binding EndpointHost}" PlaceholderText="10.0.1.20" />
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Port">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Port" IsEnabled="{Binding CanAuthor}">
                 <TextBox Text="{Binding EndpointPort}" PlaceholderText="8000" />
               </HeaderedContentControl>
               <!-- Register item 24: the test payload is stored PER endpoint. A generic ping proves the
                    socket is open; it does not prove the desk understood you. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Test message">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Test message" IsEnabled="{Binding CanAuthor}">
                 <TextBox Text="{Binding TestMessage}" />
               </HeaderedContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
@@ -123,9 +123,10 @@
           <c:PanelBox Grid.Row="0" Header="Trigger inputs" Hint="inbound · fire cues">
             <c:PanelBox.Footer>
               <Border Classes="chain">
-                <StackPanel Orientation="Horizontal" Spacing="6">
+                <WrapPanel Orientation="Horizontal" IsEnabled="{Binding CanAuthor}">
                   <Button Classes="tight" Content="+ MIDI IN…" Click="OnDialog" Tag="in:midi" />
                   <Button Classes="tight" Content="+ OSC LISTENER…" Click="OnDialog" Tag="in:osc" />
+                  <Button Classes="tight" Content="+ KEYBOARD…" Click="OnDialog" Tag="in:key" />
                   <!-- The other two ways a cue fires with nobody at the desk. Same master gate. -->
                   <Button Classes="tight" Content="+ SCHEDULE…" Click="OnDialog" Tag="in:clock" />
                   <Button Classes="tight" Content="+ TIMECODE…" Click="OnDialog" Tag="in:mtc" />
@@ -133,7 +134,7 @@
                           IsEnabled="{Binding HasSourceSelected}" />
                   <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="in:remove"
                           IsEnabled="{Binding HasSourceSelected}" />
-                </StackPanel>
+                </WrapPanel>
               </Border>
             </c:PanelBox.Footer>
 
@@ -168,7 +169,7 @@
             <c:PanelBox.Footer>
               <Border Classes="chain">
                 <Button Classes="tight" Content="REMOVE BINDING" Click="OnRemoveBinding"
-                        IsEnabled="{Binding HasBindings}" />
+                        IsEnabled="{Binding CanRemoveBinding}" />
               </Border>
             </c:PanelBox.Footer>
             <DockPanel>
@@ -245,6 +246,11 @@
                    box that looked like one would be the thing this sweep is removing. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="No repeat">
                 <TextBox Text="{Binding LearnNoRepeat}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="While typing"
+                                      IsVisible="{Binding IsKeyboardSource}">
+                <CheckBox Content="Keep this binding global while editing text"
+                          IsChecked="{Binding LearnAllowWhileTyping}" />
               </HeaderedContentControl>
             </StackPanel>
           </c:PanelBox>

@@ -101,8 +101,8 @@ public static class ShowCompiler
     /// </summary>
     /// <remarks>
     /// The question is "do two of these ever sound at the same time". Only a playlist can answer no —
-    /// it is defined by items succeeding one another — so it is the one mode that keeps a shared
-    /// transport, and the crossfade between its items depends on that sharing.
+    /// playlist/armed-list items succeed one another, and first-only can only fire one child. Those
+    /// modes keep a shared transport; timeline and all-together require concurrent child voices.
     /// </remarks>
     private static bool LayersChildren(GroupCueNode group) =>
         group.FireMode is GroupFireMode.Timeline or GroupFireMode.AllTogether;

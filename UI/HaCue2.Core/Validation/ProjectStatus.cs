@@ -48,10 +48,9 @@ public sealed record ProjectStatusReport(IReadOnlyList<StatusCheck> Checks, doub
     public int ExitCode => Errors > 0 ? 1 : 0;
 
     /// <summary>The status-bar summary: "2 errors · 2 warnings · 9 passed · 0.4 s".</summary>
-    public string Summary =>
-        string.Create(CultureInfo.InvariantCulture,
-            $"{Errors} error{S(Errors)} · {Warnings} warning{S(Warnings)} · {Passed} passed · "
-            + $"{ElapsedSeconds:0.0} s");
+    public string Summary => string.Format(CultureInfo.InvariantCulture,
+        "{0} error{1} · {2} warning{3} · {4} passed · {5}{6:0.0} s",
+        Errors, S(Errors), Warnings, S(Warnings), Passed, NotCheckedPart(), ElapsedSeconds);
 
     public string ToText()
     {
@@ -85,6 +84,8 @@ public sealed record ProjectStatusReport(IReadOnlyList<StatusCheck> Checks, doub
     };
 
     private static string S(int count) => count == 1 ? "" : "s";
+
+    private string NotCheckedPart() => NotChecked > 0 ? $"{NotChecked} not checked · " : "";
 }
 
 /// <summary>
@@ -106,6 +107,15 @@ public sealed record ProjectStatusReport(IReadOnlyList<StatusCheck> Checks, doub
 /// </remarks>
 public static class ProjectStatus
 {
+    /// <summary>A truthful initial report when a project asks not to run machine checks on open.</summary>
+    public static ProjectStatusReport NotRun(string reason = "status checks are disabled on open")
+    {
+        StatusCheck Row(string name) => new(name, CheckOutcome.NotChecked, reason,
+            "open Project status and choose RERUN when you want to check this machine", []);
+
+        return new([Row("Audio devices"), Row("Video outputs"), Row("Logical outputs")], 0);
+    }
+
     public static ProjectStatusReport Run(
         HaCueProject project,
         string? projectPath = null,

@@ -110,6 +110,31 @@ public sealed class ImplementationRegressionTests
         Assert.Equal(9, section.MeshPoints!.Count);
     }
 
+    [Fact]
+    public void DirectWarpDragIsOneUndoableEdit()
+    {
+        var composition = new CompositionDefinition { Name = "Canvas" };
+        var output = new VideoOutputDefinition
+        {
+            Name = "Projector", CompositionId = composition.Id,
+            Mapping = [new MappingSection { Name = "Full" }],
+        };
+        var project = new HaCueProject { Compositions = [composition], VideoOutputs = [output] };
+        var journal = new ProjectJournal(project);
+        var video = new VideoViewModel(project, new ShowRuntime(), journal);
+        video.MeshEnabled = true;
+        journal.MarkSaved();
+
+        video.MoveWarpPoint(new HaCue2.Controls.WarpPointGesture(4, .08, -.04));
+        video.MoveWarpPoint(new HaCue2.Controls.WarpPointGesture(4, .12, -.06));
+        video.EndWarpGesture();
+
+        Assert.Equal(.12, output.Mapping[0].WarpOffsets[8], 6);
+        Assert.True(journal.Undo());
+        Assert.Equal(0, output.Mapping[0].WarpOffsets[8], 6);
+        Assert.Equal(0, output.Mapping[0].WarpOffsets[9], 6);
+    }
+
     /// <summary>
     /// Growing a mesh keeps the handles the operator has already placed.
     /// </summary>
@@ -538,4 +563,3 @@ public sealed class ImplementationRegressionTests
         Assert.Equal(PromptFieldKind.Text, device.Kind);
     }
 }
-

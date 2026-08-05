@@ -33,6 +33,8 @@
     <Border Classes="statusbar" DockPanel.Dock="Bottom">
       <Grid ColumnDefinitions="Auto,*,Auto">
         <TextBlock Grid.Column="0" Classes="mono dim3 small" Text="{Binding ScopeNote}" />
+        <TextBlock Grid.Column="1" Classes="mono err small" HorizontalAlignment="Center"
+                   IsVisible="{Binding HasSettingsProblem}" Text="{Binding SettingsProblem}" />
         <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding ScopeFile}" />
       </Grid>
     </Border>
@@ -81,8 +83,6 @@
                 <ContentControl Theme="{StaticResource Subhead}" Content="Main view" />
                 <CheckBox Margin="10,3" IsChecked="{Binding RememberInspectorTab}"
                           Content="Remember inspector tab per cue kind" />
-                <CheckBox Margin="10,3" IsChecked="{Binding RememberTimelineDock}"
-                          Content="Timeline sheet ⇄ window state remembered" />
                 <CheckBox Margin="10,3" IsChecked="{Binding FlatActiveList}"
                           Content="Flat active list (default grouped)" />
                 <CheckBox Margin="10,3" IsChecked="{Binding OpenDrawerOnLaunch}"
@@ -108,7 +108,7 @@
           <c:PanelBox IsVisible="{Binding IsTransportPane}" VerticalAlignment="Top"
                       Header="Transport defaults" Hint="app-settings.json · not journaled">
             <StackPanel Margin="0,6,0,8">
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Stop fade">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="New-project stop fade">
                 <TextBox Classes="short" Text="{Binding AppStopFade}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Panic fade">
@@ -131,45 +131,42 @@
             </StackPanel>
           </c:PanelBox>
 
-          <!-- ══ Hotkeys — WIP by decision, not by omission ══════════════════════════════════ -->
+          <!-- ══ Hotkeys ═════════════════════════════════════════════════════════════════════ -->
           <c:PanelBox IsVisible="{Binding IsHotkeysPane}" VerticalAlignment="Top"
                       Header="Hotkeys" Hint="command × gesture">
             <c:PanelBox.Footer>
               <Border Classes="chain">
-                <DockPanel LastChildFill="True">
-                  <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge clock">
-                    <TextBlock Text="WIP" />
-                  </Border>
-                  <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
-                             Text="the grid stays a stub until the command list is stable — binding a moving target would have to be redone, and would look settled while it wasn't" />
-                </DockPanel>
+                <TextBlock Classes="mono dim3 small" TextWrapping="Wrap"
+                           Text="{Binding HotkeyCollisionNote}" />
               </Border>
             </c:PanelBox.Footer>
 
-            <DockPanel>
+            <StackPanel>
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="8,6">
+                <ComboBox Grid.Column="0" ItemsSource="{Binding HotkeyProfiles}"
+                          SelectedItem="{Binding HotkeyProfile}" />
+                <Button Grid.Column="1" Classes="tight" Content="RESET PROFILE" Click="OnResetHotkeys" />
+              </Grid>
               <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                       BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
-                <Grid ColumnDefinitions="*,140,110,140" ColumnSpacing="8">
+                <Grid ColumnDefinitions="*,160,110" ColumnSpacing="8">
                   <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="COMMAND" />
                   <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="GESTURE" />
                   <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="GROUP" />
-                  <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="PROJECT OVERRIDE" />
                 </Grid>
               </Border>
               <ListBox Theme="{StaticResource TableRows}" ItemsSource="{Binding Hotkeys}">
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="vm:HotkeyRow">
-                    <Grid ColumnDefinitions="*,140,110,140" ColumnSpacing="8" Margin="8,4">
+                    <Grid ColumnDefinitions="*,160,110" ColumnSpacing="8" Margin="8,4">
                       <TextBlock Grid.Column="0" FontSize="{DynamicResource FontSizeSmall}" Text="{Binding Command}" />
-                      <TextBlock Grid.Column="1" Classes="mono small" Text="{Binding Gesture}" />
+                      <TextBox Grid.Column="1" Classes="mono small" Text="{Binding Gesture}" />
                       <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding Group}" />
-                      <TextBlock Grid.Column="3" Classes="mono dim3 small"
-                                 Classes.warn="{Binding HasOverride}" Text="{Binding OverrideText}" />
                     </Grid>
                   </DataTemplate>
                 </ListBox.ItemTemplate>
               </ListBox>
-            </DockPanel>
+            </StackPanel>
           </c:PanelBox>
 
           <!-- ══ Remote API (app default) ════════════════════════════════════════════════════ -->
@@ -225,20 +222,23 @@
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Location">
                 <TextBox Text="{Binding CacheRoot}" />
               </HeaderedContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding CacheRootNote}" />
+              </ContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Waveforms">
                 <TextBox Classes="short" Text="{Binding WaveformBudget}" />
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Thumbnails">
-                <TextBox Classes="short" Text="{Binding ThumbnailBudget}" />
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="YouTube media">
+                <TextBox Classes="short" Text="{Binding YouTubeBudget}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="In use">
                 <TextBox Classes="ro" Text="{Binding CacheInUse}" />
               </HeaderedContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="CLEAR WAVEFORM &amp; PROBE CACHE" Click="OnClearCache" Tag="waveforms" />
+                <Button Classes="block" Content="CLEAR WAVEFORM CACHE" Click="OnClearCache" Tag="waveforms" />
               </ContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="CLEAR THUMBNAIL CACHE" Click="OnClearCache" Tag="thumbnails" />
+                <Button Classes="block" Content="CLEAR YOUTUBE CACHE" Click="OnClearCache" Tag="youtube" />
               </ContentControl>
               <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
                          Text="Everything here is re-derivable from the media. Clearing costs time on the next open, never show data." />
@@ -264,6 +264,9 @@
               <CheckBox Margin="10,4" IsChecked="{Binding CrashDumps}"
                         Content="Write a crash report when the app faults" />
               <ContentControl Theme="{StaticResource FieldWide}">
+                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding LoggingActivationNote}" />
+              </ContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
                 <StackPanel>
                   <Button Classes="block" Content="OPEN LOGS FOLDER" Click="OnOpenLogs" />
                   <TextBlock Classes="mono dim3 micro" Margin="10,4" TextWrapping="Wrap"
@@ -276,7 +279,7 @@
           <!-- ══ Save, autosave & recovery (project scope) ═══════════════════════════════════ -->
           <c:PanelBox IsVisible="{Binding IsSavePane}" VerticalAlignment="Top"
                       Header="Save, autosave &amp; recovery" Hint="journaled · undoable">
-            <StackPanel Margin="0,6,0,8">
+            <StackPanel Margin="0,6,0,8" IsEnabled="{Binding CanEditProject}">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Autosave every">
                 <TextBox Classes="short" Text="{Binding AutosaveCadence}" />
               </HeaderedContentControl>
@@ -284,7 +287,7 @@
                 <TextBox Classes="short" Text="{Binding RecoveryCopies}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Recovery in">
-                <TextBox Text="{Binding RecoveryLocation}" />
+                <TextBox Classes="ro" IsReadOnly="True" Text="{Binding RecoveryLocation}" />
               </HeaderedContentControl>
               <!-- Off by default: a GO is a performance action and a disk write on it is a stall. -->
               <CheckBox Margin="10,4" IsChecked="{Binding SaveOnGo}" Content="Save on every GO" />
@@ -323,7 +326,7 @@
           <!-- ══ Show behaviour (project scope) ══════════════════════════════════════════════ -->
           <c:PanelBox IsVisible="{Binding IsShowBehaviourPane}" VerticalAlignment="Top"
                       Header="Show behaviour" Hint="journaled · undoable">
-            <StackPanel Margin="0,6,0,8">
+            <StackPanel Margin="0,6,0,8" IsEnabled="{Binding CanEditProject}">
               <!-- Editing is the default everywhere; this row exists only for the show that wants to
                    boot locked (register item 2). -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Open in">
@@ -360,7 +363,7 @@
           <!-- ══ Authoring defaults ══════════════════════════════════════════════════════════ -->
           <c:PanelBox IsVisible="{Binding IsAuthoringPane}" VerticalAlignment="Top"
                       Header="Authoring defaults">
-            <StackPanel Margin="0,6,0,8">
+            <StackPanel Margin="0,6,0,8" IsEnabled="{Binding CanEditProject}">
               <HeaderedContentControl Theme="{StaticResource Field}" Header="New cue trigger">
                 <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding TriggerModes}"
                          SelectedItem="{Binding TriggerMode}" />

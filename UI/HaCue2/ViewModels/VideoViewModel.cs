@@ -37,8 +37,12 @@ public partial class VideoViewModel : ObservableObject
     private readonly ShowRuntime _runtime;
     private readonly ProjectJournal _journal;
 
+    /// <summary>Whether document-backed video controls may edit; output runtime controls are independent.</summary>
+    public bool CanAuthor => !_journal.IsReadOnly;
+
     /// <summary>The composite open for the duration of one drag, so the whole gesture is one ⌘Z.</summary>
     private IDisposable? _drag;
+    private readonly HashSet<Guid> _calibrating = [];
 
     public VideoViewModel(HaCueProject project, ShowRuntime runtime, ProjectJournal journal)
     {
@@ -207,6 +211,7 @@ public partial class VideoViewModel : ObservableObject
 
         // The refusal was about the output that was selected when it happened.
         OutputProblem = "";
+        OnPropertyChanged(nameof(IsCalibrationOn));
 
         // The composition pane follows the output's own composition: an operator who selects the
         // projector and then goes to look at a canvas expects to be looking at what the projector
@@ -215,6 +220,17 @@ public partial class VideoViewModel : ObservableObject
         // recorder arming) would otherwise pull the pane back to somewhere they did not choose.
         if (!IsCompositionsPane)
             SelectedCompositionId = MappedOutput?.CompositionId;
+    }
+
+    public bool IsCalibrationOn => SelectedOutput is { } output && _calibrating.Contains(output.Id);
+
+    public void NoteCalibration(Guid outputId, bool enabled)
+    {
+        if (enabled)
+            _calibrating.Add(outputId);
+        else
+            _calibrating.Remove(outputId);
+        OnPropertyChanged(nameof(IsCalibrationOn));
     }
 
     /// <summary>
@@ -1415,6 +1431,8 @@ public partial class VideoViewModel : ObservableObject
 
     public bool HasWarp => Section?.HasMesh == true;
 
+    public IReadOnlyList<double> WarpOffsets => Section?.WarpOffsets ?? [];
+
     public IReadOnlyList<string> WarpPoints => Section is not { } section || !section.HasMesh
         ? []
         : [.. Enumerable.Range(0, section.MeshPointCount)
@@ -1491,6 +1509,28 @@ public partial class VideoViewModel : ObservableObject
             section.Id, $"warpPoint:{SelectedWarpPoint}", "mapping",
             () => section.WarpOffsets, values => section.WarpOffsets = values,
             changed, "nudge warp point"));
+        _journal.CloseGroup();
+        Refresh();
+    }
+
+    /// <summary>Moves one direct-manipulation handle; repeated drag ticks coalesce into one undo.</summary>
+    public void MoveWarpPoint(WarpPointGesture gesture)
+    {
+        if (Section is not { } section || !section.HasMesh
+            || gesture.Index < 0 || gesture.Index >= section.MeshPointCount)
+            return;
+        SelectedWarpPoint = gesture.Index;
+        var changed = section.WarpOffsets.ToList();
+        changed[gesture.Index * 2] = Math.Clamp(gesture.OffsetX, -1, 1);
+        changed[gesture.Index * 2 + 1] = Math.Clamp(gesture.OffsetY, -1, 1);
+        _journal.Do(new SetValueCommand<List<double>>(
+            section.Id, $"warpPoint:{gesture.Index}", "mapping",
+            () => section.WarpOffsets, values => section.WarpOffsets = values,
+            changed, "drag warp point"));
+    }
+
+    public void EndWarpGesture()
+    {
         _journal.CloseGroup();
         Refresh();
     }
@@ -1807,6 +1847,8 @@ public partial class VideoViewModel : ObservableObject
     /// <summary>Re-reads every canvas from the document — after an edit here, or an undo anywhere.</summary>
     public void Refresh()
     {
+        OnPropertyChanged(nameof(CanAuthor));
+
         // The SET first: a composition added, removed or renamed needs new panes, and one only edited
         // needs its existing pane left alone so a drag in progress keeps its container.
         var wanted = _project.Compositions.Select(item => item.Id).ToList();
@@ -1935,6 +1977,7 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(MeshRows));
         OnPropertyChanged(nameof(HasWarp));
         OnPropertyChanged(nameof(WarpPoints));
+        OnPropertyChanged(nameof(WarpOffsets));
         OnPropertyChanged(nameof(SelectedWarpPoint));
         OnPropertyChanged(nameof(WarpOffsetX));
         OnPropertyChanged(nameof(WarpOffsetY));

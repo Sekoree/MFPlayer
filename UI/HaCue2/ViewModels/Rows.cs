@@ -486,7 +486,8 @@ public sealed record CompositionStatsRow
     public string Layers { get; init; } = "0";
     public required Status Late { get; init; }
     public string Dropped { get; init; } = "0";
-    public string Gpu { get; init; } = "GL";
+    /// <summary>The compositor actually selected by the production session, never an assumed GPU.</summary>
+    public string Gpu { get; init; } = "Unknown";
 }
 
 /// <summary>One line of the log tail (screen 15) or a wire monitor (screen 11).</summary>
@@ -512,11 +513,35 @@ public sealed record RecentProjectRow
 /// <summary>Screen 13 — one app setting this project defeats.</summary>
 public sealed record OverrideRow(string Setting, string AppValue, string ProjectValue);
 
-/// <summary>Screen 12 — one row of the hotkey grid: a command, its gesture, and any project override.</summary>
-public sealed record HotkeyRow(string Command, string Gesture, string Group, string ProjectOverride)
+/// <summary>One editable machine hotkey. Safety Esc/Esc×2 is intentionally a fixed convention.</summary>
+public sealed class HotkeyRow : ObservableObject
 {
-    public bool HasOverride => ProjectOverride.Length > 0;
-    public string OverrideText => HasOverride ? ProjectOverride : "—";
+    private readonly Action<string> _write;
+    private string _gesture;
+
+    public HotkeyRow(string id, string command, string gesture, string group, Action<string> write)
+    {
+        Id = id;
+        Command = command;
+        _gesture = gesture;
+        Group = group;
+        _write = write;
+    }
+
+    public string Id { get; }
+    public string Command { get; }
+    public string Group { get; }
+
+    public string Gesture
+    {
+        get => _gesture;
+        set
+        {
+            var normalized = value.Trim().Replace(" ", "", StringComparison.Ordinal);
+            if (SetProperty(ref _gesture, normalized))
+                _write(normalized);
+        }
+    }
 }
 
 /// <summary>Screen 02b — a line chip in the Output info drawer.</summary>

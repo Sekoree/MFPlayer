@@ -156,6 +156,7 @@ public sealed partial class ShowHost
         await _visualizers.StopAsync(cueId).ConfigureAwait(false);
         await _session.StopCueAsync(cueId.ToString()).ConfigureAwait(false);
         Forget(cueId.ToString());
+        Executor.OnStopped(cueId);
     }
 
     /// <summary>Stops everything, fading over the project's stop fade.</summary>
@@ -197,6 +198,8 @@ public sealed partial class ShowHost
         // stop fade while everything audible came down would read as a rig that had not stopped.
         await _visualizers.StopAllAsync().ConfigureAwait(false);
         await _session.StopAllAsync(fade, curve).ConfigureAwait(false);
+
+        _executor?.ResetTransientState();
 
         lock (_gate)
             _sounding.Clear();

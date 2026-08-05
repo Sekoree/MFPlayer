@@ -289,6 +289,13 @@ public sealed record TriggerBinding
 
     /// <summary>Ignore repeats inside this window; 0 disables the filter.</summary>
     public int NoRepeatMs { get; set; }
+
+    /// <summary>
+    /// A keyboard binding normally yields to a text editor. Global bindings remain live while typing;
+    /// use this only for commands whose show-control value outweighs the risk of stealing a character.
+    /// Ignored by non-keyboard sources.
+    /// </summary>
+    public bool AllowWhileTyping { get; set; }
 }
 
 public enum TriggerTarget

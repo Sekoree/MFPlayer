@@ -6,6 +6,7 @@ using HaCue2.Core.Model;
 using HaCue2.Machine;
 using HaCue2.Sample;
 using HaCue2.Session;
+using HaCue2.Engine;
 using S.Media.Core.Audio;
 using HaCue2.ViewModels;
 using HaCue2.Views;
@@ -31,6 +32,7 @@ public partial class App : Application
         // Touched rather than assigned: the desktop head has already loaded these to pick an audio
         // backend from them, and loading again would discard that choice.
         _ = Settings;
+        YouTubeRuntime.Configure(Settings);
 
         // Before anything that logs, and before the framework is touched: MediaDiagnostics resolves
         // per-category loggers from whatever factory is installed at the moment it is asked, so a

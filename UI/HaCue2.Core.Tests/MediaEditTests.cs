@@ -177,6 +177,37 @@ public sealed class MediaEditTests
         Assert.Equal(before, HaCueProjectFile.Serialize(fixture.Project));
     }
 
+    [Fact]
+    public void LockedConsolidateDoesNotCopyOrRewriteAnything()
+    {
+        var fixture = new TestProject();
+        fixture.Track.MediaPath = "/elsewhere/track.flac";
+        var store = new FakeStore { "/elsewhere/track.flac" };
+        var journal = new ProjectJournal(fixture.Project) { IsReadOnly = true };
+
+        var result = MediaEdits.Consolidate(journal, "/tour/media", store: store);
+
+        Assert.False(result.IsComplete);
+        Assert.Contains("locked", Assert.Single(result.Unresolved), StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(store.Copied);
+        Assert.Equal("/elsewhere/track.flac", fixture.Track.MediaPath);
+        Assert.Empty(journal.Log);
+    }
+
+    [Fact]
+    public void LockedRelinkDoesNotRewriteAnything()
+    {
+        var fixture = Missing("sfx/storm-bed.flac");
+        var store = new FakeStore { "/new/root/storm-bed.flac" };
+        var journal = new ProjectJournal(fixture.Project) { IsReadOnly = true };
+
+        var result = MediaEdits.Relink(journal, "/new/root", RelinkStrategy.ByFileName, store: store);
+
+        Assert.False(result.IsComplete);
+        Assert.Contains("locked", Assert.Single(result.Unresolved), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("sfx/storm-bed.flac", fixture.Track.MediaPath);
+    }
+
     private static TestProject Missing(string path)
     {
         var fixture = new TestProject();

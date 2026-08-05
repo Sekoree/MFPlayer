@@ -63,6 +63,7 @@ public static class ProjectFiles
                 MediaRoot = mediaRoot,
                 DefaultFadeInMs = Math.Max(0, app.NewProjectFadeInMs),
                 DefaultFadeOutMs = Math.Max(0, app.NewProjectFadeOutMs),
+                StopFadeMs = Math.Max(0, app.StopFadeMs),
                 AutoRenumberOnInsert = app.AutoRenumberDefault,
                 ClickMovesStandby = app.StandbyFollowsClick,
             },

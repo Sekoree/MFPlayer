@@ -13,10 +13,13 @@ public readonly record struct TriggerSignal(
     ControlMIDIMessageType MidiType,
     int Channel,
     int Number,
-    double? Value)
+    double? Value,
+    bool IsKeyboard = false)
 {
     /// <summary>How the wire monitor shows it — the same text a binding is written in.</summary>
-    public string Describe() => IsMidi
+    public string Describe() => IsKeyboard
+        ? Address
+        : IsMidi
         ? MidiType switch
         {
             ControlMIDIMessageType.NoteOn => $"note {Number} ch {Channel}",
@@ -46,6 +49,16 @@ public readonly record struct TriggerSignal(
 /// </remarks>
 public static class TriggerMatching
 {
+    /// <summary>Keyboard gestures are formatting-insensitive but otherwise exact.</summary>
+    public static bool MatchesKeyboard(string gesture, string pattern) =>
+        string.Equals(NormalizeKeyboard(gesture), NormalizeKeyboard(pattern), StringComparison.OrdinalIgnoreCase)
+        && NormalizeKeyboard(gesture).Length > 0;
+
+    private static string NormalizeKeyboard(string text) =>
+        string.Join('+', (text ?? "")
+            .Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(part => part.Equals("Control", StringComparison.OrdinalIgnoreCase) ? "Ctrl" : part));
+
     /// <summary>
     /// Whether a signal satisfies a binding's input pattern.
     /// </summary>

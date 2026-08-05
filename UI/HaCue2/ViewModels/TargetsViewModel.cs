@@ -58,6 +58,10 @@ public partial class TargetsViewModel : ObservableObject
     /// <summary>The journal, for the dialogs the view opens.</summary>
     public ProjectJournal Journal => _journal ?? new ProjectJournal(_project);
 
+    /// <summary>Endpoint and trigger authoring follows project lock; monitoring and test sends do not.</summary>
+    public bool CanAuthor => _journal is { IsReadOnly: false };
+    public bool CanRemoveBinding => CanAuthor && HasBindings;
+
     public bool HasNoEndpoints => Endpoints.Count == 0;
     public bool HasNoSources => Sources.Count == 0;
 
@@ -83,6 +87,8 @@ public partial class TargetsViewModel : ObservableObject
         OnPropertyChanged(nameof(HasBindings));
         OnPropertyChanged(nameof(BindingsHeader));
         OnPropertyChanged(nameof(Monitor));
+        OnPropertyChanged(nameof(CanAuthor));
+        OnPropertyChanged(nameof(CanRemoveBinding));
     }
 
     public const string RemoteTab = "REMOTE API";
@@ -227,6 +233,7 @@ public partial class TargetsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsTyped))]
     [NotifyPropertyChangedFor(nameof(CanLearn))]
     [NotifyPropertyChangedFor(nameof(CanBind))]
+    [NotifyPropertyChangedFor(nameof(IsKeyboardSource))]
     [NotifyPropertyChangedFor(nameof(LearnState))]
     [NotifyPropertyChangedFor(nameof(LearnConflict))]
     [NotifyPropertyChangedFor(nameof(HasSourceSelected))]
@@ -290,6 +297,12 @@ public partial class TargetsViewModel : ObservableObject
     [ObservableProperty]
     private string _learnNoRepeat = "250 ms";
 
+    /// <summary>Keyboard-only: keep this binding live while a text editor has focus.</summary>
+    [ObservableProperty]
+    private bool _learnAllowWhileTyping;
+
+    public bool IsKeyboardSource => Input?.Kind == TriggerInputKind.Keyboard;
+
     /// <summary>The parsed filter, or the default when the box says something unusable.</summary>
     private int NoRepeatMs
     {
@@ -351,6 +364,16 @@ public partial class TargetsViewModel : ObservableObject
         IsLearning = false;
     }
 
+    /// <summary>Lets the shell's next key complete Learn for a selected keyboard source.</summary>
+    public bool CaptureKeyboardGesture(string gesture)
+    {
+        if (!IsLearning || !IsKeyboardSource || gesture.Length == 0)
+            return false;
+
+        Observe(gesture);
+        return true;
+    }
+
     /// <summary>The parameters a control surface may ride, when a session is running.</summary>
     /// <remarks>
     /// Read from the running host rather than a list authored here: the registry is what a binding
@@ -386,7 +409,7 @@ public partial class TargetsViewModel : ObservableObject
         : "select a source first";
 
     public bool CanBind =>
-        _journal is not null && SelectedSource is not null && LearnCaught.Length > 0
+        CanAuthor && SelectedSource is not null && LearnCaught.Length > 0
         && TimeRefusal is null;
 
     /// <summary>
@@ -463,6 +486,7 @@ public partial class TargetsViewModel : ObservableObject
         {
             Input = LearnCaught,
             NoRepeatMs = NoRepeatMs,
+            AllowWhileTyping = IsKeyboardSource && LearnAllowWhileTyping,
         };
 
         var verbs = new[] { "go", "stop", "pause", "panic" };

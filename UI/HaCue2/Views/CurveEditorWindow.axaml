@@ -36,6 +36,8 @@
       <Grid ColumnDefinitions="*,220" ColumnSpacing="7" Margin="10,2,10,10">
 
         <c:CurveCanvas Grid.Column="0"
+                       AutomationProperties.Name="Curve point editor"
+                       AutomationProperties.HelpText="Drag points to shape the curve. Exact keyboard-editable values are beside the canvas."
                        Points="{Binding Points}"
                        Shape="{Binding Shape}"
                        Gesture="OnCurveGesture"

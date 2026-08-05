@@ -1,4 +1,5 @@
 using S.Media.Core.Video;
+using HaCue2.Core.Model;
 
 namespace HaCue2.Engine;
 
@@ -34,7 +35,8 @@ public static class IdentifyPattern
     /// BGRA32 with a plain managed buffer: this is one frame shown for a couple of seconds, so there is
     /// nothing to gain from a hardware surface and a great deal to lose from needing one.
     /// </remarks>
-    public static VideoFrame Render(string text, int width, int height)
+    public static VideoFrame Render(
+        string text, int width, int height, IReadOnlyList<MappingSection>? sections = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -45,6 +47,9 @@ public static class IdentifyPattern
         // A saturated blue nobody's content is likely to be, so an operator glancing across a rack of
         // screens can tell at once which one is being identified.
         Fill(pixels, 0x8C, 0x2B, 0x11);
+        Grid(pixels, width, height, stride);
+        SectionBorders(pixels, width, height, stride, sections ?? []);
+        Corners(pixels, width, height, stride);
         Border(pixels, width, height, stride);
         Draw(pixels, width, height, stride, (text ?? "").Trim());
 
@@ -54,6 +59,65 @@ public static class IdentifyPattern
             pixels,
             stride,
             new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Premultiplied));
+    }
+
+    private static void Grid(byte[] pixels, int width, int height, int stride)
+    {
+        var thickness = Math.Max(1, Math.Min(width, height) / 500);
+        for (var division = 1; division < 10; division++)
+        {
+            var x = width * division / 10;
+            var y = height * division / 10;
+            for (var offset = -thickness; offset <= thickness; offset++)
+            {
+                for (var row = 0; row < height; row++)
+                    SetColor(pixels, row * stride + Math.Clamp(x + offset, 0, width - 1) * 4,
+                        0x70, 0x70, 0x70);
+                for (var column = 0; column < width; column++)
+                    SetColor(pixels, Math.Clamp(y + offset, 0, height - 1) * stride + column * 4,
+                        0x70, 0x70, 0x70);
+            }
+        }
+    }
+
+    private static void SectionBorders(
+        byte[] pixels, int width, int height, int stride, IReadOnlyList<MappingSection> sections)
+    {
+        foreach (var section in sections.Where(section => section.Enabled))
+        {
+            var left = Math.Clamp((int)Math.Round(section.SourceX * width), 0, width - 1);
+            var top = Math.Clamp((int)Math.Round(section.SourceY * height), 0, height - 1);
+            var right = Math.Clamp((int)Math.Round((section.SourceX + section.SourceWidth) * width), 0, width - 1);
+            var bottom = Math.Clamp((int)Math.Round((section.SourceY + section.SourceHeight) * height), 0, height - 1);
+            for (var x = left; x <= right; x++)
+            {
+                SetColor(pixels, top * stride + x * 4, 0x00, 0xE6, 0xFF);
+                SetColor(pixels, bottom * stride + x * 4, 0x00, 0xE6, 0xFF);
+            }
+            for (var y = top; y <= bottom; y++)
+            {
+                SetColor(pixels, y * stride + left * 4, 0x00, 0xE6, 0xFF);
+                SetColor(pixels, y * stride + right * 4, 0x00, 0xE6, 0xFF);
+            }
+        }
+    }
+
+    private static void Corners(byte[] pixels, int width, int height, int stride)
+    {
+        var size = Math.Max(8, Math.Min(width, height) / 12);
+        Corner(pixels, width, height, stride, 0, 0, size, 0x20, 0x20, 0xFF);
+        Corner(pixels, width, height, stride, width - size, 0, size, 0x20, 0xFF, 0x20);
+        Corner(pixels, width, height, stride, 0, height - size, size, 0xFF, 0x40, 0x20);
+        Corner(pixels, width, height, stride, width - size, height - size, size, 0x20, 0xE6, 0xFF);
+    }
+
+    private static void Corner(
+        byte[] pixels, int width, int height, int stride, int left, int top, int size,
+        byte blue, byte green, byte red)
+    {
+        for (var y = Math.Max(0, top); y < Math.Min(height, top + size); y++)
+        for (var x = Math.Max(0, left); x < Math.Min(width, left + size); x++)
+            SetColor(pixels, y * stride + x * 4, blue, green, red);
     }
 
     private static void Fill(byte[] pixels, byte blue, byte green, byte red)
@@ -151,6 +215,14 @@ public static class IdentifyPattern
         pixels[at] = 0xFF;
         pixels[at + 1] = 0xFF;
         pixels[at + 2] = 0xFF;
+        pixels[at + 3] = 0xFF;
+    }
+
+    private static void SetColor(byte[] pixels, int at, byte blue, byte green, byte red)
+    {
+        pixels[at] = blue;
+        pixels[at + 1] = green;
+        pixels[at + 2] = red;
         pixels[at + 3] = 0xFF;
     }
 

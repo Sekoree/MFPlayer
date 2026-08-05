@@ -153,6 +153,7 @@ public static class SampleRuntime
             Layers = VideoPresentation.Layers(project, composition).Count.ToString(),
             Late = index == 0 ? new Status("0") : new Status("6", Gel.Amber),
             Dropped = "0",
+            Gpu = "OpenGL",
         }),
     ];
 

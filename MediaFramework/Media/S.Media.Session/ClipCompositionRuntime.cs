@@ -388,7 +388,8 @@ public sealed class ClipCompositionRuntime : IDisposable
             _pumpTiming.Snapshot(),
             _compositeTiming.Snapshot(),
             _canvasPeriod,
-            SnapshotOutputStats());
+            SnapshotOutputStats(),
+            CompositorBackendName);
     }
 
     /// <summary>One throughput row per attached output. Reads the same lock-free output snapshot the pump
@@ -2564,7 +2565,8 @@ public readonly record struct ClipCompositionRuntimeStats(
     TimingSnapshot PumpTiming = default,
     TimingSnapshot CompositeTiming = default,
     TimeSpan CanvasPeriod = default,
-    IReadOnlyList<ClipCompositionOutputStats>? Outputs = null)
+    IReadOnlyList<ClipCompositionOutputStats>? Outputs = null,
+    string CompositorBackend = "Unknown")
 {
     /// <summary>
     /// The composition's target frame rate, derived from <see cref="CanvasPeriod"/>.

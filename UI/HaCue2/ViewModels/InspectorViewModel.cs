@@ -41,6 +41,9 @@ public partial class InspectorViewModel : ObservableObject
 
     public InspectorViewModel(ProjectJournal journal) => _journal = journal;
 
+    /// <summary>When false each selection starts on its cue-kind default instead of recalling a prior tab.</summary>
+    public bool RememberTabs { get; set; } = true;
+
     private HaCueProject Project => _journal.Project;
 
     /// <summary>The journal, for the dialogs the view opens.</summary>
@@ -102,7 +105,7 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     public void Show(IReadOnlyList<Guid> cueIds)
     {
-        if (SelectedTab is { } previous && Cue is { } old && SelectionCount <= 1)
+        if (RememberTabs && SelectedTab is { } previous && Cue is { } old && SelectionCount <= 1)
             _rememberedTab[KindOf(old)] = previous;
 
         _selection = cueIds;
@@ -125,7 +128,7 @@ public partial class InspectorViewModel : ObservableObject
 
         SelectedTab = lead is null
             ? null
-            : _rememberedTab.TryGetValue(KindOf(lead), out var remembered) && Tabs.Contains(remembered)
+            : RememberTabs && _rememberedTab.TryGetValue(KindOf(lead), out var remembered) && Tabs.Contains(remembered)
                 ? remembered
                 // Second tab, not the first: General is the same on every kind, so landing on it tells
                 // the operator nothing about what they just selected.
@@ -156,6 +159,10 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(IsEnabled));
         OnPropertyChanged(nameof(IsSourceCue));
         OnPropertyChanged(nameof(SourceNote));
+        OnPropertyChanged(nameof(HasMediaCue));
+        OnPropertyChanged(nameof(EndTargetOptions));
+        OnPropertyChanged(nameof(EndTargetIndex));
+        OnPropertyChanged(nameof(SendToVisualizerValue));
         OnPropertyChanged(nameof(SendColumns));
         OnPropertyChanged(nameof(SendRows));
         OnPropertyChanged(nameof(RouteChain));
@@ -210,11 +217,13 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(FireModeIndex));
         OnPropertyChanged(nameof(IsTimelineGroup));
         OnPropertyChanged(nameof(IsPlaylistGroup));
+        OnPropertyChanged(nameof(IsSequencedGroup));
         OnPropertyChanged(nameof(ChildCount));
         OnPropertyChanged(nameof(ShuffleValue));
         OnPropertyChanged(nameof(ReshuffleValue));
         OnPropertyChanged(nameof(AvoidRepeatValue));
         OnPropertyChanged(nameof(LoopCountValue));
+        OnPropertyChanged(nameof(PlayCountValue));
         OnPropertyChanged(nameof(EndBehaviourIndex));
         OnPropertyChanged(nameof(IsLooping));
         OnPropertyChanged(nameof(LoopCrossfadeValue));
@@ -270,6 +279,9 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(VisualizerHoldValue));
         OnPropertyChanged(nameof(VisualizerBlendValue));
         OnPropertyChanged(nameof(VisualizerLocksPresetValue));
+        OnPropertyChanged(nameof(VisualizerFeedAllValue));
+        OnPropertyChanged(nameof(VisualizerFeedCueNumbers));
+        OnPropertyChanged(nameof(VisualizerFeedHint));
     }
 
     private CueKind KindOf() => Cue is null ? CueKind.Comment : CuePresentation.KindOf(Cue);
@@ -349,6 +361,37 @@ public partial class InspectorViewModel : ObservableObject
 
     /// <summary>Whether this cue plays a source URI rather than a file on disk.</summary>
     public bool IsSourceCue => Cue is MediaCueNode media && SourceUri.IsSource(media.MediaPath);
+    public bool HasMediaCue => Cue is MediaCueNode;
+
+    public IReadOnlyList<string> EndTargetOptions => Cue is not MediaCueNode media
+        ? []
+        : ["— normal follow —", .. EndTargetCandidates(media)
+            .Select(cue => $"Q{CuePresentation.Number(cue.Number)} · {cue.Label}")];
+
+    public int EndTargetIndex
+    {
+        get
+        {
+            if (Cue is not MediaCueNode { EndTargetCueId: { } targetId } media)
+                return 0;
+            var at = EndTargetCandidates(media).FindIndex(cue => cue.Id == targetId);
+            return at < 0 ? 0 : at + 1;
+        }
+        set
+        {
+            if (Cue is not MediaCueNode media || value < 0)
+                return;
+            var candidates = EndTargetCandidates(media);
+            var selected = value == 0 || value > candidates.Count ? (Guid?)null : candidates[value - 1].Id;
+            if (selected == media.EndTargetCueId)
+                return;
+            EditMedia("endTarget", cue => cue.EndTargetCueId,
+                (cue, target) => cue.EndTargetCueId = target, selected);
+        }
+    }
+
+    private List<CueNode> EndTargetCandidates(MediaCueNode media) =>
+        [.. Project.AllCues().Where(cue => cue.Id != media.Id && cue is not CommentCueNode)];
 
     /// <summary>
     /// What the cue is pointed at, in words.
@@ -402,6 +445,13 @@ public partial class InspectorViewModel : ObservableObject
     {
         get => Cue is MediaCueNode { Loop: true } or MediaCueNode { EndBehavior: CueEndBehavior.Loop };
         set => EditMedia("loop", media => media.Loop, (media, on) => media.Loop = on, value);
+    }
+
+    public bool SendToVisualizerValue
+    {
+        get => Cue is MediaCueNode { SendToVisualizer: true };
+        set => EditMedia("sendToVisualizer", cue => cue.SendToVisualizer,
+            (cue, on) => cue.SendToVisualizer = on, value);
     }
 
     /// <summary>
@@ -1257,7 +1307,8 @@ public partial class InspectorViewModel : ObservableObject
 
     private GroupCueNode? Group => Cue as GroupCueNode;
 
-    public IReadOnlyList<string> FireModes { get; } = ["all together", "playlist", "timeline"];
+    public IReadOnlyList<string> FireModes { get; } =
+        ["all together", "playlist", "timeline", "first cue only", "armed list · one per GO"];
 
     /// <summary>
     /// How this group fires. Was a hard-coded index, so a timeline group read "playlist".
@@ -1280,6 +1331,8 @@ public partial class InspectorViewModel : ObservableObject
 
     /// <summary>Playlist-only options; a timeline group has no "next item" to cross into.</summary>
     public bool IsPlaylistGroup => Group is { FireMode: GroupFireMode.Playlist };
+    public bool IsSequencedGroup => Group is
+        { FireMode: GroupFireMode.Playlist or GroupFireMode.ArmedList };
 
     public string ChildCount => Group is { } group
         ? $"{group.Children.Count} cue{(group.Children.Count == 1 ? "" : "s")}"
@@ -1337,6 +1390,22 @@ public partial class InspectorViewModel : ObservableObject
                 Edit("loopCount", "cues",
                     () => group.LoopCount, count => group.LoopCount = count, Math.Clamp(value, 0, 999),
                     value == 0 ? "loop forever" : $"play {value} pass(es)");
+        }
+    }
+
+    /// <summary>Blank means every enabled child; otherwise a subset per pass.</summary>
+    public decimal? PlayCountValue
+    {
+        get => Group?.PlayCount;
+        set
+        {
+            if (Group is not { } group)
+                return;
+            var count = value is null ? (int?)null : Math.Max(1, (int)value.Value);
+            if (count == group.PlayCount)
+                return;
+            Edit("playCount", "cues", () => group.PlayCount, set => group.PlayCount = set,
+                count, count is null ? "play every item per pass" : $"play {count} item(s) per pass");
         }
     }
 
@@ -2037,6 +2106,52 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
+    public bool VisualizerFeedAllValue
+    {
+        get => Visualizer is not { FeedAll: false };
+        set
+        {
+            if (Visualizer is not { } visualizer || value == visualizer.FeedAll)
+                return;
+            Edit("visualizerFeedAll", "cues", () => visualizer.FeedAll,
+                on => visualizer.FeedAll = on, value,
+                value ? "feed all sounding media to the visualizer" : "use a selective visualizer feed");
+        }
+    }
+
+    public string VisualizerFeedCueNumbers
+    {
+        get => Visualizer is not { } visualizer
+            ? ""
+            : string.Join(", ", visualizer.FeedCueIds
+                .Select(Project.FindCue)
+                .OfType<MediaCueNode>()
+                .Select(cue => CuePresentation.Number(cue.Number)));
+        set
+        {
+            if (Visualizer is not { } visualizer)
+                return;
+
+            var tokens = value.Split([',', ';', ' ', '\t', '\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var wanted = Project.AllCues().OfType<MediaCueNode>()
+                .Where(cue => tokens.Contains(CuePresentation.Number(cue.Number), StringComparer.OrdinalIgnoreCase))
+                .Select(cue => cue.Id)
+                .Distinct()
+                .ToList();
+            if (wanted.SequenceEqual(visualizer.FeedCueIds))
+                return;
+            Edit("visualizerFeedCues", "cues", () => visualizer.FeedCueIds,
+                ids => visualizer.FeedCueIds = ids, wanted, "set visualizer audio feed cues");
+        }
+    }
+
+    public string VisualizerFeedHint => Visualizer is not { } visualizer
+        ? ""
+        : visualizer.FeedAll
+            ? "program bus · every sounding cue"
+            : $"{visualizer.FeedCueIds.Count} explicit cue(s) plus every media cue marked “send to visualizer”";
+
     /// <summary>
     /// What a visualizer cue will actually do on THIS machine.
     /// </summary>
@@ -2061,6 +2176,9 @@ public partial class InspectorViewModel : ObservableObject
 
     /// <summary>Where derived files live, so the clip editor can cache a scan. Set by the shell.</summary>
     public string CacheRoot { get; set; } = "";
+
+    /// <summary>The machine's cap for waveform data; null keeps it unbounded.</summary>
+    public long? WaveformCacheBytes { get; set; }
 
     /// <summary>The current project filename, read lazily so Save As immediately changes resolution.</summary>
     public Func<string?> ProjectPath { get; set; } = static () => null;
@@ -2092,7 +2210,8 @@ public partial class InspectorViewModel : ObservableObject
                 media,
                 MediaPaths.Resolve(Project, media.MediaPath, ProjectPath()),
                 Facts?.Duration,
-                CacheRoot);
+                CacheRoot,
+                WaveformCacheBytes);
 
     public TrackPickerViewModel AudioTrack => Track(TrackKind.Audio);
     public TrackPickerViewModel VideoTrack => Track(TrackKind.Video);

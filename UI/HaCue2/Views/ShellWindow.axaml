@@ -7,7 +7,7 @@
         x:DataType="vm:ShellViewModel"
         Title="{Binding WindowTitle}"
         Width="1440" Height="900"
-        MinWidth="1080" MinHeight="700"
+        MinWidth="900" MinHeight="640"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource BoothBg}"
         Foreground="{DynamicResource BoothInk}"
@@ -32,7 +32,8 @@
         <!-- FILE, first and leftmost, where every application on every desktop puts it. It exists as
              much for the answer to "where is this saved" — the menu names the path — as for the verbs:
              a save that only ever happened via a hotkey gave an operator nothing to look at. -->
-        <Button Grid.Column="0" Classes="tight" Content="FILE ▾" Margin="0,0,6,0">
+        <Button Grid.Column="0" Classes="tight" Content="FILE ▾" Margin="0,0,6,0"
+                AutomationProperties.Name="File menu">
           <Button.Flyout>
             <MenuFlyout>
               <MenuItem Header="New project…" Click="OnFileNew" InputGesture="Ctrl+N" />
@@ -70,7 +71,8 @@
         <ListBox Grid.Column="2"
                  Theme="{StaticResource ViewTabs}"
                  ItemsSource="{Binding Views}"
-                 SelectedItem="{Binding SelectedView}" />
+                 SelectedItem="{Binding SelectedView}"
+                 AutomationProperties.Name="Main view" />
 
         <!-- The mode chip is a readout, not a control: it says which mode you are in, and Lock beside
              it is the only way to change that. -->
@@ -144,7 +146,7 @@
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:ProgramMeter">
                     <StackPanel Spacing="4" Width="22" HorizontalAlignment="Center">
-                      <c:LevelMeter HorizontalAlignment="Center"
+                      <c:LevelMeter HorizontalAlignment="Center" PointerPressed="OnProgramMeterPressed"
                                     Level="{Binding Level}" Peak="{Binding Peak}"
                                     IsClipping="{Binding IsClipping}" />
                       <TextBlock Classes="caps" HorizontalAlignment="Center"

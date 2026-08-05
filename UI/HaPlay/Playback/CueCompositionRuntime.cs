@@ -262,50 +262,17 @@ internal sealed class CueCompositionRuntime : IDisposable
 
     private static ClipCompositionCompositor CreateCompositor(VideoFormat canvasFormat, string compositionName)
     {
-        var requested = Environment.GetEnvironmentVariable("HAPLAY_CUE_COMPOSITOR");
-        if (string.Equals(requested, "cpu", StringComparison.OrdinalIgnoreCase))
-        {
-            Trace.LogInformation("CueCompositionRuntime: composition {Composition} using CPU compositor (env override)",
-                compositionName);
-            return new ClipCompositionCompositor(
-                new CpuVideoCompositor(canvasFormat),
-                RequiresBgraLayerConversion: true,
-                BackendName: "CPU");
-        }
-
-        if (SDL3GLVideoCompositor.TryProbe(out var glError))
-        {
-            var gpu = new SDL3GLVideoCompositor(canvasFormat);
-            Trace.LogInformation("CueCompositionRuntime: composition {Composition} using OpenGL compositor", compositionName);
-            return new ClipCompositionCompositor(
-                gpu,
-                RequiresBgraLayerConversion: false,
-                BackendName: "OpenGL",
-                DisposeOnDriverThread: gpu.DisposeOnOwnerThread);
-        }
-
-        var explicitGpu =
-            string.Equals(requested, "gl", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(requested, "gpu", StringComparison.OrdinalIgnoreCase);
-        if (explicitGpu)
-        {
-            Trace.LogWarning(
-                "CueCompositionRuntime: OpenGL compositor requested for {Composition} but unavailable: {Error}; falling back to CPU",
-                compositionName,
-                glError);
-        }
-        else
-        {
-            Trace.LogInformation(
-                "CueCompositionRuntime: OpenGL compositor unavailable for {Composition}: {Error}; using CPU compositor",
-                compositionName,
-                glError);
-        }
-
+        var requested = Environment.GetEnvironmentVariable("HAPLAY_CUE_COMPOSITOR")
+                        ?? Environment.GetEnvironmentVariable("S_MEDIA_COMPOSITOR");
+        var selected = SDL3CompositionCompositorFactory.Create(
+            canvasFormat,
+            requested,
+            $"HaPlay · {compositionName}");
         return new ClipCompositionCompositor(
-            new CpuVideoCompositor(canvasFormat),
-            RequiresBgraLayerConversion: true,
-            BackendName: "CPU");
+            selected.Compositor,
+            selected.RequiresBgraLayerConversion,
+            selected.BackendName,
+            selected.DisposeOnDriverThread);
     }
 
     private static Guid? TryParseGuid(string id) =>

@@ -27,9 +27,18 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// "play this twice and then hold" needs a pass number, and there was nowhere to keep one.
     /// </param>
     private sealed record PlaylistRun(Guid GroupId, IReadOnlyList<Guid> Order, int Index, int Pass = 1);
+    private sealed record ArmedRun(
+        Guid GroupId,
+        IReadOnlyList<Guid> Order,
+        int NextIndex,
+        int Pass,
+        Guid LastFiredId,
+        bool FinalPending);
 
     private readonly Lock _stateGate = new();
     private readonly Dictionary<Guid, PlaylistRun> _playlistRuns = [];
+    private readonly Dictionary<Guid, ArmedRun> _armedRuns = [];
+    private readonly Dictionary<Guid, Guid> _armedOwners = [];
     private readonly Dictionary<Guid, IReadOnlyList<Guid>> _stableShuffleOrders = [];
     private readonly Dictionary<Guid, int> _jumpVisits = [];
 
@@ -100,11 +109,12 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         // Auto-continue is resolved here for every kind. The session chains on a clip's natural end,
         // which a jump or a comment never has — left to the session those chains would simply stall.
-        if (cue.Trigger == CueTrigger.Continue && list is not null)
+        var sequenceOwned = IsSequenceOwned(cue.Id);
+        if (!sequenceOwned && cue.Trigger == CueTrigger.Continue && list is not null)
         {
             await ContinueFromAsync(cue, list, depth, follow: false).ConfigureAwait(false);
         }
-        else if (cue.Trigger == CueTrigger.Follow
+        else if (!sequenceOwned && cue.Trigger == CueTrigger.Follow
                  && cue is not MediaCueNode
                  && cue is not TextCueNode
                  && cue is not VisualizerCueNode
@@ -115,6 +125,13 @@ public sealed class CueExecutor(ICueExecutionHost host)
         }
 
         return true;
+    }
+
+    private bool IsSequenceOwned(Guid cueId)
+    {
+        lock (_stateGate)
+            return _armedOwners.ContainsKey(cueId)
+                   || _playlistRuns.Values.Any(run => run.Order.Contains(cueId));
     }
 
     /// <summary>
@@ -139,8 +156,14 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         switch (group.FireMode)
         {
+            case GroupFireMode.FirstCueOnly:
+                return await FireAsync(children[0].Id, depth + 1).ConfigureAwait(false);
+
+            case GroupFireMode.ArmedList:
+                return await FireArmedAsync(group, children, depth).ConfigureAwait(false);
+
             case GroupFireMode.Playlist:
-                var order = PlaylistOrder(group, children);
+                var order = PassOrder(group, children);
                 lock (_stateGate)
                     _playlistRuns[group.Id] = new PlaylistRun(group.Id, order, 0);
                 return await FireAsync(order[0], depth + 1).ConfigureAwait(false);
@@ -168,6 +191,23 @@ public sealed class CueExecutor(ICueExecutionHost host)
         if (await AdvancePlaylistAsync(cueId, approaching: false).ConfigureAwait(false))
             return;
 
+        if (await FinishArmedItemAsync(cueId).ConfigureAwait(false))
+            return;
+
+        if (Project.FindCue(cueId) is MediaCueNode { EndTargetCueId: { } targetId } media)
+        {
+            if (targetId == cueId || Project.FindCue(targetId) is not { Enabled: true } target
+                               || target is CommentCueNode || Project.ListOf(targetId) is not { } targetList)
+            {
+                host.Report($"“{media.Label}” has no live end target — the chain stopped");
+                return;
+            }
+
+            await AdvanceAsync(targetList, target.Id).ConfigureAwait(false);
+            await FireAsync(target.Id, depth: 1).ConfigureAwait(false);
+            return;
+        }
+
         if (Project.FindCue(cueId) is { Trigger: CueTrigger.Follow } cue
             && Project.ListOf(cueId) is { } list)
             await ContinueFromAsync(cue, list, depth: 0, follow: true).ConfigureAwait(false);
@@ -175,6 +215,138 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
     /// <summary>Starts the next playlist item early when the current clip enters its crossfade window.</summary>
     public Task OnApproachingEndAsync(Guid cueId) => AdvancePlaylistAsync(cueId, approaching: true);
+
+    /// <summary>
+    /// Releases sequence state when a cue is stopped instead of reaching its natural end.
+    /// </summary>
+    /// <remarks>
+    /// An armed list deliberately waits for natural end before it closes its final pass. A manual
+    /// stop has no natural-end callback, so leaving that state behind would make every later GO look
+    /// like a repeated GO on a still-running final item. Playlist ownership is released for the same
+    /// reason: a stopped run must not keep swallowing that child's ordinary Follow or end target.
+    /// </remarks>
+    public void OnStopped(Guid cueId)
+    {
+        lock (_stateGate)
+        {
+            if (_armedOwners.Remove(cueId, out var armedGroupId))
+            {
+                _armedRuns.Remove(armedGroupId);
+                foreach (var owned in _armedOwners
+                             .Where(item => item.Value == armedGroupId)
+                             .Select(item => item.Key)
+                             .ToArray())
+                    _armedOwners.Remove(owned);
+            }
+
+            foreach (var groupId in _playlistRuns
+                         .Where(item => item.Value.Index < item.Value.Order.Count
+                                        && item.Value.Order[item.Value.Index] == cueId)
+                         .Select(item => item.Key)
+                         .ToArray())
+                _playlistRuns.Remove(groupId);
+        }
+    }
+
+    /// <summary>Starts the next transport run with no state left by the stopped show.</summary>
+    public void ResetTransientState()
+    {
+        lock (_stateGate)
+        {
+            _playlistRuns.Clear();
+            _armedRuns.Clear();
+            _armedOwners.Clear();
+            _stableShuffleOrders.Clear();
+            _jumpVisits.Clear();
+        }
+    }
+
+    /// <summary>
+    /// ARMED LIST fires exactly one enabled child per operator GO. Natural end never advances it;
+    /// it merely releases ownership so the child's own Follow/end-target cannot escape the group.
+    /// </summary>
+    private async Task<bool> FireArmedAsync(GroupCueNode group, IReadOnlyList<CueNode> children, int depth)
+    {
+        ArmedRun? before;
+        ArmedRun next;
+        Guid selected;
+
+        lock (_stateGate)
+        {
+            _armedRuns.TryGetValue(group.Id, out before);
+            var current = before;
+            if (current is null
+                || current.Order.Count == 0
+                || current.Order.Any(id => children.All(cue => cue.Id != id)))
+            {
+                var firstOrder = PassOrder(group, children);
+                current = new ArmedRun(group.Id, firstOrder, 0, 1, Guid.Empty, false);
+            }
+
+            // The final item is still running. A repeated GO must not silently begin a new pass over
+            // it; the natural-end edge closes this run and the next GO starts cleanly.
+            if (current.FinalPending)
+                return true;
+
+            selected = current.Order[current.NextIndex];
+            var after = current.NextIndex + 1;
+            if (after < current.Order.Count)
+            {
+                next = current with { NextIndex = after, LastFiredId = selected };
+            }
+            else if (group.LoopCount == 0 || current.Pass < group.LoopCount)
+            {
+                var order = PassOrder(group, children, selected);
+                next = new ArmedRun(group.Id, order, 0, current.Pass + 1, selected, false);
+            }
+            else
+            {
+                next = current with { NextIndex = current.Order.Count, LastFiredId = selected, FinalPending = true };
+            }
+
+            _armedRuns[group.Id] = next;
+            _armedOwners[selected] = group.Id;
+        }
+
+        if (await FireAsync(selected, depth + 1).ConfigureAwait(false))
+            return true;
+
+        lock (_stateGate)
+        {
+            _armedOwners.Remove(selected);
+            if (before is null)
+                _armedRuns.Remove(group.Id);
+            else
+                _armedRuns[group.Id] = before;
+        }
+        return false;
+    }
+
+    private async Task<bool> FinishArmedItemAsync(Guid ended)
+    {
+        GroupCueNode? group = null;
+        var final = false;
+
+        lock (_stateGate)
+        {
+            if (!_armedOwners.Remove(ended, out var groupId))
+                return false;
+
+            if (_armedRuns.TryGetValue(groupId, out var run)
+                && run.FinalPending && run.LastFiredId == ended)
+            {
+                final = true;
+                _armedRuns.Remove(groupId);
+                group = Project.FindCue(groupId) as GroupCueNode;
+            }
+        }
+
+        if (final && group is { AtEnd: AtListEnd.NextList }
+                  && Project.ListOf(group.Id) is { } owner)
+            await ContinueAtListEndAsync(owner, depth: 0, AtListEnd.NextList).ConfigureAwait(false);
+
+        return true;
+    }
 
     private async Task<bool> AdvancePlaylistAsync(Guid ended, bool approaching)
     {
@@ -247,31 +419,24 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
     private async Task<bool> FinishPlaylistAsync(GroupCueNode group, PlaylistRun completed)
     {
+        var children = group.Children.Where(cue => cue.Enabled).ToList();
+        var hasAnotherPass = children.Count > 0
+                             && (group.LoopCount == 0 || completed.Pass < group.LoopCount);
+
+        // Pass count and final behavior are independent: "twice, then hold" and "three times, then
+        // next list" both run their remaining passes before the terminal policy is considered.
+        if (hasAnotherPass)
+        {
+            var order = PassOrder(group, children, completed.Order.LastOrDefault());
+            var next = new PlaylistRun(group.Id, order, 0, completed.Pass + 1);
+            lock (_stateGate)
+                _playlistRuns[group.Id] = next;
+            await FireAsync(order[0], depth: 1).ConfigureAwait(false);
+            return true;
+        }
+
         switch (group.AtEnd)
         {
-            case AtListEnd.Loop:
-            {
-                var children = group.Children.Where(cue => cue.Enabled).ToList();
-                if (children.Count == 0)
-                    return true;
-
-                // LoopCount is passes, and zero is forever. It is separate from AtEnd, which says what
-                // happens AFTER the last pass — "play this twice and then hold" needs both.
-                if (group.LoopCount > 0 && completed.Pass >= group.LoopCount)
-                {
-                    lock (_stateGate)
-                        _playlistRuns.Remove(group.Id);
-                    return true;
-                }
-
-                var order = PlaylistOrder(group, children, completed.Order.LastOrDefault());
-                var next = new PlaylistRun(group.Id, order, 0, completed.Pass + 1);
-                lock (_stateGate)
-                    _playlistRuns[group.Id] = next;
-                await FireAsync(order[0], depth: 1).ConfigureAwait(false);
-                return true;
-            }
-
             case AtListEnd.NextList:
                 lock (_stateGate)
                     _playlistRuns.Remove(group.Id);
@@ -321,6 +486,16 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
             return shuffled;
         }
+    }
+
+    private IReadOnlyList<Guid> PassOrder(
+        GroupCueNode group, IReadOnlyList<CueNode> children, Guid? closedPreviousPass = null)
+    {
+        var order = PlaylistOrder(group, children, closedPreviousPass);
+        var count = group.PlayCount is { } requested
+            ? Math.Clamp(requested, 1, order.Count)
+            : order.Count;
+        return count == order.Count ? order : [.. order.Take(count)];
     }
 
     private async Task ContinueFromAsync(CueNode cue, CueList list, int depth, bool follow)
@@ -551,7 +726,10 @@ public sealed class CueExecutor(ICueExecutionHost host)
                 toSilence && fade.StopTargetsWhenComplete).ConfigureAwait(false);
 
             if (toSilence && fade.StopTargetsWhenComplete)
+            {
                 host.Forget(cueId);
+                OnStopped(cueId);
+            }
         }
 
         return cues.Count > 0 || fade.TargetChannelIds.Count > 0;

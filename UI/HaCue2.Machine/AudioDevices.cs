@@ -26,6 +26,23 @@ public sealed class AudioDevices
 
         foreach (var backend in backends ?? [])
         {
+            if (backend is IAudioDeviceSnapshotProvider snapshot)
+            {
+                try
+                {
+                    var devices = snapshot.EnumerateDevices();
+                    found.AddRange(devices.Outputs);
+                    captures.AddRange(devices.Inputs);
+                    Enumerated = true;
+                }
+                catch (Exception failure) when (failure is not OutOfMemoryException)
+                {
+                    // One failed native catalog is unknown, not an assertion that no devices exist.
+                }
+
+                continue;
+            }
+
             try
             {
                 found.AddRange(backend.EnumerateOutputDevices());

@@ -34,14 +34,17 @@ public partial class SettingsWindow : Window
     private void OnRotateToken(object? sender, RoutedEventArgs e) =>
         (DataContext as SettingsViewModel)?.RotateRemoteToken();
 
+    private void OnResetHotkeys(object? sender, RoutedEventArgs e) =>
+        (DataContext as SettingsViewModel)?.ResetHotkeys();
+
     /// <summary>Clears one part of the media cache. Everything here re-derives from the media.</summary>
     private void OnClearCache(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not SettingsViewModel settings || (sender as Control)?.Tag is not string kind)
             return;
 
-        if (kind == "thumbnails")
-            settings.ClearThumbnailCache();
+        if (kind == "youtube")
+            settings.ClearYouTubeCache();
         else
             settings.ClearWaveformCache();
     }

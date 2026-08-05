@@ -29,7 +29,7 @@
           <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:ProgramMeter">
               <StackPanel Spacing="4" Width="24">
-                <c:LevelMeter HorizontalAlignment="Center" Height="44"
+                <c:LevelMeter HorizontalAlignment="Center" Height="44" PointerPressed="OnProgramMeterPressed"
                               Level="{Binding Level}" Peak="{Binding Peak}"
                               IsClipping="{Binding IsClipping}" />
                 <TextBlock Classes="caps" HorizontalAlignment="Center"

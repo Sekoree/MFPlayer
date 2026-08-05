@@ -287,6 +287,81 @@ public class CueExecutorTests
     }
 
     [Fact]
+    public async Task PlaylistPassCountRunsBeforeHoldAtEnd()
+    {
+        var group = new GroupCueNode
+        {
+            Number = "1",
+            FireMode = GroupFireMode.Playlist,
+            LoopCount = 2,
+            AtEnd = AtListEnd.Hold,
+            Children = [Media("1.1"), Media("1.2")],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+        await executor.OnNaturalEndAsync(group.Children[0].Id);
+        await executor.OnNaturalEndAsync(group.Children[1].Id);
+        await executor.OnNaturalEndAsync(group.Children[0].Id);
+        await executor.OnNaturalEndAsync(group.Children[1].Id);
+
+        Assert.Equal(
+            [group.Children[0].Id, group.Children[1].Id, group.Children[0].Id, group.Children[1].Id],
+            host.Played);
+    }
+
+    [Fact]
+    public async Task PlaylistPlayCountLimitsTheItemsChosenPerPass()
+    {
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.Playlist, LoopCount = 2, PlayCount = 1,
+            Children = [Media("1.1"), Media("1.2"), Media("1.3")],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+        await executor.OnNaturalEndAsync(group.Children[0].Id);
+        await executor.OnNaturalEndAsync(group.Children[0].Id);
+
+        Assert.Equal([group.Children[0].Id, group.Children[0].Id], host.Played);
+    }
+
+    [Fact]
+    public async Task PlaylistPassCountRunsBeforeAdvancingToTheNextList()
+    {
+        var group = new GroupCueNode
+        {
+            Number = "1",
+            FireMode = GroupFireMode.Playlist,
+            LoopCount = 2,
+            AtEnd = AtListEnd.NextList,
+            Children = [Media("1.1"), Media("1.2")],
+        };
+        var after = Media("2");
+        var project = new HaCueProject
+        {
+            CueLists =
+            [
+                new CueList { Name = "Act 1", Cues = [group] },
+                new CueList { Name = "Act 2", Cues = [after] },
+            ],
+        };
+        var host = new FakeCueHost(project);
+        var executor = new CueExecutor(host);
+
+        await executor.FireAsync(group.Id);
+        await executor.OnNaturalEndAsync(group.Children[0].Id);
+        await executor.OnNaturalEndAsync(group.Children[1].Id);
+        await executor.OnNaturalEndAsync(group.Children[0].Id);
+        await executor.OnNaturalEndAsync(group.Children[1].Id);
+
+        Assert.Equal(
+            [group.Children[0].Id, group.Children[1].Id, group.Children[0].Id, group.Children[1].Id, after.Id],
+            host.Played);
+    }
+
+    [Fact]
     public async Task APlaylistCrossfadeUsesItsCustomCurveAndConsumesTheOutgoingEnd()
     {
         var first = Media("1.1");
@@ -320,6 +395,135 @@ public class CueExecutorTests
         await executor.OnNaturalEndAsync(first.Id);
 
         Assert.Equal(1, host.Played.Count(id => id == second.Id));
+    }
+
+    [Fact]
+    public async Task FirstCueOnlyNeverFiresTheOtherChildren()
+    {
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.FirstCueOnly,
+            Children = [Media("1.1"), Media("1.2")],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+        await executor.OnNaturalEndAsync(group.Children[0].Id);
+
+        Assert.Equal([group.Children[0].Id], host.Played);
+    }
+
+    [Fact]
+    public async Task ArmedListAdvancesOnlyOnOperatorGoAndHonoursPlayCount()
+    {
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.ArmedList, LoopCount = 2,
+            Children = [Media("1.1"), Media("1.2")],
+        };
+        var (executor, host, _) = Show(group);
+
+        for (var index = 0; index < 4; index++)
+        {
+            await executor.FireAsync(group.Id);
+            Assert.Equal(index + 1, host.Played.Count);
+            await executor.OnNaturalEndAsync(host.Played[^1]);
+            Assert.Equal(index + 1, host.Played.Count); // natural end never advances an armed list
+        }
+
+        Assert.Equal(
+            [group.Children[0].Id, group.Children[1].Id, group.Children[0].Id, group.Children[1].Id],
+            host.Played);
+    }
+
+    [Fact]
+    public async Task ArmedListOwnsChildFollowAndEndTarget()
+    {
+        var target = Media("2");
+        var child = Media("1.1");
+        child.Trigger = CueTrigger.Follow;
+        child.EndTargetCueId = target.Id;
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.ArmedList, Children = [child, Media("1.2")],
+        };
+        var (executor, host, _) = Show(group, target);
+
+        await executor.FireAsync(group.Id);
+        await executor.OnNaturalEndAsync(child.Id);
+
+        Assert.Equal([child.Id], host.Played);
+    }
+
+    [Fact]
+    public async Task StoppingAnArmedListsFinalItemLetsTheNextGoStartAgain()
+    {
+        var child = Media("1.1");
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.ArmedList, Children = [child],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+        executor.OnStopped(child.Id); // a manual stop has no natural-end callback
+        await executor.FireAsync(group.Id);
+
+        Assert.Equal([child.Id, child.Id], host.Played);
+    }
+
+    [Fact]
+    public async Task StopAllStateResetRestartsAnArmedPassAtItsFirstItem()
+    {
+        var first = Media("1.1");
+        var second = Media("1.2");
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.ArmedList, Children = [first, second],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+        executor.ResetTransientState();
+        await executor.FireAsync(group.Id);
+
+        Assert.Equal([first.Id, first.Id], host.Played);
+    }
+
+    [Fact]
+    public async Task MediaEndTargetFiresInsteadOfOrdinaryFollow()
+    {
+        var first = Media("1");
+        var skipped = Media("2");
+        var target = Media("3");
+        first.Trigger = CueTrigger.Follow;
+        first.EndTargetCueId = target.Id;
+        var (executor, host, _) = Show(first, skipped, target);
+
+        await executor.FireAsync(first.Id);
+        await executor.OnNaturalEndAsync(first.Id);
+
+        Assert.Equal([first.Id, target.Id], host.Played);
+        Assert.DoesNotContain(skipped.Id, host.Played);
+    }
+
+    [Fact]
+    public async Task PlaylistOwnershipPrecedesAChildEndTarget()
+    {
+        var target = Media("2");
+        var first = Media("1.1");
+        first.EndTargetCueId = target.Id;
+        var second = Media("1.2");
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.Playlist, Children = [first, second],
+        };
+        var (executor, host, _) = Show(group, target);
+
+        await executor.FireAsync(group.Id);
+        await executor.OnNaturalEndAsync(first.Id);
+
+        Assert.Equal([first.Id, second.Id], host.Played);
     }
 
     [Fact]

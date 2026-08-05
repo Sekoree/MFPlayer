@@ -9,7 +9,7 @@ namespace S.Media.Audio.PortAudio;
 /// <c>null</c>/empty selects the system default device. Registered by
 /// <see cref="MediaFrameworkRuntimePortAudioExtensions.UsePortAudio"/>.
 /// </summary>
-public sealed class PortAudioBackend : IAudioBackend
+public sealed class PortAudioBackend : IAudioBackend, IAudioDeviceSnapshotProvider
 {
     public string Name => "PortAudio";
 
@@ -37,6 +37,20 @@ public sealed class PortAudioBackend : IAudioBackend
                     DeviceId(d.GlobalDeviceIndex), d.Name, d.MaxInputChannels, d.DefaultSampleRate,
                     d.IsDefault, HostApi(hosts, d.HostApiIndex))),
         ];
+    }
+
+    /// <summary>One PortAudio initialization for both lists, avoiding repeated ALSA host probing.</summary>
+    public (IReadOnlyList<AudioDeviceInfo> Outputs, IReadOnlyList<AudioDeviceInfo> Inputs) EnumerateDevices()
+    {
+        PortAudioRuntime.Acquire();
+        try
+        {
+            return (EnumerateOutputDevices(), EnumerateInputDevices());
+        }
+        finally
+        {
+            PortAudioRuntime.Release();
+        }
     }
 
     /// <summary>Host API names by index, so each device can carry the family it came from.</summary>

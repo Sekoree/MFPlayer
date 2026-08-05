@@ -5,6 +5,7 @@ using HaCue2.Core.Model;
 using HaCue2.Engine;
 using HaCue2.Presentation;
 using HaCue2.ViewModels;
+using HaCue2.Machine;
 
 namespace HaCue2.Session;
 
@@ -32,6 +33,8 @@ public sealed class EngineRuntime : IAsyncDisposable
     private readonly ShowHost _host;
     private readonly ShowRuntime _runtime;
     private readonly HaCueProject _project;
+    private readonly AppSettings _settings;
+    private readonly ProgramMeterPresenter _meterPresenter = new();
     private readonly DispatcherTimer _timer;
     private bool _polling;
 
@@ -44,11 +47,12 @@ public sealed class EngineRuntime : IAsyncDisposable
     /// <summary>Frame counts across ticks, which is the only way an achieved frame rate exists.</summary>
     private readonly CompositionRates _rates = new();
 
-    public EngineRuntime(ShowHost host, ShowRuntime runtime, HaCueProject project)
+    public EngineRuntime(ShowHost host, ShowRuntime runtime, HaCueProject project, AppSettings? settings = null)
     {
         _host = host;
         _runtime = runtime;
         _project = project;
+        _settings = settings ?? new AppSettings();
 
         // The first reading; the tick keeps it current. Copied ONCE was the bug: outputs open and close
         // on every reload, so an output added mid-show reported "live" before any window existed for
@@ -103,6 +107,9 @@ public sealed class EngineRuntime : IAsyncDisposable
         // Long enough to walk to the projector and look, short enough that forgetting to press it
         // again does not leave a blue card in front of an audience.
         _host.IdentifyAsync(outputId, TimeSpan.FromSeconds(4));
+
+    public Task<string?> SetCalibrationAsync(Guid outputId, bool enabled) =>
+        _host.SetCalibrationAsync(outputId, enabled);
 
     /// <summary>Runs a timeline group from where the operator put the playhead.</summary>
     public Task PlayTimelineFromAsync(GroupCueNode group, TimeSpan from) =>
@@ -199,7 +206,8 @@ public sealed class EngineRuntime : IAsyncDisposable
         _runtime.AbsentVideoOutputs = [.. _host.AbsentVideoOutputs];
 
         _runtime.BayRows = BayPresentation.Rows(_project, bay);
-        _runtime.Meters = BayPresentation.Meters(_project, bay);
+        _runtime.Meters = _meterPresenter.Present(
+            BayPresentation.Meters(_project, bay), _settings, DateTimeOffset.UtcNow);
         _runtime.Levels = BayPresentation.Levels(_project, bay);
         _runtime.BaySummary = BayPresentation.Summary(bay);
         _runtime.BayClock = BayPresentation.Clock(_project, bay);
@@ -213,6 +221,28 @@ public sealed class EngineRuntime : IAsyncDisposable
         _runtime.ChaseReadout =
             OutputPresentation.Chase(_host.Triggers.Chase.Read(), _host.Triggers.IsEnabled);
         _runtime.LastSent = _host.LastSent;
+
+        ApplyAutomaticClipReset(bay);
+    }
+
+    private DateTimeOffset? _clippedSince;
+
+    private void ApplyAutomaticClipReset(S.Media.Routing.AudioPatchBayDiagnostics bay)
+    {
+        if (!string.Equals(_settings.ClipReset, "3 s auto", StringComparison.OrdinalIgnoreCase)
+            || !bay.ChannelLevels.Any(level => level.Clipped))
+        {
+            _clippedSince = null;
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        _clippedSince ??= now;
+        if (now - _clippedSince < TimeSpan.FromSeconds(3))
+            return;
+
+        _host.ResetMeterClips();
+        _clippedSince = null;
     }
 
     private bool StandbyChanged(ShowState state) =>
