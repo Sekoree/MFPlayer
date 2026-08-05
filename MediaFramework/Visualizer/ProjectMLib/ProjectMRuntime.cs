@@ -1,9 +1,9 @@
 namespace ProjectMLib;
 
 /// <summary>
-/// Availability probe + version info for the host-supplied libprojectM-4 (mirrors NDIRuntime's
-/// graceful-degradation pattern: no native lib ⇒ the visualizer feature greys out with a reason,
-/// nothing crashes). IMPORTANT: only <see cref="IsAvailable"/>/<see cref="Version"/> are safe without
+/// Availability probe + version info for the application-bundled libprojectM-4 (with explicit and
+/// system compatibility fallbacks). A missing native still degrades gracefully: the visualizer
+/// feature greys out with a reason rather than crashing. IMPORTANT: only <see cref="IsAvailable"/>/<see cref="Version"/> are safe without
 /// a GL context - creating an instance requires a current OpenGL context on the calling thread.
 /// </summary>
 public static class ProjectMRuntime
@@ -47,7 +47,7 @@ public static class ProjectMRuntime
                     .Any(n => n.StartsWith("libGLESv2", StringComparison.Ordinal)))
             {
                 return (false, null,
-                    $"the installed libprojectM-4 ({loadedPath}) is an OpenGL ES build, which crashes on the desktop-GL compositor - "
+                    $"the loaded libprojectM-4 ({loadedPath}) is an OpenGL ES build, which crashes on the desktop-GL compositor - "
                     + $"build a desktop-GL projectM with scripts/build-projectm.sh and set {Runtime.ProjectMLibraryResolver.EnvironmentOverride}.");
             }
 
@@ -56,7 +56,7 @@ public static class ProjectMRuntime
         catch (DllNotFoundException)
         {
             return (false, null,
-                $"libprojectM-4 not found - install the projectM 4.x package or set {Runtime.ProjectMLibraryResolver.EnvironmentOverride} (see scripts/build-projectm.sh).");
+                $"the bundled libprojectM-4 was not found - reinstall the application or set {Runtime.ProjectMLibraryResolver.EnvironmentOverride} to a patched 4.1.6 build (see scripts/build-projectm.sh).");
         }
         catch (Exception ex)
         {

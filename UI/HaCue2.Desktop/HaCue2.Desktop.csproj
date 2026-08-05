@@ -75,4 +75,9 @@
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Present.SDL3.Compositor\S.Media.Present.SDL3.Compositor.csproj"/>
     </ItemGroup>
 
+    <!-- Always stage the repository's patched projectM build and pinned preset/texture packs when
+         they have been produced by scripts/build-projectm.sh. One shared target keeps HaCue2,
+         HaPlay and HaViz on the same deployment layout. -->
+    <Import Project="../../MediaFramework/Visualizer/ProjectMLib/ProjectMDesktopDeployment.targets" />
+
 </Project>

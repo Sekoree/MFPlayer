@@ -76,4 +76,8 @@
     <ItemGroup>
         <ProjectReference Include="..\HaPlay\HaPlay.csproj" />
     </ItemGroup>
+
+    <!-- projectM's bound-FBO/null-safety patches are part of the app contract, not an optional
+         system-library variation. Stage the same native + pack layout as HaCue2 and HaViz. -->
+    <Import Project="../../MediaFramework/Visualizer/ProjectMLib/ProjectMDesktopDeployment.targets" />
 </Project>

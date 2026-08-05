@@ -9,6 +9,7 @@ using S.Media.Audio.PortAudio;
 using S.Media.Core.Registry;
 using S.Media.Decode.FFmpeg;
 using S.Media.Present.SDL3;
+using S.Media.Visualizer.ProjectM;
 using System.Collections.ObjectModel;
 
 namespace HaViz.Desktop.ViewModels;
@@ -168,18 +169,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<ChannelChoice> InputChannels { get; } = [];
 
-    /// <summary>App-local preset bundle first (deployed copies are self-contained; the csproj
-    /// stages External/projectm/linux-x64/presets next to the executable), then the repo dev
-    /// tree for uncopied IDE runs. Null = no pack found (projectM idles on its builtin preset).</summary>
-    internal static string? ResolvePresetDirectory()
-    {
-        var appLocal = Path.Combine(AppContext.BaseDirectory, "presets");
-        if (Directory.Exists(appLocal))
-            return appLocal;
-        var dev = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
-            "../../../../../External/projectm/linux-x64/presets"));
-        return Directory.Exists(dev) ? dev : null;
-    }
+    /// <summary>The same app-local/repository pack resolver every desktop projectM host uses.</summary>
+    internal static string? ResolvePresetDirectory() =>
+        ProjectMAssetPaths.DefaultPresetDirectory();
 
     // --- PCM sink (decoder/capture threads) ---
     private void SubmitPcm(ReadOnlySpan<float> interleaved, int sampleRate, int channels) =>

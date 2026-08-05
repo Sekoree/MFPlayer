@@ -466,20 +466,11 @@ jobs:
           # projectM 4.1.6 + presets/textures (review P1-3): the full tier PROMISES the visualizer, so
           # build the pinned, patched libprojectM from source (scripts/build-projectm.sh downloads the
           # hash-verified release archive when Reference/ is absent - always the case on CI) and stage
-          # the whole install tree (lib + presets + textures). It lands under External/projectm/<rid>
-          # inside the publish dir because ProjectMLibraryResolver.TryFindDevBuildRoot probes exactly
-          # that layout next to the executable, and the UI derives its default preset directory from it.
-          # check-native-versions.sh later proves the staged library reports 4.1.6.
+          # the whole install tree (lib + presets + textures). The desktop projectM hosts import one
+          # shared deployment target which places that tree under External/projectm/<rid> during publish;
+          # check-native-versions.sh later proves the bundled library reports 4.1.6.
           sudo apt-get install -y libgl1-mesa-dev libglm-dev
           scripts/build-projectm.sh
-          mkdir -p projectm-stage/External/projectm
-          cp -a External/projectm/linux-x64 projectm-stage/External/projectm/linux-x64
-          # Headers/cmake/pkgconfig are build-time only - keep the shipped tree lean.
-          rm -rf projectm-stage/External/projectm/linux-x64/include \
-                 projectm-stage/External/projectm/linux-x64/lib/cmake \
-                 projectm-stage/External/projectm/linux-x64/lib/pkgconfig \
-                 projectm-stage/External/projectm/linux-x64/share
-          du -sh projectm-stage
 
       # ─── Windows natives (from source; iterate on CI — no Windows runner to pre-validate against) ───
       - name: Stage Windows natives — miniaudio + portmidi (CMake/MSVC)
@@ -630,8 +621,7 @@ jobs:
         shell: bash
         run: |
           if [ -d natives-stage ]; then cp -v natives-stage/* haplay-publish/ 2>/dev/null || true; fi
-          # projectM ships as its whole install tree (lib + presets + textures) under External/projectm/.
-          if [ -d projectm-stage ]; then cp -a projectm-stage/. haplay-publish/; fi
+          # The shared projectM deployment target already staged the patched runtime and packs.
           echo "--- native libs in the artifact ---"
           ls haplay-publish/ | grep -iE '\.(dll|so)(\.[0-9]+)*$' | sort
 
@@ -853,9 +843,7 @@ jobs:
         shell: bash
         run: |
           if [ -d natives-stage ]; then cp -v natives-stage/* hacue2-publish/ 2>/dev/null || true; fi
-          # projectM ships as its whole install tree (lib + presets + textures) — a visualizer cue needs
-          # the presets, not just the library.
-          if [ -d projectm-stage ]; then cp -a projectm-stage/. hacue2-publish/; fi
+          # The shared projectM deployment target already staged the patched runtime and packs.
           echo "--- native libs in the artifact ---"
           ls hacue2-publish/ | grep -iE '\.(dll|so)(\.[0-9]+)*$' | sort
 

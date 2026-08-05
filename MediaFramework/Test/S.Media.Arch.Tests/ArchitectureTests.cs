@@ -154,7 +154,10 @@ public sealed class ArchitectureTests
             // Local-screen video outputs, opened directly: HaOutput is not on this branch, so there
             // is no shared output engine here to consume (gap analysis §7.1 describes one that lives
             // on next-fix-enhance-round).
-            "S.Media.Present.SDL3",
+            "S.Media.Present.SDL3", "S.Media.Present.SDL3.Compositor",
+            // Production subtitle overlays are composed from FFmpeg/container/sidecar input through
+            // the shared interop factory and libass-backed subtitle module.
+            "S.Media.Interop", "S.Media.Subtitles",
             // Record and stream outputs, for the same reason: the encode session's sinks are attached
             // to the bay and the compositor directly.
             "S.Media.Encode.FFmpeg", "S.Media.FFmpeg.Common",
@@ -491,7 +494,7 @@ public sealed class ArchitectureTests
     [InlineData("Visualizer/ProjectMLib/ProjectMLib.csproj")]
     [InlineData("Media/S.Media.Source.MMD/S.Media.Source.MMD.csproj")]
     [InlineData("Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj")]
-    public void BundledNativeWrappersUseSharedSystemFirstResolverPolicy(string relativePath)
+    public void NativeWrappersUseSharedResolverPolicy(string relativePath)
     {
         var project = Path.Combine(RepoRoot(), "MediaFramework", relativePath);
         var linkedSources = XDocument.Load(project).Descendants("Compile")
@@ -500,6 +503,23 @@ public sealed class ArchitectureTests
 
         Assert.Contains(linkedSources, include =>
             include!.Replace('\\', '/').EndsWith("Shared/SystemFirstNativeLibraryResolver.cs", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("HaCue2.Desktop/HaCue2.Desktop.csproj")]
+    [InlineData("HaPlay.Desktop/HaPlay.Desktop.csproj")]
+    [InlineData("HaViz.Desktop/HaViz.Desktop.csproj")]
+    public void DesktopProjectMHostsImportTheSharedDeploymentTarget(string relativePath)
+    {
+        var project = Path.Combine(RepoRoot(), "UI", relativePath);
+        var imports = XDocument.Load(project).Descendants("Import")
+            .Select(element => (string?)element.Attribute("Project"))
+            .Where(path => !string.IsNullOrWhiteSpace(path));
+
+        Assert.Contains(imports, path =>
+            path!.Replace('\\', '/').EndsWith(
+                "MediaFramework/Visualizer/ProjectMLib/ProjectMDesktopDeployment.targets",
+                StringComparison.Ordinal));
     }
 
     private static string[] SolutionProjectPaths(string root) =>

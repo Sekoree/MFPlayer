@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using ProjectMLib;
 using ProjectMLib.Runtime;
 using S.Media.NativeInterop;
+using S.Media.Visualizer.ProjectM;
 using Xunit;
 
 namespace S.Media.Visualizer.ProjectM.Tests;
@@ -12,7 +13,7 @@ namespace S.Media.Visualizer.ProjectM.Tests;
 public sealed class ProjectMTests
 {
     [Fact]
-    public void ResolverCandidates_SystemNamesPrecedeEnvironmentDirectoryFallback()
+    public void ResolverCandidates_EnvironmentDirectoryPrecedesSystemFallback()
     {
         var original = Environment.GetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride);
         var dir = Path.Combine(Path.GetTempPath(), $"pm_test_{Guid.NewGuid():N}");
@@ -26,7 +27,7 @@ public sealed class ProjectMTests
             var systemNameIndex = Array.FindIndex(candidates, c => !Path.IsPathRooted(c));
             var environmentIndex = Array.FindIndex(candidates, c => c.StartsWith(dir, StringComparison.Ordinal));
             Assert.True(systemNameIndex >= 0);
-            Assert.True(environmentIndex > systemNameIndex);
+            Assert.True(environmentIndex >= 0 && environmentIndex < systemNameIndex);
         }
         finally
         {
@@ -47,7 +48,7 @@ public sealed class ProjectMTests
             var candidates = ProjectMLibraryResolver.GetCandidates().ToArray();
             Assert.Contains(file, candidates);
             Assert.True(Array.IndexOf(candidates, file)
-                        > Array.FindIndex(candidates, c => !Path.IsPathRooted(c)));
+                        < Array.FindIndex(candidates, c => !Path.IsPathRooted(c)));
         }
         finally
         {
@@ -57,7 +58,7 @@ public sealed class ProjectMTests
     }
 
     [Fact]
-    public void ResolverCandidates_ProbeSystemNames_BeforeApplicationDirectory()
+    public void ResolverCandidates_PatchedApplicationBundlePrecedesSystemFallback()
     {
         var original = Environment.GetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride);
         try
@@ -71,13 +72,37 @@ public sealed class ProjectMTests
             var appDirIndex = Array.FindIndex(candidates, c => c.StartsWith(appDir, StringComparison.Ordinal));
             Assert.True(appDirIndex >= 0, "the application directory must be probed for a bundled native library");
 
-            // System-installed libraries must win; the app-local copy is only a portable fallback.
+            // The repository copy carries required compositor and safety patches, so it must win over
+            // an ABI-compatible but unpatched system installation.
             var systemNameIndex = Array.FindIndex(candidates, c => !Path.IsPathRooted(c));
-            Assert.True(systemNameIndex >= 0 && systemNameIndex < appDirIndex);
+            Assert.True(systemNameIndex >= 0 && appDirIndex < systemNameIndex);
         }
         finally
         {
             Environment.SetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride, original);
+        }
+    }
+
+    [Fact]
+    public void DefaultPresetDirectory_FollowsExplicitNativeInstallRoot()
+    {
+        var original = Environment.GetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride);
+        var root = Path.Combine(Path.GetTempPath(), $"pm_assets_{Guid.NewGuid():N}");
+        var lib = Path.Combine(root, "lib");
+        var presets = Path.Combine(root, "presets", "Milkdrop-Original");
+        Directory.CreateDirectory(lib);
+        Directory.CreateDirectory(presets);
+        File.WriteAllText(Path.Combine(presets, "qualified.milk"), "");
+
+        try
+        {
+            Environment.SetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride, lib);
+            Assert.Equal(Path.Combine(root, "presets"), ProjectMAssetPaths.DefaultPresetDirectory());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(ProjectMLibraryResolver.EnvironmentOverride, original);
+            Directory.Delete(root, recursive: true);
         }
     }
 

@@ -166,28 +166,7 @@ public partial class MediaPlayerViewModel
     private void NextVisualizerPreset() => _visualizerSource?.RequestNextPreset();
 
     private static string? DefaultPresetDirectory()
-    {
-        // scripts/build-projectm.sh installs a preset pack under its install root (…/<rid>/presets).
-        // Prefer the explicit env override's sibling, else the auto-discovered dev build; a plain
-        // system install has no obvious preset home, so leave it unset there.
-        var libDir = Environment.GetEnvironmentVariable(ProjectMLib.Runtime.ProjectMLibraryResolver.EnvironmentOverride);
-        if (!string.IsNullOrWhiteSpace(libDir) && Directory.Exists(libDir))
-        {
-            var root = Path.GetDirectoryName(libDir.TrimEnd(Path.DirectorySeparatorChar));
-            var presets = root is null ? null : Path.Combine(root, "presets");
-            if (presets is not null && Directory.Exists(presets))
-                return presets;
-        }
-
-        if (ProjectMLib.Runtime.ProjectMLibraryResolver.TryFindDevBuildRoot() is { } devRoot)
-        {
-            var presets = Path.Combine(devRoot, "presets");
-            if (Directory.Exists(presets))
-                return presets;
-        }
-
-        return null;
-    }
+        => S.Media.Visualizer.ProjectM.ProjectMAssetPaths.DefaultPresetDirectory();
 
     /// <summary>Applies the VIZ toggle to the RUNNING session: attaches (or removes) the projectM layer
     /// + audio tap on the deck's composition. Safe/idempotent; a failure just clears the toggle with a

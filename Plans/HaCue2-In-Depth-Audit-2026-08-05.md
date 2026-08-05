@@ -627,6 +627,12 @@ is the implementation and after-state.
   screen is now an editable binding table with conflict/reserved-safety feedback.
 - Visualizer feed validation and project-reference tracking now catch deleted/selective targets before
   show time.
+- HaCue2, HaPlay and HaViz now import one projectM deployment policy. IDE output and direct publishes
+  carry the repository-patched 4.1.6 runtime with the pinned 552-preset and 68-texture packs under
+  `External/projectm/<rid>`. The resolver deliberately prefers that application bundle over a system
+  projectM, while retaining `MFP_PROJECTM_LIB` as the highest-priority diagnostic/development override.
+  A Linux publish fails if this payload is absent instead of silently shipping an unpatched fallback.
+  Blank HaCue visualizer packs now select the bundled pack rather than projectM's idle preset.
 - Output calibration ownership lives in `ShowHost`, so output reload/replacement does not strand a
   test frame or silently discard a calibration session.
 - Disabled status checks remain neutral; health summaries cannot convert “not examined” into “OK”.
@@ -649,7 +655,9 @@ is the implementation and after-state.
 | `S.Media.PortAudio.Tests` | ✅ 21 passed |
 | `S.Media.Audio.Backends.Tests` | ✅ 45 passed |
 | `S.Media.Source.YouTube.Tests` | ✅ 34 passed, 2 opt-in live-network skips |
-| **Extended total** | ✅ **2,303 passed, 5 skipped** |
+| `S.Media.Visualizer.ProjectM.Tests` | ✅ 19 passed |
+| `S.Media.Arch.Tests` | ✅ 30 passed |
+| **Extended total** | ✅ **2,352 passed, 5 skipped** |
 | Linux x64 NativeAOT publish | ✅ native-code generation and link completed |
 | JIT desktop launch, isolated data root | ✅ start screen opened and remained responsive |
 | NativeAOT desktop launch, isolated data root | ✅ native ELF start screen opened and remained responsive |
@@ -664,6 +672,8 @@ AOT asset graphs.
 | Exercise | Result |
 |---|---|
 | `CompositorSmoke` | ✅ SDL/OpenGL composite, pipeline and readback correct |
+| `ProjectMGlSmoke`, app-bundle resolution | ✅ patched projectM 4.1.6 loaded from the deployed HaCue layout without an environment override; 60/60 exact compositor-path frames rendered, final frame 60,000 lit pixels (26.0%) |
+| `ProjectMGlSmoke`, pinned full pack | ✅ patched projectM 4.1.6 loaded from HaCue2's Debug output; 120/120 frames rendered through the 552-preset/68-texture bundle, final frame 29,376 lit pixels (12.8%); captured frame inspected and visibly non-black |
 | `shootingstar_0611_1.mov` direct playback | ✅ ProRes 3840×2106, 10-bit 4:2:2, 60 fps; 602 frames presented through 10.150 s |
 | `おねがいダーリン_0611.mov` direct playback | ✅ ProRes 3840×2106, 10-bit 4:2:2, 60 fps; 603 frames presented through 10.150 s |
 | Two-output headless fan-out, `shootingstar_0611_1.mov` | ✅ 601 frames; 0 late drops, 0 misses; skew median 0.01 ms, p95 0.04 ms, max 0.68 ms |
@@ -680,7 +690,6 @@ equipment or human assistive-technology session and should remain on the release
 
 - projector/LED-processor final-glass inspection, EDID changes and multi-screen hot-plug;
 - real multichannel audio interfaces, MIDI devices, OSC peer, LTC/MTC and NDI endpoints;
-- installed projectM native runtime/preset packs on the target booth image;
 - live output loss/reacquisition while a calibrated multi-output show is running;
 - screen-reader, high-contrast and large-text use by a human operator; and
 - a complete dress-rehearsal pass on the packaged target-machine artifact.

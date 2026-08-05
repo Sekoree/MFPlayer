@@ -23,8 +23,17 @@ internal static class SystemFirstNativeLibraryResolver
         IEnumerable<string>? bundledPaths,
         out nint handle,
         out string? loadedCandidate,
-        Func<string, bool>? acceptCandidate = null)
+        Func<string, bool>? acceptCandidate = null,
+        bool preferExplicitPaths = false)
     {
+        // Most wrappers deliberately prefer the host's patched/security-serviced native. A component
+        // whose ABI depends on repository patches can opt into the opposite policy without cloning
+        // this resolver: explicit override/application paths first, system fallback last.
+        if (preferExplicitPaths
+            && (TryLoadExplicitPaths(installedPaths, acceptCandidate, out handle, out loadedCandidate)
+                || TryLoadExplicitPaths(bundledPaths, acceptCandidate, out handle, out loadedCandidate)))
+            return true;
+
         foreach (var candidate in SystemCandidates(systemNames))
         {
             if (NativeLibrary.TryLoad(candidate, out handle) && Accept(candidate, ref handle, acceptCandidate))
@@ -34,8 +43,9 @@ internal static class SystemFirstNativeLibraryResolver
             }
         }
 
-        if (TryLoadExplicitPaths(installedPaths, acceptCandidate, out handle, out loadedCandidate)
-            || TryLoadExplicitPaths(bundledPaths, acceptCandidate, out handle, out loadedCandidate))
+        if (!preferExplicitPaths
+            && (TryLoadExplicitPaths(installedPaths, acceptCandidate, out handle, out loadedCandidate)
+                || TryLoadExplicitPaths(bundledPaths, acceptCandidate, out handle, out loadedCandidate)))
             return true;
 
         // Keep .NET's normal assembly/RID probing as the final compatibility fallback. It is
@@ -71,16 +81,30 @@ internal static class SystemFirstNativeLibraryResolver
     internal static IEnumerable<string> OrderedCandidates(
         IReadOnlyList<string> systemNames,
         IEnumerable<string>? installedPaths,
-        IEnumerable<string>? bundledPaths)
+        IEnumerable<string>? bundledPaths,
+        bool preferExplicitPaths = false)
     {
+        if (preferExplicitPaths)
+        {
+            if (installedPaths is not null)
+                foreach (var candidate in installedPaths)
+                    yield return candidate;
+            if (bundledPaths is not null)
+                foreach (var candidate in bundledPaths)
+                    yield return candidate;
+        }
+
         foreach (var candidate in systemNames)
             yield return candidate;
-        if (installedPaths is not null)
-            foreach (var candidate in installedPaths)
-                yield return candidate;
-        if (bundledPaths is not null)
-            foreach (var candidate in bundledPaths)
-                yield return candidate;
+        if (!preferExplicitPaths)
+        {
+            if (installedPaths is not null)
+                foreach (var candidate in installedPaths)
+                    yield return candidate;
+            if (bundledPaths is not null)
+                foreach (var candidate in bundledPaths)
+                    yield return candidate;
+        }
     }
 
     internal static IEnumerable<string> AppLocalPaths(IReadOnlyList<string> names)

@@ -1,9 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- ProjectMLib is the dedicated P/Invoke binding for projectM 4.x (projectm_*). The native
-         libprojectM-4 is host-supplied (system package, or scripts/build-projectm.sh building
-         Reference/projectm-4.1.6); ProjectMLibraryResolver locates it - no native build step here.
-         projectM is LGPL-2.1: we link dynamically and never statically embed it. -->
+    <!-- ProjectMLib is the dedicated P/Invoke binding for projectM 4.x (projectm_*). Desktop apps
+         deploy the patched build produced by scripts/build-projectm.sh; the resolver prefers that
+         application bundle and retains an explicit override/system install only as compatibility
+         fallbacks. projectM is LGPL-2.1: we link dynamically and never statically embed it. -->
 
     <PropertyGroup>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

@@ -71,24 +71,7 @@
         <ProjectReference Include="../../MediaFramework/Media/S.Media.Present.SDL3.Compositor/S.Media.Present.SDL3.Compositor.csproj" />
     </ItemGroup>
 
-    <ItemGroup>
-        <!-- Bundle the preset/texture packs next to the executable so a deployed copy is self-contained
-             (the packs are arch-independent; linux-x64 is the staging source). Runtime resolution prefers
-             this app-local copy over the repo dev tree (see MainViewModel.ResolvePresetDirectory). -->
-        <None Include="../../External/projectm/linux-x64/presets/**"
-              LinkBase="presets" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-        <None Include="../../External/projectm/linux-x64/textures/**"
-              LinkBase="textures" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    </ItemGroup>
-
-    <!-- Linux: ship the dev-built desktop-GL libprojectM-4 next to the executable (the ProjectMLib
-         resolver probes app-local paths; this box's system libprojectM-4 is a GLES build that crashes
-         desktop GL). Windows relies on MFP_PROJECTM_LIB / a prebuilt bundle. Empty when the native was
-         never built (scripts/build-projectm.sh) - the visualizer then reports unavailable. -->
-    <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
-        <None Include="../../External/projectm/linux-x64/lib/libprojectM-4.so*" Visible="false"
-              Link="%(Filename)%(Extension)"
-              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    </ItemGroup>
+    <!-- Shared patched-native + preset/texture deployment policy for every desktop projectM app. -->
+    <Import Project="../../MediaFramework/Visualizer/ProjectMLib/ProjectMDesktopDeployment.targets" />
 
 </Project>

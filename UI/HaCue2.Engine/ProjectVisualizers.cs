@@ -23,14 +23,18 @@ namespace HaCue2.Engine;
 /// different compositions do get two renderers: they have separate GL threads and cannot share one.
 /// </para>
 /// <para>
-/// <b>A machine without projectM is reported, never silently blank.</b> The visualizer is a native
-/// library that a booth box may simply not have, and a cue that appears to fire onto a canvas that
-/// then stays black is the worst version of that — the operator has no way to tell it from a
-/// mis-authored placement.
+/// <b>A missing or damaged projectM bundle is reported, never silently blank.</b> Packaged desktop
+/// apps carry the native, but a developer checkout or damaged install can still lack it. A cue that
+/// appears to fire onto a canvas that then stays black is the worst version of that — the operator
+/// has no way to tell it from a mis-authored placement.
 /// </para>
 /// </remarks>
 public sealed class ProjectVisualizers : IAsyncDisposable
 {
+    // The deployed pack is immutable for the process lifetime. Resolve its recursive tree once rather
+    // than scanning 552 presets every time an unqualified visualizer cue fires.
+    private static readonly Lazy<string?> DefaultPresetPack = new(ProjectMAssetPaths.DefaultPresetDirectory);
+
     /// <summary>One cue's renderers: a source per composition it is placed on.</summary>
     private readonly Dictionary<Guid, List<(string CompositionId, ProjectMVisualSource Source)>> _running = [];
 
@@ -74,7 +78,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(cue);
 
         if (!IsAvailable)
-            return $"“{cue.Label}” needs projectM — {UnavailableReason ?? "it is not installed"}";
+            return $"“{cue.Label}” needs projectM — {UnavailableReason ?? "its native bundle is unavailable"}";
 
         if (cue.Placements.Count == 0)
             return $"“{cue.Label}” is not placed on any composition";
@@ -217,7 +221,11 @@ public sealed class ProjectVisualizers : IAsyncDisposable
             new Rational((int)Math.Round(fps * 1000), 1000),
             new ProjectMOptions
             {
-                PresetDirectory = cue.PresetPack.Length > 0 ? cue.PresetPack : null,
+                // A blank pack means the repository's deployed, pinned Milkdrop bundle — not the
+                // projectM idle preset. An authored path still wins so a show can carry its own pack.
+                PresetDirectory = cue.PresetPack.Length > 0
+                    ? cue.PresetPack
+                    : DefaultPresetPack.Value,
                 RenderWidth = width,
                 RenderHeight = height,
                 Fps = (int)Math.Round(fps),

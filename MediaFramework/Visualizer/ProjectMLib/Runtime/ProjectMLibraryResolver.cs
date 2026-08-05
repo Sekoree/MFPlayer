@@ -8,13 +8,15 @@ namespace ProjectMLib.Runtime;
 
 /// <summary>
 /// Cross-platform DllImport resolver for libprojectM-4 (same pattern as NDILibraryResolver).
-/// Probe order: system-installed projectM, then the <c>MFP_PROJECTM_LIB</c> environment fallback
-/// (a full library path OR a directory containing the library), development builds, and app-local assets.
+/// Probe order: the <c>MFP_PROJECTM_LIB</c> override, the app-local patched bundle, a repository
+/// development build, then a system-installed compatibility fallback. projectM is intentionally the
+/// exception to the wrappers' usual system-first policy because MFPlayer requires its bound-FBO and
+/// native-safety patches, not merely a matching upstream ABI.
 /// Registered by <see cref="ProjectMLibModuleInit"/> before any P/Invoke fires.
 /// </summary>
 public static class ProjectMLibraryResolver
 {
-    /// <summary>Full path to libprojectM-4, or a directory containing it (dev builds from Reference/).</summary>
+    /// <summary>Full path to libprojectM-4, or a directory containing a qualified patched build.</summary>
     public const string EnvironmentOverride = "MFP_PROJECTM_LIB";
 
     private static readonly Lock Gate = new();
@@ -50,7 +52,8 @@ public static class ProjectMLibraryResolver
                 BundledFallbackPaths(names),
                 out var handle,
                 out var loadedCandidate,
-                acceptCandidate: IsUsableProjectMBuild))
+                acceptCandidate: IsUsableProjectMBuild,
+                preferExplicitPaths: true))
         {
             _logger.LogDebug("Loaded projectM native library candidate '{Candidate}'.", loadedCandidate);
             return handle;
@@ -60,15 +63,16 @@ public static class ProjectMLibraryResolver
         return nint.Zero;
     }
 
-    /// <summary>High-level probe order used by tests and diagnostics. Bare system names are always
-    /// first; explicit override/development/application paths are fallbacks.</summary>
+    /// <summary>High-level probe order used by tests and diagnostics. Explicit override/application/
+    /// development paths precede bare system names so the repository-patched runtime wins.</summary>
     internal static IEnumerable<string> GetCandidates()
     {
         var names = PlatformNames();
         return SystemFirstNativeLibraryResolver.OrderedCandidates(
             names,
             EnvironmentFallbackPaths(names),
-            BundledFallbackPaths(names));
+            BundledFallbackPaths(names),
+            preferExplicitPaths: true);
     }
 
     /// <summary>Rejects a projectM candidate that is an OpenGL ES build (DT_NEEDED <c>libGLESv2</c>). Such
@@ -124,16 +128,17 @@ public static class ProjectMLibraryResolver
 
     private static IEnumerable<string> BundledFallbackPaths(IReadOnlyList<string> names)
     {
+        // A deployed artifact owns the patched build beside its executable. Prefer it to a dev tree
+        // found farther up the directory hierarchy so the artifact is exactly what was qualified.
+        foreach (var path in SystemFirstNativeLibraryResolver.AppLocalPaths(names))
+            yield return path;
+
         if (TryFindDevBuildRoot() is { } devRoot)
         {
             foreach (var libDir in DevLibDirectories(devRoot))
             foreach (var name in names)
                 yield return Path.Combine(libDir, LibraryFileName(name));
         }
-
-        // A deployed artifact commonly ships the projectM native library next to the executable.
-        foreach (var path in SystemFirstNativeLibraryResolver.AppLocalPaths(names))
-            yield return path;
     }
 
     private static string LibraryFileName(string name) =>
@@ -155,7 +160,8 @@ public static class ProjectMLibraryResolver
     /// <summary>The scripts/build-projectm.sh install root for this platform
     /// (<c>External/projectm/&lt;rid&gt;</c>), found by walking up from the app base directory. Also
     /// used by the UI for the default preset directory (<c>&lt;root&gt;/presets</c>). Null when no dev
-    /// build exists (deployed installs rely on the env override or the system library).</summary>
+    /// build exists. The same lookup discovers a deployed app's nested
+    /// <c>External/projectm/&lt;rid&gt;</c> bundle directly beneath its executable.</summary>
     public static string? TryFindDevBuildRoot()
     {
         var arch = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch

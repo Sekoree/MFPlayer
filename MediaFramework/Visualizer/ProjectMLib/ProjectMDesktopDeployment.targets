@@ -1,0 +1,69 @@
+<Project>
+
+  <!--
+    Desktop application opt-in for the repository's patched projectM runtime.
+
+    Import this from an executable head that exposes projectM. The native remains dynamically linked
+    (LGPL-2.1); this target only stages the build produced by scripts/build-projectm.sh plus its pinned
+    preset/texture packs. Keeping the layout identical to release CI means ProjectMLibraryResolver and
+    ProjectMAssetPaths exercise the same paths in IDE builds, direct publishes, and uploaded bundles.
+  -->
+  <PropertyGroup>
+    <MfpProjectMRepositoryRoot Condition="'$(MfpProjectMRepositoryRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../..'))</MfpProjectMRepositoryRoot>
+    <MfpProjectMAssetsRoot Condition="'$(MfpProjectMAssetsRoot)' == ''">$(MfpProjectMRepositoryRoot)/External/projectm</MfpProjectMAssetsRoot>
+    <MfpProjectMDeploymentRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</MfpProjectMDeploymentRid>
+    <MfpProjectMDeploymentRid Condition="'$(MfpProjectMDeploymentRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</MfpProjectMDeploymentRid>
+    <MfpProjectMTargetRoot>$(MfpProjectMAssetsRoot)/$(MfpProjectMDeploymentRid)</MfpProjectMTargetRoot>
+
+    <!-- Presets/textures are architecture-independent. A target-specific pack wins when present;
+         linux-x64 is the canonical staging source for a target whose native build has not populated
+         its own copy yet. The native library itself never crosses RIDs. -->
+    <MfpProjectMPackRoot Condition="Exists('$(MfpProjectMTargetRoot)/presets')">$(MfpProjectMTargetRoot)</MfpProjectMPackRoot>
+    <MfpProjectMPackRoot Condition="'$(MfpProjectMPackRoot)' == '' And Exists('$(MfpProjectMAssetsRoot)/linux-x64/presets')">$(MfpProjectMAssetsRoot)/linux-x64</MfpProjectMPackRoot>
+    <MfpProjectMOutputRoot>External/projectm/$(MfpProjectMDeploymentRid)</MfpProjectMOutputRoot>
+  </PropertyGroup>
+
+  <!-- A Linux publish is a distributable application, so silently degrading it to a distro projectM
+       defeats the patched-runtime contract. The lightweight CI compile gate opts out because its
+       SkipProjectMNativeBuild job deliberately does not produce an artifact; release jobs do not. -->
+  <Target Name="MfpValidateProjectMBundleForPublish"
+          BeforeTargets="ComputeFilesToPublish"
+          Condition="$([MSBuild]::IsOSPlatform('Linux')) And '$(SkipProjectMNativeBuild)' != 'true'">
+    <ItemGroup>
+      <_MfpProjectMNative Include="$(MfpProjectMTargetRoot)/lib/*projectM*;$(MfpProjectMTargetRoot)/bin/*projectM*" />
+      <_MfpProjectMPreset Include="$(MfpProjectMPackRoot)/presets/**/*.milk" />
+      <_MfpProjectMTexture Include="$(MfpProjectMPackRoot)/textures/**/*" />
+    </ItemGroup>
+    <Error Condition="'@(_MfpProjectMNative)' == ''"
+           Text="Patched projectM is required in published desktop apps. Run scripts/build-projectm.sh for $(MfpProjectMDeploymentRid) before publishing (or set SkipProjectMNativeBuild=true only for a non-distributable compile gate)." />
+    <Error Condition="'@(_MfpProjectMPreset)' == ''"
+           Text="The pinned projectM preset pack is missing. Run scripts/build-projectm.sh before publishing." />
+    <Error Condition="'@(_MfpProjectMTexture)' == ''"
+           Text="The pinned projectM texture pack is missing. Run scripts/build-projectm.sh before publishing." />
+  </Target>
+
+  <ItemGroup Condition="Exists('$(MfpProjectMPackRoot)/presets')">
+    <None Include="$(MfpProjectMPackRoot)/presets/**" Visible="false"
+          Link="$(MfpProjectMOutputRoot)/presets/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MfpProjectMPackRoot)/textures')">
+    <None Include="$(MfpProjectMPackRoot)/textures/**" Visible="false"
+          Link="$(MfpProjectMOutputRoot)/textures/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MfpProjectMTargetRoot)/lib')">
+    <None Include="$(MfpProjectMTargetRoot)/lib/*projectM*" Visible="false"
+          Link="$(MfpProjectMOutputRoot)/lib/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MfpProjectMTargetRoot)/bin')">
+    <None Include="$(MfpProjectMTargetRoot)/bin/*projectM*" Visible="false"
+          Link="$(MfpProjectMOutputRoot)/bin/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
