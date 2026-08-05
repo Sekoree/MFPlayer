@@ -303,13 +303,13 @@ public static class ShowCompiler
             },
             LoopCrossfade = TimeSpan.FromMilliseconds(Math.Max(0, media.LoopCrossfadeMs)),
             DisablePreRoll = media.DisablePreRoll,
-            Placement = placement is null ? null : Placement(placement),
+            Placement = placement is null ? null : VideoPlacement(placement),
             ExtraPlacements = placements.Count < 2
                 ? null
                 : [.. placements.Skip(1).Select(extra => new ShowClipPlacement(
                     extra.CompositionId.ToString(),
                     extra.LayerIndex,
-                    Placement(extra)))],
+                    VideoPlacement(extra)))],
             LogicalSends = [.. Sends(media)],
             VolumeEnvelope = Envelope(media, EffectLaneKind.Volume, fileLength, inheritedLanes),
             OpacityEnvelope = Envelope(media, EffectLaneKind.Opacity, fileLength, inheritedLanes),
@@ -419,13 +419,13 @@ public static class ShowCompiler
             EndBehavior = text.DurationMs > 0
                 ? ClipEndBehavior.Stop
                 : ClipEndBehavior.FreezeLastFrame,
-            Placement = placement is null ? null : Placement(placement),
+            Placement = placement is null ? null : VideoPlacement(placement),
             ExtraPlacements = placements.Count < 2
                 ? null
                 : [.. placements.Skip(1).Select(extra => new ShowClipPlacement(
                     extra.CompositionId.ToString(),
                     extra.LayerIndex,
-                    Placement(extra)))],
+                    VideoPlacement(extra)))],
             // An indefinite card has no honest time span for an envelope. Timed cards do, and inherit
             // their nearest group lane just like media cues.
             OpacityEnvelope = Envelope(
@@ -499,7 +499,7 @@ public static class ShowCompiler
     /// The fit name is passed as TEXT the framework maps by name, so the two enums can be read side by
     /// side rather than through a table that drifts.
     /// </remarks>
-    private static ShowVideoPlacement Placement(LayerPlacement placement) =>
+    public static ShowVideoPlacement VideoPlacement(LayerPlacement placement) =>
         new(
             DestX: placement.X,
             DestY: placement.Y,

@@ -4,6 +4,7 @@ using HaCue2.Core.Journal;
 using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Core.Patch;
+using HaCue2.Engine;
 using HaCue2.Machine;
 using HaCue2.Controls;
 using HaCue2.Presentation;
@@ -48,6 +49,9 @@ public partial class InspectorViewModel : ObservableObject
 
     /// <summary>The journal, for the dialogs the view opens.</summary>
     public ProjectJournal Journal => _journal;
+
+    /// <summary>The running show, used only for hot geometry edits while a cue is sounding.</summary>
+    public ShowHost? Host { get; set; }
 
     /// <summary>The lead cue — the one whose values the single-selection fields show.</summary>
     public CueNode? Cue => _selection.Count > 0 ? Project.FindCue(_selection[0]) : null;
@@ -177,6 +181,7 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(Placements));
         OnPropertyChanged(nameof(PlacementGuidesX));
         OnPropertyChanged(nameof(PlacementGuidesY));
+        OnPropertyChanged(nameof(PlacementAspect));
         OnPropertyChanged(nameof(HasPlacement));
         OnPropertyChanged(nameof(PlacementList));
         OnPropertyChanged(nameof(PlacementHeaders));
@@ -790,6 +795,20 @@ public partial class InspectorViewModel : ObservableObject
             ? VideoPresentation.SliceGuides(Project, placement.CompositionId, horizontal: false)
             : [];
 
+    /// <summary>The selected placement's real composition shape.</summary>
+    public double PlacementAspect =>
+        Placement is { } placement
+        && Project.Compositions.FirstOrDefault(item => item.Id == placement.CompositionId) is { Height: > 0 } composition
+            ? composition.Width / (double)composition.Height
+            : 16d / 9d;
+
+    /// <summary>Editor preferences, shared by this inspector's placement canvases and not project data.</summary>
+    [ObservableProperty]
+    private bool _preservePlacementAspect = true;
+
+    [ObservableProperty]
+    private bool _snapPlacement = true;
+
     /// <summary>Every canvas the cue appears on.</summary>
     public IReadOnlyList<LayerPlacement> PlacementList =>
         Cue is null ? [] : CuePlacements.Of(Cue);
@@ -804,6 +823,7 @@ public partial class InspectorViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(Placements))]
     [NotifyPropertyChangedFor(nameof(PlacementGuidesX))]
     [NotifyPropertyChangedFor(nameof(PlacementGuidesY))]
+    [NotifyPropertyChangedFor(nameof(PlacementAspect))]
     [NotifyPropertyChangedFor(nameof(PlacementHeaders))]
     private int _selectedPlacement;
 
@@ -813,6 +833,7 @@ public partial class InspectorViewModel : ObservableObject
         // changing the cue, so a normal document Reload is neither necessary nor desirable (it would
         // also reset the selected tab); announce the projection properties directly.
         OnPropertyChanged(nameof(PlacementCompositionIndex));
+        OnPropertyChanged(nameof(PlacementAspect));
         OnPropertyChanged(nameof(LayerValue));
         OnPropertyChanged(nameof(FitIndex));
         OnPropertyChanged(nameof(PlacementOpacity));
@@ -905,6 +926,7 @@ public partial class InspectorViewModel : ObservableObject
             Edit("fit", "video",
                 () => placement.Fit, fit => placement.Fit = fit, (LayerFit)value,
                 $"set fit {FitModes[value]}");
+            ApplyLivePlacement(Cue, placement);
         }
     }
 
@@ -1014,6 +1036,7 @@ public partial class InspectorViewModel : ObservableObject
 
         Edit(property, "video",
             () => read(placement), number => write(placement, number), clamped, description);
+        ApplyLivePlacement(Cue, placement);
     }
 
     /// <summary>
@@ -1053,6 +1076,7 @@ public partial class InspectorViewModel : ObservableObject
         }
 
         _journal.CloseGroup();
+        ApplyLivePlacement(Cue, placement);
         Reload();
     }
 
@@ -1091,6 +1115,7 @@ public partial class InspectorViewModel : ObservableObject
         }
 
         _journal.CloseGroup();
+        ApplyLivePlacement(Cue, placement);
         Reload();
     }
 
@@ -1295,15 +1320,21 @@ public partial class InspectorViewModel : ObservableObject
         if (Project.FindCue(gesture.SubjectId) is not { } cue)
             return;
 
-        if (CuePlacements.Of(cue).FirstOrDefault(item => item.LayerIndex == gesture.Layer)
+        var compositionId = Placement?.CompositionId;
+        if (CuePlacements.Of(cue).FirstOrDefault(item => item.LayerIndex == gesture.Layer
+                                                  && item.CompositionId == compositionId)
             is not { } placement)
             return;
 
-        _drag ??= _journal.Composite("move layer", "video");
+        // The view-model raises the placement properties below, so journal observers do not need to
+        // rebuild the entire shell for every pointer pixel. They see one finished edit on release.
+        _drag ??= _journal.Composite("move layer", "video", quiet: true);
         _journal.Do(RectEdits.Placement(cue, placement, gesture.Rect));
+        ApplyLivePlacement(cue, placement);
         OnPropertyChanged(nameof(Placements));
         OnPropertyChanged(nameof(PlacementGuidesX));
         OnPropertyChanged(nameof(PlacementGuidesY));
+        OnPropertyChanged(nameof(PlacementAspect));
         OnPropertyChanged(nameof(HasPlacement));
         OnPropertyChanged(nameof(PlacementList));
         OnPropertyChanged(nameof(PlacementHeaders));
@@ -1337,6 +1368,30 @@ public partial class InspectorViewModel : ObservableObject
     {
         _drag?.Dispose();
         _drag = null;
+    }
+
+    private static async Task ObserveLivePlacementAsync(
+        ShowHost? host,
+        Guid cueId,
+        LayerPlacement placement)
+    {
+        if (host is null)
+            return;
+
+        try
+        {
+            await host.UpdateActivePlacementAsync(cueId, placement).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // A pointer release can race application/engine shutdown; the persisted edit still stands.
+        }
+    }
+
+    private void ApplyLivePlacement(CueNode? cue, LayerPlacement placement)
+    {
+        if (cue is not null)
+            _ = ObserveLivePlacementAsync(Host, cue.Id, placement);
     }
 
     // ── the Group pane ────────────────────────────────────────────────────────────────────────

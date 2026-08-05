@@ -24,10 +24,67 @@ public sealed partial class ShowSession
         InvokeAsync(() =>
         {
             if (ActiveVoiceOf(cueId) is { } voice)
-                return Task.FromResult(voice.UpdatePlacement(
-                    compositionId, layerIndex, BuildVideoPlacementSpec(compositionId, layerIndex, placement)));
+            {
+                var updated = voice.UpdatePlacement(
+                    compositionId, layerIndex, BuildVideoPlacementSpec(compositionId, layerIndex, placement));
+                if (!updated)
+                    return Task.FromResult(false);
+
+                // The layer is now live at the new rectangle, so the voice's binding must say the same
+                // thing. HaCue2 still performs one normal document reload after the drag (persistence,
+                // validation, every other observer); preserveActiveGroups compares this binding with that
+                // document. Keeping the pre-drag value here made the reload stop audio and video even though
+                // the hot edit itself had succeeded.
+                var binding = WithPlacement(voice.Binding, compositionId, layerIndex, placement);
+                voice.AdoptBinding(binding);
+
+                // Pre-roll and a fire after this edit read the session's binding table too. It is exposed as
+                // IReadOnlyDictionary, so replace it atomically on the dispatcher rather than mutating a
+                // dictionary a concurrent off-dispatcher open may have captured.
+                var clips = new Dictionary<string, ShowClipBinding>(_clipsById, StringComparer.Ordinal)
+                {
+                    [cueId] = binding,
+                };
+                _clipsById = clips;
+                return Task.FromResult(true);
+            }
             return Task.FromResult(false);
         });
+
+    /// <summary>Returns the binding with exactly one addressed placement replaced.</summary>
+    private static ShowClipBinding WithPlacement(
+        ShowClipBinding binding,
+        string compositionId,
+        int layerIndex,
+        ShowVideoPlacement placement)
+    {
+        if (string.Equals(binding.CompositionId, compositionId, StringComparison.Ordinal)
+            && binding.LayerIndex == layerIndex)
+            return binding with { Placement = placement };
+
+        if (binding.ExtraPlacements is { Count: > 0 } extras)
+        {
+            var changed = false;
+            var replacement = extras.Select(item =>
+            {
+                if (!string.Equals(item.CompositionId, compositionId, StringComparison.Ordinal)
+                    || item.LayerIndex != layerIndex)
+                    return item;
+
+                changed = true;
+                return item with { Placement = placement };
+            }).ToArray();
+
+            if (changed)
+                return binding with { ExtraPlacements = replacement };
+        }
+
+        // UpdatePlacement intentionally supports the old single-placement API, where callers did not
+        // provide an exact composition/layer key. Mirror that compatibility in the authored binding.
+        return binding.GetPlacements().Count == 1
+            ? binding with { Placement = placement }
+            : binding;
+    }
 
     /// <summary>Hot-attaches an output lease to a LIVE composition so a playing clip starts fanning its
     /// composited video to a newly-selected line WITHOUT a re-fire (the GUI's <c>TryAddOutput</c> under the

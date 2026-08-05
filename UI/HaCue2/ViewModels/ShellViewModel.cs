@@ -256,6 +256,7 @@ public partial class ShellViewModel : ObservableObject
         if (IsExternalInputEnabled)
             await Host.Triggers.SetEnabledAsync(true).ConfigureAwait(true);
         Cues.Engine = Host;
+        Video.Host = Host;
         Targets.Host = Host;
         Host.MachinePanicFadeMs = Settings.PanicFadeMs;
         Audio.NoteAudioStarted();
@@ -590,6 +591,7 @@ public partial class ShellViewModel : ObservableObject
         _engine = null;
         Host = null;
         Cues.Engine = null;
+        Video.Host = null;
         Targets.Host = null;
 
         await _remoteLifecycle.WaitAsync().ConfigureAwait(true);

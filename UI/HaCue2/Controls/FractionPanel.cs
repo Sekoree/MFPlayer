@@ -93,3 +93,63 @@ public class FractionPanel : Panel
         return finalSize;
     }
 }
+
+/// <summary>
+/// Keeps a normalized placement surface in the middle of a larger, equally-scaled work area.
+/// </summary>
+/// <remarks>
+/// The inset is a FRACTION on both axes, so the child keeps the aspect ratio supplied by its
+/// surrounding <see cref="AspectBox"/>. The spare area is where an off-composition placement remains
+/// visible and grabbable; a fixed pixel margin would quietly change the canvas aspect ratio.
+/// </remarks>
+public class PlacementWorkArea : Decorator
+{
+    private const double MarginFraction = 0.13;
+
+    public static readonly StyledProperty<bool> IsExpandedProperty =
+        AvaloniaProperty.Register<PlacementWorkArea, bool>(nameof(IsExpanded));
+
+    static PlacementWorkArea() => AffectsArrange<PlacementWorkArea>(IsExpandedProperty);
+
+    public bool IsExpanded
+    {
+        get => GetValue(IsExpandedProperty);
+        set => SetValue(IsExpandedProperty, value);
+    }
+
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        var childSize = IsExpanded
+            ? new Size(
+                Scale(availableSize.Width, 1 - (MarginFraction * 2)),
+                Scale(availableSize.Height, 1 - (MarginFraction * 2)))
+            : availableSize;
+
+        Child?.Measure(childSize);
+
+        return new Size(
+            double.IsInfinity(availableSize.Width) ? Child?.DesiredSize.Width ?? 0 : availableSize.Width,
+            double.IsInfinity(availableSize.Height) ? Child?.DesiredSize.Height ?? 0 : availableSize.Height);
+    }
+
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        if (!IsExpanded)
+        {
+            Child?.Arrange(new Rect(finalSize));
+            return finalSize;
+        }
+
+        var x = finalSize.Width * MarginFraction;
+        var y = finalSize.Height * MarginFraction;
+        Child?.Arrange(new Rect(
+            x,
+            y,
+            Math.Max(0, finalSize.Width - (x * 2)),
+            Math.Max(0, finalSize.Height - (y * 2))));
+        return finalSize;
+    }
+
+    private static double Scale(double value, double factor) =>
+        double.IsInfinity(value) ? value : Math.Max(0, value * factor);
+}

@@ -62,6 +62,13 @@
       </WrapPanel>
     </ContentControl>
 
+    <HeaderedContentControl Theme="{StaticResource Field}" Header="Resize">
+      <WrapPanel ItemSpacing="12" LineSpacing="4">
+        <CheckBox Content="preserve aspect" IsChecked="{Binding PreservePlacementAspect}" />
+        <CheckBox Content="snap + guides" IsChecked="{Binding SnapPlacement}" />
+      </WrapPanel>
+    </HeaderedContentControl>
+
     <!-- Source crop is which part of the picture to use, not where to put it. -->
     <ContentControl Theme="{StaticResource Subhead}" Content="Source crop" />
     <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Left / top">
@@ -128,12 +135,15 @@
     </HeaderedContentControl>
 
     <!-- The guides are seams between the screens dividing this placement's canvas. -->
-    <c:AspectBox Margin="10,6" VerticalAlignment="Top">
+    <c:AspectBox Margin="10,6" VerticalAlignment="Top" Ratio="{Binding PlacementAspect}">
       <c:PlacementCanvas Boxes="{Binding Placements}"
                          AutomationProperties.Name="Video placement canvas"
                          AutomationProperties.HelpText="Drag or resize this placement. Exact numeric fields are above."
                          GuidesX="{Binding PlacementGuidesX}"
                          GuidesY="{Binding PlacementGuidesY}"
+                         PreserveAspect="{Binding PreservePlacementAspect}"
+                         SnapEnabled="{Binding SnapPlacement}"
+                         AllowOutside="True"
                          Gesture="OnPlacementGesture"
                          GestureCompleted="OnPlacementGestureCompleted" />
     </c:AspectBox>

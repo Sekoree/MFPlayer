@@ -1451,6 +1451,23 @@ public sealed class ShowSessionTests
         Assert.True(await session.UpdateActivePlacementAsync("c", "a", 0, edit));  // primary layer
         Assert.True(await session.UpdateActivePlacementAsync("c", "b", 0, edit));  // the fanned-out layer
         Assert.False(await session.UpdateActivePlacementAsync("c", "z", 9, edit)); // no such layer → rejected
+
+        // A host persists the gesture by compiling and reloading the edited document after release.
+        // The hot-edited voice must already describe the new geometry or that preserving reload sees
+        // a changed binding and tears down audio/video that is supposed to keep playing.
+        var editedBinding = doc.Clips[0] with
+        {
+            Placement = edit,
+            ExtraPlacements = [new ShowClipPlacement("b", 0, edit)],
+        };
+        await session.LoadDocumentAsync(
+            doc with { Clips = [editedBinding] },
+            preserveMatchingCompositions: true,
+            preserveActiveGroups: true);
+
+        Assert.Single(session.Snapshot(), state => state.IsActive);
+        Assert.Equal(1, (await session.GetCompositionStatsAsync("a"))!.Value.LayerCount);
+        Assert.Equal(1, (await session.GetCompositionStatsAsync("b"))!.Value.LayerCount);
     }
 
     [Fact]

@@ -1,4 +1,7 @@
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using HaCue2.Controls;
@@ -95,17 +98,35 @@ public class OutputLayoutTests
     });
 
     [Fact]
-    public Task ASliceStaysInsideTheCanvas() => ShellFixture.WithShell(shell =>
+    public Task AFeedMayMoveOutsideTheCanvas() => ShellFixture.WithShell(shell =>
     {
         var (video, _, left, _) = Wall(shell);
 
         video.ApplyLayoutGesture(new PlacementGesture(0, left.Id, 0, new NormalizedRect(0.9, 0, 0.5, 1)));
         video.EndGesture();
 
-        // The opposite rule from a cue placement: a slice is a region OF the canvas, so a slice
-        // outside the canvas is a crop of nothing.
+        // Letterboxing and multi-screen layouts sometimes need the physical feed to overhang the
+        // composition. It remains bounded by NormalizedRect.Free, so it can always be recovered.
         var section = left.Mapping[0];
-        Assert.True(section.SourceX + section.SourceWidth <= 1.0001, "the slice left the canvas");
+        Assert.Equal(0.9, section.SourceX, 6);
+        Assert.Equal(0.5, section.SourceWidth, 6);
+    });
+
+    [Fact]
+    public Task ResolutionLayoutUsesEachOutputsPhysicalRaster() => ShellFixture.WithShell(shell =>
+    {
+        var (video, canvas, left, right) = Wall(shell);
+        left.MappingWidth = right.MappingWidth = 1920;
+        left.MappingHeight = right.MappingHeight = 1080;
+
+        video.ApplyResolutionLayout(canvas.Id);
+
+        Assert.Equal(0, left.Mapping[0].SourceX, 6);
+        Assert.Equal(0.5, left.Mapping[0].SourceWidth, 6);
+        Assert.Equal(0.5, right.Mapping[0].SourceX, 6);
+        Assert.Equal(0.5, right.Mapping[0].SourceWidth, 6);
+        Assert.All(new[] { left, right }, output =>
+            Assert.Equal(1, output.Mapping[0].SourceHeight, 6));
     });
 
     [Fact]
@@ -122,6 +143,22 @@ public class OutputLayoutTests
 
         // A drag that undid in three steps could be walked back into a shape nobody ever saw.
         Assert.Empty(left.Mapping);
+    });
+
+    [Fact]
+    public Task ADragPublishesOneFinishedProjectChangeRatherThanOnePerPixel() => ShellFixture.WithShell(shell =>
+    {
+        var (video, _, left, _) = Wall(shell);
+        var changes = 0;
+        shell.Journal.Changed += () => changes++;
+
+        video.ApplyLayoutGesture(new PlacementGesture(0, left.Id, 0, new NormalizedRect(0, 0, 0.7, 1)));
+        video.ApplyLayoutGesture(new PlacementGesture(0, left.Id, 0, new NormalizedRect(0, 0, 0.6, 1)));
+        video.ApplyLayoutGesture(new PlacementGesture(0, left.Id, 0, new NormalizedRect(0, 0, 0.5, 1)));
+
+        Assert.Equal(0, changes);
+        video.EndGesture();
+        Assert.Equal(1, changes);
     });
 
     [Fact]
@@ -203,6 +240,212 @@ public class OutputLayoutTests
         // A layout that binds correctly and never reaches the screen is the failure this catches.
         Assert.NotEmpty(canvases);
         Assert.Contains(canvases, item => item.Boxes.Count == 2);
+    });
+}
+
+/// <summary>The shared rectangle editor used by composition, cue-placement and mapping panes.</summary>
+public class PlacementCanvasInteractionTests
+{
+    [Fact]
+    public Task MovingABodyFollowsThePointerDistanceAndDirection() => ShellFixture.WithShell(_ =>
+    {
+        var canvas = new PlacementCanvas
+        {
+            Width = 400,
+            Height = 225,
+            SnapEnabled = false,
+            Boxes =
+            [
+                new PlacementBox
+                {
+                    SubjectId = Guid.NewGuid(), Label = "Feed", Left = .2, Top = .2,
+                    Width = .4, Height = .4, IsSelected = true,
+                },
+            ],
+        };
+        var window = new Window { Width = 420, Height = 245, Content = canvas };
+        PlacementGesture? gesture = null;
+        canvas.Gesture += (_, value) => gesture = value;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        try
+        {
+            var surface = canvas.GetVisualDescendants().OfType<FractionPanel>().Single();
+            var origin = surface.TranslatePoint(default, window)!.Value;
+            var start = new Point(
+                origin.X + (.4 * surface.Bounds.Width),
+                origin.Y + (.4 * surface.Bounds.Height));
+            var end = new Point(
+                start.X + (.1 * surface.Bounds.Width),
+                start.Y + (.1 * surface.Bounds.Height));
+
+            window.MouseDown(start, MouseButton.Left);
+            window.MouseMove(end);
+            Dispatcher.UIThread.RunJobs();
+            window.MouseUp(end, MouseButton.Left);
+
+            Assert.NotNull(gesture);
+            Assert.Equal(.3, gesture.Rect.X, 6);
+            Assert.Equal(.3, gesture.Rect.Y, 6);
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
+    [Fact]
+    public Task ResizeIsAspectLockedByDefaultAndEdgesAdvertiseTheirGesture() =>
+        ShellFixture.WithShell(_ =>
+        {
+            var canvas = new PlacementCanvas
+            {
+                Width = 400,
+                Height = 225,
+                SnapEnabled = false,
+                Boxes =
+                [
+                    new PlacementBox
+                    {
+                        SubjectId = Guid.NewGuid(), Label = "Feed", Left = .2, Top = .2,
+                        Width = .4, Height = .4, IsSelected = true,
+                    },
+                ],
+            };
+            var window = new Window { Width = 420, Height = 245, Content = canvas };
+            PlacementGesture? gesture = null;
+            canvas.Gesture += (_, value) => gesture = value;
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            try
+            {
+                var surface = canvas.GetVisualDescendants().OfType<FractionPanel>().Single();
+                var origin = surface.TranslatePoint(default, window)!.Value;
+                var edge = new Point(
+                    origin.X + (.6 * surface.Bounds.Width),
+                    origin.Y + (.4 * surface.Bounds.Height));
+                var body = new Point(
+                    origin.X + (.4 * surface.Bounds.Width),
+                    origin.Y + (.4 * surface.Bounds.Height));
+
+                window.MouseMove(body);
+                Dispatcher.UIThread.RunJobs();
+                var bodyCursor = canvas.Cursor;
+                window.MouseMove(edge);
+                Dispatcher.UIThread.RunJobs();
+                var edgeCursor = canvas.Cursor;
+
+                var dragged = new Point(edge.X + (.1 * surface.Bounds.Width), edge.Y);
+                window.MouseDown(edge, MouseButton.Left);
+                window.MouseMove(dragged);
+                Dispatcher.UIThread.RunJobs();
+                window.MouseUp(dragged, MouseButton.Left);
+
+                Assert.True(canvas.PreserveAspect);
+                Assert.NotNull(bodyCursor);
+                Assert.NotNull(edgeCursor);
+                Assert.NotSame(bodyCursor, edgeCursor);
+                Assert.NotNull(gesture);
+                Assert.Equal(
+                    .4 / .4,
+                    gesture.Rect.Width / gesture.Rect.Height,
+                    6);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task OverflowWorkAreaKeepsAnOutsideFeedGrabbable() => ShellFixture.WithShell(_ =>
+    {
+        var canvas = new PlacementCanvas
+        {
+            Width = 400,
+            Height = 225,
+            AllowOutside = true,
+            Boxes =
+            [
+                new PlacementBox
+                {
+                    SubjectId = Guid.NewGuid(), Label = "Feed", Left = -.1, Top = .2,
+                    Width = .3, Height = .4, IsSelected = true,
+                },
+            ],
+        };
+        var window = new Window { Width = 420, Height = 245, Content = canvas };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        try
+        {
+            var surface = canvas.GetVisualDescendants().OfType<FractionPanel>().Single();
+            var origin = surface.TranslatePoint(default, window)!.Value;
+            var outside = new Point(
+                origin.X - (.05 * surface.Bounds.Width),
+                origin.Y + (.4 * surface.Bounds.Height));
+
+            window.MouseMove(outside);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.NotSame(Cursor.Default, canvas.Cursor);
+            Assert.True(origin.X > 0, "the composition was not inset into a surrounding work area");
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
+    [Fact]
+    public Task SnappingShowsTheGuideOnlyForTheActiveDrag() => ShellFixture.WithShell(_ =>
+    {
+        var canvas = new PlacementCanvas
+        {
+            Width = 400,
+            Height = 225,
+            SnapEnabled = true,
+            Boxes =
+            [
+                new PlacementBox
+                {
+                    SubjectId = Guid.NewGuid(), Label = "Feed", Left = .1, Top = .1,
+                    Width = .2, Height = .2, IsSelected = true,
+                },
+            ],
+        };
+        var window = new Window { Width = 420, Height = 245, Content = canvas };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        try
+        {
+            var surface = canvas.GetVisualDescendants().OfType<FractionPanel>().Single();
+            var guides = canvas.GetVisualDescendants().OfType<Canvas>().Single();
+            var origin = surface.TranslatePoint(default, window)!.Value;
+            var start = new Point(
+                origin.X + (.2 * surface.Bounds.Width),
+                origin.Y + (.2 * surface.Bounds.Height));
+            var centre = new Point(
+                origin.X + (.5 * surface.Bounds.Width),
+                origin.Y + (.5 * surface.Bounds.Height));
+
+            window.MouseDown(start, MouseButton.Left);
+            window.MouseMove(centre);
+            Dispatcher.UIThread.RunJobs();
+            Assert.NotEmpty(guides.Children);
+
+            window.MouseUp(centre, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Empty(guides.Children);
+        }
+        finally
+        {
+            window.Close();
+        }
     });
 }
 

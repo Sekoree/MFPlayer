@@ -11,11 +11,16 @@
        the drag, the resize handles and the arrow-key nudge behave identically wherever a box appears —
        an operator who learns the gesture on a composition must find it true on a mapping section. -->
 
-  <Border Classes="vidcanvas">
-    <Panel>
-      <c:CanvasGrid IsVisible="{Binding ShowGrid, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}" />
+  <!-- The transparent outer border owns the work-area hit test. When overflow is enabled the real
+       composition is inset inside it, leaving somewhere visible to drag a box beyond the frame. -->
+  <Border Background="Transparent" ClipToBounds="True">
+    <c:PlacementWorkArea IsExpanded="{Binding AllowOutside, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}">
+      <Border Classes="vidcanvas"
+              ClipToBounds="{Binding !AllowOutside, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}">
+        <Panel>
+          <c:CanvasGrid IsVisible="{Binding ShowGrid, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}" />
 
-      <ItemsControl ItemsSource="{Binding Boxes, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}">
+          <ItemsControl ItemsSource="{Binding Boxes, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}">
         <ItemsControl.ItemsPanel>
           <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
         </ItemsControl.ItemsPanel>
@@ -53,7 +58,13 @@
             </Border>
           </DataTemplate>
         </ItemsControl.ItemTemplate>
-      </ItemsControl>
-    </Panel>
+          </ItemsControl>
+
+          <!-- Populated only while a snapped drag is active. Last in paint order so a guide remains
+               legible through overlapping translucent placement boxes. -->
+          <Canvas x:Name="GuideLayer" IsHitTestVisible="False" />
+        </Panel>
+      </Border>
+    </c:PlacementWorkArea>
   </Border>
 </UserControl>

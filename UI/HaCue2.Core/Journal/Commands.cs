@@ -663,7 +663,8 @@ public static class RectEdits
             },
             rect, "move layer", allowOutsideFrame: true);
 
-    public static SetRectCommand MappingSource(MappingSection section, NormalizedRect rect) =>
+    public static SetRectCommand MappingSource(
+        MappingSection section, NormalizedRect rect, bool allowOutsideFrame = false) =>
         new(section.Id, "source", "mapping",
             () => new NormalizedRect(
                 section.SourceX, section.SourceY, section.SourceWidth, section.SourceHeight),
@@ -674,7 +675,7 @@ public static class RectEdits
                 section.SourceWidth = value.Width;
                 section.SourceHeight = value.Height;
             },
-            rect, "move source region");
+            rect, "move source region", allowOutsideFrame);
 
     public static SetRectCommand MappingTarget(MappingSection section, NormalizedRect rect) =>
         new(section.Id, "target", "mapping",

@@ -380,6 +380,7 @@ public partial class CuesViewModel : ObservableObject
         set
         {
             _engine = value;
+            Inspector.Host = value;
             SyncActiveCueList();
         }
     }

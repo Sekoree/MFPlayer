@@ -80,6 +80,38 @@ public class CompositionFeedTests
     });
 
     [Fact]
+    public Task NewlyAssignedScreensDefaultToTheirRasterSize() => ShellFixture.WithShell(shell =>
+    {
+        shell.Project.Compositions.Clear();
+        shell.Project.VideoOutputs.Clear();
+        var canvas = new CompositionDefinition { Name = "Wall", Width = 3840, Height = 1080 };
+        var left = new VideoOutputDefinition
+        {
+            Name = "Left", MappingWidth = 1920, MappingHeight = 1080,
+        };
+        var right = new VideoOutputDefinition
+        {
+            Name = "Right", MappingWidth = 1920, MappingHeight = 1080,
+        };
+        shell.Project.Compositions.Add(canvas);
+        shell.Project.VideoOutputs.Add(left);
+        shell.Project.VideoOutputs.Add(right);
+        var video = new VideoViewModel(shell.Project, shell.Runtime, shell.Journal);
+        video.SelectedTab = video.CompositionsTab;
+        video.SelectedCompositionId = canvas.Id;
+
+        video.AssignableIndex = 0;
+        video.AssignSelectedOutput();
+        video.AssignableIndex = 0;
+        video.AssignSelectedOutput();
+
+        Assert.Equal(0.5, Assert.Single(left.Mapping).SourceWidth, 6);
+        Assert.Equal(0, left.Mapping[0].SourceX, 6);
+        Assert.Equal(0.5, Assert.Single(right.Mapping).SourceWidth, 6);
+        Assert.Equal(0.5, right.Mapping[0].SourceX, 6);
+    });
+
+    [Fact]
     public Task AnAssignedOutputAppearsUnderFeeds() => ShellFixture.WithShell(shell =>
     {
         var (video, canvas, output) = Unassigned(shell);
@@ -215,7 +247,10 @@ public class CompositionFeedTests
         video.SliceWidth = 0.5;
         shell.Undo();
 
-        Assert.Empty(output.Mapping);
+        // Assignment now authors the resolution-sized default. Undoing the typed adjustment returns
+        // to that default rather than deleting a section that already existed.
+        var section = Assert.Single(output.Mapping);
+        Assert.Equal(1, section.SourceWidth, 6);
     });
 
     [Fact]
@@ -269,6 +304,24 @@ public class CompositionFeedTests
         // without anybody working out what fraction that is. The pane built these seams from the start
         // and nothing consumed them — the canvas an operator drags a picture on never saw them.
         Assert.Contains(0.5, shell.Cues.Inspector.PlacementGuidesX);
+    });
+
+    [Fact]
+    public Task APlacementDragPublishesOnlyAfterPointerRelease() => ShellFixture.WithShell(shell =>
+    {
+        var (_, _, cue) = SplitWall(shell);
+        var inspector = shell.Cues.Inspector;
+        var changes = 0;
+        shell.Journal.Changed += () => changes++;
+
+        inspector.ApplyPlacementGesture(
+            new PlacementGesture(0, cue.Id, 0, new NormalizedRect(0.1, 0.1, 0.8, 0.8)));
+        inspector.ApplyPlacementGesture(
+            new PlacementGesture(0, cue.Id, 0, new NormalizedRect(0.2, 0.1, 0.8, 0.8)));
+
+        Assert.Equal(0, changes);
+        inspector.EndPlacementGesture();
+        Assert.Equal(1, changes);
     });
 
     [Fact]

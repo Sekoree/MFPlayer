@@ -703,8 +703,9 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// nothing to say why.
     /// </para>
     /// <para>
-    /// Idempotent: an output already attached to a surviving composition is skipped rather than
-    /// re-added, so an edit that touches nothing visual costs nothing here.
+    /// Idempotent: an output already attached to a surviving composition is not re-added; only its
+    /// inexpensive mapping spec is refreshed, so geometry edits take effect without replacing the
+    /// window or its compositor output.
     /// </para>
     /// </remarks>
     private async Task AttachScreensAsync()
@@ -724,7 +725,14 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         foreach (var (compositionId, lease) in _screens.Leases(_project))
         {
             if (_attached.Contains(lease.OutputId))
+            {
+                // The output object survives document reloads, but its mapping is authored state and
+                // may have changed. Skipping the whole lease here left an already-open projector on its
+                // start-up crop forever even while the editor showed the new source slice.
+                await _session.ApplyOutputMappingAsync(compositionId, lease.OutputId, lease.Mapping)
+                    .ConfigureAwait(false);
                 continue;
+            }
 
             if (await _session.AddCompositionOutputAsync(compositionId, lease).ConfigureAwait(false))
             {
@@ -736,6 +744,30 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         }
 
         PaintUnattachedScreens();
+    }
+
+    /// <summary>Moves an active cue's already-attached composition layer without re-firing it.</summary>
+    public Task<bool> UpdateActivePlacementAsync(Guid cueId, LayerPlacement placement)
+    {
+        ArgumentNullException.ThrowIfNull(placement);
+        return _session.UpdateActivePlacementAsync(
+            cueId.ToString(),
+            placement.CompositionId.ToString(),
+            placement.LayerIndex,
+            ShowCompiler.VideoPlacement(placement));
+    }
+
+    /// <summary>Applies an output's current crop/warp to its open composition immediately.</summary>
+    public Task<bool> ApplyOutputMappingAsync(
+        VideoOutputDefinition output,
+        CompositionDefinition composition)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(composition);
+        return _session.ApplyOutputMappingAsync(
+            composition.Id.ToString(),
+            output.Id.ToString("N"),
+            OutputMapping.Spec(output, composition.Width, composition.Height));
     }
 
     /// <summary>

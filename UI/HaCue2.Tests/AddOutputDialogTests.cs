@@ -89,6 +89,24 @@ public class AddOutputDialogTests
         Assert.False(output.Fullscreen);
         Assert.Equal(1280, output.WindowWidth);
         Assert.Equal(720, output.WindowHeight);
+        Assert.Equal(1280, output.MappingWidth);
+        Assert.Equal(720, output.MappingHeight);
+    }
+
+    [Fact]
+    public void AFullscreenOutputCarriesItsSelectedScreensRasterIntoTheLayout()
+    {
+        var journal = new ProjectJournal(ShellFixture.Project());
+        var prompt = Dialogs.AddVideoOutput(
+            journal, VideoOutputKind.LocalScreen,
+            ["1 · 1920×1080", "2 · 3840×2160 · primary"]);
+
+        prompt["Target"].SelectedIndex = 1;
+        prompt.Commit();
+
+        var output = journal.Project.VideoOutputs[^1];
+        Assert.Equal(3840, output.MappingWidth);
+        Assert.Equal(2160, output.MappingHeight);
     }
 
     [Fact]

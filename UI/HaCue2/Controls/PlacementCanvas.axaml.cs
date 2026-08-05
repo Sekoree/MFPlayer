@@ -1,6 +1,8 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Shapes;
 using Avalonia.Input;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media;
 using Avalonia.VisualTree;
 using HaCue2.Core.Journal;
 using HaCue2.ViewModels;
@@ -39,7 +41,7 @@ public sealed record PlacementGesture(int Index, Guid SubjectId, int Layer, Norm
 public partial class PlacementCanvas : UserControl
 {
     /// <summary>How close to an edge counts as grabbing it rather than the body.</summary>
-    private const double EdgeGrab = 7;
+    private const double EdgeGrab = 12;
 
     /// <summary>Arrow-key step, and the coarse step with Shift held.</summary>
     private const double NudgeStep = 0.005;
@@ -54,6 +56,7 @@ public partial class PlacementCanvas : UserControl
     /// against the outer box would offset every hit test and skew every delta by that inset.
     /// </remarks>
     private Panel? _surface;
+    private Canvas? _guideLayer;
 
     private int _draggedIndex = -1;
     private ResizeEdges _edges;
@@ -88,6 +91,20 @@ public partial class PlacementCanvas : UserControl
     public static readonly StyledProperty<bool> SnapEnabledProperty =
         AvaloniaProperty.Register<PlacementCanvas, bool>(nameof(SnapEnabled), true);
 
+    /// <summary>
+    /// Whether a resize keeps the rectangle's start-of-drag aspect ratio. Shift temporarily reverses
+    /// this choice, so an occasional free resize does not require leaving the canvas.
+    /// </summary>
+    public static readonly StyledProperty<bool> PreserveAspectProperty =
+        AvaloniaProperty.Register<PlacementCanvas, bool>(nameof(PreserveAspect), true);
+
+    /// <summary>
+    /// Gives the composition a surrounding work area and allows hit-testing boxes that overhang it.
+    /// The document command remains the authority on how far a rectangle may travel.
+    /// </summary>
+    public static readonly StyledProperty<bool> AllowOutsideProperty =
+        AvaloniaProperty.Register<PlacementCanvas, bool>(nameof(AllowOutside));
+
     public IReadOnlyList<double> GuidesX
     {
         get => GetValue(GuidesXProperty);
@@ -106,12 +123,25 @@ public partial class PlacementCanvas : UserControl
         set => SetValue(SnapEnabledProperty, value);
     }
 
+    public bool PreserveAspect
+    {
+        get => GetValue(PreserveAspectProperty);
+        set => SetValue(PreserveAspectProperty, value);
+    }
+
+    public bool AllowOutside
+    {
+        get => GetValue(AllowOutsideProperty);
+        set => SetValue(AllowOutsideProperty, value);
+    }
+
     /// <summary>How near a guide a dragged edge has to come before it takes, in pixels.</summary>
     private const double SnapPixels = 6;
 
     public PlacementCanvas()
     {
         InitializeComponent();
+        _guideLayer = this.FindControl<Canvas>("GuideLayer");
         Focusable = true;
     }
 
@@ -181,8 +211,14 @@ public partial class PlacementCanvas : UserControl
     {
         base.OnPointerMoved(e);
 
-        if (_draggedIndex < 0 || Surface is not { } surface)
+        if (Surface is not { } surface)
             return;
+
+        if (_draggedIndex < 0)
+        {
+            UpdateHoverCursor(e.GetPosition(surface));
+            return;
+        }
 
         var position = e.GetPosition(surface);
         var dx = (position.X - _grabbedAt.X) / surface.Bounds.Width;
@@ -191,19 +227,29 @@ public partial class PlacementCanvas : UserControl
         // Always computed from where the grab STARTED, never accumulated frame by frame: an
         // incremental sum drifts, and a clamped increment loses the movement that was clipped, so the
         // box stops following the pointer once it has touched an edge.
-        var moved = Resize(
-            _grabbedRect,
-            _edges,
-            dx,
-            dy,
-            // Shift keeps a corner drag on the box's own aspect ratio, which is what stops a resize
-            // quietly distorting a picture that was placed to match its source.
-            e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        var moved = Resize(_grabbedRect, _edges, dx, dy);
+
+        // Aspect is the normal editing mode. Shift temporarily reverses the visible option: it unlocks
+        // the usual locked editor and locks an editor whose option was deliberately switched off.
+        var keepAspect = _edges != ResizeEdges.None
+                         && PreserveAspect != e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        if (keepAspect)
+            moved = WithAspect(_grabbedRect, moved, _edges);
 
         // Alt suspends snapping for one gesture — the escape hatch for placing something a few pixels
         // off a guide, which is otherwise impossible once the guide has it.
         if (SnapEnabled && !e.KeyModifiers.HasFlag(KeyModifiers.Alt))
             moved = Snap(moved, _edges, surface);
+
+        // A snapped resize may have changed only one dragged edge. Reapply the constraint so a guide
+        // never introduces the one-pixel distortion the aspect option exists to prevent.
+        if (keepAspect)
+            moved = WithAspect(_grabbedRect, moved, _edges);
+
+        UpdateActiveGuides(
+            moved,
+            surface,
+            SnapEnabled && !e.KeyModifiers.HasFlag(KeyModifiers.Alt));
 
         Gesture?.Invoke(this, new PlacementGesture(
             _draggedIndex,
@@ -335,6 +381,8 @@ public partial class PlacementCanvas : UserControl
 
         _draggedIndex = -1;
         _edges = ResizeEdges.None;
+        ClearGuides();
+        Cursor = Cursor.Default;
         e.Pointer.Capture(null);
         GestureCompleted?.Invoke(this, EventArgs.Empty);
     }
@@ -428,31 +476,10 @@ public partial class PlacementCanvas : UserControl
     }
 
     private static NormalizedRect Resize(
-        NormalizedRect rect, ResizeEdges edges, double dx, double dy, bool keepAspect = false)
+        NormalizedRect rect, ResizeEdges edges, double dx, double dy)
     {
         if (edges == ResizeEdges.None)
             return new NormalizedRect(rect.X + dx, rect.Y + dy, rect.Width, rect.Height);
-
-        // A CORNER drag with Shift moves both axes by the same proportion, so the box keeps the shape
-        // it had. Driven by the larger of the two movements: following one axis alone makes the corner
-        // lag the pointer diagonally.
-        if (keepAspect
-            && rect is { Width: > 0, Height: > 0 }
-            && (edges.HasFlag(ResizeEdges.Left) || edges.HasFlag(ResizeEdges.Right))
-            && (edges.HasFlag(ResizeEdges.Top) || edges.HasFlag(ResizeEdges.Bottom)))
-        {
-            var growX = edges.HasFlag(ResizeEdges.Left) ? -dx : dx;
-            var growY = edges.HasFlag(ResizeEdges.Top) ? -dy : dy;
-            var scale = Math.Abs(growX / rect.Width) >= Math.Abs(growY / rect.Height)
-                ? growX / rect.Width
-                : growY / rect.Height;
-
-            growX = scale * rect.Width;
-            growY = scale * rect.Height;
-
-            dx = edges.HasFlag(ResizeEdges.Left) ? -growX : growX;
-            dy = edges.HasFlag(ResizeEdges.Top) ? -growY : growY;
-        }
 
         var (x, y, width, height) = (rect.X, rect.Y, rect.Width, rect.Height);
 
@@ -478,6 +505,125 @@ public partial class PlacementCanvas : UserControl
 
         return new NormalizedRect(x, y, width, height);
     }
+
+    /// <summary>Keeps the start rectangle's shape, anchored opposite the edge being dragged.</summary>
+    private static NormalizedRect WithAspect(
+        NormalizedRect original, NormalizedRect resized, ResizeEdges edges)
+    {
+        if (original is not { Width: > 0, Height: > 0 })
+            return resized;
+
+        var horizontal = edges.HasFlag(ResizeEdges.Left) || edges.HasFlag(ResizeEdges.Right);
+        var vertical = edges.HasFlag(ResizeEdges.Top) || edges.HasFlag(ResizeEdges.Bottom);
+        if (!horizontal && !vertical)
+            return resized;
+
+        var aspect = original.Width / original.Height;
+        var width = resized.Width;
+        var height = resized.Height;
+
+        if (horizontal && vertical)
+        {
+            var widthChange = Math.Abs((width / original.Width) - 1);
+            var heightChange = Math.Abs((height / original.Height) - 1);
+            if (widthChange >= heightChange)
+                height = width / aspect;
+            else
+                width = height * aspect;
+        }
+        else if (horizontal)
+        {
+            height = width / aspect;
+        }
+        else
+        {
+            width = height * aspect;
+        }
+
+        var x = horizontal
+            ? edges.HasFlag(ResizeEdges.Left) ? original.X + original.Width - width : original.X
+            : original.X + ((original.Width - width) / 2);
+        var y = vertical
+            ? edges.HasFlag(ResizeEdges.Top) ? original.Y + original.Height - height : original.Y
+            : original.Y + ((original.Height - height) / 2);
+
+        return new NormalizedRect(x, y, width, height);
+    }
+
+    /// <summary>Changes the cursor before the press, using the same generous edge hit test as the drag.</summary>
+    private void UpdateHoverCursor(Point position)
+    {
+        var index = BoxAt(position);
+        if (index < 0)
+        {
+            Cursor = Cursor.Default;
+            return;
+        }
+
+        var edges = EdgesAt(position, RectOf(Boxes[index]));
+        Cursor = edges switch
+        {
+            ResizeEdges.Left or ResizeEdges.Right => new Cursor(StandardCursorType.SizeWestEast),
+            ResizeEdges.Top or ResizeEdges.Bottom => new Cursor(StandardCursorType.SizeNorthSouth),
+            ResizeEdges.Left | ResizeEdges.Top or ResizeEdges.Right | ResizeEdges.Bottom =>
+                new Cursor(StandardCursorType.TopLeftCorner),
+            ResizeEdges.Right | ResizeEdges.Top or ResizeEdges.Left | ResizeEdges.Bottom =>
+                new Cursor(StandardCursorType.TopRightCorner),
+            _ => new Cursor(StandardCursorType.SizeAll),
+        };
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        if (_draggedIndex < 0)
+            Cursor = Cursor.Default;
+    }
+
+    /// <summary>Draws only the guides the current snapped rectangle is actually aligned with.</summary>
+    private void UpdateActiveGuides(NormalizedRect rect, Panel surface, bool visible)
+    {
+        ClearGuides();
+        if (!visible || _guideLayer is null)
+            return;
+
+        const double epsilon = 0.000001;
+        var xs = new[] { rect.X, rect.X + (rect.Width / 2), rect.X + rect.Width };
+        var ys = new[] { rect.Y, rect.Y + (rect.Height / 2), rect.Y + rect.Height };
+        var activeX = Guides(GuidesX, horizontal: true)
+            .Where(guide => xs.Any(edge => Math.Abs(edge - guide) < epsilon))
+            .Distinct()
+            .ToList();
+        var activeY = Guides(GuidesY, horizontal: false)
+            .Where(guide => ys.Any(edge => Math.Abs(edge - guide) < epsilon))
+            .Distinct()
+            .ToList();
+
+        var stroke = new SolidColorBrush(Color.FromRgb(0xFF, 0xD1, 0x66));
+        foreach (var guide in activeX)
+        {
+            _guideLayer.Children.Add(new Line
+            {
+                StartPoint = new Point(guide * surface.Bounds.Width, 0),
+                EndPoint = new Point(guide * surface.Bounds.Width, surface.Bounds.Height),
+                Stroke = stroke,
+                StrokeThickness = 1,
+            });
+        }
+
+        foreach (var guide in activeY)
+        {
+            _guideLayer.Children.Add(new Line
+            {
+                StartPoint = new Point(0, guide * surface.Bounds.Height),
+                EndPoint = new Point(surface.Bounds.Width, guide * surface.Bounds.Height),
+                Stroke = stroke,
+                StrokeThickness = 1,
+            });
+        }
+    }
+
+    private void ClearGuides() => _guideLayer?.Children.Clear();
 
     private Rect PixelRect(NormalizedRect rect)
     {

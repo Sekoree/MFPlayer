@@ -48,7 +48,7 @@ public sealed partial class ShowSession
     private sealed class TransportVoice(IArmedClip clip, ShowClipBinding binding, float masterTrim)
     {
         public IArmedClip Clip { get; } = clip;
-        public ShowClipBinding Binding { get; } = binding;
+        public ShowClipBinding Binding { get; private set; } = binding;
         public S.Media.Players.MediaPlayer Player => Clip.Player;
         public VoiceState State { get; private set; } = VoiceState.Arming;
 
@@ -81,6 +81,13 @@ public sealed partial class ShowSession
         public IReadOnlyList<(string OutputId, string DeviceId)> AudioPumps { get; private set; } = [];
 
         public void SetAudioPumps(IReadOnlyList<(string OutputId, string DeviceId)> pumps) => AudioPumps = [.. pumps];
+
+        /// <summary>
+        /// Adopts the authored binding that now describes this still-running voice after a successful
+        /// hot edit. A later preserving document reload compares against this value; leaving the old
+        /// geometry here would make that reload retire a voice whose live layer was already updated.
+        /// </summary>
+        public void AdoptBinding(ShowClipBinding binding) => Binding = binding;
 
         /// <summary>The authored full-level opacity of each composition layer, captured when the clip
         /// committed - what a fade UP ramps toward (opacity at level 1).</summary>

@@ -378,13 +378,23 @@
                         <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding Aspect}">
                           <c:PlacementCanvas Boxes="{Binding OutputBoxes}"
                                              AutomationProperties.Name="Composition output layout"
+                                             PreserveAspect="{Binding PreserveAspect}"
+                                             SnapEnabled="{Binding SnapEnabled}"
+                                             AllowOutside="True"
                                              Gesture="OnLayoutGesture"
                                              GestureCompleted="OnGestureCompleted"
                                              BoxSelected="OnLayoutOutputSelected" />
                         </c:AspectBox>
 
+                        <WrapPanel Margin="10,0" ItemSpacing="12" LineSpacing="4">
+                          <CheckBox Content="preserve aspect" IsChecked="{Binding PreserveAspect}" />
+                          <CheckBox Content="snap + guides" IsChecked="{Binding SnapEnabled}" />
+                          <Button Classes="tight" Content="SIZE BY RASTER" Click="OnResolutionLayout"
+                                  ToolTip.Tip="Lay out every screen at its output resolution, left to right." />
+                        </WrapPanel>
+
                         <TextBlock Margin="10,0" Classes="mono dim3 micro" TextWrapping="Wrap"
-                                   Text="Drag a screen's edge to divide the canvas. Overlap is a blend zone; canvas no screen covers stays dark. Shift keeps a corner on its aspect, Alt suspends snapping." />
+                                   Text="Drag anywhere inside to move; grab any edge or corner to resize. Overhang remains visible. Shift temporarily reverses aspect lock; Alt suspends guides." />
 
                         <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
                           <TextBox Text="{Binding EditName}" />
@@ -605,6 +615,8 @@
             </StackPanel>
             <Button Classes="tight" Content="RESET" Click="OnDialog" Tag="section:reset"
                     ToolTip.Tip="Back to one section showing the whole canvas across the whole output" />
+            <CheckBox Content="preserve aspect" IsChecked="{Binding PreserveMappingAspect}" />
+            <CheckBox Content="snap + guides" IsChecked="{Binding SnapMapping}" />
             <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
                        Text="{Binding RasterNote}" />
           </WrapPanel>
@@ -695,8 +707,10 @@
                              Text="drag on the canvas · type for exact values" />
                 </Grid>
               </Border>
-              <c:AspectBox Margin="10,8" VerticalAlignment="Top">
+              <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding MappingSourceAspect}">
                 <c:PlacementCanvas Boxes="{Binding MappingSource}"
+                                   PreserveAspect="{Binding PreserveMappingAspect}"
+                                   SnapEnabled="{Binding SnapMapping}"
                                    AutomationProperties.Name="Mapping source sections"
                                    Gesture="OnMappingSourceGesture"
                                    GestureCompleted="OnGestureCompleted"
@@ -789,9 +803,11 @@
                   </StackPanel>
                 </Grid>
               </Border>
-              <c:AspectBox Margin="10,8" VerticalAlignment="Top">
+              <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding MappingTargetAspect}">
                 <!-- No grid on the output half: the reference here is the wall, not a nominal frame. -->
                 <c:PlacementCanvas Boxes="{Binding MappingTarget}" ShowGrid="False"
+                                   PreserveAspect="{Binding PreserveMappingAspect}"
+                                   SnapEnabled="{Binding SnapMapping}"
                                    AutomationProperties.Name="Mapping destination sections"
                                    Gesture="OnMappingTargetGesture"
                                    GestureCompleted="OnGestureCompleted"

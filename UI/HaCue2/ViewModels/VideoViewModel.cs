@@ -37,6 +37,9 @@ public partial class VideoViewModel : ObservableObject
     private readonly ShowRuntime _runtime;
     private readonly ProjectJournal _journal;
 
+    /// <summary>The running show, used to push output mapping edits to open screens immediately.</summary>
+    public ShowHost? Host { get; set; }
+
     /// <summary>Whether document-backed video controls may edit; output runtime controls are independent.</summary>
     public bool CanAuthor => !_journal.IsReadOnly;
 
@@ -514,6 +517,8 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(OutputMappingIndex));
         OnPropertyChanged(nameof(OutputRequired));
         OnPropertyChanged(nameof(MappingNote));
+        OnPropertyChanged(nameof(MappingSourceAspect));
+        OnPropertyChanged(nameof(MappingTargetAspect));
         OnPropertyChanged(nameof(HasOutput));
         OnPropertyChanged(nameof(IsMappingOpen));
         RaiseSliceFields();
@@ -844,9 +849,33 @@ public partial class VideoViewModel : ObservableObject
         if (output.CompositionId == compositionId)
             return;
 
-        _journal.Do(new SetValueCommand<Guid?>(
-            output.Id, "composition", "video",
-            () => output.CompositionId, id => output.CompositionId = id, compositionId, label));
+        using (_journal.Composite(label, "video"))
+        {
+            _journal.Do(new SetValueCommand<Guid?>(
+                output.Id, "composition", "video",
+                () => output.CompositionId, id => output.CompositionId = id, compositionId, label));
+
+            // A newly-bound physical screen starts as a real-sized region, like HaPlay's output
+            // layout editor. This is authored now (rather than merely drawn as a suggestion) so the
+            // canvas and the running compositor tell the same truth from the first frame.
+            if (compositionId is { } canvas
+                && output.Kind == VideoOutputKind.LocalScreen
+                && output.Mapping.All(section => !section.Enabled)
+                && RasterLayout(canvas).FirstOrDefault(item => item.Output.Id == output.Id) is { Output: not null } item)
+            {
+                var section = new MappingSection
+                {
+                    Name = "Screen",
+                    SourceX = item.Rect.X,
+                    SourceY = item.Rect.Y,
+                    SourceWidth = item.Rect.Width,
+                    SourceHeight = item.Rect.Height,
+                };
+                _journal.Do(new AddItemCommand<MappingSection>(
+                    output.Mapping, section, output.Mapping.Count, "video",
+                    $"size “{output.Name}” from its raster"));
+            }
+        }
         _journal.CloseGroup();
 
         AssignableIndex = 0;
@@ -891,25 +920,14 @@ public partial class VideoViewModel : ObservableObject
         // on a laptop driving one projector the size you want is nearly always one this box can see.
         Resolutions =
         [
-            .. all.Select(SizeIn).OfType<string>().Distinct(),
+            .. all.Select(Dialogs.SizeInLabel)
+                .Where(size => size is { Width: > 0, Height: > 0 })
+                .Select(size => $"{size.Width}×{size.Height}")
+                .Distinct(),
             .. CommonResolutions,
         ];
 
         OnPropertyChanged(nameof(Resolutions));
-    }
-
-    /// <summary>The "1920×1080" inside a screen label, or null when it carries none.</summary>
-    private static string? SizeIn(string label)
-    {
-        foreach (var part in (label ?? "").Split('·', StringSplitOptions.TrimEntries))
-        {
-            var (width, height) = Dialogs.WindowSize(part);
-
-            if (width > 0 && height > 0)
-                return $"{width}×{height}";
-        }
-
-        return null;
     }
 
     /// <summary>
@@ -968,6 +986,21 @@ public partial class VideoViewModel : ObservableObject
 
     public IReadOnlyList<PlacementBox> MappingTarget =>
         MappedOutput is null ? [] : VideoPresentation.MappingTarget(MappedOutput, SelectedSection);
+
+    /// <summary>Real shapes for the two mapping canvases, plus their shared editor preferences.</summary>
+    public double MappingSourceAspect =>
+        MappedOutput?.CompositionId is { } id
+        && _project.Compositions.FirstOrDefault(item => item.Id == id) is { Height: > 0 } composition
+            ? composition.Width / (double)composition.Height
+            : 16d / 9d;
+
+    public double MappingTargetAspect => Raster.Height > 0 ? Raster.Width / (double)Raster.Height : 16d / 9d;
+
+    [ObservableProperty]
+    private bool _preserveMappingAspect = true;
+
+    [ObservableProperty]
+    private bool _snapMapping = true;
 
     /// <summary>
     /// The SAME rig the Audio view configures.
@@ -1646,6 +1679,76 @@ public partial class VideoViewModel : ObservableObject
         VideoPresentation.Slice(output);
 
     /// <summary>
+    /// Places each physical screen at its output raster size relative to the composition, row by row.
+    /// A wall larger than the canvas deliberately continues into the work area rather than shrinking
+    /// the screens and lying about their pixel relationship.
+    /// </summary>
+    private IReadOnlyList<(VideoOutputDefinition Output, NormalizedRect Rect)> RasterLayout(Guid compositionId)
+    {
+        if (_project.Compositions.FirstOrDefault(item => item.Id == compositionId) is not { } composition)
+            return [];
+
+        var layout = new List<(VideoOutputDefinition, NormalizedRect)>();
+        var nextX = 0d;
+        var nextY = 0d;
+        var rowHeight = 0d;
+
+        foreach (var output in ScreensOn(compositionId))
+        {
+            var (pixelWidth, pixelHeight) = EffectiveRaster(output, composition);
+            var width = Math.Max(1d / composition.Width, pixelWidth / (double)composition.Width);
+            var height = Math.Max(1d / composition.Height, pixelHeight / (double)composition.Height);
+
+            if (nextX > 0 && nextX + width > 1.000001)
+            {
+                nextX = 0;
+                nextY += rowHeight;
+                rowHeight = 0;
+            }
+
+            // If another full row cannot fit, begin again at the origin. This is the useful default
+            // for two same-size confidence/program outputs showing the same canvas; an INDIVIDUAL
+            // raster larger than the composition still overhangs and is never silently shrunk.
+            if (nextY > 0 && nextY + height > 1.000001)
+                nextY = 0;
+
+            var rect = new NormalizedRect(nextX, nextY, width, height).Free();
+            layout.Add((output, rect));
+            nextX += width;
+            rowHeight = Math.Max(rowHeight, height);
+        }
+
+        return layout;
+    }
+
+    private (int Width, int Height) EffectiveRaster(
+        VideoOutputDefinition output, CompositionDefinition composition)
+    {
+        if (output is { MappingWidth: > 0, MappingHeight: > 0 })
+            return (output.MappingWidth, output.MappingHeight);
+
+        if (!output.Fullscreen && output is { WindowWidth: > 0, WindowHeight: > 0 })
+            return (output.WindowWidth, output.WindowHeight);
+
+        if (ProjectVideoOutputs.ScreenNumber(output.TargetHint) is { } screen
+            && screen > 0
+            && screen < Screens.Count
+            && Dialogs.SizeInLabel(Screens[screen]) is { Width: > 0, Height: > 0 } size)
+            return size;
+
+        return (composition.Width, composition.Height);
+    }
+
+    /// <summary>Explicitly reapplies the resolution-proportional default to every screen on a canvas.</summary>
+    public void ApplyResolutionLayout(Guid compositionId)
+    {
+        foreach (var (output, rect) in RasterLayout(compositionId))
+            ApplyLayoutGesture(new PlacementGesture(0, output.Id, 0, rect));
+
+        EndGesture();
+    }
+
+    /// <summary>
     /// What the layout adds up to, said plainly rather than left to be read off the picture.
     /// </summary>
     /// <remarks>
@@ -1671,7 +1774,9 @@ public partial class VideoViewModel : ObservableObject
             is not { } target)
             return;
 
-        _drag ??= _journal.Composite($"“{target.Name}” canvas slice", "video");
+        // RefreshLayout below keeps this pane following the pointer. Withhold the journal's global
+        // Changed event until release so the shell does not validate and rebuild the show per pixel.
+        _drag ??= _journal.Composite($"“{target.Name}” canvas slice", "video", quiet: true);
 
         if (target.Mapping.FirstOrDefault(section => section.Enabled) is not { } section)
         {
@@ -1681,13 +1786,14 @@ public partial class VideoViewModel : ObservableObject
                 $"“{target.Name}” takes part of the canvas"));
         }
 
-        _journal.Do(RectEdits.MappingSource(section, gesture.Rect));
+        _journal.Do(RectEdits.MappingSource(section, gesture.Rect, allowOutsideFrame: true));
 
         // Identity destination: the slice fills the screen. A warp authored later in the mapping
         // editor lives in the same section and is deliberately left alone.
         if (section is { TargetX: 0, TargetY: 0, TargetWidth: 1, TargetHeight: 1 } is false)
             _journal.Do(RectEdits.MappingTarget(section, new NormalizedRect(0, 0, 1, 1)));
 
+        ApplyLiveMapping(target);
         RefreshLayout();
     }
 
@@ -1813,7 +1919,8 @@ public partial class VideoViewModel : ObservableObject
 
 
     public void ApplyMappingSourceGesture(PlacementGesture gesture) =>
-        ApplyMappingGesture(gesture, RectEdits.MappingSource, "move source region");
+        ApplyMappingGesture(gesture, (section, rect) => RectEdits.MappingSource(section, rect),
+            "move source region");
 
     public void ApplyMappingTargetGesture(PlacementGesture gesture) =>
         ApplyMappingGesture(gesture, RectEdits.MappingTarget, "move output region");
@@ -1826,10 +1933,36 @@ public partial class VideoViewModel : ObservableObject
         if (MappedOutput?.Mapping.FirstOrDefault(item => item.Id == gesture.SubjectId) is not { } section)
             return;
 
-        _drag ??= _journal.Composite(description, "mapping");
+        _drag ??= _journal.Composite(description, "mapping", quiet: true);
         _journal.Do(command(section, gesture.Rect));
         SelectedSection = gesture.Index;
+        ApplyLiveMapping(MappedOutput);
         Refresh();
+    }
+
+    private void ApplyLiveMapping(VideoOutputDefinition? output)
+    {
+        if (Host is not { } host
+            || output?.CompositionId is not { } compositionId
+            || _project.Compositions.FirstOrDefault(item => item.Id == compositionId) is not { } composition)
+            return;
+
+        _ = ObserveLiveMappingAsync(host, output, composition);
+    }
+
+    private static async Task ObserveLiveMappingAsync(
+        ShowHost host,
+        VideoOutputDefinition output,
+        CompositionDefinition composition)
+    {
+        try
+        {
+            await host.ApplyOutputMappingAsync(output, composition).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // A final pointer event can race engine shutdown; the journal still persists the mapping.
+        }
     }
 
     /// <summary>
@@ -1961,6 +2094,8 @@ public partial class VideoViewModel : ObservableObject
 
     private void RaiseSectionFields()
     {
+        OnPropertyChanged(nameof(MappingSourceAspect));
+        OnPropertyChanged(nameof(MappingTargetAspect));
         OnPropertyChanged(nameof(SourceX));
         OnPropertyChanged(nameof(SourceY));
         OnPropertyChanged(nameof(SourceWidth));
@@ -2184,6 +2319,13 @@ public sealed partial class CompositionPaneViewModel(
 
     [ObservableProperty]
     private bool _isSelected;
+
+    /// <summary>Per-pane editing preferences. They are UI state, not part of the show document.</summary>
+    [ObservableProperty]
+    private bool _preserveAspect = true;
+
+    [ObservableProperty]
+    private bool _snapEnabled = true;
 
     // No GuidesX/GuidesY on the pane. They were the slice edges of THIS canvas, and the only canvas
     // that ever received them was the layout editor drawing those same edges — so an editable drag

@@ -156,6 +156,12 @@ public partial class VideoView : UserControl
 
     private void OnLayoutGesture(object? sender, PlacementGesture e) => Video?.ApplyLayoutGesture(e);
 
+    private void OnResolutionLayout(object? sender, RoutedEventArgs e)
+    {
+        if (Video is { } video && PaneOf(sender) is { } compositionId)
+            video.ApplyResolutionLayout(compositionId);
+    }
+
     /// <summary>
     /// Selects the screen whose slice was clicked, on the canvas it was clicked on.
     /// </summary>

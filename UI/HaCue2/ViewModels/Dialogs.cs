@@ -799,30 +799,38 @@ public static class Dialogs
                 ? "a screen, a sender or a recorder · send a composition to it once you have one"
                 : "a screen, a sender or a recorder · assign it to a composition under COMPOSITIONS",
             fields,
-            prompt => journal.Do(new AddItemCommand<VideoOutputDefinition>(
-                project.VideoOutputs,
-                new VideoOutputDefinition
-                {
-                    Name = prompt["Name"].Value.Trim(),
-                    Kind = kind,
-                    // The chosen screen's NUMBER, which is what every reader of the hint expects, and
-                    // what the picker's label happens to start with.
-                    TargetHint = target.IsChoice
-                        ? ScreenHint(target)
-                        : target.Value.Trim(),
-                    Required = prompt["Required"].IsOn,
-                    Fullscreen = kind != VideoOutputKind.LocalScreen
-                                 || prompt["Presentation"].Choice != "windowed",
-                    WindowWidth = kind == VideoOutputKind.LocalScreen
-                        ? WindowSize(prompt["Window size"].Value).Width
-                        : 0,
-                    WindowHeight = kind == VideoOutputKind.LocalScreen
-                        ? WindowSize(prompt["Window size"].Value).Height
-                        : 0,
-                },
-                project.VideoOutputs.Count,
-                "video",
-                $"add output “{prompt["Name"].Value.Trim()}”")));
+            prompt =>
+            {
+                var local = kind == VideoOutputKind.LocalScreen;
+                var windowed = local && prompt["Presentation"].Choice == "windowed";
+                var windowSize = local ? WindowSize(prompt["Window size"].Value) : (0, 0);
+                var screenSize = local ? SizeInLabel(target.Choice) : (0, 0);
+                var raster = windowed ? windowSize : screenSize;
+
+                journal.Do(new AddItemCommand<VideoOutputDefinition>(
+                    project.VideoOutputs,
+                    new VideoOutputDefinition
+                    {
+                        Name = prompt["Name"].Value.Trim(),
+                        Kind = kind,
+                        // The chosen screen's NUMBER, which is what every reader of the hint expects,
+                        // and what the picker's label happens to start with.
+                        TargetHint = target.IsChoice
+                            ? ScreenHint(target)
+                            : target.Value.Trim(),
+                        Required = prompt["Required"].IsOn,
+                        Fullscreen = !local || !windowed,
+                        WindowWidth = local ? windowSize.Item1 : 0,
+                        WindowHeight = local ? windowSize.Item2 : 0,
+                        // The output layout can now size a feed from the selected display/window
+                        // immediately. Zero remains the honest fallback when a label has no size.
+                        MappingWidth = local ? raster.Item1 : 0,
+                        MappingHeight = local ? raster.Item2 : 0,
+                    },
+                    project.VideoOutputs.Count,
+                    "video",
+                    $"add output “{prompt["Name"].Value.Trim()}”"));
+            });
     }
 
     /// <summary>
@@ -1003,6 +1011,19 @@ public static class Dialogs
                && height is > 0 and <= 16384
             ? (width, height)
             : (0, 0);
+    }
+
+    /// <summary>The first valid raster embedded in a label such as "2 · 1920×1080 · primary".</summary>
+    public static (int Width, int Height) SizeInLabel(string? label)
+    {
+        foreach (var part in (label ?? "").Split('·', StringSplitOptions.TrimEntries))
+        {
+            var size = WindowSize(part);
+            if (size is { Width: > 0, Height: > 0 })
+                return size;
+        }
+
+        return (0, 0);
     }
 
     // ── targets ───────────────────────────────────────────────────────────────────────────────
