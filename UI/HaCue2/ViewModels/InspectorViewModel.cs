@@ -160,6 +160,8 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(SendRows));
         OnPropertyChanged(nameof(RouteChain));
         OnPropertyChanged(nameof(Placements));
+        OnPropertyChanged(nameof(PlacementGuidesX));
+        OnPropertyChanged(nameof(PlacementGuidesY));
         OnPropertyChanged(nameof(HasPlacement));
         OnPropertyChanged(nameof(PlacementList));
         OnPropertyChanged(nameof(PlacementNames));
@@ -710,12 +712,40 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// The seams between the screens showing this canvas, as snap targets for the placement drag.
+    /// </summary>
+    /// <remarks>
+    /// What makes dividing a composition between projectors worth more than a picture: a cue can be
+    /// dropped exactly onto ONE screen of a wall without anybody working out what fraction that is.
+    /// Scoped to the composition the SELECTED placement is on, which is the same canvas
+    /// <see cref="Placements"/> draws — a cue can be on several at once, and the guides of a canvas it
+    /// is not being dragged on would snap it to seams that are not there.
+    /// </remarks>
+    public IReadOnlyList<double> PlacementGuidesX =>
+        Placement is { } placement
+            ? VideoPresentation.SliceGuides(Project, placement.CompositionId, horizontal: true)
+            : [];
+
+    public IReadOnlyList<double> PlacementGuidesY =>
+        Placement is { } placement
+            ? VideoPresentation.SliceGuides(Project, placement.CompositionId, horizontal: false)
+            : [];
+
     /// <summary>Every canvas the cue appears on.</summary>
     public IReadOnlyList<LayerPlacement> PlacementList =>
         Cue is null ? [] : CuePlacements.Of(Cue);
 
     /// <summary>Which one the fields edit. A cue can be on several canvases at once.</summary>
+    /// <remarks>
+    /// Both the boxes and the guides follow it, because switching placement can switch COMPOSITION —
+    /// and a canvas drawn from one composition with the seams of another is worse than no seams: it
+    /// offers snap targets that do not exist on the screen the cue is actually going to.
+    /// </remarks>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Placements))]
+    [NotifyPropertyChangedFor(nameof(PlacementGuidesX))]
+    [NotifyPropertyChangedFor(nameof(PlacementGuidesY))]
     private int _selectedPlacement;
 
     private LayerPlacement? Placement =>
@@ -1184,6 +1214,8 @@ public partial class InspectorViewModel : ObservableObject
         _drag ??= _journal.Composite("move layer", "video");
         _journal.Do(RectEdits.Placement(cue, placement, gesture.Rect));
         OnPropertyChanged(nameof(Placements));
+        OnPropertyChanged(nameof(PlacementGuidesX));
+        OnPropertyChanged(nameof(PlacementGuidesY));
         OnPropertyChanged(nameof(HasPlacement));
         OnPropertyChanged(nameof(PlacementList));
         OnPropertyChanged(nameof(PlacementNames));

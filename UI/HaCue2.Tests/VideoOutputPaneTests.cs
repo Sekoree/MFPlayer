@@ -29,15 +29,35 @@ public class VideoOutputPaneTests
         return (video, output, composition);
     }
 
+    /// <summary>
+    /// An output already on a canvas can be MOVED to another, from the destination's own rail.
+    /// </summary>
+    /// <remarks>
+    /// This used to drive a "Shows" picker on the output pane. Assignment lives on the composition now,
+    /// so the picker went and the second, unreachable way to write the same field went with it — but
+    /// the case it covered is real and belongs to the rail: an output already showing something is
+    /// still OFFERED, saying where it would come from, because hiding it leaves an operator hunting for
+    /// a projector that is simply pointed elsewhere with nothing on screen saying where.
+    /// </remarks>
     [Fact]
-    public Task PointingAnOutputAtAnotherCompositionReachesTheDocument() => ShellFixture.WithShell(shell =>
+    public Task AnOutputAlreadyOnACanvasCanBeMovedToAnother() => ShellFixture.WithShell(shell =>
     {
-        var (video, output, _) = WithOutput(shell);
-        var other = shell.Project.Compositions.First();
+        var (video, output, from) = WithOutput(shell);
+        var to = shell.Project.Compositions.First(item => item.Id != from.Id);
 
-        video.OutputCompositionIndex = 0;
+        video.SelectedCompositionId = to.Id;
 
-        Assert.Equal(other.Id, output.CompositionId);
+        // Named with where it would come from, so a move never looks like a fresh assignment.
+        Assert.Contains(
+            video.AssignableOutputs,
+            entry => entry.Contains(output.Name, StringComparison.Ordinal)
+                     && entry.Contains(from.Name, StringComparison.Ordinal));
+
+        video.AssignableIndex = video.AssignableOutputs.ToList()
+            .FindIndex(entry => entry.Contains(output.Name, StringComparison.Ordinal));
+        video.AssignSelectedOutput();
+
+        Assert.Equal(to.Id, output.CompositionId);
     });
 
     [Fact]

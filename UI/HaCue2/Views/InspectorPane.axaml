@@ -438,8 +438,15 @@
                 </Grid>
               </HeaderedContentControl>
 
+              <!-- The guides are the seams between the screens dividing THIS placement's canvas, so a
+                   cue can be dropped exactly onto one projector of a wall without anybody working out
+                   what fraction that is. Unlike the composition's own layout editor, this canvas is
+                   drawing something else — cue placements — so the slice edges are new information
+                   here rather than its own boxes fed back to it. -->
               <c:AspectBox Margin="10,6" VerticalAlignment="Top">
                 <c:PlacementCanvas Boxes="{Binding Placements}"
+                                   GuidesX="{Binding PlacementGuidesX}"
+                                   GuidesY="{Binding PlacementGuidesY}"
                                    Gesture="OnPlacementGesture"
                                    GestureCompleted="OnPlacementGestureCompleted" />
               </c:AspectBox>

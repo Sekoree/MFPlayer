@@ -110,4 +110,57 @@ public class FileMenuTests
             Directory.Delete(directory, recursive: true);
         }
     });
+
+    // ── a new project is given a home when it is made ─────────────────────────────────────────
+
+    [Fact]
+    public Task ANewProjectArrivesWithNowhereToGo() => ShellFixture.WithShell(shell =>
+    {
+        var launcher = new LauncherViewModel(shell.Settings, HaCue2.Session.MachineFacts.Nothing);
+        var opened = new List<(string Title, string Path)>();
+
+        launcher.ProjectOpened += (project, path) => opened.Add((project.Title, path));
+
+        var prompt = launcher.NewProject();
+        prompt["Name"].Value = "Gala";
+        prompt.Commit();
+
+        // The empty path is what the shell keys "ask where this lives" on, and it is what every OTHER
+        // route into the shell does not produce — a recovered autosave is adopted under its original
+        // file's path precisely so it is not mistaken for a new show.
+        var created = Assert.Single(opened);
+        Assert.Equal("Gala", created.Title);
+        Assert.Equal("", created.Path);
+
+        // And the prompt says what happens next, so the picker that follows is not a surprise.
+        Assert.Contains("where to save", prompt.Hint, StringComparison.Ordinal);
+    });
+
+    [Fact]
+    public Task TheFirstSaveAnnouncesWhereItLanded() => ShellFixture.WithShell(async shell =>
+    {
+        var directory = Directory.CreateTempSubdirectory("hacue2-first-save").FullName;
+
+        try
+        {
+            var announced = new List<string>();
+            shell.Saved += path => announced.Add(path);
+
+            var target = Path.Combine(directory, "gala.hacue2proj");
+            await shell.SaveToAsync(target);
+
+            // This is what puts a project created THIS session into the recents list. Without it a new
+            // show was missing from the launcher until somebody opened it by hand — which is the one
+            // time they cannot, because it is not in the list.
+            Assert.Equal(target, Assert.Single(announced));
+
+            // Only on a write that happened: a cancelled or failed save must not claim a location.
+            await shell.SaveToAsync(Path.Combine(directory, "no-such-dir", "gala.hacue2proj"));
+            Assert.Single(announced);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    });
 }

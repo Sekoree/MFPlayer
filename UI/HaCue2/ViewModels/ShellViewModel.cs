@@ -745,6 +745,15 @@ public partial class ShellViewModel : ObservableObject
         return true;
     }
 
+    /// <summary>
+    /// Raised with the path a save actually landed on.
+    /// </summary>
+    /// <remarks>
+    /// So the application can record it as a recent. The shell cannot: which files this MACHINE has
+    /// opened is app-scope state, and a view-model over one document is the wrong owner for it.
+    /// </remarks>
+    public event Action<string>? Saved;
+
     /// <summary>Saves to a path the operator chose, and adopts it.</summary>
     public async Task SaveToAsync(string path)
     {
@@ -768,6 +777,7 @@ public partial class ShellViewModel : ObservableObject
         RecoveryStore.Clear(Path, Project.Title);
         Refresh();
         RaisePathProperties();
+        Saved?.Invoke(Path);
     }
 
     /// <summary>Adopts a path for a project that was just opened from it.</summary>

@@ -67,6 +67,16 @@ public partial class App : Application
     /// </remarks>
     public static void ShowProject(HaCueProject project, string path) => Open(project, path).Show();
 
+    /// <summary>
+    /// Opens a project that has just been CREATED, which is the one that has to be given a home.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="ShowProject"/> rather than inferred from an empty path: the two callers
+    /// that pass one are the New-project prompt and the sample-show harness, and asking the harness
+    /// where to save would put a modal in front of every screenshot run.
+    /// </remarks>
+    public static void ShowNewProject(HaCueProject project) => Open(project, "", isNew: true).Show();
+
     /// <summary>Returns to the launcher — what "close project" leaves the operator looking at.</summary>
     public static void ShowLauncher() => OpenLauncher().Show();
 
@@ -80,7 +90,9 @@ public partial class App : Application
         // whatever was clicked.
         vm.ProjectOpened += (project, path) =>
         {
-            Open(project, path).Show();
+            // A new project is the only route that arrives with no path — a recovered autosave is
+            // adopted under its ORIGINAL file's, so it has somewhere to go already.
+            Open(project, path, isNew: path.Length == 0).Show();
             window.Close();
         };
 
@@ -88,17 +100,26 @@ public partial class App : Application
     }
 
     /// <summary>Opens a project in the shell and records it as the most recent.</summary>
-    private static ShellWindow Open(HaCueProject project, string path)
+    private static ShellWindow Open(HaCueProject project, string path, bool isNew = false)
     {
         var shell = new ShellViewModel(project, Machine, path, Settings);
 
         if (path.Length > 0)
-        {
-            Settings.NoteOpened(path, project.Title, Summarize(project), DateTimeOffset.Now);
-            AppSettingsStore.Save(Settings);
-        }
+            NoteOpened(shell, path);
 
-        return Live(shell);
+        // Recorded on the FIRST save too, not only at open: a project created in this session and
+        // saved from the picker below would otherwise be missing from the launcher's recents until the
+        // next time somebody opened it by hand — which is the one time they cannot, because it is not
+        // in the list.
+        shell.Saved += saved => NoteOpened(shell, saved);
+
+        return Live(shell, isNew);
+    }
+
+    private static void NoteOpened(ShellViewModel shell, string path)
+    {
+        Settings.NoteOpened(path, shell.Project.Title, Summarize(shell.Project), DateTimeOffset.Now);
+        AppSettingsStore.Save(Settings);
     }
 
     /// <summary>The one-line contents the launcher shows without opening anything.</summary>
@@ -147,7 +168,7 @@ public partial class App : Application
     /// looks broken. The editor is fully usable in the meantime — the transport simply moves the
     /// cursor until the session is up.
     /// </remarks>
-    private static ShellWindow Live(ShellViewModel shell)
+    private static ShellWindow Live(ShellViewModel shell, bool isNew = false)
     {
         var window = new ShellWindow { DataContext = shell };
         var shutdownStarted = false;
@@ -157,6 +178,12 @@ public partial class App : Application
         {
             try
             {
+                // BEFORE the autosave and the engine. Autosave writes beside the project file, so a
+                // show still waiting to be told where it lives has nowhere to put its recovery copy —
+                // which is exactly the window a crash during the first hour would fall into.
+                if (isNew)
+                    await window.AskWhereToSaveAsync();
+
                 shell.StartAutosave();
                 await shell.StartEngineAsync(Backend);
             }

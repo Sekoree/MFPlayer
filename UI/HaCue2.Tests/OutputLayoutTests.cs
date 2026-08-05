@@ -4,6 +4,7 @@ using Avalonia.VisualTree;
 using HaCue2.Controls;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
+using HaCue2.Presentation;
 using HaCue2.ViewModels;
 using HaCue2.Views;
 using Xunit;
@@ -37,20 +38,34 @@ public class OutputLayoutTests
         return (video, canvas, left, right);
     }
 
+    /// <summary>
+    /// The canvas as it is actually drawn — the composition's own pane.
+    /// </summary>
+    /// <remarks>
+    /// These used to read <c>video.LayoutBoxes</c>, a projection scoped to "the selected composition"
+    /// that fed the full-screen layout overlay. The overlay is gone and every pane draws its own
+    /// layout, so asserting on the view-model's copy would be testing a surface nobody can see —
+    /// which is exactly how the pane's boxes went stale without a test noticing.
+    /// </remarks>
+    private static CompositionPaneViewModel Pane(VideoViewModel video, CompositionDefinition canvas) =>
+        video.Compositions.Single(pane => pane.Id == canvas.Id);
+
     [Fact]
     public Task EveryOutputOnTheCanvasGetsABox() => ShellFixture.WithShell(shell =>
     {
-        var (video, _, _, _) = Wall(shell);
+        var (video, canvas, _, _) = Wall(shell);
 
-        Assert.Equal(2, video.LayoutBoxes.Count);
-        Assert.Equal(["Projector L", "Projector R"], video.LayoutBoxes.Select(box => box.Label));
+        Assert.Equal(2, Pane(video, canvas).OutputBoxes.Count);
+        Assert.Equal(
+            ["Projector L", "Projector R"],
+            Pane(video, canvas).OutputBoxes.Select(box => box.Label));
     });
 
     [Fact]
     public Task AnUnmappedOutputShowsTheWholeCanvas() => ShellFixture.WithShell(shell =>
     {
-        var (video, _, _, _) = Wall(shell);
-        var box = video.LayoutBoxes[0];
+        var (video, canvas, _, _) = Wall(shell);
+        var box = Pane(video, canvas).OutputBoxes[0];
 
         // The honest answer, and the one every output starts with.
         Assert.Equal(0, box.Left, 6);
@@ -117,14 +132,15 @@ public class OutputLayoutTests
         video.ApplyLayoutGesture(new PlacementGesture(0, left.Id, 0, new NormalizedRect(0, 0, 0.5, 1)));
         video.ApplyLayoutGesture(new PlacementGesture(1, right.Id, 0, new NormalizedRect(0.5, 0, 0.5, 1)));
         video.EndGesture();
-        video.Refresh();
 
-        // This is what makes the layout worth more than a picture: a cue can be dropped exactly onto
-        // one projector of a wall without anybody working out what fraction that is.
-        Assert.Contains(0.5, video.LayoutGuidesX);
-
-        var pane = video.Compositions.Single(item => item.Id == canvas.Id);
-        Assert.Contains(0.5, pane.GuidesX);
+        // What makes the layout worth more than a picture: a cue can be dropped exactly onto one
+        // projector of a wall without anybody working out what fraction that is. Asserted on the ONE
+        // source both readers share — the composition's layout and the inspector's cue-placement
+        // canvas — because a seam an operator lines a picture up against and a seam the show actually
+        // renders at have to be the same number. That it reaches the drag is CompositionFeedTests.
+        Assert.Equal(
+            [0, 0.5, 1],
+            VideoPresentation.SliceGuides(shell.Project, canvas.Id, horizontal: true));
     });
 
     [Fact]
@@ -141,17 +157,14 @@ public class OutputLayoutTests
     });
 
     [Fact]
-    public Task TheEditorIsClosedUntilItIsOpened() => ShellFixture.WithShell(shell =>
+    public Task TheLayoutIsOnTheCompositionRatherThanBehindAButton() => ShellFixture.WithShell(shell =>
     {
-        var (video, _, _, _) = Wall(shell);
+        var (video, canvas, _, _) = Wall(shell);
+        var pane = video.Compositions.Single(item => item.Id == canvas.Id);
 
-        Assert.False(video.IsLayoutOpen);
-
-        video.OpenLayout();
-
-        // Opening it is also what takes you to the pane it belongs over.
-        Assert.True(video.IsCompositionsPane);
-        Assert.True(video.IsLayoutOpen);
+        // There is no editor to OPEN any more. The composition's own pane draws the layout and takes
+        // the drags, which is what the second surface behind an EDIT › button used to be for.
+        Assert.Equal(2, pane.OutputBoxes.Count);
     });
 
     [Fact]
@@ -175,7 +188,7 @@ public class OutputLayoutTests
     public Task TheLayoutEditorRendersItsCanvas() => ShellFixture.WithShell(shell =>
     {
         var (video, _, _, _) = Wall(shell);
-        video.OpenLayout();
+        video.SelectedTab = video.CompositionsTab;
 
         var view = new VideoView { DataContext = video };
         var window = new Window { Width = 1600, Height = 950, Content = view };
@@ -194,23 +207,30 @@ public class OutputLayoutTests
 }
 
 /// <summary>
-/// The composition editor saying what it is for.
+/// Which canvas the FEEDS rail is assigning to.
 /// </summary>
 /// <remarks>
-/// The fields sat disabled and blank whenever nothing was selected, which reads as a broken panel
-/// rather than a form waiting for a subject — and gave no clue they EDIT the canvas rather than
-/// describe it. There are two different empty states and they need different answers.
+/// These used to cover a right-hand form that edited "the selected composition" — name, size, rate and
+/// idle image. Those fields live on each composition's own pane now, so the form is gone and with it
+/// the two empty states it needed. What survives is the rule underneath it, which the assignment rail
+/// still depends on: a null id follows the FIRST composition, so the rail always has a subject as long
+/// as one canvas exists, and "nothing picked" is not a state anybody can get stuck in.
 /// </remarks>
-public class CompositionEditorTests
+public class CompositionSelectionTests
 {
     [Fact]
-    public Task WithNoCanvasAtAllItNamesTheWayOut() => ShellFixture.WithShell(shell =>
+    public Task WithNoCanvasAtAllThereIsNothingToAssignTo() => ShellFixture.WithShell(shell =>
     {
         shell.Project.Compositions.Clear();
         var video = new VideoViewModel(shell.Project, shell.Runtime, shell.Journal);
 
-        Assert.False(video.IsEditingComposition);
-        Assert.Contains("ADD", video.CompositionEditorHint);
+        Assert.True(video.HasNoCompositions);
+        Assert.False(video.HasComposition);
+        Assert.False(video.CanAssignOutput);
+
+        // And the outputs pane says which comes first, because the order is a real dependency and
+        // nothing else on the screen states it.
+        Assert.Contains("COMPOSITION first", video.OutputsEmptyDetail, StringComparison.Ordinal);
     });
 
     [Fact]
@@ -219,22 +239,19 @@ public class CompositionEditorTests
         var video = new VideoViewModel(shell.Project, shell.Runtime, shell.Journal);
         video.SelectedCompositionId = null;
 
-        // "None picked" is not a state this editor has: a null id follows the first composition, so
-        // the form always has a subject as long as one canvas exists.
-        Assert.True(video.IsEditingComposition);
-        Assert.Contains(shell.Project.Compositions[0].Name, video.CompositionEditorHint);
+        Assert.True(video.HasComposition);
+        Assert.Equal(shell.Project.Compositions[0].Name, video.CompositionHeader);
+        Assert.Contains(shell.Project.Compositions[0].Name, video.FeedsHint, StringComparison.Ordinal);
     });
 
     [Fact]
-    public Task WithOnePickedItSaysWhatItIsEditing() => ShellFixture.WithShell(shell =>
+    public Task WithOnePickedTheRailNamesIt() => ShellFixture.WithShell(shell =>
     {
         var video = new VideoViewModel(shell.Project, shell.Runtime, shell.Journal);
-        var composition = shell.Project.Compositions[0];
+        var composition = shell.Project.Compositions[^1];
         video.SelectedCompositionId = composition.Id;
 
-        Assert.True(video.IsEditingComposition);
-        Assert.Contains(composition.Name, video.CompositionEditorHint);
-        Assert.Contains("editing", video.CompositionEditorHint);
-        Assert.Contains("switch", video.CompositionEditorHint);
+        Assert.Equal(composition.Name, video.CompositionHeader);
+        Assert.Contains(composition.Name, video.FeedsHint, StringComparison.Ordinal);
     });
 }

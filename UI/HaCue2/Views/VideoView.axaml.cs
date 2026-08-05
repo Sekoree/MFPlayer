@@ -133,18 +133,23 @@ public partial class VideoView : UserControl
             video.ShowMapping = false;
     }
 
-    /// <summary>Opens the output layout over the Compositions pane.</summary>
-    private void OnEditLayout(object? sender, RoutedEventArgs e) => Video?.OpenLayout();
-
-    private void OnCloseLayout(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is VideoViewModel video)
-            video.ShowLayout = false;
-    }
-
     private void OnLayoutGesture(object? sender, PlacementGesture e) => Video?.ApplyLayoutGesture(e);
 
-    private void OnLayoutOutputSelected(object? sender, int index) => Video?.SelectLayoutOutput(index);
+    /// <summary>
+    /// Selects the screen whose slice was clicked, on the canvas it was clicked on.
+    /// </summary>
+    /// <remarks>
+    /// Through the canvas's own pane rather than the view-model's selection, because every composition
+    /// draws its own layout now: an index alone would address whichever pane happened to be selected.
+    /// This is also what selects the COMPOSITION when a box is clicked — the canvas handles the press,
+    /// so it never reaches the pane's own <see cref="OnSelectComposition"/>.
+    /// </remarks>
+    private void OnLayoutOutputSelected(object? sender, int index) =>
+        Video?.SelectScreen(PaneOf(sender), index);
+
+    /// <summary>The composition a control inside a pane's template belongs to.</summary>
+    private static Guid? PaneOf(object? sender) =>
+        (sender as Control)?.DataContext is CompositionPaneViewModel pane ? pane.Id : null;
 
     /// <summary>
     /// Selects the composition whose pane was clicked.
@@ -213,8 +218,6 @@ public partial class VideoView : UserControl
     // Handled here rather than bound to a command because a composition canvas lives inside a
     // DataTemplate whose DataContext is one pane, and the edit belongs to the view — the pane is a
     // projection, not the thing that owns the journal.
-
-    private void OnLayerGesture(object? sender, PlacementGesture e) => Video?.ApplyLayerGesture(e);
 
     private void OnMappingSourceGesture(object? sender, PlacementGesture e) =>
         Video?.ApplyMappingSourceGesture(e);

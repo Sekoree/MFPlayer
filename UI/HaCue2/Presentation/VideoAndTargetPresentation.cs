@@ -1,3 +1,4 @@
+using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Session;
 using HaCue2.ViewModels;
@@ -46,6 +47,77 @@ public static class VideoPresentation
         // and so a click, which searches back to front, grabs what the operator sees on top. Cue order
         // would have an L1 covering an L2 whenever the L1 cue happened to come later in the list.
         return [.. boxes.OrderBy(box => box.LayerIndex)];
+    }
+
+    /// <summary>
+    /// Where the screens showing a canvas divide it, on one axis, as snap guides.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// What makes an output layout worth more than a picture: with the screen boundaries as snap
+    /// targets, a cue can be dropped exactly onto one projector of a wall without anybody working out
+    /// what fraction that is. Empty on a canvas nobody has divided — which still snaps to its own edges
+    /// and centre, as every canvas does.
+    /// </para>
+    /// <para>
+    /// Here rather than on the Video view-model because it has TWO readers that must agree: the
+    /// composition's own layout, and the inspector's cue-placement canvas. A seam an operator lines a
+    /// picture up against and a seam the show actually renders at have to be the same number.
+    /// </para>
+    /// <para>
+    /// Local screens only, for the same reason they are the only ones drawn as boxes: a sender and a
+    /// recorder take the whole canvas, so their "edges" are the canvas edges and offering them as
+    /// guides would add nothing but duplicates.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<double> SliceGuides(
+        HaCueProject project, Guid compositionId, bool horizontal)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+
+        return
+        [
+            .. Screens(project, compositionId)
+                .SelectMany(output =>
+                {
+                    var slice = Slice(output);
+
+                    return horizontal
+                        ? new[] { slice.X, slice.X + slice.Width }
+                        : [slice.Y, slice.Y + slice.Height];
+                })
+                .Distinct()
+                .Order(),
+        ];
+    }
+
+    /// <summary>The local screens showing a canvas, in document order — the boxes it is divided into.</summary>
+    public static IReadOnlyList<VideoOutputDefinition> Screens(HaCueProject project, Guid compositionId)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+
+        return
+        [
+            .. project.VideoOutputs.Where(output =>
+                output.CompositionId == compositionId && output.Kind == VideoOutputKind.LocalScreen),
+        ];
+    }
+
+    /// <summary>
+    /// The part of the canvas one output shows.
+    /// </summary>
+    /// <remarks>
+    /// Its first enabled mapping section's SOURCE rectangle, because that is what a section means: this
+    /// piece of the canvas goes to this piece of the screen. An output with no mapping shows the whole
+    /// canvas, which is both the honest answer and the one every output starts with.
+    /// </remarks>
+    public static NormalizedRect Slice(VideoOutputDefinition output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        return output.Mapping.FirstOrDefault(section => section.Enabled) is { } section
+            ? new NormalizedRect(section.SourceX, section.SourceY, section.SourceWidth, section.SourceHeight)
+            : new NormalizedRect(0, 0, 1, 1);
     }
 
     public static IReadOnlyList<VideoOutputRow> Outputs(HaCueProject project, ShowRuntime runtime) =>

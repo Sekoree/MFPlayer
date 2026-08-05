@@ -2612,3 +2612,145 @@ not to open on a typed name.
 **A bug found on the way.** The shell adopted probe results at load and after a save only, so a media
 cue added at 19:50 read "—" for its length until the show was next saved. `OnJournalChanged` now
 re-adopts and kicks the probe.
+
+---
+
+## Owner-reported round 3 — 2026-08-05
+
+Three defects reported against HaCue2 on `cue-separation`. All real, all confirmed with a failing
+test before the fix.
+
+### 1. Assigning an output to a composition drew nothing
+
+The report was "after assigning, the output doesn't show up", and the assignment itself was fine: it
+reached the document, the FEEDS chips, the OUTPUTS row's SHOWS column and the engine. What did not
+move was the **canvas** — the large picture that is the reason the screen exists.
+
+`VideoViewModel.Refresh` mutates each composition pane in place (panes are only rebuilt when the SET
+of compositions changes, so a drag keeps its pointer capture). That loop refreshed `Layers`, `Feeds`,
+`GuidesX` and `GuidesY` — and **not `OutputBoxes`**, which was only ever filled in `Panes()`. So a
+canvas kept whatever screens it had at the moment its pane was constructed, and the first assignment
+was invisible until something added, removed or renamed a composition and forced a rebuild.
+
+`CompositionPaneViewModel.LayoutSummary` had the same shape of bug for a different reason: it is
+computed off the document, and nothing ever told it to re-read. The header went on saying "no output
+shows this canvas yet — assign one under FEEDS" to somebody who had just done exactly that.
+
+Fixed by refreshing `OutputBoxes` in the same loop and adding `NoteLayoutChanged()` for the two
+computed sentences. `RefreshLayout` (the per-gesture path) updates the panes too — before this a drag
+only re-announced the view-model's own copy, which is not what the canvas binds to.
+
+**Related lie, same sentence.** `LayoutSummaryOf` counted LOCAL SCREENS only, because a sender and a
+recorder take the whole canvas by definition and drawing them would put a box over everything and hide
+the overlaps and gaps the layout exists to show. Correct not to draw them; wrong to then report "no
+output shows this canvas yet" when an NDI output is assigned. It now distinguishes the two. The
+view-model's own `LayoutSummary` was a SECOND implementation counting all kinds, so the rail and the
+header disagreed about the same canvas — it now delegates to the pane's.
+
+### 2. Two editors claiming to be the composition layout
+
+Reported as "the composition tab should show the layout directly but there is another button that
+seemingly goes to the same editor". Exactly right, and worse than duplication:
+
+- each composition pane drew a **read-only** `PlacementCanvas` of the output layout, and
+- the right rail held an "Output layout" panel whose entire content was an `EDIT ›` button, opening a
+  **full-screen overlay** over the same pane, drawing the same rectangles — the editable one.
+
+So the canvas an operator was looking at and dragging was the one that did nothing.
+
+There is one now. The per-composition canvas takes `Gesture`, `GestureCompleted` and `BoxSelected`;
+the overlay, `ShowLayout`, `IsLayoutOpen`, `OpenLayout()` and both its handlers are gone. The
+overlay's right rail was worth keeping and moved into the Compositions rail as **selected screen** —
+slice x/y/w/h, output raster, and `WARP THIS SCREEN ›` into the mapping editor.
+
+**The slice numerics are new, not moved.** The overlay's bound the mapping editor's `SourceX…` — the
+selected SECTION's fields, which are null on an output that has no mapping yet, i.e. exactly the
+outputs somebody is dividing for the first time. `SliceX/Y/Width/Height` read `SliceOf` and write
+through `ApplyLayoutGesture`, which creates the section when there is none. Typed and dragged slices
+are now one code path and one undo step.
+
+**Two gotchas worth keeping:**
+
+- `PlacementCanvas` must NOT be given `GuidesX`/`GuidesY` here. Those are this canvas's own slice
+  edges, so once it became editable every drag found a guide exactly where the dragged edge already
+  was, snapped to itself with shift 0, and could never reach any other guide. The canvas derives the
+  same guides from its other boxes and skips `_draggedIndex`, which is the correct version. The pane's
+  guides are still built — see open items.
+- The canvas sets `e.Handled` on a press that hits a box, so the pane's own `PointerPressed`
+  (`OnSelectComposition`) never runs for a click on a screen. `BoxSelected` therefore has to select
+  the COMPOSITION as well as the screen — `SelectScreen(compositionId, index)` takes the canvas's id
+  from its own pane rather than reading the selection, because every pane is open at once and an index
+  alone would address whichever one was last touched.
+
+### 3. A new project had nowhere to live until the first save
+
+Reported as "when creating a project it should instantly ask where to save it and not just on first
+save". Everything that keys off the project's own folder is wrong until it has one: media paths are
+stored relative to it, relink searches under it, the autosave that survives a crash is written beside
+it, and the recents list cannot offer a file that does not exist. An hour of authoring could sit in a
+document that had never touched a disk.
+
+`App.ShowNewProject` is now a separate route from `ShowProject`, and `Live(shell, isNew: true)` runs
+`ShellWindow.AskWhereToSaveAsync` on `Opened` — **before** `StartAutosave`, so the recovery copy has
+somewhere to go from the first minute. Separate route rather than inferring it from an empty path: the
+sample-show harness (`HACUE2_START=main`) also opens with none, and putting a modal in front of every
+screenshot run is not the intent. A cancelled picker is not a refusal — the project is already open
+and its edits are real; it goes back to being path-less and the status line says what that costs.
+
+`ShellViewModel.Saved` is new, raised only after a write that actually happened, and `App` records it
+as a recent. Without it a project created this session was missing from the launcher until somebody
+opened it by hand — which is the one time they cannot, because it is not in the list.
+
+### 4. The leftovers, cleared
+
+Removing the overlay left a set of projections alive only because a test still named them, which is
+the state a dead surface hides in: it looks covered. Audited by symbol rather than by reading, and
+resolved one of two ways — wire it to its real consumer, or delete it and re-point the test at the
+surface that actually renders.
+
+**Wired up.** The slice guides now reach the canvas they were built for. `SliceGuides`, `Screens` and
+`Slice` moved to `VideoPresentation`, and `InspectorViewModel.PlacementGuidesX/Y` feed the cue-placement
+canvas, scoped to the composition the SELECTED placement is on — a cue can sit on several at once, so
+it resolves per placement, not per pane. Dragging a cue on a divided canvas now snaps to the seam
+between two projectors. One source for both readers, which matters because a seam an operator lines a
+picture up against and a seam the show renders at have to be the same number; the view-model's copy had
+already drifted, counting every output kind while the boxes beside it counted screens.
+
+**Deleted**, each with its test re-pointed rather than dropped:
+
+- `LayoutBoxes`, `LayoutGuidesX/Y`, `LayoutOutputs`, `CompositionAspect` — the overlay's bindings. The
+  tests now assert on `pane.OutputBoxes`, which is what renders. Asserting on the view-model's copy is
+  precisely how the pane's boxes went stale in §1 without a test noticing.
+- `CompositionEditorHint`, `IsEditingComposition` — the "nothing selected" form. The rule underneath
+  survives as `CompositionSelectionTests`: a null id follows the FIRST composition, so the assignment
+  rail always has a subject and "nothing picked" is not a state anybody can reach.
+- `CompositionNames`, `OutputCompositionIndex` — the old "Shows" picker, a second and unreachable way
+  to write the field the FEEDS rail owns. Its test became `AnOutputAlreadyOnACanvasCanBeMovedToAnother`,
+  which covers the case the rail genuinely adds: a taken output is still offered, named with where it
+  would come from.
+- `ApplyLayerGesture`, `OnLayerGesture`, `CompositionPaneViewModel.Layers` — from when the pane drew cue
+  layers. That surface is the inspector's.
+- `CompositionPaneViewModel.GuidesX/GuidesY` — redundant once the guides flowed through
+  `VideoPresentation` to their real reader.
+
+**One was neither dead nor wired: `pane.IsSelected` was written twice and read nowhere.** Bound now,
+because it is the answer to the confusion that started §2 — every pane is open at once and each edits
+itself, so nothing said which canvas the FEEDS rail belonged to, and + ASSIGN could be pressed having
+just read the name on a different pane. Marked with the app's own selection wash.
+
+The end state is checkable: every member of `CompositionPaneViewModel` has a consumer, and no symbol
+from the overlay survives outside a comment explaining where it went.
+
+### Open items this round added
+
+- `OutputPresentationTests.TwoReadsInsideTheSameInstantReportNothingRatherThanThousands` asserts that
+  two back-to-back `CompositionRates.Sample` calls land inside one clock instant. Under a full parallel
+  solution run the machine is loaded enough to separate them, and it reports ~56 fps and fails. Passes
+  in isolation; the assertion wants an injected clock rather than real time. Same class as
+  `S.Control.Tests.OutboundRampRunnerTests.AsyncSender_HoldsOneInFlightAndOnlyTheNewestPendingValue`
+  and the OSC port collision — the whole-solution run has three known load-sensitive tests.
+- The engine half of assignment was verified rather than changed: `ProjectVideoOutputs.Sync` records
+  the retarget, `AttachScreensAsync` releases the old attachment, and the lease's `EnsureConfigured`
+  re-`Configure`s the window — `SDL3GLVideoOutput.Configure` rebuilds its renderer on a format change,
+  so a screen opened dark at 1280×720 and later given a 1080p canvas is correct. Still owed one manual
+  check on a rig with a display; this machine has no X server.

@@ -52,11 +52,18 @@ public partial class LauncherViewModel : ObservableObject
     /// <summary>Hands a loaded project to the shell.</summary>
     public void Adopt(HaCueProject project, string path) => ProjectOpened?.Invoke(project, path);
 
-    /// <summary>The prompt behind "New project…".</summary>
+    /// <summary>
+    /// The prompt behind "New project…".
+    /// </summary>
+    /// <remarks>
+    /// It asks WHAT, and the shell asks WHERE the moment this closes. Split that way because a file
+    /// picker is a platform window the launcher cannot host inside a field, and because the name typed
+    /// here is what the picker suggests as the filename.
+    /// </remarks>
     public PromptViewModel NewProject() =>
         new(
             "New project",
-            "seeded with a Main L/R pair and one cue list",
+            "seeded with a Main L/R pair and one cue list · you will be asked where to save it next",
             [
                 new PromptField { Label = "Name", Value = "Untitled show" },
                 new PromptField

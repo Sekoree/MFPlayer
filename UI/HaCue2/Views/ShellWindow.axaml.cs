@@ -156,11 +156,13 @@ public partial class ShellWindow : Window
             await SaveAsAsync(shell);
     }
 
-    private async Task SaveAsAsync(ShellViewModel shell)
+    private Task SaveAsAsync(ShellViewModel shell) => SaveAsAsync(shell, "Save project");
+
+    private async Task SaveAsAsync(ShellViewModel shell, string title)
     {
         var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            Title = "Save project",
+            Title = title,
             SuggestedFileName = shell.Project.Title,
             DefaultExtension = ProjectFiles.Extension.TrimStart('.'),
             FileTypeChoices =
@@ -171,6 +173,32 @@ public partial class ShellWindow : Window
 
         if (file?.TryGetLocalPath() is { } path)
             await shell.SaveToAsync(path);
+    }
+
+    /// <summary>
+    /// Asks a brand-new project where it lives, as soon as it exists.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A show used to be created with nowhere to go and only find out at the first Ctrl+S. Everything
+    /// that keys off the project's own folder is wrong until then: media paths are stored relative to
+    /// it, the relink search starts from it, the autosave that protects a crash is written beside it,
+    /// and the recents list cannot offer a file that has none. An hour of authoring could sit in a
+    /// document that had never touched a disk.
+    /// </para>
+    /// <para>
+    /// A cancelled picker is not a refusal to create the project — it is already open and its edits are
+    /// real. It goes back to being a project with nowhere to go, and the status line says so rather
+    /// than letting that be discovered later.
+    /// </para>
+    /// </remarks>
+    internal async Task AskWhereToSaveAsync()
+    {
+        await SaveAsAsync(Shell, "Where should this show live?");
+
+        if (!Shell.HasPath)
+            Shell.FileMessage =
+                "not saved anywhere yet — media paths stay absolute and there is no autosave until it is";
     }
 
     // ── the File menu ─────────────────────────────────────────────────────────────────────────
@@ -189,9 +217,11 @@ public partial class ShellWindow : Window
             // project is seeded with is one decision and it already lives there.
             var launcher = new LauncherViewModel(Shell.Settings, App.Machine);
 
-            launcher.ProjectOpened += (project, path) =>
+            launcher.ProjectOpened += (project, _) =>
             {
-                App.ShowProject(project, path);
+                // Always the NEW route from here: this menu item only ever produces a freshly created
+                // project, and it has to be asked where it lives like any other.
+                App.ShowNewProject(project);
                 Close();
             };
 

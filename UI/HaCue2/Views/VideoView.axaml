@@ -15,6 +15,21 @@
        decision about the show, and choosing which outputs it feeds is where the two meet. Mapping is
        the fine adjustment between them, and there is nothing to adjust until both ends exist. -->
 
+  <UserControl.Styles>
+    <!-- Which canvas the FEEDS rail is assigning to. Every pane is open at once and each edits itself,
+         so nothing else on the screen said which one the rail on the right belonged to — an operator
+         could press + ASSIGN having read the name on a different pane. The app's own selection wash,
+         the same one the cue list uses. -->
+    <Style Selector="Border.canvas">
+      <Setter Property="BorderThickness" Value="2,0,0,0" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.canvas.picked">
+      <Setter Property="BorderBrush" Value="{DynamicResource GelGreen}" />
+      <Setter Property="Background" Value="{DynamicResource CueSelectedWash}" />
+    </Style>
+  </UserControl.Styles>
+
   <DockPanel>
 
     <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" Background="{DynamicResource BoothPanel}">
@@ -319,6 +334,7 @@
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:CompositionPaneViewModel">
+                    <Border Classes="canvas" Classes.picked="{Binding IsSelected}">
                     <Expander IsExpanded="True" HorizontalAlignment="Stretch"
                               PointerPressed="OnSelectComposition">
                       <Expander.Header>
@@ -328,6 +344,10 @@
                                        VerticalAlignment="Center" />
                             <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
                                        Text="{Binding Hint}" />
+                            <!-- Which screen the rail beside this canvas is describing, on the canvas
+                                 itself: the rail names one output and six panes can be open at once. -->
+                            <TextBlock Classes="mono small ok" VerticalAlignment="Center"
+                                       Text="{Binding SelectionNote}" />
                           </StackPanel>
                           <!-- Kept in the header so a collapsed composition still says who receives
                                it: a canvas feeding nothing looks identical to one feeding three
@@ -339,14 +359,30 @@
 
                       <StackPanel Spacing="6">
 
-                        <!-- The OUTPUT LAYOUT, not the cue layers: which screen covers which part of
-                             this canvas, where two overlap and where nothing does. This was behind an
-                             EDIT › button; it is the reason the screen exists. -->
+                        <!-- The OUTPUT LAYOUT, and the EDITOR of it rather than a picture of one:
+                             which screen covers which part of this canvas, where two overlap and
+                             where nothing does, dragged here.
+
+                             It used to be a read-only illustration, with the real editor behind an
+                             EDIT › button in the rail beside it that opened a full-screen pane over
+                             this one drawing the same rectangles. Two surfaces claiming to be the
+                             layout, and the one an operator was looking at was the one that did
+                             nothing when dragged. There is one now. -->
+                        <!-- No GuidesX/GuidesY here, deliberately. They ARE this canvas's own slice
+                             edges, so once it became editable every drag found a guide exactly where
+                             the dragged edge already was and snapped to itself — which is a snap that
+                             can never reach anything else. The canvas derives its guides from the
+                             other boxes and skips the one being dragged, which is the same feature
+                             done correctly. The pane's guides remain what a CUE placement snaps to. -->
                         <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding Aspect}">
                           <c:PlacementCanvas Boxes="{Binding OutputBoxes}"
-                                             GuidesX="{Binding GuidesX}"
-                                             GuidesY="{Binding GuidesY}" />
+                                             Gesture="OnLayoutGesture"
+                                             GestureCompleted="OnGestureCompleted"
+                                             BoxSelected="OnLayoutOutputSelected" />
                         </c:AspectBox>
+
+                        <TextBlock Margin="10,0" Classes="mono dim3 micro" TextWrapping="Wrap"
+                                   Text="Drag a screen's edge to divide the canvas. Overlap is a blend zone; canvas no screen covers stays dark. Shift keeps a corner on its aspect, Alt suspends snapping." />
 
                         <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
                           <TextBox Text="{Binding EditName}" />
@@ -406,6 +442,7 @@
                         </Border>
                       </StackPanel>
                     </Expander>
+                    </Border>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
@@ -417,24 +454,63 @@
 
           <!-- The name, size, rate and idle image moved onto each composition's own pane, where they
                belong: they are properties OF that canvas, and editing them through a selection meant
-               the fields could describe a different composition from the one being looked at. What is
-               left here is the one thing that is not a property of a single canvas — dividing it
-               between the screens that show it, which needs the mapping editor. -->
-          <c:PanelBox Grid.Row="0" Header="Output layout"
-                      Hint="which part of the canvas each screen covers">
-            <Panel>
-              <c:EmptyState IsVisible="{Binding !IsEditingComposition}"
-                            Headline="Nothing selected"
-                            Detail="{Binding CompositionEditorHint}" />
+               the fields could describe a different composition from the one being looked at.
 
-              <StackPanel Margin="0,6,0,8" IsVisible="{Binding IsEditingComposition}">
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="{Binding CompositionHeader}">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                    <TextBlock Grid.Column="0" Classes="mono dim3 small" VerticalAlignment="Center"
-                               TextWrapping="Wrap" Text="{Binding LayoutSummary}" />
-                    <Button Grid.Column="1" Classes="tight" Content="EDIT ›" Click="OnEditLayout" />
+               What is left here is the half of the layout a drag cannot deliver. A canvas alone
+               cannot hit exactly half, which is the number a two-projector wall is made of, so the
+               slice a screen takes is typable as well as draggable — and a slice and the screen it
+               lands on are two different sizes, which is why the raster sits beside it: half of a
+               1920×2160 stacked canvas is still a 1920×1080 projector. -->
+          <c:PanelBox Grid.Row="0" Header="{Binding SelectedOutputName}" Hint="selected screen">
+            <Panel>
+              <c:EmptyState IsVisible="{Binding !HasScreenSelected}"
+                            Headline="No screen selected"
+                            Detail="{Binding LayoutSummary}" />
+
+              <StackPanel Margin="0,6,0,8" IsVisible="{Binding HasScreenSelected}">
+                <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Slice x / y">
+                  <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                    <NumericUpDown Grid.Column="0" Minimum="0" Maximum="1" Increment="0.01"
+                                   FormatString="0.###" Value="{Binding SliceX}" />
+                    <NumericUpDown Grid.Column="1" Minimum="0" Maximum="1" Increment="0.01"
+                                   FormatString="0.###" Value="{Binding SliceY}" />
                   </Grid>
                 </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Slice w / h">
+                  <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                    <NumericUpDown Grid.Column="0" Minimum="0.01" Maximum="1" Increment="0.01"
+                                   FormatString="0.###" Value="{Binding SliceWidth}" />
+                    <NumericUpDown Grid.Column="1" Minimum="0.01" Maximum="1" Increment="0.01"
+                                   FormatString="0.###" Value="{Binding SliceHeight}" />
+                  </Grid>
+                </HeaderedContentControl>
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="Output raster">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                    <TextBox Grid.Column="0" Text="{Binding OutputRaster}"
+                             PlaceholderText="1920×1080 · empty follows the composition" />
+                    <Button Grid.Column="1" Classes="icon" Content="▾"
+                            ToolTip.Tip="Common sizes. Anything can still be typed.">
+                      <Button.Flyout>
+                        <Flyout>
+                          <ItemsControl ItemsSource="{Binding Resolutions}">
+                            <ItemsControl.ItemTemplate>
+                              <DataTemplate x:DataType="sys:String">
+                                <Button Classes="tight block" HorizontalAlignment="Stretch"
+                                        Click="OnPickResolution" Tag="raster" Content="{Binding}" />
+                              </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                          </ItemsControl>
+                        </Flyout>
+                      </Button.Flyout>
+                    </Button>
+                  </Grid>
+                </HeaderedContentControl>
+                <ContentControl Theme="{StaticResource FieldWide}">
+                  <Border Classes="chain">
+                    <Button Classes="tight" Content="WARP THIS SCREEN ›" Click="OnEditMapping"
+                            ToolTip.Tip="Mesh, blend and per-section geometry for this output." />
+                  </Border>
+                </ContentControl>
               </StackPanel>
             </Panel>
           </c:PanelBox>
@@ -443,7 +519,9 @@
                because an operator decides where a canvas goes once the canvas exists — and being
                asked which composition a brand-new output shows, on a project that has none, was the
                first question the old flow put in front of anybody. -->
-          <c:PanelBox Grid.Row="1" Header="Feeds" Hint="outputs showing this composition">
+          <!-- Named rather than "this composition": the panes are all open at once, so a rail that
+               said "this" left the operator to work out which one it meant. -->
+          <c:PanelBox Grid.Row="1" Header="Feeds" Hint="{Binding FeedsHint}">
             <c:PanelBox.Footer>
               <StackPanel>
                 <Border Classes="chain">
@@ -482,93 +560,6 @@
           </c:PanelBox>
         </Grid>
       </Grid>
-
-      <!-- ══ OUTPUT LAYOUT ═════════════════════════════════════════════════════════════════
-           What HaPlay's cue player called the multi-output layout: each output assigned to this
-           canvas draws the slice of it that it shows, full-frame, on its own screen. Two boxes side
-           by side is a 2×1 wall; overlapping boxes are a blend zone; canvas under no box reaches no
-           screen at all. Every slice is one output's first mapping SECTION, so this and the mapping
-           editor are two views of the same numbers rather than a second place to author geometry. -->
-      <DockPanel IsVisible="{Binding IsLayoutOpen}" Margin="7"
-                 Background="{DynamicResource BoothBg}">
-
-        <Border DockPanel.Dock="Top" Classes="chain" Margin="0,0,0,7">
-          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="7">
-            <Border Grid.Column="0" Classes="badge"><TextBlock Text="OUTPUT LAYOUT" /></Border>
-            <TextBlock Grid.Column="1" Classes="mono small" VerticalAlignment="Center"
-                       Text="{Binding CompositionHeader}" />
-            <Button Grid.Column="2" Classes="tight" Content="✕ CLOSE" Click="OnCloseLayout" />
-          </Grid>
-        </Border>
-
-        <Border DockPanel.Dock="Bottom" Classes="chain" Margin="0,7,0,0">
-          <TextBlock Classes="mono dim3 small" TextWrapping="Wrap"
-                     Text="Drag a screen's edge to divide the canvas. Overlap is a blend zone; canvas no screen covers stays dark. Shift keeps a corner on its aspect, Alt suspends snapping." />
-        </Border>
-
-        <Grid ColumnDefinitions="*,360" ColumnSpacing="7">
-          <c:PanelBox Grid.Column="0" Header="Canvas" Hint="{Binding LayoutSummary}">
-            <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding CompositionAspect}">
-              <c:PlacementCanvas Boxes="{Binding LayoutBoxes}"
-                                 Gesture="OnLayoutGesture"
-                                 GestureCompleted="OnGestureCompleted"
-                                 BoxSelected="OnLayoutOutputSelected" />
-            </c:AspectBox>
-          </c:PanelBox>
-
-          <!-- The raster beside the picture, because a slice and the screen it lands on are two
-               different sizes: half of a 1920×2160 stacked canvas is still a 1920×1080 projector. -->
-          <c:PanelBox Grid.Column="1" Header="{Binding SelectedOutputName}" Hint="selected screen">
-            <ScrollViewer>
-              <StackPanel Margin="0,6,0,8" IsEnabled="{Binding HasOutput}">
-                <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Slice x / y">
-                  <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                    <NumericUpDown Grid.Column="0" Minimum="0" Maximum="1" Increment="0.01"
-                                   FormatString="0.###" Value="{Binding SourceX}" />
-                    <NumericUpDown Grid.Column="1" Minimum="0" Maximum="1" Increment="0.01"
-                                   FormatString="0.###" Value="{Binding SourceY}" />
-                  </Grid>
-                </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Slice w / h">
-                  <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                    <NumericUpDown Grid.Column="0" Minimum="0.01" Maximum="1" Increment="0.01"
-                                   FormatString="0.###" Value="{Binding SourceWidth}" />
-                    <NumericUpDown Grid.Column="1" Minimum="0.01" Maximum="1" Increment="0.01"
-                                   FormatString="0.###" Value="{Binding SourceHeight}" />
-                  </Grid>
-                </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Output raster">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
-                    <TextBox Grid.Column="0" Text="{Binding OutputRaster}"
-                             PlaceholderText="1920×1080 · empty follows the composition" />
-                    <Button Grid.Column="1" Classes="icon" Content="▾"
-                            ToolTip.Tip="Common sizes. Anything can still be typed.">
-                      <Button.Flyout>
-                        <Flyout>
-                          <ItemsControl ItemsSource="{Binding Resolutions}">
-                            <ItemsControl.ItemTemplate>
-                              <DataTemplate x:DataType="sys:String">
-                                <Button Classes="tight block" HorizontalAlignment="Stretch"
-                                        Click="OnPickResolution" Tag="raster" Content="{Binding}" />
-                              </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                          </ItemsControl>
-                        </Flyout>
-                      </Button.Flyout>
-                    </Button>
-                  </Grid>
-                </HeaderedContentControl>
-                <ContentControl Theme="{StaticResource FieldWide}">
-                  <Border Classes="chain">
-                    <Button Classes="tight" Content="WARP THIS SCREEN ›" Click="OnEditMapping"
-                            ToolTip.Tip="Mesh, blend and per-section geometry for this output." />
-                  </Border>
-                </ContentControl>
-              </StackPanel>
-            </ScrollViewer>
-          </c:PanelBox>
-        </Grid>
-      </DockPanel>
 
       <!-- ══ MAPPING ════════════════════════════════════════════════════════════════════════
            Always the mapping OF ONE OUTPUT: the same Cyc is warped for Projector A and clean for the
