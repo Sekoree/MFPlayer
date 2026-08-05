@@ -93,12 +93,11 @@ public class PlacementRowTests
     });
 
     [Fact]
-    public Task ASingleplacementNeedsNoChooser() => ShellFixture.WithShell(shell =>
+    public Task ASinglePlacementStillGetsAnOrganisingExpander() => ShellFixture.WithShell(shell =>
     {
         WithPlacements(shell, 1);
 
-        // The rows are a way through several; one placement is just the editor.
-        Assert.False(shell.Cues.Inspector.HasSeveralPlacements);
+        Assert.Single(shell.Cues.Inspector.PlacementHeaders);
     });
 
     [Fact]
@@ -113,10 +112,23 @@ public class PlacementRowTests
         window.Show();
         Dispatcher.UIThread.RunJobs();
 
-        var rows = pane.GetVisualDescendants().OfType<RadioButton>().ToList();
+        var rows = pane.GetVisualDescendants()
+            .OfType<Expander>()
+            .Where(row => row.Tag is int)
+            .ToList();
 
-        // A row that binds correctly and never reaches the screen is the failure this catches.
-        Assert.True(rows.Count >= 3, $"the pane realised {rows.Count} placement row(s)");
-        Assert.Single(rows, row => row.IsChecked == true);
+        Assert.Equal(3, rows.Count);
+        Assert.Single(rows, row => row.IsExpanded);
+
+        rows.Single(row => (int)row.Tag! == 2).IsExpanded = true;
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(2, shell.Cues.Inspector.SelectedPlacement);
+        rows = pane.GetVisualDescendants()
+            .OfType<Expander>()
+            .Where(row => row.Tag is int)
+            .ToList();
+        Assert.Single(rows, row => row.IsExpanded);
+        Assert.True(rows.Single(row => (int)row.Tag! == 2).IsExpanded);
     });
 }

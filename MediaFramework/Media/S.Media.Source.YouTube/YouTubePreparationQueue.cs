@@ -151,6 +151,36 @@ public sealed class YouTubePreparationQueue : IDisposable
             : YouTubeCacheState.Missing;
     }
 
+    /// <summary>The committed local media file behind a prepared URI, or null while it is unavailable.</summary>
+    /// <remarks>
+    /// Authoring tools such as a waveform/trim editor need the same concrete file the decoder opens.
+    /// Returning only a verified existing path preserves the provider's no-network-on-open contract and
+    /// makes a cache clear visible immediately instead of handing the caller a stale filename.
+    /// </remarks>
+    public string? PreparedAssetPath(string sourceUri)
+    {
+        if (!TryCanonical(sourceUri, out var canonical, out var videoId, out var selection))
+            return null;
+
+        lock (_gate)
+        {
+            if (_entries.TryGetValue(canonical, out var entry)
+                && entry.State == YouTubeCacheState.Ready
+                && entry.PreparedAssetPath is { Length: > 0 } prepared)
+                return File.Exists(prepared) ? prepared : null;
+        }
+
+        if (!IsConcrete(selection))
+            return null;
+
+        var path = _preparer.AssetPathFor(
+            videoId,
+            selection.IncludeVideo ? selection.Video : null,
+            selection.Audio,
+            selection.IncludeThumbnail);
+        return File.Exists(path) ? path : null;
+    }
+
     /// <summary>Queue summary, optionally limited to source URIs owned by one open project.</summary>
     public YouTubePreparationSnapshot Snapshot(IEnumerable<string>? sourceUris = null)
     {

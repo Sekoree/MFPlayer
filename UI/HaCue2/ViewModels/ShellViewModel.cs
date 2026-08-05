@@ -76,6 +76,9 @@ public partial class ShellViewModel : ObservableObject
         };
         Cues.Inspector.CacheRoot = MediaCache.RootFor(Settings);
         Cues.Inspector.WaveformCacheBytes = MediaCache.ParseBudget(Settings.WaveformBudget);
+        // Resolve lazily through the current queue: changing the cache root replaces the shared queue,
+        // and a method group captured here would keep the disposed old one for the rest of the project.
+        Cues.Inspector.PreparedMediaPath = source => YouTubeRuntime.Downloads.PreparedAssetPath(source);
         Cues.Inspector.RememberTabs = Settings.RememberInspectorTab;
         Cues.FlatActiveList = Settings.FlatActiveList;
         Cues.Inspector.ProjectPath = () => ProjectPath;
@@ -971,6 +974,7 @@ public partial class ShellViewModel : ObservableObject
     {
         Status = ProjectStatus.Run(Project, ProjectPath, Environment);
         OnPropertyChanged(nameof(YouTubeDownloadSummary));
+        Cues.Inspector.RefreshPreparedMedia();
         var contentRevision = YouTubeRuntime.Downloads.ContentRevision;
         if (Host is not null && contentRevision != _youTubeContentRevision)
             ScheduleReload();

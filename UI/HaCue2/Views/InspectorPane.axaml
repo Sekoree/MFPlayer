@@ -3,6 +3,7 @@
              xmlns:c="using:HaCue2.Controls"
              xmlns:sys="using:System"
              xmlns:vm="using:HaCue2.ViewModels"
+             xmlns:v="using:HaCue2.Views"
              x:Class="HaCue2.Views.InspectorPane"
              x:DataType="vm:InspectorViewModel">
 
@@ -90,6 +91,53 @@
                       Content="Enabled — GO and auto-follow include this cue" />
           </StackPanel>
 
+          <!-- ══ CLIP ══════════════════════════════════════════════════════════════════════ -->
+          <!-- Finite-media playback belongs here rather than under AUDIO: a silent video still has
+               an in-point and an out-point, and this is the first pane a media cue opens on. -->
+          <StackPanel IsVisible="{Binding IsClipPane}" Margin="0,6,0,8">
+            <StackPanel IsVisible="{Binding CanTrimMedia}">
+              <!-- "end" rather than 0.0 for an untrimmed out-point: zero means play through in the
+                   model, and a field reading 0.0 looks like a cue that plays nothing. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Trim in / out">
+                <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Text="{Binding TrimInValue}" LostFocus="OnFieldCommitted"
+                           PlaceholderText="in" AutomationProperties.Name="Trim in" />
+                  <TextBox Grid.Column="1" Text="{Binding TrimOutValue}" LostFocus="OnFieldCommitted"
+                           PlaceholderText="end" AutomationProperties.Name="Trim out" />
+                  <!-- Two boxes are enough for a sting and hopeless for finding a cut in a concert;
+                       the waveform editor is the precise version for an ordinary local file. -->
+                  <Button Grid.Column="2" Classes="tight" Content="EDIT…" Click="OnEditClip"
+                          IsEnabled="{Binding CanEditClip}"
+                          AutomationProperties.Name="Open clip trimming editor"
+                          ToolTip.Tip="{Binding ClipEditorHint}" />
+                </Grid>
+              </HeaderedContentControl>
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding TrimHint}" />
+              </ContentControl>
+            </StackPanel>
+
+            <CheckBox Margin="10,2,10,4" IsChecked="{Binding LoopValue}"
+                      IsEnabled="{Binding CanTrimMedia}"
+                      Content="Loop until stopped" />
+
+            <!-- Every cue simply STOPPED before this existed. Freeze is what a title card wants; fade
+                 out gives a cue its own out-ramp without a fade cue aimed at it. -->
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="At end"
+                                    IsEnabled="{Binding CanTrimMedia}">
+              <ComboBox ItemsSource="{Binding EndBehaviours}" SelectedIndex="{Binding EndBehaviourIndex}" />
+            </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Loop overlap"
+                                    IsVisible="{Binding IsLooping}">
+              <NumericUpDown Minimum="0" Maximum="30000" Increment="100" FormatString="0"
+                             Value="{Binding LoopCrossfadeValue}"
+                             ToolTip.Tip="Milliseconds of overlap when the loop wraps. A seamless loop is made of this; zero is a hard cut." />
+            </HeaderedContentControl>
+            <CheckBox Margin="10,2,10,4" IsChecked="{Binding PreRollValue}"
+                      Content="Pre-roll — open this cue's media before it fires"
+                      ToolTip.Tip="On by default. Turn it off for a clip that costs more to hold open than it saves, or whose open starts something early." />
+          </StackPanel>
+
           <!-- ══ AUDIO ═════════════════════════════════════════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsAudioPane}" Margin="0,6,0,8">
             <!-- A concert capture routinely carries several audio tracks — a stereo mix, an isolated
@@ -140,52 +188,15 @@
               </Grid>
             </HeaderedContentControl>
 
-            <!-- The trim window. "end" rather than 0.0 for an untrimmed out-point: zero means play
-                 through in the model, and a field reading 0.0 would look like a cue that plays
-                 nothing. Both values reach the engine only once the file has been probed — the
-                 out-point is stored absolute and the document wants it counted back from the end. -->
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Trim in / out">
-              <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="6">
-                <TextBox Grid.Column="0" Text="{Binding TrimInValue}" LostFocus="OnFieldCommitted" />
-                <TextBox Grid.Column="1" Text="{Binding TrimOutValue}" LostFocus="OnFieldCommitted" />
-                <!-- Two boxes are enough for a sting and hopeless for "half an hour off a concert",
-                     which is what the editor is for. -->
-                <Button Grid.Column="2" Classes="tight" Content="✎" Click="OnEditClip"
-                        IsEnabled="{Binding CanEditClip}" />
-              </Grid>
-            </HeaderedContentControl>
-            <ContentControl Theme="{StaticResource FieldWide}">
-              <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding TrimHint}" />
-            </ContentControl>
-            <CheckBox Margin="10,2,10,4" IsChecked="{Binding LoopValue}"
-                      Content="Loop until stopped" />
-
-            <!-- Every cue simply STOPPED before this existed. Freeze is what a title card wants; fade
-                 out gives a cue its own out-ramp without a fade cue aimed at it. -->
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="At end">
-              <ComboBox ItemsSource="{Binding EndBehaviours}" SelectedIndex="{Binding EndBehaviourIndex}" />
-            </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Loop overlap"
-                                    IsVisible="{Binding IsLooping}">
-              <NumericUpDown Minimum="0" Maximum="30000" Increment="100" FormatString="0"
-                             Value="{Binding LoopCrossfadeValue}"
-                             ToolTip.Tip="Milliseconds of overlap when the loop wraps. A seamless loop is made of this; zero is a hard cut." />
-            </HeaderedContentControl>
-            <!-- Phrased as the positive: a checkbox called "disable", ticked to mean "do not", is one
-                 an operator has to read twice under pressure. -->
-            <CheckBox Margin="10,2,10,4" IsChecked="{Binding PreRollValue}"
-                      Content="Pre-roll — open this cue's media before it fires"
-                      ToolTip.Tip="On by default. Turn it off for a clip that costs more to hold open than it saves, or whose open starts something early." />
-
             <ContentControl Theme="{StaticResource Subhead}" Content="Sends → logical outputs" />
-            <!-- The bottom padding is for the horizontal scrollbar: it is an overlay, so without room
-                 of its own it sits on top of the last row of cells and hides the gain there. Twelve
-                 covered the bar at rest and not the ~18px it expands to under the pointer — which is
-                 exactly when somebody is reading that row — so the last row was clipped in half. The
-                 margin adds the gap to the PRESETS strip that the padding used to be doing double
-                 duty as. -->
-            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
-                          Margin="10,2,10,6" Padding="0,0,0,20">
+            <!-- Both axes have a viewport. The matrix can be taller than the remaining inspector and
+                 Avalonia's overlay bars grow under the pointer, so a 40 px bottom gutter keeps the
+                 final send row clear even while the horizontal bar is active. -->
+            <ScrollViewer Name="CueSendMatrixViewport"
+                          AutomationProperties.Name="Cue send matrix viewport"
+                          HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                          MaxHeight="360"
+                          Margin="10,2,10,6" Padding="0,0,20,40">
               <!-- The same gesture vocabulary as the patch: an operator who learns it on one matrix
                    must find it true on the other. -->
               <c:MatrixView Columns="{Binding SendColumns}" Rows="{Binding SendRows}"
@@ -295,24 +306,20 @@
               </Grid>
             </HeaderedContentControl>
 
-            <StackPanel IsVisible="{Binding HasPlacement}">
-              <!-- A cue can be on several canvases at once — a mirror to a second wall, or two regions
-                   of one. The engine fans ONE decoded source to all of them, so this costs nothing
-                   beyond the compositing; playing the file twice would double the decode and let the
-                   copies drift. The picker only appears when there is more than one to choose. -->
-              <!-- One row per placement, opened to edit. A picker over a single editor meant a cue on
-                   three canvases was three screens of settings reachable only by remembering which
-                   entry was which; a closed row still says where its picture goes and what is on it.
-                   Only shown when there IS more than one — a single placement needs no chooser. -->
-              <ItemsControl ItemsSource="{Binding PlacementHeaders}" Margin="10,2,10,4"
-                            IsVisible="{Binding HasSeveralPlacements}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="vm:PlacementHeader">
-                    <RadioButton Theme="{StaticResource PlacementRow}"
-                                 GroupName="placement"
-                                 IsChecked="{Binding IsOpen, Mode=OneWay}"
-                                 IsCheckedChanged="OnPlacementRowChosen"
-                                 Tag="{Binding Index}">
+            <!-- Every placement is a real expander. Its closed header still identifies the canvas,
+                 layer and geometry; opening it selects that placement and reveals its complete editor. -->
+            <ItemsControl ItemsSource="{Binding PlacementHeaders}" Margin="10,2,10,4"
+                          IsVisible="{Binding HasPlacement}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Spacing="4" /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:PlacementHeader">
+                  <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                            IsExpanded="{Binding IsOpen, Mode=OneWay}"
+                            Expanding="OnPlacementExpanding"
+                            Tag="{Binding Index}">
+                    <Expander.Header>
                       <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="7">
                         <Border Grid.Row="0" Grid.Column="0" Classes="badge">
                           <TextBlock Text="{Binding Layer}" />
@@ -322,161 +329,25 @@
                         <TextBlock Grid.Row="1" Grid.Column="1" Classes="mono dim3 micro"
                                    TextTrimming="CharacterEllipsis" Text="{Binding Summary}" />
                       </Grid>
-                    </RadioButton>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Composition">
-                <ComboBox ItemsSource="{Binding PlacementCompositions}"
-                          SelectedIndex="{Binding PlacementCompositionIndex}" />
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Layer">
-                <TextBox Classes="short" Text="{Binding LayerValue}" LostFocus="OnFieldCommitted" />
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Fit">
-                <ComboBox ItemsSource="{Binding FitModes}" SelectedIndex="{Binding FitIndex}" />
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Opacity">
-                <NumericUpDown Minimum="0" Maximum="1" Increment="0.05" FormatString="0.##"
-                               Value="{Binding PlacementOpacity}" />
-              </HeaderedContentControl>
+                    </Expander.Header>
+                    <v:PlacementEditorPane
+                        DataContext="{Binding $parent[v:InspectorPane].((vm:InspectorViewModel)DataContext)}" />
+                  </Expander>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
 
-              <!-- The destination rectangle as NUMBERS. A drag cannot hit exactly half, and half is
-                   what a split screen is made of. -->
-              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Dest x / y">
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                  <NumericUpDown Grid.Column="0" Minimum="-1" Maximum="2" Increment="0.01"
-                                 FormatString="0.###" Value="{Binding PlacementX}" />
-                  <NumericUpDown Grid.Column="1" Minimum="-1" Maximum="2" Increment="0.01"
-                                 FormatString="0.###" Value="{Binding PlacementY}" />
-                </Grid>
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Dest w / h">
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                  <NumericUpDown Grid.Column="0" Minimum="0.001" Maximum="2" Increment="0.01"
-                                 FormatString="0.###" Value="{Binding PlacementWidth}" />
-                  <NumericUpDown Grid.Column="1" Minimum="0.001" Maximum="2" Increment="0.01"
-                                 FormatString="0.###" Value="{Binding PlacementHeight}" />
-                </Grid>
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Rotation">
-                <NumericUpDown Minimum="-360" Maximum="360" Increment="1" FormatString="0.##"
-                               Value="{Binding PlacementRotation}"
-                               ToolTip.Tip="Clockwise, about the rectangle's centre. A rotated layer overflows its rectangle rather than being trimmed to it." />
-              </HeaderedContentControl>
-
-              <ContentControl Theme="{StaticResource FieldWide}">
-                <WrapPanel ItemSpacing="4" LineSpacing="4">
-                  <Button Classes="tight" Content="FULL" Click="OnLayout" Tag="full" AutomationProperties.Name="Place full frame" />
-                  <Button Classes="tight" Content="◧" Click="OnLayout" Tag="left" ToolTip.Tip="Left half" AutomationProperties.Name="Place in left half" />
-                  <Button Classes="tight" Content="◨" Click="OnLayout" Tag="right" ToolTip.Tip="Right half" AutomationProperties.Name="Place in right half" />
-                  <Button Classes="tight" Content="⬒" Click="OnLayout" Tag="top" ToolTip.Tip="Top half" AutomationProperties.Name="Place in top half" />
-                  <Button Classes="tight" Content="⬓" Click="OnLayout" Tag="bottom" ToolTip.Tip="Bottom half" AutomationProperties.Name="Place in bottom half" />
-                  <Button Classes="tight" Content="◰" Click="OnLayout" Tag="tl" ToolTip.Tip="Top left" AutomationProperties.Name="Place in top left" />
-                  <Button Classes="tight" Content="◳" Click="OnLayout" Tag="tr" ToolTip.Tip="Top right" AutomationProperties.Name="Place in top right" />
-                  <Button Classes="tight" Content="◱" Click="OnLayout" Tag="bl" ToolTip.Tip="Bottom left" AutomationProperties.Name="Place in bottom left" />
-                  <Button Classes="tight" Content="◲" Click="OnLayout" Tag="br" ToolTip.Tip="Bottom right" AutomationProperties.Name="Place in bottom right" />
-                </WrapPanel>
-              </ContentControl>
-
-              <!-- The CROP, which is a different question from the destination: which part of the
-                   picture to use, not where to put it. Baked-in letterbox bars come off here. -->
-              <ContentControl Theme="{StaticResource Subhead}" Content="Source crop" />
-              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Left / top">
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                  <NumericUpDown Grid.Column="0" Minimum="0" Maximum="0.49" Increment="0.01"
-                                 FormatString="0.###" Value="{Binding CropLeft}" />
-                  <NumericUpDown Grid.Column="1" Minimum="0" Maximum="0.49" Increment="0.01"
-                                 FormatString="0.###" Value="{Binding CropTop}" />
-                </Grid>
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Right / bottom">
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                  <NumericUpDown Grid.Column="0" Minimum="0" Maximum="0.49" Increment="0.01"
-                                 FormatString="0.###" Value="{Binding CropRight}" />
-                  <NumericUpDown Grid.Column="1" Minimum="0" Maximum="0.49" Increment="0.01"
-                                 FormatString="0.###" Value="{Binding CropBottom}" />
-                </Grid>
-              </HeaderedContentControl>
-              <ContentControl Theme="{StaticResource FieldWide}">
-                <WrapPanel ItemSpacing="4" LineSpacing="4">
-                  <Button Classes="tight" Content="NO CROP" Click="OnCrop" Tag="none" />
-                  <Button Classes="tight" Content="CENTRE ½ WIDE" Click="OnCrop" Tag="wide" />
-                  <Button Classes="tight" Content="CENTRE ½ TALL" Click="OnCrop" Tag="tall" />
-                  <Button Classes="tight" Content="CENTRE BOX" Click="OnCrop" Tag="centre" />
-                </WrapPanel>
-              </ContentControl>
-
-              <!-- Both effects follow the app's rule: OFF IS NOT DELETE. The settings survive the
-                   toggle, so checking a shot against an unkeyed one costs nothing to undo. -->
-              <ContentControl Theme="{StaticResource Subhead}" Content="Chroma key" />
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Key">
-                <CheckBox IsChecked="{Binding ChromaKeyOn}" Content="key this layer" />
-              </HeaderedContentControl>
-              <StackPanel IsVisible="{Binding HasChromaKey}">
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Colour">
-                  <TextBox Text="{Binding ChromaColour}" PlaceholderText="#00FF00" />
-                </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Similar / soft">
-                  <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                    <NumericUpDown Grid.Column="0" Minimum="0" Maximum="1" Increment="0.02"
-                                   FormatString="0.##" Value="{Binding ChromaSimilarity}" />
-                    <NumericUpDown Grid.Column="1" Minimum="0" Maximum="1" Increment="0.02"
-                                   FormatString="0.##" Value="{Binding ChromaSmoothness}" />
-                  </Grid>
-                </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Spill">
-                  <NumericUpDown Minimum="0" Maximum="1" Increment="0.02" FormatString="0.##"
-                                 Value="{Binding ChromaSpill}"
-                                 ToolTip.Tip="How much of the key colour is pulled out of what remains — the green fringe." />
-                </HeaderedContentControl>
-              </StackPanel>
-
-              <ContentControl Theme="{StaticResource Subhead}" Content="Colour" />
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Adjust">
-                <CheckBox IsChecked="{Binding ColorAdjustOn}" Content="brightness and contrast" />
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Bright / contrast"
-                                      IsVisible="{Binding ColorAdjustOn}">
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                  <NumericUpDown Grid.Column="0" Minimum="-1" Maximum="1" Increment="0.05"
-                                 FormatString="0.##" Value="{Binding LayerBrightness}" />
-                  <NumericUpDown Grid.Column="1" Minimum="0" Maximum="4" Increment="0.05"
-                                 FormatString="0.##" Value="{Binding LayerContrast}" />
-                </Grid>
-              </HeaderedContentControl>
-
-              <!-- The guides are the seams between the screens dividing THIS placement's canvas, so a
-                   cue can be dropped exactly onto one projector of a wall without anybody working out
-                   what fraction that is. Unlike the composition's own layout editor, this canvas is
-                   drawing something else — cue placements — so the slice edges are new information
-                   here rather than its own boxes fed back to it. -->
-              <c:AspectBox Margin="10,6" VerticalAlignment="Top">
-                <c:PlacementCanvas Boxes="{Binding Placements}"
-                                   AutomationProperties.Name="Video placement canvas"
-                                   AutomationProperties.HelpText="Drag or resize the selected placement. Exact numeric fields are above."
-                                   GuidesX="{Binding PlacementGuidesX}"
-                                   GuidesY="{Binding PlacementGuidesY}"
-                                   Gesture="OnPlacementGesture"
-                                   GestureCompleted="OnPlacementGestureCompleted" />
-              </c:AspectBox>
-
-              <!-- The canvas is a second editor for the same cue data, under the same undo journal —
-                   rough here, precise in the Video view. -->
-              <Border Classes="chain">
-                <DockPanel LastChildFill="True">
-                  <Button DockPanel.Dock="Right" Classes="tight" Content="REMOVE" Click="OnRemovePlacement" />
-                  <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
-                          Content="+ ANOTHER" Click="OnPlace"
-                          ToolTip.Tip="Show this cue on another composition — one decode, several canvases." />
-                  <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge">
-                    <TextBlock Text="PLACEMENT" />
-                  </Border>
-                  <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                             Text="drag here for rough · Video view for precision" />
-                </DockPanel>
-              </Border>
-            </StackPanel>
+            <!-- Adding is separate from any one row: the target is explicit and remains reachable
+                 even when every placement is collapsed. -->
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Another placement"
+                                    IsVisible="{Binding HasPlacement}">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                <ComboBox Grid.Column="0" ItemsSource="{Binding PlacementCompositions}"
+                          SelectedIndex="{Binding PlacementTarget}" />
+                <Button Grid.Column="1" Classes="tight" Content="ADD" Click="OnPlace"
+                        ToolTip.Tip="Show this cue on another composition — one decode, several canvases." />
+              </Grid>
+            </HeaderedContentControl>
           </StackPanel>
 
           <!-- ══ EFFECTS — lanes, hidden until added (register item 18) ═════════════════════ -->

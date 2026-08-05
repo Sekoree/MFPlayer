@@ -281,15 +281,16 @@
         <c:PanelBox Grid.Row="2" MinHeight="120"
                     Header="Active" Subhead="{Binding ActiveCues.Count}"
                     Hint="{Binding ActivePanelHint}">
-          <!-- The seek latch. LOCKED by default: these bars sit under the pointer for the whole show,
-               a drag on one is instantly audible in the room, and there is no undo for it. -->
+          <!-- Editing mode makes the bars live, like the rest of the cue editor. Locked/performance
+               mode keeps an explicit latch: a drag is instantly audible and has no undo. -->
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7">
                 <ToggleButton Grid.Column="0" Theme="{StaticResource ChipToggle}"
-                              IsChecked="{Binding SeekUnlocked}">
+                              IsChecked="{Binding CanSeekActive}"
+                              IsEnabled="{Binding !CanEditDocument}">
                   <StackPanel Orientation="Horizontal" Spacing="5">
-                    <Ellipse Classes="led" Classes.warn="{Binding SeekUnlocked}" />
+                    <Ellipse Classes="led" Classes.warn="{Binding CanSeekActive}" />
                     <TextBlock Text="{Binding SeekLockLabel}" />
                   </StackPanel>
                 </ToggleButton>
@@ -387,7 +388,7 @@
                     <c:SeekBar Grid.Column="6" Maximum="1" Value="{Binding Progress}"
                                AutomationProperties.Name="Seek active cue"
                                IsSeekable="{Binding CanSeek}"
-                               IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).SeekUnlocked}"
+                               IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanSeekActive}"
                                VerticalAlignment="Center"
                                Seeked="OnSeekActive"
                                Tag="{Binding CueId}"

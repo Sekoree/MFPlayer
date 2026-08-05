@@ -60,6 +60,7 @@ public partial class InspectorViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsGeneralPane))]
+    [NotifyPropertyChangedFor(nameof(IsClipPane))]
     [NotifyPropertyChangedFor(nameof(IsAudioPane))]
     [NotifyPropertyChangedFor(nameof(IsVideoPane))]
     [NotifyPropertyChangedFor(nameof(IsEffectsPane))]
@@ -122,8 +123,8 @@ public partial class InspectorViewModel : ObservableObject
         Tabs = lead is null
             ? NoTabs
             : Selected
-                .Select(cue => TabsFor(KindOf(cue)))
-                .Aggregate((IEnumerable<string>)TabsFor(KindOf(lead)), (common, next) => common.Intersect(next))
+                .Select(TabsFor)
+                .Aggregate((IEnumerable<string>)TabsFor(lead), (common, next) => common.Intersect(next))
                 .ToList();
 
         SelectedTab = lead is null
@@ -151,7 +152,9 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(TrimInValue));
         OnPropertyChanged(nameof(TrimOutValue));
         OnPropertyChanged(nameof(TrimHint));
+        OnPropertyChanged(nameof(CanTrimMedia));
         OnPropertyChanged(nameof(CanEditClip));
+        OnPropertyChanged(nameof(ClipEditorHint));
         OnPropertyChanged(nameof(TriggerIndex));
         OnPropertyChanged(nameof(PreWaitValue));
         OnPropertyChanged(nameof(PostWaitValue));
@@ -171,8 +174,6 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(PlacementGuidesY));
         OnPropertyChanged(nameof(HasPlacement));
         OnPropertyChanged(nameof(PlacementList));
-        OnPropertyChanged(nameof(PlacementNames));
-        OnPropertyChanged(nameof(HasSeveralPlacements));
         OnPropertyChanged(nameof(PlacementHeaders));
         OnPropertyChanged(nameof(PlacementCompositions));
         OnPropertyChanged(nameof(PlacementCompositionIndex));
@@ -294,7 +295,7 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     private static IReadOnlyList<string> TabsFor(CueKind kind) => kind switch
     {
-        CueKind.Media or CueKind.Video => ["GENERAL", "AUDIO", "VIDEO", "EFFECTS", "NOTE", "PREVIEW"],
+        CueKind.Media or CueKind.Video => ["GENERAL", "CLIP", "AUDIO", "VIDEO", "EFFECTS", "NOTE", "PREVIEW"],
         CueKind.Group => ["GENERAL", "GROUP", "NOTE"],
         CueKind.Action => ["GENERAL", "ACTION", "NOTE"],
         CueKind.Fade => ["GENERAL", "FADE", "NOTE"],
@@ -307,7 +308,14 @@ public partial class InspectorViewModel : ObservableObject
         _ => ["GENERAL", "NOTE"],
     };
 
+    /// <summary>Live inputs have no clip window, so do not offer a pane whose only answer is “none”.</summary>
+    private static IReadOnlyList<string> TabsFor(CueNode cue) =>
+        cue is MediaCueNode media && SourceUri.IsLive(media.MediaPath)
+            ? ["GENERAL", "AUDIO", "VIDEO", "EFFECTS", "NOTE", "PREVIEW"]
+            : TabsFor(KindOf(cue));
+
     public bool IsGeneralPane => SelectedTab == "GENERAL";
+    public bool IsClipPane => SelectedTab == "CLIP";
     public bool IsAudioPane => SelectedTab == "AUDIO";
     public bool IsVideoPane => SelectedTab == "VIDEO";
     public bool IsEffectsPane => SelectedTab == "EFFECTS";
@@ -558,7 +566,7 @@ public partial class InspectorViewModel : ObservableObject
     /// take <c>-10:00</c> so the arithmetic is not needed either.
     /// </remarks>
     public string TrimHint =>
-        Facts?.Duration is { } length
+        ClipDuration is { } length
             ? $"file {ClipTimes.Format((int)length.TotalMilliseconds)} · {ClipTimes.Syntax}"
             : $"not probed · {ClipTimes.Syntax}";
 
@@ -569,7 +577,7 @@ public partial class InspectorViewModel : ObservableObject
         {
             // A clock reading, seconds, or a from-the-end time. Thirty minutes was 1800.0 here until
             // the parser learned 30:00, which is what the field exists to accept.
-            if (ClipTimes.Parse(value, Facts?.Duration) is { } ms)
+            if (ClipTimes.Parse(value, ClipDuration) is { } ms)
                 EditMedia("trimIn", media => media.TrimInMs, (media, set) => media.TrimInMs = set, ms);
         }
     }
@@ -592,7 +600,7 @@ public partial class InspectorViewModel : ObservableObject
                 return;
             }
 
-            if (ClipTimes.Parse(value, Facts?.Duration) is { } ms)
+            if (ClipTimes.Parse(value, ClipDuration) is { } ms)
                 EditMedia("trimOut", media => media.TrimOutMs, (media, set) => media.TrimOutMs = set, ms);
         }
     }
@@ -796,7 +804,37 @@ public partial class InspectorViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(Placements))]
     [NotifyPropertyChangedFor(nameof(PlacementGuidesX))]
     [NotifyPropertyChangedFor(nameof(PlacementGuidesY))]
+    [NotifyPropertyChangedFor(nameof(PlacementHeaders))]
     private int _selectedPlacement;
+
+    partial void OnSelectedPlacementChanged(int value)
+    {
+        // Every field projects the selected list entry. An expander changes that entry without
+        // changing the cue, so a normal document Reload is neither necessary nor desirable (it would
+        // also reset the selected tab); announce the projection properties directly.
+        OnPropertyChanged(nameof(PlacementCompositionIndex));
+        OnPropertyChanged(nameof(LayerValue));
+        OnPropertyChanged(nameof(FitIndex));
+        OnPropertyChanged(nameof(PlacementOpacity));
+        OnPropertyChanged(nameof(PlacementX));
+        OnPropertyChanged(nameof(PlacementY));
+        OnPropertyChanged(nameof(PlacementWidth));
+        OnPropertyChanged(nameof(PlacementHeight));
+        OnPropertyChanged(nameof(PlacementRotation));
+        OnPropertyChanged(nameof(CropLeft));
+        OnPropertyChanged(nameof(CropTop));
+        OnPropertyChanged(nameof(CropRight));
+        OnPropertyChanged(nameof(CropBottom));
+        OnPropertyChanged(nameof(HasChromaKey));
+        OnPropertyChanged(nameof(ChromaKeyOn));
+        OnPropertyChanged(nameof(ChromaColour));
+        OnPropertyChanged(nameof(ChromaSimilarity));
+        OnPropertyChanged(nameof(ChromaSmoothness));
+        OnPropertyChanged(nameof(ChromaSpill));
+        OnPropertyChanged(nameof(ColorAdjustOn));
+        OnPropertyChanged(nameof(LayerBrightness));
+        OnPropertyChanged(nameof(LayerContrast));
+    }
 
     private LayerPlacement? Placement =>
         SelectedPlacement >= 0 && SelectedPlacement < PlacementList.Count
@@ -1268,8 +1306,6 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(PlacementGuidesY));
         OnPropertyChanged(nameof(HasPlacement));
         OnPropertyChanged(nameof(PlacementList));
-        OnPropertyChanged(nameof(PlacementNames));
-        OnPropertyChanged(nameof(HasSeveralPlacements));
         OnPropertyChanged(nameof(PlacementHeaders));
         OnPropertyChanged(nameof(PlacementCompositions));
         OnPropertyChanged(nameof(PlacementCompositionIndex));
@@ -2183,16 +2219,43 @@ public partial class InspectorViewModel : ObservableObject
     /// <summary>The current project filename, read lazily so Save As immediately changes resolution.</summary>
     public Func<string?> ProjectPath { get; set; } = static () => null;
 
+    /// <summary>Resolves a prepared source URI to the verified local asset used for playback.</summary>
+    public Func<string, string?> PreparedMediaPath { get; set; } = static _ => null;
+
+    private TimeSpan? ClipDuration => Facts?.Duration
+        ?? (Cue is MediaCueNode { SourceDurationMs: > 0 } media
+            ? TimeSpan.FromMilliseconds(media.SourceDurationMs)
+            : null);
+
     /// <summary>
     /// Whether there is a FILE to open a clip editor on.
     /// </summary>
     /// <remarks>
-    /// A source cue has none. The editor scans a waveform and draws a trim window over it, and neither
-    /// means anything for a camera — nor for a prepared YouTube asset, whose URI names a cache entry
-    /// rather than a path the scanner could open.
+    /// A live source has none. A prepared YouTube cue does: its portable URI is resolved through the
+    /// cache to the exact local asset the playback provider opens.
     /// </remarks>
-    public bool CanEditClip =>
-        Cue is MediaCueNode { MediaPath.Length: > 0 } clip && !SourceUri.IsSource(clip.MediaPath);
+    public bool CanEditClip => Cue is MediaCueNode media && ClipPath(media) is { Length: > 0 };
+
+    public string ClipEditorHint => Cue is MediaCueNode media
+        && SourceUri.KindOf(media.MediaPath) == SourceKind.YouTube
+        && !CanEditClip
+            ? "The graphical editor becomes available when this cue's background download is ready."
+            : "Open the graphical waveform and frame trimming editor.";
+
+    /// <summary>Rechecks the machine-local prepared asset without resetting the inspector's tab.</summary>
+    public void RefreshPreparedMedia()
+    {
+        OnPropertyChanged(nameof(CanEditClip));
+        OnPropertyChanged(nameof(ClipEditorHint));
+    }
+
+    /// <summary>Whether an in/out window has meaning for this media cue.</summary>
+    /// <remarks>
+    /// YouTube cues play a prepared finite asset and can use numeric trim points even though the
+    /// waveform editor cannot open their URI directly. Cameras and capture devices are live and have
+    /// neither a stable beginning nor an end to trim against.
+    /// </remarks>
+    public bool CanTrimMedia => Cue is MediaCueNode media && !SourceUri.IsLive(media.MediaPath);
 
     /// <summary>
     /// The clip editor for the selected cue, or null when there is nothing to edit.
@@ -2208,10 +2271,18 @@ public partial class InspectorViewModel : ObservableObject
             : new ClipEditorViewModel(
                 _journal,
                 media,
-                MediaPaths.Resolve(Project, media.MediaPath, ProjectPath()),
-                Facts?.Duration,
+                ClipPath(media)!,
+                ClipDuration,
                 CacheRoot,
                 WaveformCacheBytes);
+
+    private string? ClipPath(MediaCueNode media) => SourceUri.KindOf(media.MediaPath) switch
+    {
+        SourceKind.File when media.MediaPath.Length > 0 =>
+            MediaPaths.Resolve(Project, media.MediaPath, ProjectPath()),
+        SourceKind.YouTube => PreparedMediaPath(media.MediaPath),
+        _ => null,
+    };
 
     public TrackPickerViewModel AudioTrack => Track(TrackKind.Audio);
     public TrackPickerViewModel VideoTrack => Track(TrackKind.Video);
@@ -2328,26 +2399,14 @@ public partial class InspectorViewModel : ObservableObject
             .DefaultIfEmpty(0)
             .Max();
 
-    /// <summary>The canvases this cue is on, as the picker beside the preview lists them.</summary>
-    public IReadOnlyList<string> PlacementNames =>
-    [
-        .. PlacementList.Select(placement =>
-            (Project.Compositions.FirstOrDefault(c => c.Id == placement.CompositionId)?.Name ?? "?")
-            + $" · L{placement.LayerIndex}"),
-    ];
-
-    /// <summary>More than one canvas: the picker only earns its space then.</summary>
-    public bool HasSeveralPlacements => PlacementList.Count > 1;
-
     /// <summary>
-    /// One header per placement, so several can be carried without scrolling past all of them.
+    /// One expander header per placement, so several can be organised without one anonymous editor.
     /// </summary>
     /// <remarks>
     /// A placement carries geometry, a fit, an opacity, a crop, a chroma key and a colour adjust — the
     /// better part of a screen each. With a picker above one editor, a cue on three canvases meant
-    /// three screens of settings reachable only by remembering which entry was which. Each is a row
-    /// that opens instead, and opening one is what selects it: the editor below follows the open row,
-    /// so there is still exactly one set of fields and no second copy of this logic to drift.
+    /// three screens of settings reachable only by remembering which entry was which. Each is now an
+    /// expander, and opening one selects the placement that its nested editor projects.
     /// </remarks>
     public IReadOnlyList<PlacementHeader> PlacementHeaders =>
     [

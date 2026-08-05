@@ -402,9 +402,54 @@ public class SourceCueTests
         var cue = shell.Cues.AddSourceCue("ndi://CAM 1", "Camera")!;
         ShellFixture.Select(shell.Cues, cue.Id);
 
+        Assert.DoesNotContain("CLIP", shell.Cues.Inspector.Tabs);
         Assert.False(shell.Cues.Inspector.CanEditClip);
         Assert.Null(shell.Cues.Inspector.ClipEditor());
     });
+
+    [Fact]
+    public Task APreparedYouTubeCueUsesItsCachedAssetInTheGraphicalTrimEditor() =>
+        ShellFixture.WithShell(shell =>
+        {
+            const string uri =
+                "youtube://dQw4w9WgXcQ?v=1080p%7Cavc1%7Cmp4&a=opus%7Cwebm%7Cen";
+            const string asset = "/cache/youtube/dQw4w9WgXcQ.mkv";
+            var cue = shell.Cues.AddSourceCue(uri, "Prepared video", 30_000)!;
+            shell.Cues.Inspector.PreparedMediaPath = source => source == uri ? asset : null;
+            ShellFixture.Select(shell.Cues, cue.Id);
+
+            Assert.True(shell.Cues.Inspector.CanTrimMedia);
+            Assert.True(shell.Cues.Inspector.CanEditClip);
+            var editor = Assert.IsType<ClipEditorViewModel>(shell.Cues.Inspector.ClipEditor());
+            Assert.Equal(asset, editor.Path);
+            Assert.Equal(TimeSpan.FromSeconds(30), editor.Length);
+
+            shell.Cues.Inspector.TrimOutValue = "-5";
+            Assert.Equal(25_000, cue.TrimOutMs);
+        });
+
+    [Fact]
+    public Task YouTubeReadinessRefreshEnablesTheGraphicalEditorWithoutChangingTabs() =>
+        ShellFixture.WithShell(shell =>
+        {
+            const string uri =
+                "youtube://dQw4w9WgXcQ?v=1080p%7Cavc1%7Cmp4&a=opus%7Cwebm%7Cen";
+            var cue = shell.Cues.AddSourceCue(uri, "Preparing video", 30_000)!;
+            string? prepared = null;
+            shell.Cues.Inspector.PreparedMediaPath = _ => prepared;
+            ShellFixture.Select(shell.Cues, cue.Id);
+            shell.Cues.Inspector.SelectedTab = "CLIP";
+            Assert.False(shell.Cues.Inspector.CanEditClip);
+
+            var changed = new List<string?>();
+            shell.Cues.Inspector.PropertyChanged += (_, change) => changed.Add(change.PropertyName);
+            prepared = "/cache/youtube/ready.mkv";
+            shell.RefreshYouTubeReadiness();
+
+            Assert.True(shell.Cues.Inspector.CanEditClip);
+            Assert.Equal("CLIP", shell.Cues.Inspector.SelectedTab);
+            Assert.Contains(nameof(InspectorViewModel.CanEditClip), changed);
+        });
 
     /// <summary>"Edit source…" is offered on a source cue and on nothing else.</summary>
     [Fact]

@@ -109,6 +109,22 @@ public class InspectorViewModelTests
     });
 
     [Fact]
+    public Task MediaCuesOpenOnAnExplicitClipTabWithTrimControls() => ShellFixture.WithShell(shell =>
+    {
+        var bed = ShellFixture.Bed(shell.Project);
+        ShellFixture.Select(shell.Cues, bed.Id);
+
+        Assert.Contains("CLIP", shell.Cues.Inspector.Tabs);
+        Assert.Equal("CLIP", shell.Cues.Inspector.SelectedTab);
+        Assert.True(shell.Cues.Inspector.IsClipPane);
+        Assert.True(shell.Cues.Inspector.CanTrimMedia);
+
+        shell.Cues.Inspector.TrimInValue = "1.5";
+
+        Assert.Equal(1_500, bed.TrimInMs);
+    });
+
+    [Fact]
     public Task TypingEndClearsTheOutPoint() => ShellFixture.WithShell(shell =>
     {
         var bed = ShellFixture.Bed(shell.Project);

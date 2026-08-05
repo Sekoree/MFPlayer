@@ -267,6 +267,25 @@ public class CuesViewModelTests
     });
 
     [Fact]
+    public Task EditingModeAllowsSeekingAndLockedModeKeepsTheSafetyLatch() => ShellFixture.WithShell(shell =>
+    {
+        shell.Cues.SeekUnlocked = false;
+
+        Assert.True(shell.Cues.CanSeekActive);
+        Assert.Equal("SEEK ENABLED", shell.Cues.SeekLockLabel);
+
+        shell.IsLocked = true;
+
+        Assert.False(shell.Cues.CanSeekActive);
+        Assert.Equal("SEEK LOCKED", shell.Cues.SeekLockLabel);
+
+        shell.Cues.CanSeekActive = true;
+
+        Assert.True(shell.Cues.SeekUnlocked);
+        Assert.True(shell.Cues.CanSeekActive);
+    });
+
+    [Fact]
     public Task OpenLockedAppliesBeforeAnyAuthoringPaneIsBuilt() => ShellFixture.Session.DispatchGuarded(() =>
     {
         var project = ShellFixture.Project();

@@ -460,7 +460,7 @@ public partial class CuesViewModel : ObservableObject
 
         // The lock is enforced HERE as well as on the bar. The control refuses the gesture, and this
         // refuses the command — a seek that arrived from anywhere else must meet the same latch.
-        if (!SeekUnlocked)
+        if (!CanSeekActive)
         {
             TransportProblem = "seeking is locked — unlock it above the Active panel first";
             return;
@@ -480,14 +480,13 @@ public partial class CuesViewModel : ObservableObject
     private string _transportProblem = "";
 
     /// <summary>
-    /// Whether the Active panel's bars can be dragged.
+    /// The explicit seek latch used while the document is Locked.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// LOCKED by default, and this is the one default in the app chosen against convenience. The bars
-    /// sit under the pointer for the whole show, a drag on one is instantly audible in the room, and
-    /// there is no undo for it — an operator reaching past the panel to click something else must not
-    /// be able to move the playhead of a cue that is on air.
+    /// Off by default. Editing mode permits the bars independently; in Locked/performance mode the bars
+    /// sit under the pointer for the whole show, a drag is instantly audible in the room, and there is
+    /// no undo for it — an operator reaching past the panel must not move an on-air playhead by accident.
     /// </para>
     /// <para>
     /// A latch rather than a modifier key: seeking is something an operator does deliberately during a
@@ -501,15 +500,39 @@ public partial class CuesViewModel : ObservableObject
     /// </para>
     /// </remarks>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSeekActive))]
     [NotifyPropertyChangedFor(nameof(SeekLockLabel))]
     [NotifyPropertyChangedFor(nameof(SeekLockHint))]
     private bool _seekUnlocked;
 
-    public string SeekLockLabel => SeekUnlocked ? "SEEK UNLOCKED" : "SEEK LOCKED";
+    /// <summary>
+    /// Whether a live cue can be seeked from the Active panel.
+    /// </summary>
+    /// <remarks>
+    /// Editing mode already permits document-changing gestures throughout the cue editor, so making an
+    /// operator discover a second, unrelated lock there turns the bar into an apparent dead control.
+    /// Locked/performance mode keeps the explicit safety latch because a seek is immediate and cannot
+    /// be undone. The setter exists for the two-way toggle and only writes that latch in locked mode.
+    /// </remarks>
+    public bool CanSeekActive
+    {
+        get => CanEditDocument || SeekUnlocked;
+        set
+        {
+            if (!CanEditDocument)
+                SeekUnlocked = value;
+        }
+    }
 
-    public string SeekLockHint => SeekUnlocked
-        ? "the bars in Active can be dragged — a drag moves a cue that is on air"
-        : "click to allow dragging the bars in Active";
+    public string SeekLockLabel => CanEditDocument
+        ? "SEEK ENABLED"
+        : SeekUnlocked ? "SEEK UNLOCKED" : "SEEK LOCKED";
+
+    public string SeekLockHint => CanEditDocument
+        ? "editing mode — drag an Active bar to seek a playing cue"
+        : SeekUnlocked
+            ? "the bars in Active can be dragged — a drag moves a cue that is on air"
+            : "click to allow dragging the bars in Active";
 
     /// <summary>Stops everything, over the project's stop fade. The split-menu half of STOP.</summary>
     public void StopAll() => _ = Engine?.StopAllAsync();
@@ -1403,6 +1426,9 @@ public partial class CuesViewModel : ObservableObject
         OnPropertyChanged(nameof(ListSelector));
         OnPropertyChanged(nameof(CanOpenTimeline));
         OnPropertyChanged(nameof(CanEditDocument));
+        OnPropertyChanged(nameof(CanSeekActive));
+        OnPropertyChanged(nameof(SeekLockLabel));
+        OnPropertyChanged(nameof(SeekLockHint));
         OnPropertyChanged(nameof(CanModifySelection));
         OnPropertyChanged(nameof(ToggleEnabledLabel));
     }

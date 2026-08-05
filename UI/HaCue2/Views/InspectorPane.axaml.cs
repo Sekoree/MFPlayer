@@ -129,48 +129,12 @@ public partial class InspectorPane : UserControl
             inspector.PlaceOnComposition();
     }
 
-    /// <summary>Opening a placement's row is what selects it for the editor below.</summary>
-    /// <remarks>
-    /// Only the row being CHECKED acts. The group unchecks the previous one in the same gesture, and
-    /// acting on that too would select whichever row happened to be unchecked last.
-    /// </remarks>
-    private void OnPlacementRowChosen(object? sender, RoutedEventArgs e)
+    /// <summary>Opening a placement's expander selects the placement its nested editor projects.</summary>
+    private void OnPlacementExpanding(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector
-            && sender is RadioButton { IsChecked: true, Tag: int index })
+            && sender is Expander { Tag: int index })
             inspector.ExpandPlacement(index);
-    }
-
-    private void OnRemovePlacement(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is InspectorViewModel inspector)
-            inspector.RemovePlacement();
-    }
-
-    /// <summary>A quick destination layout — full, halves, quadrants.</summary>
-    private void OnLayout(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is string preset)
-            inspector.ApplyLayout(preset);
-    }
-
-    /// <summary>A quick source crop, including the one that takes them all off again.</summary>
-    private void OnCrop(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is string preset)
-            inspector.ApplyCrop(preset);
-    }
-
-    private void OnPlacementGesture(object? sender, Controls.PlacementGesture gesture)
-    {
-        if (DataContext is InspectorViewModel inspector)
-            inspector.ApplyPlacementGesture(gesture);
-    }
-
-    private void OnPlacementGestureCompleted(object? sender, EventArgs e)
-    {
-        if (DataContext is InspectorViewModel inspector)
-            inspector.EndPlacementGesture();
     }
 
     private void OnSendGesture(object? sender, Controls.MatrixGesture gesture)

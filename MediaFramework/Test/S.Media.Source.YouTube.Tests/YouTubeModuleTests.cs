@@ -315,6 +315,10 @@ public sealed class YouTubeModuleTests : IDisposable
         Assert.Equal(YouTubeCacheState.Ready, queue.StateOf(uri));
         Assert.True(queue.ContentRevision > initialRevision);
         Assert.True(File.Exists(result.Prepared!.AssetPath));
+        Assert.Equal(result.Prepared.AssetPath, queue.PreparedAssetPath(uri));
+
+        File.Delete(result.Prepared.AssetPath);
+        Assert.Null(queue.PreparedAssetPath(uri));
     }
 
     [Fact]
