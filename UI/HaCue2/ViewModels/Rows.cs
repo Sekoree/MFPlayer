@@ -1,5 +1,6 @@
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
+using HaCue2.Core.Journal;
 
 namespace HaCue2.ViewModels;
 
@@ -380,6 +381,17 @@ public sealed record PlacementBox
     public double Top { get; init; }
     public double Width { get; init; }
     public double Height { get; init; }
+
+    /// <summary>
+    /// The document rectangle this rendered box edits when it is not the same rectangle.
+    /// </summary>
+    /// <remarks>
+    /// A contained square image occupies only the square part of a wide destination, and a 1280×720
+    /// output has a smaller physical footprint than a 1920×1080 composition even when it samples the
+    /// whole composition. The canvas draws the first rectangle while gestures remain edits of this
+    /// one. Null means the displayed and authored rectangles are identical.
+    /// </remarks>
+    public NormalizedRect? AuthoredRect { get; init; }
 
     /// <summary>Steel (a) or congo (b) — the mockup alternates so overlapping boxes stay separable.</summary>
     public bool IsSecondary { get; init; }

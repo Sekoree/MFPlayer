@@ -119,15 +119,28 @@ public static class OutputMappingResolver
         if (s.SrcWidth <= 0 || s.SrcHeight <= 0)
             return false;
 
-        var crop = new RectNormalized(
-            sourceBounds.X0 + (float)s.SrcX * sourceBounds.Width,
-            sourceBounds.Y0 + (float)s.SrcY * sourceBounds.Height,
-            sourceBounds.X0 + (float)(s.SrcX + s.SrcWidth) * sourceBounds.Width,
-            sourceBounds.Y0 + (float)(s.SrcY + s.SrcHeight) * sourceBounds.Height).Clamped();
+        var rawX0 = sourceBounds.X0 + (float)s.SrcX * sourceBounds.Width;
+        var rawY0 = sourceBounds.Y0 + (float)s.SrcY * sourceBounds.Height;
+        var rawX1 = sourceBounds.X0 + (float)(s.SrcX + s.SrcWidth) * sourceBounds.Width;
+        var rawY1 = sourceBounds.Y0 + (float)(s.SrcY + s.SrcHeight) * sourceBounds.Height;
 
-        // Slice size in canvas pixels (post-clamp so an out-of-range model can't go degenerate).
-        var sliceW = crop.Width * canvasWidth;
-        var sliceH = crop.Height * canvasHeight;
+        // Clip WHAT CAN BE SAMPLED, but retain the authored (possibly overhanging) slice for the
+        // transform below. Clamping first and scaling the clamped remnant to the full destination
+        // stretches the opposite edge: a full-height screen moved half a canvas above the frame then
+        // fills its output with the top half instead of leaving its upper half black.
+        var cropX0 = MathF.Max(rawX0, sourceBounds.X0);
+        var cropY0 = MathF.Max(rawY0, sourceBounds.Y0);
+        var cropX1 = MathF.Min(rawX1, sourceBounds.X1);
+        var cropY1 = MathF.Min(rawY1, sourceBounds.Y1);
+        if (cropX1 <= cropX0 || cropY1 <= cropY0)
+            return false;
+
+        var crop = new RectNormalized(cropX0, cropY0, cropX1, cropY1);
+
+        // The raw slice determines scale and position. The crop gates unavailable pixels after that
+        // transform, naturally turning overhang into transparent black output area.
+        var sliceW = (rawX1 - rawX0) * canvasWidth;
+        var sliceH = (rawY1 - rawY0) * canvasHeight;
         if (sliceW < 1e-3f || sliceH < 1e-3f)
             return false;
 
@@ -136,8 +149,8 @@ public static class OutputMappingResolver
         if (destW < 1e-3f || destH < 1e-3f)
             return false;
 
-        var srcCenterX = (crop.X0 + crop.X1) * 0.5f * canvasWidth;
-        var srcCenterY = (crop.Y0 + crop.Y1) * 0.5f * canvasHeight;
+        var srcCenterX = (rawX0 + rawX1) * 0.5f * canvasWidth;
+        var srcCenterY = (rawY0 + rawY1) * 0.5f * canvasHeight;
         var destCenterX = (float)s.DestX + destW * 0.5f;
         var destCenterY = (float)s.DestY + destH * 0.5f;
 
@@ -153,8 +166,14 @@ public static class OutputMappingResolver
         if (opacity <= 0f)
             return false;
 
+        var visibleDomain = new RectNormalized(
+            (cropX0 - rawX0) / (rawX1 - rawX0),
+            (cropY0 - rawY0) / (rawY1 - rawY0),
+            (cropX1 - rawX0) / (rawX1 - rawX0),
+            (cropY1 - rawY0) / (rawY1 - rawY0));
+
         resolved = new ResolvedMappingSection(crop, transform, opacity,
-            TryResolveMesh(s, destW, destH, destCenterX, destCenterY));
+            TryResolveMesh(s, destW, destH, destCenterX, destCenterY, visibleDomain));
         return true;
     }
 
@@ -173,7 +192,12 @@ public static class OutputMappingResolver
     /// control points equals transforming the evaluated surface.) Malformed grids resolve to null.
     /// </summary>
     private static WarpMesh? TryResolveMesh(
-        ClipOutputMappingSection s, float destW, float destH, float destCenterX, float destCenterY)
+        ClipOutputMappingSection s,
+        float destW,
+        float destH,
+        float destCenterX,
+        float destCenterY,
+        RectNormalized visibleDomain)
     {
         if (s.MeshColumns < 2 || s.MeshRows < 2 || s.MeshPoints is null)
             return null;
@@ -217,6 +241,6 @@ public static class OutputMappingResolver
                 destCenterY + dx * sin + dy * cos);
         }
 
-        return new WarpMesh(s.MeshColumns, s.MeshRows, points);
+        return new WarpMesh(s.MeshColumns, s.MeshRows, points, visibleDomain);
     }
 }

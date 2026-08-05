@@ -170,15 +170,15 @@ public sealed class ImplementationRegressionTests
     }
 
     /// <summary>
-    /// The splitter divides the SOURCE, not the destination.
+    /// The splitter divides source and destination into matching tiles.
     /// </summary>
     /// <remarks>
-    /// A wall is N outputs each showing its own slice whole. Dividing both ends would put a
-    /// quarter-size picture in the corner of every screen, which is the shape of mistake that only
-    /// shows up once the projectors are hung.
+    /// This is one output's WARP mapping, not the composition layout across several outputs. Every
+    /// source tile needs its matching output tile; making every destination full-frame enlarges all
+    /// tiles over one another and leaves the last one visually dominant.
     /// </remarks>
     [Fact]
-    public void SplittingDividesTheCanvasAndFillsEachOutput()
+    public void SplittingCreatesAnIdentityGridAcrossTheOutput()
     {
         var composition = new CompositionDefinition { Name = "Canvas" };
         var output = new VideoOutputDefinition { Name = "Wall", CompositionId = composition.Id };
@@ -194,12 +194,61 @@ public sealed class ImplementationRegressionTests
         Assert.Equal(1d / 3, output.Mapping[1].SourceX, 6);
         Assert.Equal(2d / 3, output.Mapping[2].SourceX, 6);
 
-        foreach (var section in output.Mapping)
+        Assert.Equal(0, output.Mapping[0].TargetX, 6);
+        Assert.Equal(1d / 3, output.Mapping[0].TargetWidth, 6);
+        Assert.Equal(1d / 3, output.Mapping[1].TargetX, 6);
+        Assert.Equal(1d / 3, output.Mapping[1].TargetWidth, 6);
+        Assert.Equal(2d / 3, output.Mapping[2].TargetX, 6);
+        Assert.Equal(1d / 3, output.Mapping[2].TargetWidth, 6);
+        Assert.All(output.Mapping, section =>
         {
-            Assert.Equal(0, section.TargetX);
-            Assert.Equal(1, section.TargetWidth);
-            Assert.Equal(1, section.TargetHeight);
-        }
+            Assert.Equal(0, section.TargetY, 6);
+            Assert.Equal(1, section.TargetHeight, 6);
+        });
+    }
+
+    [Fact]
+    public void SplittingSubdividesTheExistingLayoutSlice()
+    {
+        var composition = new CompositionDefinition { Name = "Canvas" };
+        var output = new VideoOutputDefinition
+        {
+            Name = "Right projector",
+            CompositionId = composition.Id,
+            Mapping =
+            [
+                new MappingSection
+                {
+                    Name = "Right half",
+                    SourceX = .5,
+                    SourceWidth = .5,
+                },
+            ],
+        };
+        var project = new HaCueProject { Compositions = [composition], VideoOutputs = [output] };
+        var video = new VideoViewModel(project, new ShowRuntime(), new ProjectJournal(project))
+        {
+            SplitColumns = 2,
+            SplitRows = 1,
+        };
+
+        video.SplitIntoGrid();
+
+        Assert.Collection(output.Mapping,
+            left =>
+            {
+                Assert.Equal(.5, left.SourceX, 6);
+                Assert.Equal(.25, left.SourceWidth, 6);
+                Assert.Equal(0, left.TargetX, 6);
+                Assert.Equal(.5, left.TargetWidth, 6);
+            },
+            right =>
+            {
+                Assert.Equal(.75, right.SourceX, 6);
+                Assert.Equal(.25, right.SourceWidth, 6);
+                Assert.Equal(.5, right.TargetX, 6);
+                Assert.Equal(.5, right.TargetWidth, 6);
+            });
     }
 
     /// <summary>

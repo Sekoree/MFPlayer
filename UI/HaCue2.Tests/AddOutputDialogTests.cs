@@ -30,6 +30,8 @@ public class AddOutputDialogTests
         Assert.Equal("fullscreen", prompt["Presentation"].Choice);
         Assert.True(prompt["Target"].IsEnabled, "a fullscreen output is placed by choosing its screen");
         Assert.False(prompt["Window size"].IsEnabled, "a fullscreen output takes the screen's size");
+        Assert.False(prompt["Lock aspect"].IsEnabled);
+        Assert.False(prompt["Lock resolution"].IsEnabled);
     }
 
     [Fact]
@@ -41,6 +43,8 @@ public class AddOutputDialogTests
 
         Assert.Equal("windowed", prompt["Presentation"].Choice);
         Assert.True(prompt["Window size"].IsEnabled);
+        Assert.True(prompt["Lock aspect"].IsEnabled);
+        Assert.True(prompt["Lock resolution"].IsEnabled);
         Assert.False(prompt["Target"].IsEnabled);
     }
 
@@ -81,6 +85,8 @@ public class AddOutputDialogTests
         prompt["Name"].Value = "Confidence";
         prompt["Presentation"].SelectedIndex = 1;
         prompt["Window size"].Value = "1280×720";
+        prompt["Lock aspect"].IsOn = true;
+        prompt["Lock resolution"].IsOn = true;
         prompt.Commit();
 
         var output = journal.Project.VideoOutputs[^1];
@@ -91,6 +97,8 @@ public class AddOutputDialogTests
         Assert.Equal(720, output.WindowHeight);
         Assert.Equal(1280, output.MappingWidth);
         Assert.Equal(720, output.MappingHeight);
+        Assert.True(output.WindowAspectLocked);
+        Assert.True(output.WindowResolutionLocked);
     }
 
     [Fact]
@@ -118,5 +126,7 @@ public class AddOutputDialogTests
         // An NDI sender has no window and no screen; offering either would be a control that lies.
         Assert.DoesNotContain(prompt.Fields, field => field.Label == "Presentation");
         Assert.DoesNotContain(prompt.Fields, field => field.Label == "Window size");
+        Assert.DoesNotContain(prompt.Fields, field => field.Label == "Lock aspect");
+        Assert.DoesNotContain(prompt.Fields, field => field.Label == "Lock resolution");
     }
 }

@@ -27,8 +27,34 @@ public enum ResizeEdges
 /// Which of the subject's placements. A cue can appear on several canvases at once, so the cue id
 /// alone does not say which rectangle was dragged.
 /// </param>
-/// <param name="Rect">Where the box should end up.</param>
-public sealed record PlacementGesture(int Index, Guid SubjectId, int Layer, NormalizedRect Rect);
+/// <param name="Rect">Where the displayed box should end up.</param>
+/// <param name="DisplayStart">The rendered/physical box at the start of the gesture.</param>
+/// <param name="AuthoredStart">The document rectangle controlled by that displayed box.</param>
+public sealed record PlacementGesture(
+    int Index,
+    Guid SubjectId,
+    int Layer,
+    NormalizedRect Rect,
+    NormalizedRect? DisplayStart = null,
+    NormalizedRect? AuthoredStart = null)
+{
+    /// <summary>Maps a gesture on rendered bounds back to the placement or source slice it edits.</summary>
+    public NormalizedRect AuthoredRect()
+    {
+        if (DisplayStart is not { Width: > 0, Height: > 0 } display
+            || AuthoredStart is not { } authored)
+            return Rect;
+
+        var scaleX = Rect.Width / display.Width;
+        var scaleY = Rect.Height / display.Height;
+
+        return new NormalizedRect(
+            Rect.X + ((authored.X - display.X) * scaleX),
+            Rect.Y + ((authored.Y - display.Y) * scaleY),
+            authored.Width * scaleX,
+            authored.Height * scaleY);
+    }
+}
 
 /// <summary>
 /// Draws fraction-positioned boxes on a canvas and turns drags on them into rectangle edits.
@@ -61,10 +87,16 @@ public partial class PlacementCanvas : UserControl
     private int _draggedIndex = -1;
     private ResizeEdges _edges;
     private Point _grabbedAt;
+    private Point _lastAppliedAt;
     private NormalizedRect _grabbedRect;
+    private NormalizedRect _grabbedAuthoredRect;
 
     public static readonly StyledProperty<IReadOnlyList<PlacementBox>> BoxesProperty =
         AvaloniaProperty.Register<PlacementCanvas, IReadOnlyList<PlacementBox>>(nameof(Boxes), []);
+
+    /// <summary>Read-only physical/reference outlines drawn behind the editable boxes.</summary>
+    public static readonly StyledProperty<IReadOnlyList<PlacementBox>> ReferenceBoxesProperty =
+        AvaloniaProperty.Register<PlacementCanvas, IReadOnlyList<PlacementBox>>(nameof(ReferenceBoxes), []);
 
     public static readonly StyledProperty<bool> ShowGridProperty =
         AvaloniaProperty.Register<PlacementCanvas, bool>(nameof(ShowGrid), true);
@@ -171,6 +203,12 @@ public partial class PlacementCanvas : UserControl
         set => SetValue(BoxesProperty, value);
     }
 
+    public IReadOnlyList<PlacementBox> ReferenceBoxes
+    {
+        get => GetValue(ReferenceBoxesProperty);
+        set => SetValue(ReferenceBoxesProperty, value);
+    }
+
     public bool ShowGrid
     {
         get => GetValue(ShowGridProperty);
@@ -200,7 +238,9 @@ public partial class PlacementCanvas : UserControl
 
         _draggedIndex = index;
         _grabbedAt = position;
+        _lastAppliedAt = position;
         _grabbedRect = RectOf(Boxes[index]);
+        _grabbedAuthoredRect = Boxes[index].AuthoredRect ?? _grabbedRect;
         _edges = EdgesAt(position, _grabbedRect);
 
         e.Pointer.Capture(this);
@@ -220,7 +260,24 @@ public partial class PlacementCanvas : UserControl
             return;
         }
 
-        var position = e.GetPosition(surface);
+        ApplyDrag(e.GetPosition(surface), e.KeyModifiers, surface);
+        e.Handled = true;
+    }
+
+    /// <summary>Applies one pointer sample against the immutable start of the active gesture.</summary>
+    /// <remarks>
+    /// Native backends are allowed to coalesce pointer motion while the UI is busy. The release path
+    /// calls this too, so the document always lands under the actual mouse-up position rather than at
+    /// the last intermediate event the backend happened to deliver.
+    /// </remarks>
+    private void ApplyDrag(Point position, KeyModifiers modifiers, Panel surface)
+    {
+        if (_draggedIndex < 0
+            || Math.Abs(position.X - _lastAppliedAt.X) < .001
+            && Math.Abs(position.Y - _lastAppliedAt.Y) < .001)
+            return;
+
+        _lastAppliedAt = position;
         var dx = (position.X - _grabbedAt.X) / surface.Bounds.Width;
         var dy = (position.Y - _grabbedAt.Y) / surface.Bounds.Height;
 
@@ -232,13 +289,13 @@ public partial class PlacementCanvas : UserControl
         // Aspect is the normal editing mode. Shift temporarily reverses the visible option: it unlocks
         // the usual locked editor and locks an editor whose option was deliberately switched off.
         var keepAspect = _edges != ResizeEdges.None
-                         && PreserveAspect != e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+                         && PreserveAspect != modifiers.HasFlag(KeyModifiers.Shift);
         if (keepAspect)
             moved = WithAspect(_grabbedRect, moved, _edges);
 
         // Alt suspends snapping for one gesture — the escape hatch for placing something a few pixels
         // off a guide, which is otherwise impossible once the guide has it.
-        if (SnapEnabled && !e.KeyModifiers.HasFlag(KeyModifiers.Alt))
+        if (SnapEnabled && !modifiers.HasFlag(KeyModifiers.Alt))
             moved = Snap(moved, _edges, surface);
 
         // A snapped resize may have changed only one dragged edge. Reapply the constraint so a guide
@@ -249,14 +306,15 @@ public partial class PlacementCanvas : UserControl
         UpdateActiveGuides(
             moved,
             surface,
-            SnapEnabled && !e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+            SnapEnabled && !modifiers.HasFlag(KeyModifiers.Alt));
 
         Gesture?.Invoke(this, new PlacementGesture(
             _draggedIndex,
             Boxes[_draggedIndex].SubjectId,
             Boxes[_draggedIndex].LayerIndex,
-            moved));
-        e.Handled = true;
+            moved,
+            _grabbedRect,
+            _grabbedAuthoredRect));
     }
 
     /// <summary>
@@ -379,6 +437,9 @@ public partial class PlacementCanvas : UserControl
         if (_draggedIndex < 0)
             return;
 
+        if (Surface is { Bounds.Width: > 0, Bounds.Height: > 0 } surface)
+            ApplyDrag(e.GetPosition(surface), e.KeyModifiers, surface);
+
         _draggedIndex = -1;
         _edges = ResizeEdges.None;
         ClearGuides();
@@ -420,11 +481,14 @@ public partial class PlacementCanvas : UserControl
         }
 
         var rect = RectOf(Boxes[selected]);
+        var authored = Boxes[selected].AuthoredRect ?? rect;
         Gesture?.Invoke(this, new PlacementGesture(
             selected,
             Boxes[selected].SubjectId,
             Boxes[selected].LayerIndex,
-            new NormalizedRect(rect.X + dx, rect.Y + dy, rect.Width, rect.Height)));
+            new NormalizedRect(rect.X + dx, rect.Y + dy, rect.Width, rect.Height),
+            rect,
+            authored));
 
         // Each keypress is its own gesture: holding an arrow key should still collapse into one undo
         // step, but a pause between two presses should not.
@@ -636,4 +700,46 @@ public partial class PlacementCanvas : UserControl
 
     private static NormalizedRect RectOf(PlacementBox box) =>
         new(box.Left, box.Top, box.Width, box.Height);
+}
+
+/// <summary>Paints non-interactive physical/raster outlines without adding another layout surface.</summary>
+public sealed class PlacementReferenceLayer : Control
+{
+    public static readonly StyledProperty<IReadOnlyList<PlacementBox>> BoxesProperty =
+        AvaloniaProperty.Register<PlacementReferenceLayer, IReadOnlyList<PlacementBox>>(nameof(Boxes), []);
+
+    public static readonly StyledProperty<IBrush> StrokeProperty =
+        AvaloniaProperty.Register<PlacementReferenceLayer, IBrush>(nameof(Stroke), Brushes.CadetBlue);
+
+    static PlacementReferenceLayer() => AffectsRender<PlacementReferenceLayer>(BoxesProperty, StrokeProperty);
+
+    public IReadOnlyList<PlacementBox> Boxes
+    {
+        get => GetValue(BoxesProperty);
+        set => SetValue(BoxesProperty, value);
+    }
+
+    public IBrush Stroke
+    {
+        get => GetValue(StrokeProperty);
+        set => SetValue(StrokeProperty, value);
+    }
+
+    public override void Render(DrawingContext context)
+    {
+        base.Render(context);
+        var pen = new Pen(Stroke, 1);
+
+        foreach (var box in Boxes)
+        {
+            context.DrawRectangle(
+                null,
+                pen,
+                new Rect(
+                    box.Left * Bounds.Width,
+                    box.Top * Bounds.Height,
+                    box.Width * Bounds.Width,
+                    box.Height * Bounds.Height));
+        }
+    }
 }

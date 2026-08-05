@@ -160,6 +160,83 @@ public sealed class EffectCatalogTests
         }
     }
 
+    [Fact]
+    public void OutputMappingSourceOverhangLeavesEmptyOutputInsteadOfStretchingTheVisibleRemainder()
+    {
+        var source = new VideoFormat(96, 54, PixelFormat.Bgra32, new Rational(60, 1));
+        var output = new VideoFormat(64, 36, PixelFormat.Bgra32, new Rational(60, 1));
+        var spec = new ClipOutputMappingSpec(
+            [
+                new ClipOutputMappingSection(
+                    "layout", true,
+                    SrcX: 0, SrcY: -0.5, SrcWidth: 1, SrcHeight: 1,
+                    DestX: 0, DestY: 0, DestWidth: output.Width, DestHeight: output.Height),
+            ],
+            output.Width,
+            output.Height);
+
+        var section = Assert.Single(OutputMappingResolver.Resolve(spec, source.Width, source.Height));
+        Assert.Equal(new RectNormalized(0, 0, 1, 0.5f), section.SourceCrop);
+
+        // The valid source begins halfway down the destination: the unavailable half of the authored
+        // source slice remains empty instead of the valid top half being scaled to fill everything.
+        var sourceTopLeft = section.Transform.Apply(0, 0);
+        Assert.Equal(0, sourceTopLeft.X, 4);
+        Assert.Equal(output.Height / 2f, sourceTopLeft.Y, 4);
+
+        using var compositor = new CpuVideoCompositor(output);
+        using var frame = SolidBgra(source, b: 30, g: 80, r: 220);
+        using var mapped = compositor.Composite(
+            [
+                new CompositorLayer(frame, section.Transform, 1, BlendMode.Source)
+                {
+                    SourceCrop = section.SourceCrop,
+                },
+            ],
+            TimeSpan.Zero);
+
+        var stride = mapped.Strides[0];
+        var topAlpha = mapped.Planes[0].Span[(output.Height / 4 * stride) + (output.Width / 2 * 4) + 3];
+        var bottomAlpha = mapped.Planes[0].Span[(output.Height * 3 / 4 * stride) + (output.Width / 2 * 4) + 3];
+        Assert.Equal(0, topAlpha);
+        Assert.Equal(255, bottomAlpha);
+    }
+
+    [Fact]
+    public void OutputMappingMeshUsesOnlyTheVisiblePartOfAnOverhangingSourceDomain()
+    {
+        var spec = new ClipOutputMappingSpec(
+        [
+            new ClipOutputMappingSection(
+                "warped", true,
+                SrcX: 0, SrcY: -0.5, SrcWidth: 1, SrcHeight: 1,
+                DestX: 0, DestY: 0, DestWidth: 640, DestHeight: 360,
+                MeshColumns: 2,
+                MeshRows: 2,
+                MeshPoints:
+                [
+                    new ClipMeshPoint(0, 0), new ClipMeshPoint(1, 0),
+                    new ClipMeshPoint(0.1, 1), new ClipMeshPoint(1, 1),
+                ]),
+        ]);
+
+        var mesh = Assert.Single(OutputMappingResolver.Resolve(spec, 1920, 1080)).Mesh;
+        Assert.NotNull(mesh);
+        Assert.Equal(new RectNormalized(0, 0.5f, 1, 1), mesh.ParameterBounds);
+
+        // Parameter (0,0) of the clipped mesh is the midpoint of the original left edge, not its
+        // off-source top-left point. The GPU therefore draws only the lower half of the warp surface.
+        var visibleTopLeft = WarpMeshTessellator.Evaluate(mesh, 0, 0);
+        Assert.Equal(32, visibleTopLeft.X, 3);
+        Assert.Equal(180, visibleTopLeft.Y, 3);
+
+        WarpMeshTessellator.Tessellate(mesh, out var vertices, out _);
+        Assert.Equal(0, vertices[0]); // visible-crop U
+        Assert.Equal(0, vertices[1]); // visible-crop V
+        Assert.Equal(32, vertices[2], 3);
+        Assert.Equal(180, vertices[3], 3);
+    }
+
     private static VideoFrame SolidBgra(VideoFormat format, byte b, byte g, byte r)
     {
         var stride = format.Width * 4;

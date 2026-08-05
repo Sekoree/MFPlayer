@@ -97,6 +97,23 @@ public class VideoOutputPaneTests
     });
 
     [Fact]
+    public Task WindowAspectAndResolutionLocksAreIndependentAndUndoable() => ShellFixture.WithShell(shell =>
+    {
+        var (video, output, _) = WithOutput(shell);
+        video.OutputFullscreenIndex = 1;
+
+        video.OutputWindowAspectLocked = true;
+        video.OutputWindowResolutionLocked = true;
+
+        Assert.True(output.WindowAspectLocked);
+        Assert.True(output.WindowResolutionLocked);
+
+        shell.Undo();
+        Assert.True(output.WindowAspectLocked);
+        Assert.False(output.WindowResolutionLocked);
+    });
+
+    [Fact]
     public Task TheIdleFallbackReachesTheDocument() => ShellFixture.WithShell(shell =>
     {
         var (video, output, _) = WithOutput(shell);

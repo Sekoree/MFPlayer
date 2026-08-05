@@ -1,0 +1,35 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
+        xmlns:vm="using:HaCue2.ViewModels"
+        x:Class="HaCue2.Views.PlacementEditorWindow"
+        x:DataType="vm:InspectorViewModel"
+        Title="HaCue2 · precise video placement"
+        Width="1180" Height="790" MinWidth="640" MinHeight="440"
+        WindowStartupLocation="CenterOwner">
+  <Grid RowDefinitions="*,Auto">
+    <c:AspectBox Grid.Row="0" Margin="18" HorizontalAlignment="Stretch"
+                 VerticalAlignment="Center" Ratio="{Binding PlacementAspect}">
+      <c:PlacementCanvas Boxes="{Binding Placements}"
+                         AutomationProperties.Name="Precise video placement canvas"
+                         GuidesX="{Binding PlacementGuidesX}"
+                         GuidesY="{Binding PlacementGuidesY}"
+                         PreserveAspect="{Binding PreservePlacementAspect}"
+                         SnapEnabled="{Binding SnapPlacement}"
+                         AllowOutside="True"
+                         Gesture="OnPlacementGesture"
+                         GestureCompleted="OnPlacementGestureCompleted" />
+    </c:AspectBox>
+
+    <Border Grid.Row="1" Classes="chain" Margin="18,0,18,14">
+      <DockPanel LastChildFill="True">
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="14">
+          <CheckBox Content="preserve aspect" IsChecked="{Binding PreservePlacementAspect}" />
+          <CheckBox Content="snap + guides" IsChecked="{Binding SnapPlacement}" />
+        </StackPanel>
+        <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                   Text="drag inside to move · edges and corners resize · arrows nudge · Shift reverses aspect lock · Alt suspends guides" />
+      </DockPanel>
+    </Border>
+  </Grid>
+</Window>

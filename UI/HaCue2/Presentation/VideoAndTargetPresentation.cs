@@ -1,7 +1,10 @@
 using HaCue2.Core.Journal;
+using HaCue2.Core.Compile;
 using HaCue2.Core.Model;
+using HaCue2.Machine;
 using HaCue2.Session;
 using HaCue2.ViewModels;
+using S.Media.Source.Text;
 
 namespace HaCue2.Presentation;
 
@@ -17,7 +20,10 @@ public static class VideoPresentation
     /// than anything on the composition itself.
     /// </remarks>
     public static IReadOnlyList<PlacementBox> Layers(
-        HaCueProject project, CompositionDefinition composition, Guid? selectedCueId = null)
+        HaCueProject project,
+        CompositionDefinition composition,
+        Guid? selectedCueId = null,
+        Func<MediaCueNode, MediaFacts?>? mediaFacts = null)
     {
         var boxes = new List<PlacementBox>();
 
@@ -27,15 +33,20 @@ public static class VideoPresentation
             if (placement.CompositionId != composition.Id)
                 continue;
 
+            var authored = new NormalizedRect(
+                placement.X, placement.Y, placement.Width, placement.Height);
+            var rendered = RenderedBounds(cue, placement, composition, mediaFacts) ?? authored;
+
             boxes.Add(new PlacementBox
             {
                 SubjectId = cue.Id,
                 LayerIndex = placement.LayerIndex,
                 Label = $"Q{CuePresentation.Number(cue.Number)} {cue.Label} · L{placement.LayerIndex}",
-                Left = placement.X,
-                Top = placement.Y,
-                Width = placement.Width,
-                Height = placement.Height,
+                Left = rendered.X,
+                Top = rendered.Y,
+                Width = rendered.Width,
+                Height = rendered.Height,
+                AuthoredRect = rendered == authored ? null : authored,
                 // Alternating gel by layer parity, so two overlapping placements stay separable at a
                 // glance without inventing a per-cue colour nobody chose.
                 IsSecondary = placement.LayerIndex % 2 == 1,
@@ -47,6 +58,187 @@ public static class VideoPresentation
         // and so a click, which searches back to front, grabs what the operator sees on top. Cue order
         // would have an L1 covering an L2 whenever the L1 cue happened to come later in the list.
         return [.. boxes.OrderBy(box => box.LayerIndex)];
+    }
+
+    /// <summary>The part of a placement that the compositor actually paints.</summary>
+    /// <remarks>
+    /// A destination is a fitting area, not necessarily the visible picture. A square cover contained
+    /// by a wide destination is still square, and a transparent text card paints only its glyphs. This
+    /// mirrors the compositor's fit/crop calculation but deliberately does not clip to the composition:
+    /// the editor's surrounding work area must keep an overhanging layer visible and recoverable.
+    /// </remarks>
+    private static NormalizedRect? RenderedBounds(
+        CueNode cue,
+        LayerPlacement placement,
+        CompositionDefinition composition,
+        Func<MediaCueNode, MediaFacts?>? mediaFacts)
+    {
+        if (composition.Width <= 0 || composition.Height <= 0 || placement.VideoFxEnabled && placement.VideoFx.Count > 0)
+            return null;
+
+        var sourceWidth = composition.Width;
+        var sourceHeight = composition.Height;
+        var content = new NormalizedRect(0, 0, 1, 1);
+
+        switch (cue)
+        {
+            case MediaCueNode media:
+            {
+                if (media.VideoTrackIndex == -1 || mediaFacts?.Invoke(media) is not { } facts)
+                    return null;
+
+                var track = MediaFacts.Resolve(
+                                facts.VideoTracks,
+                                media.VideoTrackIndex,
+                                media.VideoTrackSignature)
+                            ?? facts.PlaceableVideoTrack;
+                if (track is not { Width: > 0, Height: > 0 })
+                    return null;
+
+                sourceWidth = track.Value.Width;
+                sourceHeight = track.Value.Height;
+                break;
+            }
+
+            case TextCueNode text:
+            {
+                var spec = ShowCompiler.TextSource(text);
+                sourceWidth = spec.CanvasWidth;
+                sourceHeight = spec.CanvasHeight;
+
+                // An opaque card background really does occupy the frame. A transparent card is only
+                // as large as the ink (plus its outline), which is what a text placement editor needs.
+                if (string.IsNullOrWhiteSpace(text.Background))
+                {
+                    if (TextFrameRenderer.MeasureNormalizedBounds(spec) is not { } measured
+                        || measured.W <= 0 || measured.H <= 0)
+                        return null;
+
+                    var outlineX = spec.OutlineWidthPx / Math.Max(1d, sourceWidth);
+                    var outlineY = spec.OutlineWidthPx / Math.Max(1d, sourceHeight);
+                    var left = Math.Max(0, measured.X - outlineX);
+                    var top = Math.Max(0, measured.Y - outlineY);
+                    var right = Math.Min(1, measured.X + measured.W + outlineX);
+                    var bottom = Math.Min(1, measured.Y + measured.H + outlineY);
+                    content = new NormalizedRect(left, top, right - left, bottom - top);
+                }
+
+                break;
+            }
+
+            // A visualizer's source surface is the composition itself. The full-source result below
+            // therefore collapses to the normal placement geometry while still respecting its fit.
+            case VisualizerCueNode:
+                break;
+
+            default:
+                return null;
+        }
+
+        return FitBounds(sourceWidth, sourceHeight, content, placement, composition);
+    }
+
+    private static NormalizedRect? FitBounds(
+        int sourceWidth,
+        int sourceHeight,
+        NormalizedRect content,
+        LayerPlacement placement,
+        CompositionDefinition composition)
+    {
+        var sx0 = Math.Clamp(placement.CropLeft, 0, .99) * sourceWidth;
+        var sy0 = Math.Clamp(placement.CropTop, 0, .99) * sourceHeight;
+        var sx1 = (1 - Math.Clamp(placement.CropRight, 0, .99)) * sourceWidth;
+        var sy1 = (1 - Math.Clamp(placement.CropBottom, 0, .99)) * sourceHeight;
+        if (sx1 <= sx0) sx1 = Math.Min(sourceWidth, sx0 + 1);
+        if (sy1 <= sy0) sy1 = Math.Min(sourceHeight, sy0 + 1);
+
+        var dx = placement.X * composition.Width;
+        var dy = placement.Y * composition.Height;
+        var dw = Math.Max(1, placement.Width * composition.Width);
+        var dh = Math.Max(1, placement.Height * composition.Height);
+        var cw = sx1 - sx0;
+        var ch = sy1 - sy0;
+
+        var (scaleX, scaleY) = placement.Fit switch
+        {
+            LayerFit.Stretch => (dw / cw, dh / ch),
+            LayerFit.Cover => Uniform(Math.Max(dw / cw, dh / ch)),
+            LayerFit.FillWidth => Uniform(dw / cw),
+            LayerFit.FillHeight => Uniform(dh / ch),
+            // Center currently reaches the compositor as Contain; the editor follows the rendered
+            // result rather than presenting a 1:1 promise the output does not keep.
+            _ => Uniform(Math.Min(dw / cw, dh / ch)),
+        };
+
+        var imageWidth = cw * scaleX;
+        var imageHeight = ch * scaleY;
+        if (imageWidth > dw + .5)
+        {
+            var trim = (imageWidth - dw) / scaleX;
+            sx0 += trim / 2;
+            sx1 -= trim / 2;
+            imageWidth = (sx1 - sx0) * scaleX;
+        }
+
+        if (imageHeight > dh + .5)
+        {
+            var trim = (imageHeight - dh) / scaleY;
+            sy0 += trim / 2;
+            sy1 -= trim / 2;
+            imageHeight = (sy1 - sy0) * scaleY;
+        }
+
+        var ox = dx + ((dw - imageWidth) / 2);
+        var oy = dy + ((dh - imageHeight) / 2);
+        var contentLeft = Math.Max(sx0, content.X * sourceWidth);
+        var contentTop = Math.Max(sy0, content.Y * sourceHeight);
+        var contentRight = Math.Min(sx1, (content.X + content.Width) * sourceWidth);
+        var contentBottom = Math.Min(sy1, (content.Y + content.Height) * sourceHeight);
+        if (contentRight <= contentLeft || contentBottom <= contentTop)
+            return null;
+
+        var left = ox + ((contentLeft - sx0) * scaleX);
+        var top = oy + ((contentTop - sy0) * scaleY);
+        var right = ox + ((contentRight - sx0) * scaleX);
+        var bottom = oy + ((contentBottom - sy0) * scaleY);
+
+        if (Math.Abs(placement.RotationDegrees) > .000001)
+        {
+            var radians = placement.RotationDegrees * Math.PI / 180;
+            var cosine = Math.Cos(radians);
+            var sine = Math.Sin(radians);
+            var centerX = (placement.X + (placement.Width / 2)) * composition.Width;
+            var centerY = (placement.Y + (placement.Height / 2)) * composition.Height;
+            var corners = new[]
+            {
+                Rotate(left, top, centerX, centerY, cosine, sine),
+                Rotate(right, top, centerX, centerY, cosine, sine),
+                Rotate(left, bottom, centerX, centerY, cosine, sine),
+                Rotate(right, bottom, centerX, centerY, cosine, sine),
+            };
+            left = corners.Min(point => point.X);
+            top = corners.Min(point => point.Y);
+            right = corners.Max(point => point.X);
+            bottom = corners.Max(point => point.Y);
+        }
+
+        return new NormalizedRect(
+            left / composition.Width,
+            top / composition.Height,
+            Math.Max(1, right - left) / composition.Width,
+            Math.Max(1, bottom - top) / composition.Height).Free();
+    }
+
+    private static (double X, double Y) Uniform(double scale) => (scale, scale);
+
+    private static (double X, double Y) Rotate(
+        double x, double y, double centerX, double centerY, double cosine, double sine)
+    {
+        var translatedX = x - centerX;
+        var translatedY = y - centerY;
+        return (
+            centerX + (translatedX * cosine) - (translatedY * sine),
+            centerY + (translatedX * sine) + (translatedY * cosine));
     }
 
     /// <summary>
@@ -107,17 +299,34 @@ public static class VideoPresentation
     /// The part of the canvas one output shows.
     /// </summary>
     /// <remarks>
-    /// Its first enabled mapping section's SOURCE rectangle, because that is what a section means: this
-    /// piece of the canvas goes to this piece of the screen. An output with no mapping shows the whole
-    /// canvas, which is both the honest answer and the one every output starts with.
+    /// The bounds of every mapping section's SOURCE rectangle. A mapping may be split into many warp
+    /// panels, but those panels still describe one screen in the composition layout; treating panel 1
+    /// as the whole screen makes a 3×3 split appear to shrink the output to its top-left ninth after a
+    /// reload. Disabled panels remain part of the bounds because disabling one is an audition aid, not
+    /// a request to rearrange the physical wall. An output with no usable mapping shows the whole canvas.
     /// </remarks>
     public static NormalizedRect Slice(VideoOutputDefinition output)
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        return output.Mapping.FirstOrDefault(section => section.Enabled) is { } section
-            ? new NormalizedRect(section.SourceX, section.SourceY, section.SourceWidth, section.SourceHeight)
-            : new NormalizedRect(0, 0, 1, 1);
+        var sections = output.Mapping
+            .Where(section =>
+                double.IsFinite(section.SourceX)
+                && double.IsFinite(section.SourceY)
+                && double.IsFinite(section.SourceWidth)
+                && double.IsFinite(section.SourceHeight)
+                && section.SourceWidth > 0
+                && section.SourceHeight > 0)
+            .ToList();
+
+        if (sections.Count == 0)
+            return new NormalizedRect(0, 0, 1, 1);
+
+        var left = sections.Min(section => section.SourceX);
+        var top = sections.Min(section => section.SourceY);
+        var right = sections.Max(section => section.SourceX + section.SourceWidth);
+        var bottom = sections.Max(section => section.SourceY + section.SourceHeight);
+        return new NormalizedRect(left, top, right - left, bottom - top);
     }
 
     public static IReadOnlyList<VideoOutputRow> Outputs(HaCueProject project, ShowRuntime runtime) =>

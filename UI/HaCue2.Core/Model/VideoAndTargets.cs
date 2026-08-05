@@ -62,6 +62,17 @@ public sealed record VideoOutputDefinition
 
     public int WindowHeight { get; set; }
 
+    /// <summary>Keep a windowed local output at its configured width-to-height ratio while resizing.</summary>
+    public bool WindowAspectLocked { get; set; }
+
+    /// <summary>Prevent the window manager from resizing a windowed local output.</summary>
+    /// <remarks>
+    /// Independent of <see cref="WindowAspectLocked"/> so a project may remember both intentions. A
+    /// resolution lock naturally wins while it is enabled; turning it off restores the aspect-only
+    /// constraint without losing that setting.
+    /// </remarks>
+    public bool WindowResolutionLocked { get; set; }
+
     /// <summary>Used only when the composition has no idle image of its own (register item 23).</summary>
     public string IdleFallbackPath { get; set; } = "";
 

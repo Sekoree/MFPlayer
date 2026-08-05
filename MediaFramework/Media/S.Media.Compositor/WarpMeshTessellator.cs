@@ -31,8 +31,11 @@ public static class WarpMeshTessellator
         var cols = mesh.Columns;
         var rows = mesh.Rows;
 
-        var u = Math.Clamp(s, 0f, 1f) * (cols - 1);
-        var v = Math.Clamp(t, 0f, 1f) * (rows - 1);
+        var domain = mesh.ParameterBounds;
+        var mappedS = domain.X0 + Math.Clamp(s, 0f, 1f) * domain.Width;
+        var mappedT = domain.Y0 + Math.Clamp(t, 0f, 1f) * domain.Height;
+        var u = mappedS * (cols - 1);
+        var v = mappedT * (rows - 1);
         var ci = Math.Min((int)u, cols - 2);
         var ri = Math.Min((int)v, rows - 2);
         var lu = u - ci;

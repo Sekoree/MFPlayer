@@ -8,6 +8,98 @@ namespace HaCue2.Core.Tests;
 public sealed class ProjectFileTests
 {
     [Fact]
+    public void RepairsTheKnownFirstPanelDestinationWritebackFromSplitProjects()
+    {
+        var project = new HaCueProject
+        {
+            VideoOutputs =
+            [
+                new VideoOutputDefinition
+                {
+                    Name = "Projector",
+                    Mapping =
+                    [
+                        new MappingSection
+                        {
+                            Name = "Panel r1 c1",
+                            SourceWidth = .5,
+                            SourceHeight = .5,
+                            TargetWidth = 1,
+                            TargetHeight = 1,
+                        },
+                        new MappingSection
+                        {
+                            Name = "Panel r1 c2",
+                            SourceX = .5,
+                            SourceWidth = .5,
+                            SourceHeight = .5,
+                            TargetX = .5,
+                            TargetWidth = .5,
+                            TargetHeight = .5,
+                        },
+                        new MappingSection
+                        {
+                            Name = "Panel r2 c1",
+                            SourceY = .5,
+                            SourceWidth = .5,
+                            SourceHeight = .5,
+                            TargetY = .5,
+                            TargetWidth = .5,
+                            TargetHeight = .5,
+                        },
+                        new MappingSection
+                        {
+                            Name = "Panel r2 c2",
+                            SourceX = .5,
+                            SourceY = .5,
+                            SourceWidth = .5,
+                            SourceHeight = .5,
+                            TargetX = .5,
+                            TargetY = .5,
+                            TargetWidth = .5,
+                            TargetHeight = .5,
+                        },
+                    ],
+                },
+            ],
+        };
+
+        var restored = HaCueProjectFile.Deserialize(HaCueProjectFile.Serialize(project));
+        var first = restored.VideoOutputs[0].Mapping[0];
+        Assert.Equal(.5, first.TargetWidth, 6);
+        Assert.Equal(.5, first.TargetHeight, 6);
+    }
+
+    [Fact]
+    public void DoesNotRepairAHandNamedFullFrameDestination()
+    {
+        var project = new HaCueProject
+        {
+            VideoOutputs =
+            [
+                new VideoOutputDefinition
+                {
+                    Mapping =
+                    [
+                        new MappingSection { Name = "Hero", SourceWidth = .5 },
+                        new MappingSection
+                        {
+                            Name = "Side",
+                            SourceX = .5,
+                            SourceWidth = .5,
+                            TargetX = .5,
+                            TargetWidth = .5,
+                        },
+                    ],
+                },
+            ],
+        };
+
+        var restored = HaCueProjectFile.Deserialize(HaCueProjectFile.Serialize(project));
+        Assert.Equal(1, restored.VideoOutputs[0].Mapping[0].TargetWidth, 6);
+    }
+
+    [Fact]
     public void AProjectRoundTripsThroughJson()
     {
         var original = new TestProject().Project;
@@ -15,6 +107,31 @@ public sealed class ProjectFileTests
         var restored = HaCueProjectFile.Deserialize(HaCueProjectFile.Serialize(original));
 
         Assert.Equal(HaCueProjectFile.Serialize(original), HaCueProjectFile.Serialize(restored));
+    }
+
+    [Fact]
+    public void LocalWindowLocksRoundTripWithTheOutput()
+    {
+        var project = new HaCueProject
+        {
+            VideoOutputs =
+            [
+                new VideoOutputDefinition
+                {
+                    Name = "Preview",
+                    Fullscreen = false,
+                    WindowWidth = 1280,
+                    WindowHeight = 720,
+                    WindowAspectLocked = true,
+                    WindowResolutionLocked = true,
+                },
+            ],
+        };
+
+        var restored = HaCueProjectFile.Deserialize(HaCueProjectFile.Serialize(project));
+        var output = Assert.Single(restored.VideoOutputs);
+        Assert.True(output.WindowAspectLocked);
+        Assert.True(output.WindowResolutionLocked);
     }
 
     [Fact]

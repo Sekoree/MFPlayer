@@ -155,6 +155,15 @@
                   </Button>
                 </Grid>
               </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Window locks"
+                                      IsVisible="{Binding IsOutputWindowed}">
+                <WrapPanel ItemSpacing="12" LineSpacing="4">
+                  <CheckBox Content="aspect ratio" IsChecked="{Binding OutputWindowAspectLocked}"
+                            ToolTip.Tip="Keep the configured width-to-height ratio while resizing the real output window." />
+                  <CheckBox Content="resolution" IsChecked="{Binding OutputWindowResolutionLocked}"
+                            ToolTip.Tip="Prevent the real output window from being resized." />
+                </WrapPanel>
+              </HeaderedContentControl>
               <!-- The number a video wall is built from: mapping destinations are measured in it. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Output raster">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
@@ -377,6 +386,7 @@
                              done correctly. The pane's guides remain what a CUE placement snaps to. -->
                         <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding Aspect}">
                           <c:PlacementCanvas Boxes="{Binding OutputBoxes}"
+                                             ReferenceBoxes="{Binding OutputFootprints}"
                                              AutomationProperties.Name="Composition output layout"
                                              PreserveAspect="{Binding PreserveAspect}"
                                              SnapEnabled="{Binding SnapEnabled}"
@@ -394,7 +404,9 @@
                         </WrapPanel>
 
                         <TextBlock Margin="10,0" Classes="mono dim3 micro" TextWrapping="Wrap"
-                                   Text="Drag anywhere inside to move; grab any edge or corner to resize. Overhang remains visible. Shift temporarily reverses aspect lock; Alt suspends guides." />
+                                   Text="Steel outline = physical output pixels; coloured box = composition region it samples. Drag inside to move; edges resize. Shift reverses aspect lock; Alt suspends guides." />
+                        <TextBlock Margin="10,0" Classes="mono dim2 micro" TextWrapping="Wrap"
+                                   Text="{Binding OutputRasterSummary}" />
 
                         <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
                           <TextBox Text="{Binding EditName}" />

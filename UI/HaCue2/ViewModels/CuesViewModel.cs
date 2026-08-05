@@ -49,6 +49,9 @@ public partial class CuesViewModel : ObservableObject
             // inspector is a projection of the document.
             CacheRoot = HaCue2.Machine.MediaCache.RootFor(App.Settings),
         };
+        // Read through the current delegate rather than copying it: the shell supplies the machine
+        // probe after construction, and every layer on a placement canvas needs its own source shape.
+        Inspector.MediaFacts = cue => MediaFacts?.Invoke(cue);
         Inspector.PropertyChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(RightPanelHeader));

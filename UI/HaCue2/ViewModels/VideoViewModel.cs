@@ -163,6 +163,7 @@ public partial class VideoViewModel : ObservableObject
             (double)composition.Width / composition.Height)
         {
             OutputBoxes = OutputSlices(composition.Id, SelectedOutput?.Id),
+            OutputFootprints = OutputFootprints(composition.Id),
             Feeds = Feeds(composition.Id),
         }),
     ];
@@ -330,6 +331,34 @@ public partial class VideoViewModel : ObservableObject
     }
 
     public bool IsOutputWindowed => MappedOutput?.Fullscreen == false;
+
+    public bool OutputWindowAspectLocked
+    {
+        get => MappedOutput?.WindowAspectLocked == true;
+        set
+        {
+            if (MappedOutput is not { } output)
+                return;
+
+            Edit(output, "windowAspectLocked", () => output.WindowAspectLocked,
+                flag => output.WindowAspectLocked = flag, value,
+                value ? $"lock “{output.Name}” window aspect" : $"unlock “{output.Name}” window aspect");
+        }
+    }
+
+    public bool OutputWindowResolutionLocked
+    {
+        get => MappedOutput?.WindowResolutionLocked == true;
+        set
+        {
+            if (MappedOutput is not { } output)
+                return;
+
+            Edit(output, "windowResolutionLocked", () => output.WindowResolutionLocked,
+                flag => output.WindowResolutionLocked = flag, value,
+                value ? $"lock “{output.Name}” window resolution" : $"unlock “{output.Name}” window resolution");
+        }
+    }
 
     /// <summary>
     /// The output's real pixel size, as "1920×1080". Empty follows the composition.
@@ -509,6 +538,8 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(OutputScreenIndex));
         OnPropertyChanged(nameof(OutputFullscreenIndex));
         OnPropertyChanged(nameof(OutputWindowSize));
+        OnPropertyChanged(nameof(OutputWindowAspectLocked));
+        OnPropertyChanged(nameof(OutputWindowResolutionLocked));
         OnPropertyChanged(nameof(IsOutputWindowed));
         OnPropertyChanged(nameof(IsOutputLocal));
         OnPropertyChanged(nameof(OutputRaster));
@@ -765,6 +796,21 @@ public partial class VideoViewModel : ObservableObject
         return whole == screens.Count
             ? $"{screens.Count} screen(s), each showing the whole canvas · drag an edge to divide it"
             : $"{screens.Count} screen(s) · {screens.Count - whole} showing a slice";
+    }
+
+    internal string OutputRasterSummaryOf(Guid id)
+    {
+        if (CompositionOf(id) is not { } composition)
+            return "";
+
+        return string.Join(" · ", ScreensOn(id).Select(output =>
+        {
+            var (width, height) = EffectiveRaster(output, composition);
+            var slice = SliceOf(output);
+            var sourceWidth = Math.Round(slice.Width * composition.Width);
+            var sourceHeight = Math.Round(slice.Height * composition.Height);
+            return $"{output.Name}: {width}×{height} physical ← {sourceWidth:0}×{sourceHeight:0} source";
+        }));
     }
 
     // ── which outputs a composition feeds (assignment lives HERE) ──────────────────────────────
@@ -1155,11 +1201,11 @@ public partial class VideoViewModel : ObservableObject
     private int _splitRows = 1;
 
     /// <summary>
-    /// Replaces every section with an even grid, one per panel.
+    /// Replaces every section with an even source-and-destination grid.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The reason this exists rather than "add section" four times: a two-projector blend is made of
+    /// The reason this exists rather than "add section" four times: a multi-panel warp is made of
     /// numbers like 0.5 exactly, and nobody hits exactly half by dragging. Splitting first and nudging
     /// afterwards is how the geometry ends up right, and it is the one operation a mapping editor can
     /// do that saves an operator an evening.
@@ -1176,8 +1222,14 @@ public partial class VideoViewModel : ObservableObject
 
         var columns = Math.Clamp(SplitColumns, 1, 64);
         var rows = Math.Clamp(SplitRows, 1, 64);
+        var sourceBounds = VideoPresentation.Slice(output);
 
-        using (_journal.Composite($"split into {columns}×{rows}", "mapping"))
+        // While the list is replaced, index zero temporarily points at a succession of unrelated
+        // objects. Detach the numeric editor first; otherwise a two-way NumericUpDown can write its
+        // old full-raster value into the first newly-created destination tile during the refresh.
+        SelectedSection = -1;
+
+        using (_journal.Composite($"split into {columns}×{rows}", "mapping", quiet: true))
         {
             foreach (var existing in output.Mapping.ToList())
                 _journal.Do(new RemoveItemCommand<MappingSection>(
@@ -1192,17 +1244,17 @@ public partial class VideoViewModel : ObservableObject
                         Name = rows == 1
                             ? $"Panel {column + 1}"
                             : $"Panel r{row + 1} c{column + 1}",
-                        SourceX = (double)column / columns,
-                        SourceY = (double)row / rows,
-                        SourceWidth = 1d / columns,
-                        SourceHeight = 1d / rows,
-                        // Each panel fills its own output. A wall is N outputs each showing its slice
-                        // whole, so the destination is the full frame and only the SOURCE is divided —
-                        // dividing both would put a quarter-size picture in the corner of every screen.
-                        TargetX = 0,
-                        TargetY = 0,
-                        TargetWidth = 1,
-                        TargetHeight = 1,
+                        SourceX = sourceBounds.X + (sourceBounds.Width * column / columns),
+                        SourceY = sourceBounds.Y + (sourceBounds.Height * row / rows),
+                        SourceWidth = sourceBounds.Width / columns,
+                        SourceHeight = sourceBounds.Height / rows,
+                        // The matching destination grid reassembles the source unchanged before any
+                        // points are warped. Giving every tile a full-frame destination enlarges all
+                        // of them onto one another, so only the last tile remains apparent.
+                        TargetX = (double)column / columns,
+                        TargetY = (double)row / rows,
+                        TargetWidth = 1d / columns,
+                        TargetHeight = 1d / rows,
                     };
 
                     _journal.Do(new AddItemCommand<MappingSection>(
@@ -1214,6 +1266,7 @@ public partial class VideoViewModel : ObservableObject
 
         _journal.CloseGroup();
         SelectedSection = 0;
+        ApplyLiveMapping(output);
         Refresh();
     }
 
@@ -1222,6 +1275,8 @@ public partial class VideoViewModel : ObservableObject
     {
         if (MappedOutput is not { } output)
             return;
+
+        SelectedSection = -1;
 
         using (_journal.Composite("reset mapping", "mapping"))
         {
@@ -1655,7 +1710,6 @@ public partial class VideoViewModel : ObservableObject
             .Select((output, index) =>
             {
                 var slice = SliceOf(output);
-
                 return new PlacementBox
                 {
                     SubjectId = output.Id,
@@ -1670,6 +1724,39 @@ public partial class VideoViewModel : ObservableObject
                 };
             }),
     ];
+
+    /// <summary>
+    /// Each screen/window's pixel footprint against the composition, independent of which source
+    /// slice it samples. The source boxes remain separately editable above these outlines.
+    /// </summary>
+    private IReadOnlyList<PlacementBox> OutputFootprints(Guid compositionId)
+    {
+        if (_project.Compositions.FirstOrDefault(item => item.Id == compositionId) is not { } composition)
+            return [];
+
+        return
+        [
+            .. ScreensOn(compositionId).Select((output, index) =>
+            {
+                var slice = SliceOf(output);
+                var (pixelWidth, pixelHeight) = EffectiveRaster(output, composition);
+                var width = Math.Max(1d / composition.Width, pixelWidth / (double)composition.Width);
+                var height = Math.Max(1d / composition.Height, pixelHeight / (double)composition.Height);
+
+                return new PlacementBox
+                {
+                    SubjectId = output.Id,
+                    LayerIndex = index,
+                    Label = $"{output.Name} · {pixelWidth}×{pixelHeight} physical",
+                    Left = slice.X + ((slice.Width - width) / 2),
+                    Top = slice.Y + ((slice.Height - height) / 2),
+                    Width = width,
+                    Height = height,
+                    IsSecondary = index % 2 == 1,
+                };
+            }),
+        ];
+    }
 
     /// <summary>The local screens showing this canvas, in document order — the boxes it is divided into.</summary>
     private IReadOnlyList<VideoOutputDefinition> ScreensOn(Guid compositionId) =>
@@ -1724,11 +1811,14 @@ public partial class VideoViewModel : ObservableObject
     private (int Width, int Height) EffectiveRaster(
         VideoOutputDefinition output, CompositionDefinition composition)
     {
-        if (output is { MappingWidth: > 0, MappingHeight: > 0 })
-            return (output.MappingWidth, output.MappingHeight);
-
+        // A windowed local output is physically the window first. Its mapping raster may deliberately
+        // be larger (a 1080p render monitored at 720p), but drawing that larger raster would make the
+        // layout claim the desktop window is a size/aspect it is not.
         if (!output.Fullscreen && output is { WindowWidth: > 0, WindowHeight: > 0 })
             return (output.WindowWidth, output.WindowHeight);
+
+        if (output is { MappingWidth: > 0, MappingHeight: > 0 })
+            return (output.MappingWidth, output.MappingHeight);
 
         if (ProjectVideoOutputs.ScreenNumber(output.TargetHint) is { } screen
             && screen > 0
@@ -1764,9 +1854,9 @@ public partial class VideoViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Written into the output's own mapping, because that is where the engine reads it from and the
-    /// mapping editor is the other view of the same numbers. An output that had no mapping gets one
-    /// here, with an identity target: it shows its slice FULL FRAME, which is what dividing a canvas
-    /// between screens means before anybody warps anything.
+    /// mapping editor is the other view of the same numbers. A split mapping is transformed as one
+    /// group: its source panels keep their relative grid and its independently-authored destinations
+    /// and warp stay untouched. An output that had no mapping gets one identity section.
     /// </remarks>
     public void ApplyLayoutGesture(PlacementGesture gesture)
     {
@@ -1778,23 +1868,46 @@ public partial class VideoViewModel : ObservableObject
         // Changed event until release so the shell does not validate and rebuild the show per pixel.
         _drag ??= _journal.Composite($"“{target.Name}” canvas slice", "video", quiet: true);
 
-        if (target.Mapping.FirstOrDefault(section => section.Enabled) is not { } section)
+        var authored = gesture.AuthoredRect().Free();
+        var sections = target.Mapping
+            .Where(section => section.SourceWidth > 0 && section.SourceHeight > 0)
+            .ToList();
+
+        if (sections.Count == 0)
         {
-            section = new MappingSection { Name = "Screen" };
+            var section = new MappingSection { Name = "Screen" };
             _journal.Do(new AddItemCommand<MappingSection>(
                 target.Mapping, section, target.Mapping.Count, "video",
                 $"“{target.Name}” takes part of the canvas"));
+            sections.Add(section);
         }
 
-        _journal.Do(RectEdits.MappingSource(section, gesture.Rect, allowOutsideFrame: true));
-
-        // Identity destination: the slice fills the screen. A warp authored later in the mapping
-        // editor lives in the same section and is deliberately left alone.
-        if (section is { TargetX: 0, TargetY: 0, TargetWidth: 1, TargetHeight: 1 } is false)
-            _journal.Do(RectEdits.MappingTarget(section, new NormalizedRect(0, 0, 1, 1)));
+        var previous = VideoPresentation.Slice(target);
+        foreach (var section in sections)
+        {
+            var source = new NormalizedRect(
+                section.SourceX, section.SourceY, section.SourceWidth, section.SourceHeight);
+            _journal.Do(RectEdits.MappingSource(
+                section,
+                TransformWithin(source, previous, authored),
+                allowOutsideFrame: true));
+        }
 
         ApplyLiveMapping(target);
         RefreshLayout();
+    }
+
+    /// <summary>Moves one warp tile from an old group rectangle into the same place in a new group.</summary>
+    private static NormalizedRect TransformWithin(
+        NormalizedRect section, NormalizedRect previous, NormalizedRect next)
+    {
+        var width = Math.Max(previous.Width, 0.000001);
+        var height = Math.Max(previous.Height, 0.000001);
+        return new NormalizedRect(
+            next.X + (((section.X - previous.X) / width) * next.Width),
+            next.Y + (((section.Y - previous.Y) / height) * next.Height),
+            (section.Width / width) * next.Width,
+            (section.Height / height) * next.Height);
     }
 
     /// <summary>
@@ -1821,8 +1934,8 @@ public partial class VideoViewModel : ObservableObject
         if (Outputs.FirstOrDefault(row => row.Id == screens[index].Id) is { } row)
             SelectedOutput = row;
 
-        // The section the slice numerics address. A screen's slice is its FIRST section by definition,
-        // and without this the rail would keep whichever section the mapping editor was last left on.
+        // Keep the mapping rail predictable when the screen was selected from the layout. The layout
+        // fields themselves address the bounds of all sections, not whichever panel happens to be first.
         SelectedSection = 0;
         RefreshLayout();
     }
@@ -1846,6 +1959,7 @@ public partial class VideoViewModel : ObservableObject
         foreach (var pane in Compositions)
         {
             pane.OutputBoxes = OutputSlices(pane.Id, SelectedOutput?.Id);
+            pane.OutputFootprints = OutputFootprints(pane.Id);
             pane.IsSelected = SelectedComposition?.Id == pane.Id;
             pane.NoteLayoutChanged();
         }
@@ -2008,6 +2122,7 @@ public partial class VideoViewModel : ObservableObject
             // The one thing on the screen that answers "where does this go" was the one that did not
             // update.
             pane.OutputBoxes = OutputSlices(composition.Id, SelectedOutput?.Id);
+            pane.OutputFootprints = OutputFootprints(composition.Id);
             pane.IsSelected = SelectedComposition?.Id == pane.Id;
             // Computed off the document rather than stored, so nothing else would tell the header its
             // sentence had changed.
@@ -2269,6 +2384,8 @@ public sealed partial class CompositionPaneViewModel(
     /// <summary>How the outputs showing this canvas divide it — on the pane, not behind a button.</summary>
     public string LayoutSummary => owner.LayoutSummaryOf(Id);
 
+    public string OutputRasterSummary => owner.OutputRasterSummaryOf(Id);
+
     /// <summary>
     /// The header's own line, which is the summary plus what is selected on it.
     /// </summary>
@@ -2289,6 +2406,7 @@ public sealed partial class CompositionPaneViewModel(
     public void NoteLayoutChanged()
     {
         OnPropertyChanged(nameof(LayoutSummary));
+        OnPropertyChanged(nameof(OutputRasterSummary));
         OnPropertyChanged(nameof(SelectionNote));
     }
 
@@ -2305,6 +2423,10 @@ public sealed partial class CompositionPaneViewModel(
     /// </remarks>
     [ObservableProperty]
     private IReadOnlyList<PlacementBox> _outputBoxes = [];
+
+    /// <summary>The real output/window raster, drawn behind the source-slice boxes.</summary>
+    [ObservableProperty]
+    private IReadOnlyList<PlacementBox> _outputFootprints = [];
 
     /// <summary>
     /// The outputs this canvas is sent to, named on the canvas itself.

@@ -20,6 +20,13 @@
         <Panel>
           <c:CanvasGrid IsVisible="{Binding ShowGrid, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}" />
 
+          <!-- A physical raster/window outline can differ from the editable source slice. Keeping it
+               in its own non-interactive layer makes down/up-scaling visible without making a fixed
+               output resolution pretend it can be resized by a source-crop gesture. -->
+          <c:PlacementReferenceLayer IsHitTestVisible="False"
+                                     Stroke="{DynamicResource GelSteel}"
+                                     Boxes="{Binding ReferenceBoxes, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}" />
+
           <ItemsControl ItemsSource="{Binding Boxes, RelativeSource={RelativeSource AncestorType=c:PlacementCanvas}}">
         <ItemsControl.ItemsPanel>
           <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>

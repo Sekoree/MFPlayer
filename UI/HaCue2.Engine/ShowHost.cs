@@ -750,12 +750,24 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     public Task<bool> UpdateActivePlacementAsync(Guid cueId, LayerPlacement placement)
     {
         ArgumentNullException.ThrowIfNull(placement);
-        return _session.UpdateActivePlacementAsync(
-            cueId.ToString(),
-            placement.CompositionId.ToString(),
+        return UpdateActivePlacementAsync(
+            cueId,
+            placement.CompositionId,
             placement.LayerIndex,
             ShowCompiler.VideoPlacement(placement));
     }
+
+    /// <summary>
+    /// Publishes an immutable placement snapshot. Pointer editors use this overload so an update queued
+    /// behind the session dispatcher cannot observe a later mutation of the project object.
+    /// </summary>
+    public Task<bool> UpdateActivePlacementAsync(
+        Guid cueId,
+        Guid compositionId,
+        int layerIndex,
+        ShowVideoPlacement placement) =>
+        _session.UpdateActivePlacementAsync(
+            cueId.ToString(), compositionId.ToString(), layerIndex, placement);
 
     /// <summary>Applies an output's current crop/warp to its open composition immediately.</summary>
     public Task<bool> ApplyOutputMappingAsync(

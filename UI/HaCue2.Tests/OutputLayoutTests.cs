@@ -78,6 +78,77 @@ public class OutputLayoutTests
     });
 
     [Fact]
+    public Task A720pWindowHasItsPhysicalFootprintOnA1080pComposition() => ShellFixture.WithShell(shell =>
+    {
+        var composition = new CompositionDefinition { Name = "Program", Width = 1920, Height = 1080 };
+        var output = new VideoOutputDefinition
+        {
+            Name = "Monitor",
+            CompositionId = composition.Id,
+            Fullscreen = false,
+            WindowWidth = 1280,
+            WindowHeight = 720,
+            MappingWidth = 1280,
+            MappingHeight = 720,
+        };
+        shell.Project.Compositions.Add(composition);
+        shell.Project.VideoOutputs.Add(output);
+
+        var video = new VideoViewModel(shell.Project, shell.Runtime, shell.Journal);
+        var pane = video.Compositions.Single(item => item.Id == composition.Id);
+        var box = pane.OutputFootprints.Single();
+
+        Assert.Equal(2d / 3, box.Width, 6);
+        Assert.Equal(2d / 3, box.Height, 6);
+        Assert.Equal(1d / 6, box.Left, 6);
+        Assert.Equal(1d / 6, box.Top, 6);
+        Assert.Equal(new NormalizedRect(0, 0, 1, 1),
+            new NormalizedRect(
+                pane.OutputBoxes.Single().Left,
+                pane.OutputBoxes.Single().Top,
+                pane.OutputBoxes.Single().Width,
+                pane.OutputBoxes.Single().Height));
+    });
+
+    [Fact]
+    public Task PhysicalRasterAndSampledCompositionRegionRemainDistinct() => ShellFixture.WithShell(shell =>
+    {
+        var composition = new CompositionDefinition { Name = "Program", Width = 1920, Height = 1080 };
+        var output = new VideoOutputDefinition
+        {
+            Name = "Monitor",
+            CompositionId = composition.Id,
+            Fullscreen = false,
+            WindowWidth = 1280,
+            WindowHeight = 720,
+            Mapping =
+            [
+                new MappingSection
+                {
+                    Name = "Centre",
+                    SourceX = .25,
+                    SourceY = .25,
+                    SourceWidth = .5,
+                    SourceHeight = .5,
+                },
+            ],
+        };
+        shell.Project.Compositions.Add(composition);
+        shell.Project.VideoOutputs.Add(output);
+
+        var video = new VideoViewModel(shell.Project, shell.Runtime, shell.Journal);
+        var pane = video.Compositions.Single(item => item.Id == composition.Id);
+        var source = pane.OutputBoxes.Single();
+        var physical = pane.OutputFootprints.Single();
+
+        Assert.Equal(.25, source.Left, 6);
+        Assert.Equal(.5, source.Width, 6);
+        Assert.Equal(1d / 6, physical.Left, 6);
+        Assert.Equal(2d / 3, physical.Width, 6);
+        Assert.Contains("1280×720 physical ← 960×540 source", pane.OutputRasterSummary);
+    });
+
+    [Fact]
     public Task DraggingAScreensEdgeWritesItsSliceIntoItsOwnMapping() => ShellFixture.WithShell(shell =>
     {
         var (video, _, left, _) = Wall(shell);
@@ -111,6 +182,65 @@ public class OutputLayoutTests
         Assert.Equal(0.9, section.SourceX, 6);
         Assert.Equal(0.5, section.SourceWidth, 6);
     });
+
+    [Fact]
+    public Task SplitWarpPanelsRemainOneScreenInTheCompositionLayout() => ShellFixture.WithShell(shell =>
+    {
+        var (video, canvas, left, _) = Wall(shell);
+        video.SelectedOutput = video.Outputs.Single(row => row.Id == left.Id);
+        video.SplitColumns = 3;
+        video.SplitRows = 3;
+        video.SplitIntoGrid();
+
+        var box = Pane(video, canvas).OutputBoxes.Single(item => item.SubjectId == left.Id);
+        Assert.Equal(new NormalizedRect(0, 0, 1, 1),
+            new NormalizedRect(box.Left, box.Top, box.Width, box.Height));
+        Assert.Equal(new NormalizedRect(0, 0, 1, 1), VideoPresentation.Slice(left));
+    });
+
+    [Fact]
+    public Task MovingASplitScreenTransformsAllSourcesAndPreservesWarpDestinations() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var (video, _, left, _) = Wall(shell);
+            video.SelectedOutput = video.Outputs.Single(row => row.Id == left.Id);
+            video.SplitColumns = 2;
+            video.SplitRows = 1;
+            video.SplitIntoGrid();
+
+            var targets = left.Mapping
+                .Select(section => new NormalizedRect(
+                    section.TargetX, section.TargetY, section.TargetWidth, section.TargetHeight))
+                .ToList();
+
+            video.ApplyLayoutGesture(
+                new PlacementGesture(0, left.Id, 0, new NormalizedRect(.25, .2, .5, .6)));
+            video.EndGesture();
+
+            Assert.Collection(left.Mapping,
+                section =>
+                {
+                    Assert.Equal(.25, section.SourceX, 6);
+                    Assert.Equal(.25, section.SourceWidth, 6);
+                    Assert.Equal(.2, section.SourceY, 6);
+                    Assert.Equal(.6, section.SourceHeight, 6);
+                },
+                section =>
+                {
+                    Assert.Equal(.5, section.SourceX, 6);
+                    Assert.Equal(.25, section.SourceWidth, 6);
+                    Assert.Equal(.2, section.SourceY, 6);
+                    Assert.Equal(.6, section.SourceHeight, 6);
+                });
+            Assert.Equal(targets,
+                left.Mapping.Select(section => new NormalizedRect(
+                    section.TargetX, section.TargetY, section.TargetWidth, section.TargetHeight)));
+            var slice = VideoPresentation.Slice(left);
+            Assert.Equal(.25, slice.X, 6);
+            Assert.Equal(.2, slice.Y, 6);
+            Assert.Equal(.5, slice.Width, 6);
+            Assert.Equal(.6, slice.Height, 6);
+        });
 
     [Fact]
     public Task ResolutionLayoutUsesEachOutputsPhysicalRaster() => ShellFixture.WithShell(shell =>
@@ -240,12 +370,62 @@ public class OutputLayoutTests
         // A layout that binds correctly and never reaches the screen is the failure this catches.
         Assert.NotEmpty(canvases);
         Assert.Contains(canvases, item => item.Boxes.Count == 2);
+        Assert.Contains(canvases, item => item.ReferenceBoxes.Count == 2);
     });
 }
 
 /// <summary>The shared rectangle editor used by composition, cue-placement and mapping panes.</summary>
 public class PlacementCanvasInteractionTests
 {
+    [Fact]
+    public Task MouseUpCommitsTheFinalPositionWhenMotionWasCoalesced() => ShellFixture.WithShell(_ =>
+    {
+        var canvas = new PlacementCanvas
+        {
+            Width = 400,
+            Height = 225,
+            SnapEnabled = false,
+            Boxes =
+            [
+                new PlacementBox
+                {
+                    SubjectId = Guid.NewGuid(), Label = "Feed", Left = .2, Top = .2,
+                    Width = .4, Height = .4, IsSelected = true,
+                },
+            ],
+        };
+        var window = new Window { Width = 420, Height = 245, Content = canvas };
+        PlacementGesture? gesture = null;
+        canvas.Gesture += (_, value) => gesture = value;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        try
+        {
+            var surface = canvas.GetVisualDescendants().OfType<FractionPanel>().Single();
+            var origin = surface.TranslatePoint(default, window)!.Value;
+            var start = new Point(
+                origin.X + (.4 * surface.Bounds.Width),
+                origin.Y + (.4 * surface.Bounds.Height));
+            var end = new Point(
+                start.X + (.1 * surface.Bounds.Width),
+                start.Y + (.1 * surface.Bounds.Height));
+
+            // Deliberately no MouseMove: Wayland/X11 may coalesce motion while a live-output update is
+            // in flight. Mouse-up is still an authoritative final pointer sample.
+            window.MouseDown(start, MouseButton.Left);
+            window.MouseUp(end, MouseButton.Left);
+
+            Assert.NotNull(gesture);
+            Assert.Equal(.3, gesture.Rect.X, 6);
+            Assert.Equal(.3, gesture.Rect.Y, 6);
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
+
     [Fact]
     public Task MovingABodyFollowsThePointerDistanceAndDirection() => ShellFixture.WithShell(_ =>
     {

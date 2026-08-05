@@ -159,6 +159,8 @@ public sealed class ProjectVideoOutputs : IDisposable
             // open record kept its original canvas forever, so the assignment did nothing at all.
             if (_open.FirstOrDefault(open => open.Id == output.Id) is { } existing)
             {
+                ApplyWindowConstraints(existing.Output, output, project);
+
                 if (existing.CompositionId == canvas)
                     continue;
 
@@ -295,6 +297,13 @@ public sealed class ProjectVideoOutputs : IDisposable
                 initialWidth: output.WindowWidth > 0 ? output.WindowWidth : Math.Max(160, fallbackWidth),
                 initialHeight: output.WindowHeight > 0 ? output.WindowHeight : Math.Max(90, fallbackHeight));
 
+            var width = output.WindowWidth > 0 ? output.WindowWidth : Math.Max(160, fallbackWidth);
+            var height = output.WindowHeight > 0 ? output.WindowHeight : Math.Max(90, fallbackHeight);
+            window.SetWindowConstraints(
+                !output.Fullscreen && output.WindowAspectLocked,
+                !output.Fullscreen && output.WindowResolutionLocked,
+                width / (float)height);
+
             // The document says which screen and whether to fill it, so a show carried to a venue puts
             // its projector feed on the projector rather than on whichever display SDL opened first. An
             // unparseable or absent hint leaves the window where it is rather than guessing — moving a
@@ -311,6 +320,30 @@ public sealed class ProjectVideoOutputs : IDisposable
             _failures.Add($"“{output.Name}”: {failure.Message}");
             return null;
         }
+    }
+
+    private static void ApplyWindowConstraints(
+        IVideoOutput opened,
+        VideoOutputDefinition definition,
+        HaCueProject project)
+    {
+        if (opened is not SDL3GLVideoOutput window)
+            return;
+
+        var composition = definition.CompositionId is { } id
+            ? project.Compositions.FirstOrDefault(item => item.Id == id)
+            : null;
+        var width = definition.WindowWidth > 0
+            ? definition.WindowWidth
+            : Math.Max(160, composition?.Width ?? 1280);
+        var height = definition.WindowHeight > 0
+            ? definition.WindowHeight
+            : Math.Max(90, composition?.Height ?? 720);
+
+        window.SetWindowConstraints(
+            !definition.Fullscreen && definition.WindowAspectLocked,
+            !definition.Fullscreen && definition.WindowResolutionLocked,
+            width / (float)height);
     }
 
     /// <summary>

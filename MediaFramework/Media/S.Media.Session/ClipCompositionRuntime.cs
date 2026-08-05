@@ -2531,7 +2531,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                 points[i] = new System.Numerics.Vector2(x, y);
             }
 
-            return new WarpMesh(mesh.Columns, mesh.Rows, points);
+            return new WarpMesh(mesh.Columns, mesh.Rows, points, mesh.ParameterBounds);
         }
 
         public void Dispose()

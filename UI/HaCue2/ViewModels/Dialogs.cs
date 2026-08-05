@@ -774,6 +774,22 @@ public static class Dialogs
                 IsEnabled = false,
             };
 
+            var lockAspect = new PromptField
+            {
+                Label = "Lock aspect",
+                Kind = PromptFieldKind.Toggle,
+                Hint = "keep this width-to-height ratio when the desktop window is resized",
+                IsEnabled = false,
+            };
+
+            var lockResolution = new PromptField
+            {
+                Label = "Lock resolution",
+                Kind = PromptFieldKind.Toggle,
+                Hint = "prevent the desktop window from being resized",
+                IsEnabled = false,
+            };
+
             // The two are mutually exclusive and each dialog used to offer both at once: a fullscreen
             // output takes the SCREEN's size, so a window size typed beside it did nothing, and a
             // windowed one opens where the desktop puts it, so the screen picker did nothing either.
@@ -783,6 +799,8 @@ public static class Dialogs
             {
                 var isFullscreen = windowed.Choice != "windowed";
                 size.IsEnabled = !isFullscreen;
+                lockAspect.IsEnabled = !isFullscreen;
+                lockResolution.IsEnabled = !isFullscreen;
                 target.IsEnabled = isFullscreen;
             }
 
@@ -791,6 +809,8 @@ public static class Dialogs
 
             fields.Insert(2, windowed);
             fields.Insert(3, size);
+            fields.Insert(4, lockAspect);
+            fields.Insert(5, lockResolution);
         }
 
         return new PromptViewModel(
@@ -822,6 +842,8 @@ public static class Dialogs
                         Fullscreen = !local || !windowed,
                         WindowWidth = local ? windowSize.Item1 : 0,
                         WindowHeight = local ? windowSize.Item2 : 0,
+                        WindowAspectLocked = windowed && prompt["Lock aspect"].IsOn,
+                        WindowResolutionLocked = windowed && prompt["Lock resolution"].IsOn,
                         // The output layout can now size a feed from the selected display/window
                         // immediately. Zero remains the honest fallback when a label has no size.
                         MappingWidth = local ? raster.Item1 : 0,

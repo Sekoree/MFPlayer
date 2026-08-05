@@ -18,7 +18,11 @@ public readonly record struct WarpSection(
 /// </summary>
 public sealed record WarpMesh
 {
-    public WarpMesh(int columns, int rows, Vector2[] points)
+    public WarpMesh(
+        int columns,
+        int rows,
+        Vector2[] points,
+        RectNormalized? parameterBounds = null)
     {
         if (columns < 2 || rows < 2)
             throw new ArgumentOutOfRangeException(nameof(columns), $"mesh grid must be at least 2x2 (got {columns}x{rows}).");
@@ -32,6 +36,7 @@ public sealed record WarpMesh
         // identity, so a caller mutating its array after construction would render stale geometry.
         // Construction is control-plane rate (placement edits), never per frame.
         Points = (Vector2[])points.Clone();
+        ParameterBounds = (parameterBounds ?? RectNormalized.Full).Clamped();
     }
 
     public int Columns { get; }
@@ -40,4 +45,12 @@ public sealed record WarpMesh
 
     /// <summary>Row-major control points in warp-output pixels (TL of the grid first).</summary>
     public Vector2[] Points { get; }
+
+    /// <summary>
+    /// The portion of the authored mesh surface represented by normalized tessellation parameters.
+    /// Normally full. When a mapping source rectangle overhangs its source, only the corresponding
+    /// sub-domain is tessellated so missing pixels become empty output rather than stretching the
+    /// remaining source across the complete warp.
+    /// </summary>
+    public RectNormalized ParameterBounds { get; }
 }

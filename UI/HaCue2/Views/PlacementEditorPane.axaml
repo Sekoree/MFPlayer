@@ -151,11 +151,13 @@
     <Border Classes="chain">
       <DockPanel LastChildFill="True">
         <Button DockPanel.Dock="Right" Classes="tight" Content="REMOVE" Click="OnRemovePlacement" />
+        <Button DockPanel.Dock="Right" Margin="0,0,5,0" Classes="tight" Content="POP OUT ↗"
+                Click="OnPopOut" ToolTip.Tip="Open a large placement canvas for precise mouse editing." />
         <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge">
           <TextBlock Text="PLACEMENT" />
         </Border>
         <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                   Text="drag here for rough · Video view for precision" />
+                   Text="drag here for rough · pop out for precision" />
       </DockPanel>
     </Border>
   </StackPanel>

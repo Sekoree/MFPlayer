@@ -403,7 +403,7 @@ public static class ShowCompiler
 
         return new ShowClipBinding(
             ClipId: text.Id.ToString(),
-            MediaPath: TextSourceUri.Encode(TextSpec(text)),
+            MediaPath: TextSourceUri.Encode(TextSource(text)),
             CompositionId: placement?.CompositionId.ToString(),
             LayerIndex: placement?.LayerIndex ?? 0,
             // −1 rather than null: a card has no audio, and asking the decoder to ELECT a stream in a
@@ -445,7 +445,7 @@ public static class ShowCompiler
     /// Colours are stored as "#RRGGBB" because that is what a designer is handed, and packed to ARGB
     /// here — an empty background means transparent, which is alpha zero rather than black.
     /// </remarks>
-    private static TextSourceSpec TextSpec(TextCueNode text) => new()
+    public static TextSourceSpec TextSource(TextCueNode text) => new()
     {
         Text = text.Text,
         FontFamily = text.FontFamily.Trim().Length > 0 ? text.FontFamily.Trim() : "Inter",

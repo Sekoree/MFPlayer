@@ -34,9 +34,126 @@ public static class HaCueProjectFile
     public static HaCueProject Deserialize(string json)
     {
         RequireSupportedVersion(json);
-        return JsonSerializer.Deserialize(json, HaCueProjectJsonContext.Default.HaCueProject)
-               ?? throw new HaCueProjectFormatException("The project file is empty.");
+        var project = JsonSerializer.Deserialize(json, HaCueProjectJsonContext.Default.HaCueProject)
+                      ?? throw new HaCueProjectFormatException("The project file is empty.");
+        RepairSplitDestinationWriteback(project);
+        return project;
     }
+
+    /// <summary>
+    /// Repairs files written by the short-lived splitter build which allowed the mounted layout
+    /// editor to restore panel 1's old full-raster destination after creating an otherwise-correct
+    /// source-and-destination grid.
+    /// </summary>
+    /// <remarks>
+    /// This deliberately recognises only the split command's exact generated names and regular source
+    /// geometry, requires every later destination tile to be correct, and changes only an identity
+    /// first destination. A hand-authored mapping therefore does not get "helpfully" rearranged.
+    /// </remarks>
+    private static void RepairSplitDestinationWriteback(HaCueProject project)
+    {
+        const double tolerance = 0.0000001;
+
+        foreach (var output in project.VideoOutputs)
+        {
+            var mapping = output.Mapping;
+            if (mapping.Count < 2
+                || mapping.Any(section =>
+                    !section.Enabled
+                    || !Near(section.RotationDegrees, 0, tolerance)
+                    || !Near(section.Opacity, 1, tolerance)
+                    || !Near(section.Brightness, 1, tolerance)
+                    || section.MeshColumns > 0
+                    || section.MeshRows > 0
+                    || section.WarpOffsets is { Count: > 0 }))
+                continue;
+
+            var (rows, columns) = GeneratedGridDimensions(mapping);
+            if (rows <= 0 || columns <= 0 || rows * columns != mapping.Count)
+                continue;
+
+            var left = mapping.Min(section => section.SourceX);
+            var top = mapping.Min(section => section.SourceY);
+            var right = mapping.Max(section => section.SourceX + section.SourceWidth);
+            var bottom = mapping.Max(section => section.SourceY + section.SourceHeight);
+            var sourceWidth = right - left;
+            var sourceHeight = bottom - top;
+            if (!double.IsFinite(left) || !double.IsFinite(top)
+                || !double.IsFinite(sourceWidth) || !double.IsFinite(sourceHeight)
+                || sourceWidth <= 0 || sourceHeight <= 0)
+                continue;
+
+            var regular = true;
+            for (var index = 0; index < mapping.Count; index++)
+            {
+                var row = index / columns;
+                var column = index % columns;
+                var section = mapping[index];
+                regular &= Near(section.SourceX, left + (sourceWidth * column / columns), tolerance)
+                           && Near(section.SourceY, top + (sourceHeight * row / rows), tolerance)
+                           && Near(section.SourceWidth, sourceWidth / columns, tolerance)
+                           && Near(section.SourceHeight, sourceHeight / rows, tolerance);
+
+                if (index > 0)
+                {
+                    regular &= Near(section.TargetX, (double)column / columns, tolerance)
+                               && Near(section.TargetY, (double)row / rows, tolerance)
+                               && Near(section.TargetWidth, 1d / columns, tolerance)
+                               && Near(section.TargetHeight, 1d / rows, tolerance);
+                }
+            }
+
+            var first = mapping[0];
+            if (!regular
+                || !Near(first.TargetX, 0, tolerance)
+                || !Near(first.TargetY, 0, tolerance)
+                || !Near(first.TargetWidth, 1, tolerance)
+                || !Near(first.TargetHeight, 1, tolerance))
+                continue;
+
+            first.TargetWidth = 1d / columns;
+            first.TargetHeight = 1d / rows;
+        }
+    }
+
+    private static (int Rows, int Columns) GeneratedGridDimensions(IReadOnlyList<MappingSection> mapping)
+    {
+        if (mapping[0].Name == "Panel 1")
+        {
+            for (var index = 0; index < mapping.Count; index++)
+                if (mapping[index].Name != $"Panel {index + 1}")
+                    return (0, 0);
+
+            return (1, mapping.Count);
+        }
+
+        for (var columns = 1; columns <= mapping.Count; columns++)
+        {
+            if (mapping.Count % columns != 0)
+                continue;
+
+            var rows = mapping.Count / columns;
+            var namesMatch = true;
+            for (var index = 0; index < mapping.Count; index++)
+            {
+                var row = index / columns;
+                var column = index % columns;
+                if (mapping[index].Name != $"Panel r{row + 1} c{column + 1}")
+                {
+                    namesMatch = false;
+                    break;
+                }
+            }
+
+            if (namesMatch)
+                return (rows, columns);
+        }
+
+        return (0, 0);
+    }
+
+    private static bool Near(double left, double right, double tolerance) =>
+        double.IsFinite(left) && Math.Abs(left - right) <= tolerance;
 
     /// <summary>
     /// The project hash: SHA-256 over the serialized document.

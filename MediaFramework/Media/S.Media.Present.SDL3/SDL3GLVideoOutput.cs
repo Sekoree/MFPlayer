@@ -87,6 +87,12 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     private YuvVideoRenderer? _renderer;
     private int _viewportWidth;
     private int _viewportHeight;
+    private readonly object _windowConstraintLock = new();
+    private readonly object _windowPlacementLock = new();
+    private Action? _pendingWindowPlacement;
+    private bool _windowAspectLocked;
+    private bool _windowResolutionLocked;
+    private float _windowAspectRatio;
 
     /// <summary>Set after <see cref="InitGraphics"/> completes; controls whether <see cref="ForceDisposeMirrorFromAnchor"/> must release the SDL runtime.</summary>
     private bool _graphicsInitialized;
@@ -128,6 +134,26 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     /// each render) - and is identical to <see cref="VideoViewportFit.Stretch"/> when the window already matches
     /// the frame aspect. Set to <see cref="VideoViewportFit.Stretch"/> to fill the window and ignore aspect.</summary>
     public VideoViewportFit ViewportFit { get; set; } = VideoViewportFit.Contain;
+
+    /// <summary>
+    /// Constrains the real desktop window. May be called before <see cref="Configure"/> or while the
+    /// output is running; runtime changes are marshalled to the SDL render thread.
+    /// </summary>
+    public void SetWindowConstraints(bool lockAspectRatio, bool lockResolution, float aspectRatio)
+    {
+        if (lockAspectRatio && (!float.IsFinite(aspectRatio) || aspectRatio <= 0))
+            throw new ArgumentOutOfRangeException(nameof(aspectRatio));
+
+        lock (_windowConstraintLock)
+        {
+            _windowAspectLocked = lockAspectRatio;
+            _windowResolutionLocked = lockResolution;
+            _windowAspectRatio = aspectRatio;
+        }
+
+        if (_configured)
+            InvokeOnRenderThread(ApplyWindowConstraintsCore);
+    }
 
     public event EventHandler? CloseRequested;
     public event EventHandler<(int Width, int Height)>? Resized;
@@ -266,7 +292,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     /// (same ordering as <see cref="SDL.GetDisplays(System.Int32@)"/>).
     /// </summary>
     public void ApplyWindowPlacement(int displayIndex, bool fullscreen, int? windowWidth, int? windowHeight) =>
-        InvokeOnRenderThread(() => ApplyWindowPlacementCore(displayIndex, fullscreen, windowWidth, windowHeight));
+        ScheduleWindowPlacement(() => ApplyWindowPlacementCore(displayIndex, fullscreen, windowWidth, windowHeight));
 
     /// <summary>
     /// Moves/resizes the SDL window using a display rectangle supplied by the host UI. This is useful
@@ -280,7 +306,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         bool fullscreen,
         int? windowWidth,
         int? windowHeight) =>
-        InvokeOnRenderThread(() => ApplyWindowPlacementCore(
+        ScheduleWindowPlacement(() => ApplyWindowPlacementCore(
             displayX,
             displayY,
             displayWidth,
@@ -648,6 +674,9 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                 if (_window == nint.Zero)
                     throw new InvalidOperationException($"SDL_CreateWindow (mirror) failed: {SDL.GetError()}");
 
+                ApplyWindowConstraintsCore();
+                ApplyPendingWindowPlacementCore();
+
                 if (!SDL.ShowWindow(_window))
                     MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_ShowWindow failed: {0}", SDL.GetError());
                 if (!SDL.RaiseWindow(_window))
@@ -701,6 +730,9 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable | SDL.WindowFlags.NotFocusable);
         if (_window == nint.Zero)
             throw new InvalidOperationException($"SDL_CreateWindow failed: {SDL.GetError()}");
+
+        ApplyWindowConstraintsCore();
+        ApplyPendingWindowPlacementCore();
 
         if (!SDL.ShowWindow(_window))
             MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_ShowWindow failed: {0}", SDL.GetError());
@@ -1117,6 +1149,34 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         ApplyWindowPlacementCore(r.X, r.Y, r.W, r.H, fullscreen, windowWidth, windowHeight);
     }
 
+    private void ScheduleWindowPlacement(Action placement)
+    {
+        lock (_windowPlacementLock)
+        {
+            if (!_configured)
+            {
+                // Last request wins before the native window exists. Project hosts normally choose
+                // the display immediately after construction and the session configures it later.
+                _pendingWindowPlacement = placement;
+                return;
+            }
+        }
+
+        InvokeOnRenderThread(placement);
+    }
+
+    private void ApplyPendingWindowPlacementCore()
+    {
+        Action? placement;
+        lock (_windowPlacementLock)
+        {
+            placement = _pendingWindowPlacement;
+            _pendingWindowPlacement = null;
+        }
+
+        placement?.Invoke();
+    }
+
     private void ApplyWindowPlacementCore(
         int displayX,
         int displayY,
@@ -1155,6 +1215,30 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             if (!SDL.SetWindowPosition(_window, x, y))
                 MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_SetWindowPosition failed: {0}", SDL.GetError());
         }
+    }
+
+    private void ApplyWindowConstraintsCore()
+    {
+        if (_window == nint.Zero)
+            return;
+
+        bool lockAspect;
+        bool lockResolution;
+        float aspect;
+        lock (_windowConstraintLock)
+        {
+            lockAspect = _windowAspectLocked;
+            lockResolution = _windowResolutionLocked;
+            aspect = _windowAspectRatio;
+        }
+
+        var minimumAspect = lockAspect ? aspect : 0f;
+        var maximumAspect = lockAspect ? aspect : 0f;
+        if (!SDL.SetWindowAspectRatio(_window, minimumAspect, maximumAspect))
+            MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_SetWindowAspectRatio failed: {0}", SDL.GetError());
+
+        if (!SDL.SetWindowResizable(_window, !lockResolution))
+            MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_SetWindowResizable failed: {0}", SDL.GetError());
     }
 
     private void SafeRaise(EventHandler? handler)

@@ -47,4 +47,16 @@ public partial class PlacementEditorPane : UserControl
         if (DataContext is InspectorViewModel inspector)
             inspector.EndEdit();
     }
+
+    private void OnPopOut(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not InspectorViewModel inspector)
+            return;
+
+        var window = new PlacementEditorWindow { DataContext = inspector };
+        if (TopLevel.GetTopLevel(this) is Window owner)
+            window.Show(owner);
+        else
+            window.Show();
+    }
 }

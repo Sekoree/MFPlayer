@@ -130,6 +130,35 @@ public class VideoViewRenderTests
     });
 
     /// <summary>
+    /// Replacing sections while their two-way numeric editors are mounted must not write an old
+    /// full-raster value into the newly selected first panel.
+    /// </summary>
+    [Fact]
+    public Task SplittingABoundMappingKeepsTheFirstDestinationTile() => ShellFixture.WithShell(shell =>
+    {
+        var (video, output, _) = Rig(shell);
+        video.OpenMapping();
+        video.Refresh();
+        var window = Host(new VideoView(), video);
+
+        video.SplitColumns = 3;
+        video.SplitRows = 3;
+        video.SplitIntoGrid();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(9, output.Mapping.Count);
+        Assert.Equal(1d / 3, output.Mapping[0].TargetWidth, 6);
+        Assert.Equal(1d / 3, output.Mapping[0].TargetHeight, 6);
+        Assert.All(output.Mapping, section =>
+        {
+            Assert.Equal(1d / 3, section.TargetWidth, 6);
+            Assert.Equal(1d / 3, section.TargetHeight, 6);
+        });
+
+        window.Close();
+    });
+
+    /// <summary>
     /// The composition pane names the outputs its canvas feeds, and offers the rest.
     /// </summary>
     /// <remarks>

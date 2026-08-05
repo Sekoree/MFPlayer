@@ -1,5 +1,6 @@
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
+using HaCue2.Core.Compile;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Media;
 using HaCue2.Core.Model;
@@ -37,6 +38,9 @@ public partial class InspectorViewModel : ObservableObject
 
     /// <summary>Open for the duration of one canvas drag, so the gesture is a single undo step.</summary>
     private IDisposable? _drag;
+    private readonly object _livePlacementGate = new();
+    private readonly Dictionary<LivePlacementKey, LivePlacementEdit> _pendingLivePlacements = [];
+    private bool _livePlacementPublisherRunning;
     private readonly Dictionary<CueKind, string> _rememberedTab = [];
     private IReadOnlyList<Guid> _selection = [];
 
@@ -771,7 +775,9 @@ public partial class InspectorViewModel : ObservableObject
             var composition = Project.Compositions
                 .FirstOrDefault(item => item.Id == placement.CompositionId);
 
-            return composition is null ? [] : VideoPresentation.Layers(Project, composition, Cue?.Id);
+            return composition is null
+                ? []
+                : VideoPresentation.Layers(Project, composition, Cue?.Id, MediaFacts);
         }
     }
 
@@ -1329,38 +1335,19 @@ public partial class InspectorViewModel : ObservableObject
         // The view-model raises the placement properties below, so journal observers do not need to
         // rebuild the entire shell for every pointer pixel. They see one finished edit on release.
         _drag ??= _journal.Composite("move layer", "video", quiet: true);
-        _journal.Do(RectEdits.Placement(cue, placement, gesture.Rect));
+        _journal.Do(RectEdits.Placement(cue, placement, gesture.AuthoredRect()));
         ApplyLivePlacement(cue, placement);
+
+        // These are the only values a move/resize changes. Keeping the hot pointer path focused is
+        // important on the compact inspector canvas: rebuilding every combo, crop field, effect lane
+        // and guide collection for each native motion event can make the backend coalesce a whole drag
+        // into its first pixel. The complete inspector refresh still happens once when the quiet undo
+        // scope closes on release.
         OnPropertyChanged(nameof(Placements));
-        OnPropertyChanged(nameof(PlacementGuidesX));
-        OnPropertyChanged(nameof(PlacementGuidesY));
-        OnPropertyChanged(nameof(PlacementAspect));
-        OnPropertyChanged(nameof(HasPlacement));
-        OnPropertyChanged(nameof(PlacementList));
-        OnPropertyChanged(nameof(PlacementHeaders));
-        OnPropertyChanged(nameof(PlacementCompositions));
-        OnPropertyChanged(nameof(PlacementCompositionIndex));
-        OnPropertyChanged(nameof(LayerValue));
-        OnPropertyChanged(nameof(FitIndex));
-        OnPropertyChanged(nameof(PlacementOpacity));
         OnPropertyChanged(nameof(PlacementX));
         OnPropertyChanged(nameof(PlacementY));
         OnPropertyChanged(nameof(PlacementWidth));
         OnPropertyChanged(nameof(PlacementHeight));
-        OnPropertyChanged(nameof(PlacementRotation));
-        OnPropertyChanged(nameof(CropLeft));
-        OnPropertyChanged(nameof(CropTop));
-        OnPropertyChanged(nameof(CropRight));
-        OnPropertyChanged(nameof(CropBottom));
-        OnPropertyChanged(nameof(HasChromaKey));
-        OnPropertyChanged(nameof(ChromaKeyOn));
-        OnPropertyChanged(nameof(ChromaColour));
-        OnPropertyChanged(nameof(ChromaSimilarity));
-        OnPropertyChanged(nameof(ChromaSmoothness));
-        OnPropertyChanged(nameof(ChromaSpill));
-        OnPropertyChanged(nameof(ColorAdjustOn));
-        OnPropertyChanged(nameof(LayerBrightness));
-        OnPropertyChanged(nameof(LayerContrast));
     }
 
     /// <summary>Closes the drag's undo step. Called when the pointer is released or a nudge lands.</summary>
@@ -1370,29 +1357,82 @@ public partial class InspectorViewModel : ObservableObject
         _drag = null;
     }
 
-    private static async Task ObserveLivePlacementAsync(
-        ShowHost? host,
-        Guid cueId,
-        LayerPlacement placement)
+    private async Task PublishLivePlacementsAsync()
     {
-        if (host is null)
-            return;
+        while (true)
+        {
+            LivePlacementEdit edit;
+            lock (_livePlacementGate)
+            {
+                if (_pendingLivePlacements.Count == 0)
+                {
+                    _livePlacementPublisherRunning = false;
+                    return;
+                }
 
-        try
-        {
-            await host.UpdateActivePlacementAsync(cueId, placement).ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException)
-        {
-            // A pointer release can race application/engine shutdown; the persisted edit still stands.
+                edit = _pendingLivePlacements.Values.First();
+                _pendingLivePlacements.Remove(edit.Key);
+            }
+
+            try
+            {
+                await edit.Key.Host.UpdateActivePlacementAsync(
+                        edit.Key.CueId,
+                        edit.Key.CompositionId,
+                        edit.Key.LayerIndex,
+                        edit.Placement)
+                    .ConfigureAwait(false);
+            }
+            catch (ObjectDisposedException)
+            {
+                // A pointer release can race application/engine shutdown; the persisted edit stands.
+            }
+            catch (OperationCanceledException)
+            {
+                // Likewise during shutdown/reload. A later engine sync reads the document value.
+            }
+            catch (Exception exception)
+            {
+                // A hot update is best-effort; losing it must not strand the publisher or the authored
+                // gesture. The normal release-time project sync remains the recovery path.
+                System.Diagnostics.Trace.TraceWarning(
+                    $"Live placement update failed: {exception.GetType().Name}: {exception.Message}");
+            }
         }
     }
 
     private void ApplyLivePlacement(CueNode? cue, LayerPlacement placement)
     {
-        if (cue is not null)
-            _ = ObserveLivePlacementAsync(Host, cue.Id, placement);
+        if (cue is null || Host is not { } host)
+            return;
+
+        var key = new LivePlacementKey(
+            host, cue.Id, placement.CompositionId, placement.LayerIndex);
+        var edit = new LivePlacementEdit(key, ShowCompiler.VideoPlacement(placement));
+        var startPublisher = false;
+
+        lock (_livePlacementGate)
+        {
+            // Latest wins for this layer while one compositor update is in flight. Queuing every
+            // native pointer pixel can leave the projected picture seconds behind the mouse and can
+            // starve ordinary playback work on the same serialized session dispatcher.
+            _pendingLivePlacements[key] = edit;
+            if (!_livePlacementPublisherRunning)
+            {
+                _livePlacementPublisherRunning = true;
+                startPublisher = true;
+            }
+        }
+
+        if (startPublisher)
+            _ = PublishLivePlacementsAsync();
     }
+
+    private readonly record struct LivePlacementKey(
+        ShowHost Host, Guid CueId, Guid CompositionId, int LayerIndex);
+
+    private readonly record struct LivePlacementEdit(
+        LivePlacementKey Key, ShowVideoPlacement Placement);
 
     // ── the Group pane ────────────────────────────────────────────────────────────────────────
 
@@ -2264,6 +2304,9 @@ public partial class InspectorViewModel : ObservableObject
 
     /// <summary>What the selected cue's file turned out to contain. Set by the shell as probes land.</summary>
     public MediaFacts? Facts { get; set; }
+
+    /// <summary>Machine media facts for every cue drawn beside the selected one.</summary>
+    public Func<MediaCueNode, MediaFacts?>? MediaFacts { get; set; }
 
     /// <summary>Where derived files live, so the clip editor can cache a scan. Set by the shell.</summary>
     public string CacheRoot { get; set; } = "";
