@@ -438,7 +438,7 @@ public class SourceCueTests
             string? prepared = null;
             shell.Cues.Inspector.PreparedMediaPath = _ => prepared;
             ShellFixture.Select(shell.Cues, cue.Id);
-            shell.Cues.Inspector.SelectedTab = "CLIP";
+            shell.Cues.Inspector.SelectedTab = "GENERAL";
             Assert.False(shell.Cues.Inspector.CanEditClip);
 
             var changed = new List<string?>();
@@ -447,7 +447,7 @@ public class SourceCueTests
             shell.RefreshYouTubeReadiness();
 
             Assert.True(shell.Cues.Inspector.CanEditClip);
-            Assert.Equal("CLIP", shell.Cues.Inspector.SelectedTab);
+            Assert.Equal("GENERAL", shell.Cues.Inspector.SelectedTab);
             Assert.Contains(nameof(InspectorViewModel.CanEditClip), changed);
         });
 

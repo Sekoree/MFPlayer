@@ -55,12 +55,14 @@ public partial class InspectorViewModel : ObservableObject
     public IReadOnlyList<CueNode> Selected =>
         [.. _selection.Select(Project.FindCue).OfType<CueNode>()];
 
+    /// <summary>Whether document-authoring controls should be interactive under the shell Lock.</summary>
+    public bool CanAuthor => !_journal.IsReadOnly;
+
     [ObservableProperty]
     private IReadOnlyList<string> _tabs = NoTabs;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsGeneralPane))]
-    [NotifyPropertyChangedFor(nameof(IsClipPane))]
     [NotifyPropertyChangedFor(nameof(IsAudioPane))]
     [NotifyPropertyChangedFor(nameof(IsVideoPane))]
     [NotifyPropertyChangedFor(nameof(IsEffectsPane))]
@@ -131,12 +133,15 @@ public partial class InspectorViewModel : ObservableObject
             ? null
             : RememberTabs && _rememberedTab.TryGetValue(KindOf(lead), out var remembered) && Tabs.Contains(remembered)
                 ? remembered
-                // Second tab, not the first: General is the same on every kind, so landing on it tells
-                // the operator nothing about what they just selected.
-                : Tabs.Skip(1).FirstOrDefault() ?? Tabs.FirstOrDefault();
+                // General carries the complete clip window for finite media, so it is the useful
+                // starting pane there. Other kinds still open on their kind-specific second tab.
+                : lead is MediaCueNode media && !SourceUri.IsLive(media.MediaPath)
+                    ? "GENERAL"
+                    : Tabs.Skip(1).FirstOrDefault() ?? Tabs.FirstOrDefault();
 
         OnPropertyChanged(nameof(Cue));
         OnPropertyChanged(nameof(Selected));
+        OnPropertyChanged(nameof(CanAuthor));
         OnPropertyChanged(nameof(SelectionCount));
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(IsMultiSelection));
@@ -295,7 +300,7 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     private static IReadOnlyList<string> TabsFor(CueKind kind) => kind switch
     {
-        CueKind.Media or CueKind.Video => ["GENERAL", "CLIP", "AUDIO", "VIDEO", "EFFECTS", "NOTE", "PREVIEW"],
+        CueKind.Media or CueKind.Video => ["GENERAL", "AUDIO", "VIDEO", "EFFECTS", "NOTE", "PREVIEW"],
         CueKind.Group => ["GENERAL", "GROUP", "NOTE"],
         CueKind.Action => ["GENERAL", "ACTION", "NOTE"],
         CueKind.Fade => ["GENERAL", "FADE", "NOTE"],
@@ -308,14 +313,9 @@ public partial class InspectorViewModel : ObservableObject
         _ => ["GENERAL", "NOTE"],
     };
 
-    /// <summary>Live inputs have no clip window, so do not offer a pane whose only answer is “none”.</summary>
-    private static IReadOnlyList<string> TabsFor(CueNode cue) =>
-        cue is MediaCueNode media && SourceUri.IsLive(media.MediaPath)
-            ? ["GENERAL", "AUDIO", "VIDEO", "EFFECTS", "NOTE", "PREVIEW"]
-            : TabsFor(KindOf(cue));
+    private static IReadOnlyList<string> TabsFor(CueNode cue) => TabsFor(KindOf(cue));
 
     public bool IsGeneralPane => SelectedTab == "GENERAL";
-    public bool IsClipPane => SelectedTab == "CLIP";
     public bool IsAudioPane => SelectedTab == "AUDIO";
     public bool IsVideoPane => SelectedTab == "VIDEO";
     public bool IsEffectsPane => SelectedTab == "EFFECTS";

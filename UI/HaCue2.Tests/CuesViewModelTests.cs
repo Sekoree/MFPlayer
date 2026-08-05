@@ -297,6 +297,7 @@ public class CuesViewModelTests
         Assert.True(shell.Journal.IsReadOnly);
         Assert.False(shell.CanEdit);
         Assert.False(shell.Cues.CanEditDocument);
+        Assert.False(shell.Cues.Inspector.CanAuthor);
         Assert.False(shell.Audio.CanAuthor);
         Assert.False(shell.Video.CanAuthor);
         Assert.False(shell.Targets.CanAuthor);

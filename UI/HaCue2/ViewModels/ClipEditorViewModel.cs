@@ -147,6 +147,11 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
             if (peaks is not null)
                 WaveformCache.Write(_cacheRoot, Path, peaks, _waveformCacheBytes);
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Closing the window can cancel the Task.Run before its delegate starts. In that case the
+            // machine scanner never gets a chance to turn cancellation into a normal null result.
+        }
         finally
         {
             if (!token.IsCancellationRequested)
@@ -192,6 +197,9 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
         if (ClipTimes.Parse(text, Length) is not { } milliseconds)
             return $"“{text}” is not a time — {ClipTimes.Syntax}";
 
+        if (FileLengthMilliseconds is { } fileEnd && milliseconds >= fileEnd)
+            return "the in-point would be at or past the end of the file";
+
         if (_cue is { TrimOutMs: > 0 } cue && milliseconds >= cue.TrimOutMs)
             return "the in-point would be at or past the out-point";
 
@@ -213,6 +221,9 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
         if (ClipTimes.Parse(text, Length) is not { } milliseconds)
             return $"“{text}” is not a time — {ClipTimes.Syntax}";
 
+        if (FileLengthMilliseconds is { } fileEnd && milliseconds > fileEnd)
+            return "the out-point would be past the end of the file";
+
         if (_cue is { } cue && milliseconds <= cue.TrimInMs)
             return "the out-point would be at or before the in-point";
 
@@ -231,24 +242,32 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
     /// </remarks>
     public void Apply(TrimHandle handle, double at)
     {
-        if (Length is not { } length)
+        if (FileLengthMilliseconds is not { } fileEnd)
             return;
 
-        var milliseconds = (int)Math.Round(Math.Clamp(at, 0, 1) * length.TotalMilliseconds);
+        var milliseconds = (int)Math.Round(Math.Clamp(at, 0, 1) * fileEnd);
 
         switch (handle)
         {
             case TrimHandle.In when _cue is { } cue:
                 // Never past the out-point: a window whose ends crossed would be a cue that plays
                 // nothing, reported by the validator long after the drag that caused it.
-                var ceiling = cue.TrimOutMs > 0 ? cue.TrimOutMs - 1 : (int)length.TotalMilliseconds - 1;
+                var ceiling = cue.TrimOutMs > 0 ? cue.TrimOutMs - 1 : fileEnd - 1;
+                var trimIn = Math.Min(milliseconds, Math.Max(0, ceiling));
                 Begin("move the clip's in-point");
-                Write(trimIn: true, Math.Min(milliseconds, Math.Max(0, ceiling)), "move the clip's in-point");
+                Write(trimIn: true, trimIn, "move the clip's in-point");
+                PreviewAt(trimIn);
                 break;
 
             case TrimHandle.Out when _cue is { } cue:
+                var trimOut = Math.Min(
+                    Math.Max(milliseconds, cue.TrimInMs + 1),
+                    fileEnd);
                 Begin("move the clip's out-point");
-                Write(trimIn: false, Math.Max(milliseconds, cue.TrimInMs + 1), "move the clip's out-point");
+                Write(trimIn: false, trimOut, "move the clip's out-point");
+                // Out is an exclusive boundary. The marker and label sit exactly on it, while the
+                // picture request sits immediately before it so EOF is not used as a decode position.
+                PreviewAt(trimOut, frameBeforePosition: true);
                 break;
 
             default:
@@ -343,12 +362,21 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
     }
 
     private void Scrub(int milliseconds)
+        => PreviewAt(milliseconds);
+
+    /// <summary>Moves the visible preview target and fetches the frame that explains that position.</summary>
+    private void PreviewAt(int milliseconds, bool frameBeforePosition = false)
     {
         if (Length is not { } length || length.TotalMilliseconds <= 0)
             return;
 
-        Playhead = milliseconds / length.TotalMilliseconds;
-        _ = GrabAsync(TimeSpan.FromMilliseconds(milliseconds));
+        var durationMs = FileLengthMilliseconds ?? 0;
+        var positionMs = Math.Clamp(milliseconds, 0, durationMs);
+        Playhead = positionMs / length.TotalMilliseconds;
+
+        var frameMs = frameBeforePosition ? positionMs - 1 : positionMs;
+        frameMs = Math.Clamp(frameMs, 0, Math.Max(0, durationMs - 1));
+        _ = GrabAsync(TimeSpan.FromMilliseconds(frameMs));
     }
 
     /// <summary>
@@ -365,23 +393,42 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
             return;
 
         _frame?.Cancel();
-        _frame = new CancellationTokenSource();
-        var token = _frame.Token;
+        var request = new CancellationTokenSource();
+        _frame = request;
+        var token = request.Token;
 
-        var frame = await MediaScan.FrameAsync(Path, at, token).ConfigureAwait(true);
+        try
+        {
+            var frame = await MediaScan.FrameAsync(Path, at, token).ConfigureAwait(true);
 
-        if (token.IsCancellationRequested)
-            return;
+            if (token.IsCancellationRequested)
+                return;
 
-        var drawn = Draw(frame);
-        Preview?.Dispose();
-        Preview = drawn;
+            var drawn = Draw(frame);
+            Preview?.Dispose();
+            Preview = drawn;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // A newer pointer position superseded this request before its worker began.
+        }
+        finally
+        {
+            if (ReferenceEquals(_frame, request))
+                _frame = null;
+            request.Dispose();
+        }
     }
 
     private double Fraction(int milliseconds) =>
         Length is { TotalMilliseconds: > 0 } length
             ? Math.Clamp(milliseconds / length.TotalMilliseconds, 0, 1)
             : 0;
+
+    /// <summary>The model stores clip positions as 32-bit milliseconds.</summary>
+    private int? FileLengthMilliseconds => Length is { TotalMilliseconds: > 0 } length
+        ? (int)Math.Min(int.MaxValue, Math.Round(length.TotalMilliseconds))
+        : null;
 
     /// <summary>Re-announces everything derived from the cue, after an edit here or an undo anywhere.</summary>
     public void Refresh()
@@ -412,8 +459,9 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
         Preview?.Dispose();
         _scan?.Cancel();
         _scan?.Dispose();
-        _frame?.Cancel();
-        _frame?.Dispose();
+        var frame = _frame;
+        _frame = null;
+        frame?.Cancel();
         _drag?.Dispose();
     }
 }

@@ -40,7 +40,8 @@
         <Panel>
 
           <!-- ══ GENERAL ═══════════════════════════════════════════════════════════════════ -->
-          <StackPanel IsVisible="{Binding IsGeneralPane}" Margin="0,6,0,8">
+          <StackPanel IsVisible="{Binding IsGeneralPane}" IsEnabled="{Binding CanAuthor}"
+                      Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Number">
               <TextBox Text="{Binding NumberValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
@@ -89,13 +90,12 @@
                  to drop it for one performance is how shows lose cues. -->
             <CheckBox Margin="10,6,10,0" IsChecked="{Binding IsEnabled}"
                       Content="Enabled — GO and auto-follow include this cue" />
-          </StackPanel>
 
-          <!-- ══ CLIP ══════════════════════════════════════════════════════════════════════ -->
-          <!-- Finite-media playback belongs here rather than under AUDIO: a silent video still has
-               an in-point and an out-point, and this is the first pane a media cue opens on. -->
-          <StackPanel IsVisible="{Binding IsClipPane}" Margin="0,6,0,8">
+            <!-- Finite-media playback is part of the cue's general identity. A silent video still has
+                 an in-point and an out-point, but those controls do not warrant a separate tab. Live
+                 sources omit this whole section because they have no stable beginning or end. -->
             <StackPanel IsVisible="{Binding CanTrimMedia}">
+              <ContentControl Theme="{StaticResource Subhead}" Content="Clip" />
               <!-- "end" rather than 0.0 for an untrimmed out-point: zero means play through in the
                    model, and a field reading 0.0 looks like a cue that plays nothing. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Trim in / out">
@@ -115,31 +115,30 @@
               <ContentControl Theme="{StaticResource FieldWide}">
                 <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding TrimHint}" />
               </ContentControl>
+
+              <CheckBox Margin="10,2,10,4" IsChecked="{Binding LoopValue}"
+                        Content="Loop until stopped" />
+
+              <!-- Every cue simply STOPPED before this existed. Freeze is what a title card wants; fade
+                   out gives a cue its own out-ramp without a fade cue aimed at it. -->
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="At end">
+                <ComboBox ItemsSource="{Binding EndBehaviours}" SelectedIndex="{Binding EndBehaviourIndex}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Loop overlap"
+                                      IsVisible="{Binding IsLooping}">
+                <NumericUpDown Minimum="0" Maximum="30000" Increment="100" FormatString="0"
+                               Value="{Binding LoopCrossfadeValue}"
+                               ToolTip.Tip="Milliseconds of overlap when the loop wraps. A seamless loop is made of this; zero is a hard cut." />
+              </HeaderedContentControl>
+              <CheckBox Margin="10,2,10,4" IsChecked="{Binding PreRollValue}"
+                        Content="Pre-roll — open this cue's media before it fires"
+                        ToolTip.Tip="On by default. Turn it off for a clip that costs more to hold open than it saves, or whose open starts something early." />
             </StackPanel>
-
-            <CheckBox Margin="10,2,10,4" IsChecked="{Binding LoopValue}"
-                      IsEnabled="{Binding CanTrimMedia}"
-                      Content="Loop until stopped" />
-
-            <!-- Every cue simply STOPPED before this existed. Freeze is what a title card wants; fade
-                 out gives a cue its own out-ramp without a fade cue aimed at it. -->
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="At end"
-                                    IsEnabled="{Binding CanTrimMedia}">
-              <ComboBox ItemsSource="{Binding EndBehaviours}" SelectedIndex="{Binding EndBehaviourIndex}" />
-            </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Loop overlap"
-                                    IsVisible="{Binding IsLooping}">
-              <NumericUpDown Minimum="0" Maximum="30000" Increment="100" FormatString="0"
-                             Value="{Binding LoopCrossfadeValue}"
-                             ToolTip.Tip="Milliseconds of overlap when the loop wraps. A seamless loop is made of this; zero is a hard cut." />
-            </HeaderedContentControl>
-            <CheckBox Margin="10,2,10,4" IsChecked="{Binding PreRollValue}"
-                      Content="Pre-roll — open this cue's media before it fires"
-                      ToolTip.Tip="On by default. Turn it off for a clip that costs more to hold open than it saves, or whose open starts something early." />
           </StackPanel>
 
           <!-- ══ AUDIO ═════════════════════════════════════════════════════════════════════ -->
-          <StackPanel IsVisible="{Binding IsAudioPane}" Margin="0,6,0,8">
+          <StackPanel IsVisible="{Binding IsAudioPane}" IsEnabled="{Binding CanAuthor}"
+                      Margin="0,6,0,8">
             <!-- A concert capture routinely carries several audio tracks — a stereo mix, an isolated
                  vocal, a room pair. Which one this cue plays is an authoring decision, and the sends
                  below are the channels OF THAT TRACK. -->
@@ -244,7 +243,8 @@
           </StackPanel>
 
           <!-- ══ VIDEO ═════════════════════════════════════════════════════════════════════ -->
-          <StackPanel IsVisible="{Binding IsVideoPane}" Margin="0,6,0,8">
+          <StackPanel IsVisible="{Binding IsVideoPane}" IsEnabled="{Binding CanAuthor}"
+                      Margin="0,6,0,8">
             <!-- A cue with no placement is not on any canvas. Saying so beats four fields and an
                  empty frame, which read as a layer sized to nothing. -->
             <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding !HasPlacement}">
@@ -351,7 +351,8 @@
           </StackPanel>
 
           <!-- ══ EFFECTS — lanes, hidden until added (register item 18) ═════════════════════ -->
-          <StackPanel IsVisible="{Binding IsEffectsPane}" Margin="0,6,0,8">
+          <StackPanel IsVisible="{Binding IsEffectsPane}" IsEnabled="{Binding CanAuthor}"
+                      Margin="0,6,0,8">
             <!-- Hidden until added (register item 18): a cue with no automation shows none, rather
                  than four empty lanes implying it has some. -->
             <TextBlock Margin="10,4" Classes="mono dim3 small" IsVisible="{Binding !HasEffectLanes}"
@@ -420,7 +421,8 @@
           <StackPanel IsVisible="{Binding IsGroupPane}" Margin="0,6,0,8">
             <!-- All of this was hard-coded markup: fire mode was pinned to "playlist", so a timeline
                  group described itself as one. Bound to the cue now. -->
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Fire mode">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Fire mode"
+                                    IsEnabled="{Binding CanAuthor}">
               <ComboBox ItemsSource="{Binding FireModes}" SelectedIndex="{Binding FireModeIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Children">
@@ -432,7 +434,7 @@
               <Button Classes="block" Content="OPEN TIMELINE ›" Click="OnOpenTimeline" />
             </ContentControl>
 
-            <StackPanel IsVisible="{Binding IsSequencedGroup}">
+            <StackPanel IsVisible="{Binding IsSequencedGroup}" IsEnabled="{Binding CanAuthor}">
               <CheckBox Margin="10,3" IsChecked="{Binding ShuffleValue}"
                         Content="Shuffle" />
               <CheckBox Margin="10,3" IsChecked="{Binding ReshuffleValue}"
@@ -470,6 +472,7 @@
             </StackPanel>
 
             <HeaderedContentControl Theme="{StaticResource Field}" Header="At end"
+                                    IsEnabled="{Binding CanAuthor}"
                                     IsVisible="{Binding IsSequencedGroup}">
               <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding AtEndOptions}"
                        SelectedIndex="{Binding AtEndIndex}" />
@@ -479,7 +482,8 @@
           </StackPanel>
 
           <!-- ══ PATCH — snapshot recall AND inline level changes (register item 12) ════════ -->
-          <StackPanel IsVisible="{Binding IsPatchPane}" Margin="0,6,0,8">
+          <StackPanel IsVisible="{Binding IsPatchPane}" IsEnabled="{Binding CanAuthor}"
+                      Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Recall">
               <ComboBox ItemsSource="{Binding PatchSnapshots}"
                         SelectedIndex="{Binding PatchSnapshotIndex}" />
@@ -524,7 +528,8 @@
           </StackPanel>
 
           <!-- ══ FADE — targets, duration, curve, fade-everything ══════════════════════════ -->
-          <StackPanel IsVisible="{Binding IsFadePane}" Margin="0,6,0,8">
+          <StackPanel IsVisible="{Binding IsFadePane}" IsEnabled="{Binding CanAuthor}"
+                      Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="To level">
               <TextBox Classes="short" Text="{Binding FadeToLevelValue}" LostFocus="OnFieldCommitted"
                        ToolTip.Tip="A level in dB, or “-inf” / “off” for silence." />
@@ -557,7 +562,8 @@
           </StackPanel>
 
           <!-- ══ JUMP — targets, random pick, fire-on-jump ═════════════════════════════════ -->
-          <StackPanel IsVisible="{Binding IsJumpPane}" Margin="0,6,0,8">
+          <StackPanel IsVisible="{Binding IsJumpPane}" IsEnabled="{Binding CanAuthor}"
+                      Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Jump to">
               <ComboBox ItemsSource="{Binding JumpTargets}" SelectedIndex="{Binding JumpTargetIndex}" />
             </HeaderedContentControl>
@@ -584,7 +590,8 @@
                The document stores WORDS, not a picture: portable, diffable, and translatable. The
                app draws them into its media cache when the show is compiled, so a card carried to
                another booth is redrawn there with whatever faces that machine has. -->
-          <StackPanel IsVisible="{Binding IsTextPane}" Margin="0,6,0,8">
+          <StackPanel IsVisible="{Binding IsTextPane}" IsEnabled="{Binding CanAuthor}"
+                      Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Words">
               <TextBox Text="{Binding CardText}" AcceptsReturn="True" TextWrapping="Wrap"
                        MinHeight="90" VerticalContentAlignment="Top"
@@ -650,7 +657,8 @@
           </StackPanel>
 
           <!-- ══ VISUALIZER — the ONLY home of visualizer settings (register item 21) ═══════ -->
-          <StackPanel IsVisible="{Binding IsVisualizerPane}" Margin="0,6,0,8">
+          <StackPanel IsVisible="{Binding IsVisualizerPane}" IsEnabled="{Binding CanAuthor}"
+                      Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Preset pack">
               <TextBox Text="{Binding VisualizerPresetPackValue}" LostFocus="OnFieldCommitted"
                        PlaceholderText="a preset directory under the projectM pack root" />
@@ -681,7 +689,8 @@
           </StackPanel>
 
           <!-- ══ ACTION — endpoint, address, arguments ═════════════════════════════════════ -->
-          <StackPanel IsVisible="{Binding IsActionPane}" Margin="0,6,0,8">
+          <StackPanel IsVisible="{Binding IsActionPane}" IsEnabled="{Binding CanAuthor}"
+                      Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Endpoint">
               <ComboBox ItemsSource="{Binding ActionEndpoints}"
                         SelectedIndex="{Binding ActionEndpointIndex}" />

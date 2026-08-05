@@ -36,6 +36,8 @@ public class WaveformGraph : Control
 {
     /// <summary>How close to a handle counts as grabbing it, in pixels.</summary>
     private const double GrabRadius = 7;
+    private static readonly Cursor TrimCursor = new(StandardCursorType.SizeWestEast);
+    private static readonly Cursor ScrubCursor = new(StandardCursorType.Cross);
 
     public static readonly StyledProperty<IReadOnlyList<float>?> PeaksProperty =
         AvaloniaProperty.Register<WaveformGraph, IReadOnlyList<float>?>(nameof(Peaks));
@@ -132,14 +134,8 @@ public class WaveformGraph : Control
 
         var x = e.GetPosition(this).X;
 
-        // The nearest handle within reach, or the playhead. Nearest rather than first, so a very short
-        // trim window whose two handles overlap still gives the operator the one they aimed at.
-        var toIn = Math.Abs(x - (TrimIn * Bounds.Width));
-        var toOut = Math.Abs(x - (TrimOut * Bounds.Width));
-
-        _dragging = Math.Min(toIn, toOut) > GrabRadius
-            ? TrimHandle.Playhead
-            : toIn <= toOut ? TrimHandle.In : TrimHandle.Out;
+        _dragging = HitTest(x);
+        UpdateCursor(x);
 
         e.Pointer.Capture(this);
         Raise(x);
@@ -152,6 +148,8 @@ public class WaveformGraph : Control
 
         if (_dragging is not null)
             Raise(e.GetPosition(this).X);
+
+        UpdateCursor(e.GetPosition(this).X);
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -161,9 +159,30 @@ public class WaveformGraph : Control
         if (_dragging is null)
             return;
 
+        var x = e.GetPosition(this).X;
         _dragging = null;
         e.Pointer.Capture(null);
+        UpdateCursor(x);
         GestureCompleted?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>The nearest trim grip within reach, otherwise the open waveform scrub area.</summary>
+    private TrimHandle HitTest(double x)
+    {
+        var toIn = Math.Abs(x - (TrimIn * Bounds.Width));
+        var toOut = Math.Abs(x - (TrimOut * Bounds.Width));
+
+        // Nearest rather than first, so a very short trim window whose grips overlap still gives the
+        // operator the one they aimed at.
+        return Math.Min(toIn, toOut) > GrabRadius
+            ? TrimHandle.Playhead
+            : toIn <= toOut ? TrimHandle.In : TrimHandle.Out;
+    }
+
+    private void UpdateCursor(double x)
+    {
+        var target = _dragging ?? HitTest(x);
+        Cursor = target is TrimHandle.In or TrimHandle.Out ? TrimCursor : ScrubCursor;
     }
 
     private void Raise(double x)

@@ -25,6 +25,8 @@ public class InspectorPaneRenderTests
         {
             var cue = ShellFixture.Bed(shell.Project);
             ShellFixture.Select(shell.Cues, cue.Id);
+            Assert.DoesNotContain("CLIP", shell.Cues.Inspector.Tabs);
+            Assert.Equal("GENERAL", shell.Cues.Inspector.SelectedTab);
 
             var (pane, window) = Show(shell.Cues.Inspector);
             try
@@ -38,6 +40,36 @@ public class InspectorPaneRenderTests
                 Assert.Contains("Trim in", names);
                 Assert.Contains("Trim out", names);
                 Assert.Contains("Open clip trimming editor", names);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task LockedInspectorDisablesAuthoringButKeepsNotesWritable() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var cue = ShellFixture.Bed(shell.Project);
+            ShellFixture.Select(shell.Cues, cue.Id);
+            shell.IsLocked = true;
+
+            var (pane, window) = Show(shell.Cues.Inspector);
+            try
+            {
+                var trimIn = pane.GetVisualDescendants()
+                    .OfType<Control>()
+                    .Single(control => AutomationProperties.GetName(control) == "Trim in");
+                Assert.False(trimIn.IsEffectivelyEnabled);
+
+                shell.Cues.Inspector.SelectedTab = "NOTE";
+                Dispatcher.UIThread.RunJobs();
+
+                var note = pane.GetVisualDescendants()
+                    .OfType<TextBox>()
+                    .Single(box => box.AcceptsReturn && box.IsVisible);
+                Assert.True(note.IsEffectivelyEnabled);
             }
             finally
             {

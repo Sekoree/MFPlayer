@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Threading;
@@ -105,6 +106,18 @@ public class ClipEditorTests
     }
 
     [Fact]
+    public void TypedTrimPointsOutsideTheFileAreRefused()
+    {
+        var (editor, cue, _) = Editor();
+
+        Assert.NotNull(editor.SetTrimIn("2:00:00"));
+        Assert.NotNull(editor.SetTrimOut("2:00:01"));
+
+        Assert.Equal(0, cue.TrimInMs);
+        Assert.Equal(0, cue.TrimOutMs);
+    }
+
+    [Fact]
     public void AMistypedTimeIsRefusedAndChangesNothing()
     {
         var (editor, cue, _) = Editor();
@@ -135,6 +148,57 @@ public class ClipEditorTests
         // trim they did not ask for.
         Assert.Equal(0, cue.TrimInMs);
     }
+
+    [Fact]
+    public void DraggingEitherTrimHandleMovesThePreviewToThatBoundary()
+    {
+        var (editor, _, _) = Editor();
+
+        editor.Apply(TrimHandle.In, 0.25);
+        Assert.Equal("30:00", editor.PlayheadLabel);
+        editor.EndGesture();
+
+        editor.Apply(TrimHandle.Out, 0.75);
+        Assert.Equal("1:30:00", editor.PlayheadLabel);
+        editor.EndGesture();
+    }
+
+    [Fact]
+    public Task HoveringAHandleAndTheScrubAreaUsesDifferentCursors() => ShellFixture.WithShell(_ =>
+    {
+        var (editor, _, _) = Editor();
+        editor.Peaks = [1, 1, 1, 1];
+        var window = new ClipEditorWindow(editor);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        try
+        {
+            var graph = window.GetVisualDescendants().OfType<WaveformGraph>().Single();
+            var origin = graph.TranslatePoint(default, window)!.Value;
+            var y = origin.Y + (graph.Bounds.Height / 2);
+
+            window.MouseMove(new Point(origin.X + 2, y));
+            Dispatcher.UIThread.RunJobs();
+            var trimCursor = graph.Cursor;
+
+            window.MouseMove(new Point(origin.X + (graph.Bounds.Width / 2), y));
+            Dispatcher.UIThread.RunJobs();
+            var scrubCursor = graph.Cursor;
+
+            window.MouseMove(new Point(origin.X + graph.Bounds.Width - 2, y));
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.NotNull(trimCursor);
+            Assert.NotNull(scrubCursor);
+            Assert.NotSame(trimCursor, scrubCursor);
+            Assert.Same(trimCursor, graph.Cursor);
+        }
+        finally
+        {
+            window.Close();
+        }
+    });
 
     [Fact]
     public void AHandleCannotBeDraggedPastTheOtherOne()

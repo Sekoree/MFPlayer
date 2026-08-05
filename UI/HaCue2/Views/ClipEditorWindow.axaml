@@ -42,7 +42,7 @@
         <HeaderedContentControl Grid.Column="2" Theme="{StaticResource FieldTight}" Header="File">
           <TextBox Classes="ro" IsReadOnly="True" Text="{Binding LengthLabel}" MinWidth="90" />
         </HeaderedContentControl>
-        <HeaderedContentControl Grid.Column="3" Theme="{StaticResource FieldTight}" Header="Playhead">
+        <HeaderedContentControl Grid.Column="3" Theme="{StaticResource FieldTight}" Header="Preview at">
           <TextBox Classes="ro" IsReadOnly="True" Text="{Binding PlayheadLabel}" MinWidth="90" />
         </HeaderedContentControl>
       </Grid>

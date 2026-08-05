@@ -109,14 +109,14 @@ public class InspectorViewModelTests
     });
 
     [Fact]
-    public Task MediaCuesOpenOnAnExplicitClipTabWithTrimControls() => ShellFixture.WithShell(shell =>
+    public Task FiniteMediaCuesPutTrimControlsInGeneralWithoutAClipTab() => ShellFixture.WithShell(shell =>
     {
         var bed = ShellFixture.Bed(shell.Project);
         ShellFixture.Select(shell.Cues, bed.Id);
 
-        Assert.Contains("CLIP", shell.Cues.Inspector.Tabs);
-        Assert.Equal("CLIP", shell.Cues.Inspector.SelectedTab);
-        Assert.True(shell.Cues.Inspector.IsClipPane);
+        Assert.DoesNotContain("CLIP", shell.Cues.Inspector.Tabs);
+        Assert.Equal("GENERAL", shell.Cues.Inspector.SelectedTab);
+        Assert.True(shell.Cues.Inspector.IsGeneralPane);
         Assert.True(shell.Cues.Inspector.CanTrimMedia);
 
         shell.Cues.Inspector.TrimInValue = "1.5";
