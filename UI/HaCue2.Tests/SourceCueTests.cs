@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using HaCue2.Core.Validation;
 using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Machine;
@@ -8,6 +9,7 @@ using HaCue2.Presentation;
 using HaCue2.ViewModels;
 using HaCue2.Views;
 using S.Media.Core.Audio;
+using S.Media.Source.YouTube;
 using Xunit;
 
 namespace HaCue2.Tests;
@@ -22,6 +24,43 @@ namespace HaCue2.Tests;
 /// </remarks>
 public class SourceCueTests
 {
+    private sealed class PreparedEnvironment(Func<string, PreparedSourceAvailability> availability)
+        : IProjectEnvironment
+    {
+        public bool MediaExists(string resolvedPath) => true;
+        public DeviceAvailability AudioLine(AudioLineDefinition line) => DeviceAvailability.Present;
+        public DeviceAvailability VideoOutput(VideoOutputDefinition output) => DeviceAvailability.Present;
+        public PreparedSourceAvailability PreparedSource(string sourceUri) => availability(sourceUri);
+    }
+
+    private sealed class YouTubeGateway : IYouTubeGateway
+    {
+        public YouTubeMediaManifest Manifest { get; } = new(
+            "dQw4w9WgXcQ", "Background video", "Test", TimeSpan.FromSeconds(30),
+            [new YouTubeVideoStreamInfo("1080p|avc1|mp4", "1080p", 1080, 30, "avc1", "mp4", 100, 1000)],
+            [new YouTubeAudioStreamInfo("opus|webm|en", "opus", "webm", 10, 128, "en", true)],
+            []);
+
+        public Task<YouTubeMediaManifest> GetManifestAsync(string videoId, CancellationToken cancellationToken) =>
+            Task.FromResult(Manifest);
+
+        public async Task DownloadStreamAsync(
+            string videoId, string descriptor, string filePath,
+            IProgress<double>? progress, CancellationToken cancellationToken)
+        {
+            await Task.Delay(250, cancellationToken);
+            await File.WriteAllTextAsync(filePath, descriptor, cancellationToken);
+        }
+
+        public Task<bool> TryDownloadCaptionsAssAsync(
+            string videoId, string languageCode, string filePath, CancellationToken cancellationToken) =>
+            Task.FromResult(false);
+
+        public Task<bool> TryDownloadThumbnailJpegAsync(
+            string videoId, string filePath, CancellationToken cancellationToken) =>
+            Task.FromResult(false);
+    }
+
     /// <summary>A machine with two capture devices across two driver families.</summary>
     private sealed class Backend : IAudioBackend
     {
@@ -254,6 +293,107 @@ public class SourceCueTests
         Assert.DoesNotContain(row.Badges, badge => badge.Text == "live");
         Assert.Equal("3:33", row.Length);
     });
+
+    [Fact]
+    public Task AddingAYouTubeCueClosesOverASavedCueWhileItsDownloadContinues() =>
+        ShellFixture.WithShellAsync(async shell =>
+        {
+            var cache = Directory.CreateTempSubdirectory("hacue-youtube-ui-").FullName;
+            var gateway = new YouTubeGateway();
+            var preparer = new YouTubePreparer(gateway, cache, (video, audio, thumbnail, output, _) =>
+            {
+                File.WriteAllText(output, string.Join('+', new[] { video, audio }
+                    .Where(path => path is not null)
+                    .Select(path => File.ReadAllText(path!))));
+            });
+            using var downloads = new YouTubePreparationQueue(preparer);
+            try
+            {
+                var before = Ids(shell);
+                var editor = new YouTubeCueViewModel(shell.Cues, gateway, preparer, downloads)
+                {
+                    Url = "https://youtu.be/dQw4w9WgXcQ",
+                };
+
+                await editor.ResolveCommand.ExecuteAsync(null);
+                editor.PrepareCommand.Execute(null);
+
+                var cue = Added(shell, before);
+                var completion = downloads.Enqueue(cue.MediaPath); // joins the dialog's job
+                Assert.Equal("Background video", cue.Label);
+                Assert.Equal(30_000, cue.SourceDurationMs);
+                Assert.False(completion.IsCompleted);
+                Assert.True(downloads.StateOf(cue.MediaPath) is
+                    YouTubeCacheState.Queued or YouTubeCacheState.Downloading);
+
+                var result = await completion;
+                Assert.True(result.IsSuccess, result.Error);
+                Assert.Equal(YouTubeCacheState.Ready, downloads.StateOf(cue.MediaPath));
+            }
+            finally
+            {
+                try { Directory.Delete(cache, recursive: true); }
+                catch { /* best effort */ }
+            }
+        });
+
+    [Fact]
+    public Task ProjectStatusFixRedownloadsAMovedYouTubeCueAndPinsItsResolvedStreams() =>
+        ShellFixture.WithShellAsync(async shell =>
+        {
+            var cache = Directory.CreateTempSubdirectory("hacue-youtube-repair-").FullName;
+            var gateway = new YouTubeGateway();
+            var preparer = new YouTubePreparer(gateway, cache, (video, audio, thumbnail, output, _) =>
+            {
+                File.WriteAllText(output, string.Join('+', new[] { video, audio }
+                    .Where(path => path is not null)
+                    .Select(path => File.ReadAllText(path!))));
+            });
+            using var downloads = new YouTubePreparationQueue(preparer);
+            const string movedSource = "youtube://dQw4w9WgXcQ"; // older projects stored the unresolved policy
+            var cue = shell.Cues.AddSourceCue(movedSource, "Moved video", 30_000)!;
+            var environment = new PreparedEnvironment(source => downloads.StateOf(source) switch
+            {
+                YouTubeCacheState.Ready => PreparedSourceAvailability.Ready,
+                YouTubeCacheState.Queued or YouTubeCacheState.Downloading => PreparedSourceAvailability.Preparing,
+                YouTubeCacheState.Failed => PreparedSourceAvailability.Failed,
+                _ => PreparedSourceAvailability.Missing,
+            });
+            using var status = new ProjectStatusViewModel(
+                shell.Project, environment, shell.Journal, youTubeDownloads: downloads);
+
+            Assert.Equal(CheckOutcome.Failed,
+                status.Report.Checks.Single(check => check.Name == "YouTube cache").Outcome);
+
+            try
+            {
+                status.QueueMissingYouTube();
+                var result = await downloads.Enqueue(movedSource); // joins the Fix action's job
+                Assert.True(result.IsSuccess, result.Error);
+
+                // The repair continuation journals the manifest-resolved selection on the UI thread.
+                for (var attempt = 0; attempt < 20 && cue.MediaPath == movedSource; attempt++)
+                {
+                    Dispatcher.UIThread.RunJobs();
+                    await Task.Delay(10);
+                }
+
+                Assert.NotEqual(movedSource, cue.MediaPath);
+                Assert.Contains("v=1080p", cue.MediaPath);
+                Assert.Contains("a=opus", cue.MediaPath);
+                status.Rerun();
+                Assert.Equal(CheckOutcome.Passed,
+                    status.Report.Checks.Single(check => check.Name == "YouTube cache").Outcome);
+
+                shell.Journal.Undo();
+                Assert.Equal(movedSource, cue.MediaPath);
+            }
+            finally
+            {
+                try { Directory.Delete(cache, recursive: true); }
+                catch { /* best effort */ }
+            }
+        });
 
     /// <summary>The clip editor is a waveform over a file; a source has neither.</summary>
     [Fact]

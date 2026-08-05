@@ -149,7 +149,8 @@ public partial class CuesView : UserControl
 
         YouTubeCueWindow.Show(
             this,
-            new YouTubeCueViewModel(cues, YouTubeRuntime.Gateway, YouTubeRuntime.Preparer),
+            new YouTubeCueViewModel(
+                cues, YouTubeRuntime.Gateway, YouTubeRuntime.Preparer, YouTubeRuntime.Downloads),
             cues.Refresh);
     }
 
@@ -173,7 +174,8 @@ public partial class CuesView : UserControl
             case SourceKind.YouTube:
                 YouTubeCueWindow.Show(
                     this,
-                    new YouTubeCueViewModel(cues, YouTubeRuntime.Gateway, YouTubeRuntime.Preparer, cue),
+                    new YouTubeCueViewModel(
+                        cues, YouTubeRuntime.Gateway, YouTubeRuntime.Preparer, YouTubeRuntime.Downloads, cue),
                     cues.Refresh);
                 break;
         }

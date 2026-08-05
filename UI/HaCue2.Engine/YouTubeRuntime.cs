@@ -1,4 +1,6 @@
 using S.Media.Source.YouTube;
+using HaCue2.Core.Model;
+using HaCue2.Core.Validation;
 
 namespace HaCue2.Engine;
 
@@ -22,6 +24,7 @@ public static class YouTubeRuntime
 {
     private static readonly object Gate = new();
     private static YouTubePreparer? _preparer;
+    private static YouTubePreparationQueue? _downloads;
 
     public static YoutubeExplodeGateway Gateway { get; } = new();
 
@@ -35,6 +38,16 @@ public static class YouTubeRuntime
         }
     }
 
+    /// <summary>The bounded background queue shared by authoring, Project status and diagnostics.</summary>
+    public static YouTubePreparationQueue Downloads
+    {
+        get
+        {
+            lock (Gate)
+                return _downloads ??= new YouTubePreparationQueue(Preparer);
+        }
+    }
+
     /// <summary>Points YouTube at HaCue's unified cache before any dialog or source module is created.</summary>
     public static void Configure(HaCue2.Machine.AppSettings settings)
     {
@@ -45,11 +58,36 @@ public static class YouTubeRuntime
             if (_preparer is not null && string.Equals(_preparer.CacheRoot, root, StringComparison.Ordinal))
                 return;
 
+            _downloads?.Dispose();
             _preparer = new YouTubePreparer(
                 Gateway,
                 root,
                 maxCacheBytes: HaCue2.Machine.MediaCache.ParseBudget(settings.YouTubeBudget));
+            _downloads = new YouTubePreparationQueue(_preparer);
         }
+    }
+
+    public static PreparedSourceAvailability Availability(string sourceUri) =>
+        Downloads.StateOf(sourceUri) switch
+        {
+            YouTubeCacheState.Ready => PreparedSourceAvailability.Ready,
+            YouTubeCacheState.Queued or YouTubeCacheState.Downloading => PreparedSourceAvailability.Preparing,
+            YouTubeCacheState.Failed => PreparedSourceAvailability.Failed,
+            _ => PreparedSourceAvailability.Missing,
+        };
+
+    /// <summary>Machine-local caption sidecars, derived from portable source URIs at compile time.</summary>
+    public static IReadOnlyDictionary<Guid, string> PreparedSubtitlePaths(HaCueProject project) =>
+        project.AllCues().OfType<MediaCueNode>()
+            .Select(cue => (cue.Id, Path: Downloads.PreparedSubtitlePath(cue.MediaPath)))
+            .Where(item => item.Path is { Length: > 0 })
+            .ToDictionary(item => item.Id, item => item.Path!);
+
+    /// <summary>Cancels background work during application shutdown; atomic cache writes clean up partials.</summary>
+    public static void Shutdown()
+    {
+        lock (Gate)
+            _downloads?.Dispose();
     }
 
     /// <summary>The registry module, built over the shared preparer.</summary>

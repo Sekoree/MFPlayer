@@ -11,6 +11,7 @@ using HaCue2.Presentation;
 using HaCue2.Sample;
 using HaCue2.Session;
 using S.Media.Core.Diagnostics;
+using S.Media.Source.YouTube;
 
 namespace HaCue2.ViewModels;
 
@@ -1387,21 +1388,24 @@ public partial class SettingsViewModel : ObservableObject
 /// that listed its own findings could disagree with the CLI, and the first time it did nobody would
 /// know which to believe.
 /// </remarks>
-public partial class ProjectStatusViewModel : ObservableObject
+public partial class ProjectStatusViewModel : ObservableObject, IDisposable
 {
     private readonly ProjectJournal? _journal;
     private readonly IProjectEnvironment? _environment;
     private readonly string? _projectPath;
+    private readonly YouTubePreparationQueue? _youTubeDownloads;
 
     public ProjectStatusViewModel(
         HaCueProject project,
         IProjectEnvironment? environment = null,
         ProjectJournal? journal = null,
-        string? projectPath = null)
+        string? projectPath = null,
+        YouTubePreparationQueue? youTubeDownloads = null)
     {
         _journal = journal;
         _environment = environment;
         _projectPath = projectPath;
+        _youTubeDownloads = youTubeDownloads;
         Project = project;
         Report = ProjectStatus.Run(project, projectPath, environment);
         Title = $"Project status — {project.Title}";
@@ -1412,6 +1416,12 @@ public partial class ProjectStatusViewModel : ObservableObject
         _missingFile = Report.Checks
             .FirstOrDefault(check => check.Name == "Media files")?.Issues
             .FirstOrDefault()?.Message ?? "nothing missing";
+
+        if (_youTubeDownloads is not null)
+        {
+            _youTubeDownloads.Changed += OnYouTubeDownloadChanged;
+            _youTubeDownloads.ReadinessChanged += OnYouTubeReadinessChanged;
+        }
     }
 
     public ProjectStatusReport Report { get; private set; }
@@ -1551,6 +1561,96 @@ public partial class ProjectStatusViewModel : ObservableObject
             .Select(issue => issue.Message)
             .FirstOrDefault()
             ?? "nothing is missing";
+    }
+
+    /// <summary>Queues every non-ready YouTube cue; completion continues after this window closes.</summary>
+    public void QueueMissingYouTube()
+    {
+        if (_youTubeDownloads is null)
+            return;
+
+        var queued = 0;
+        foreach (var cue in Project.AllCues().OfType<MediaCueNode>()
+                     .Where(cue => SourceUri.KindOf(cue.MediaPath) == SourceKind.YouTube)
+                     .Where(cue => _youTubeDownloads.StateOf(cue.MediaPath) != YouTubeCacheState.Ready))
+        {
+            var original = cue.MediaPath;
+            var completion = _youTubeDownloads.Enqueue(original);
+            _ = AdoptResolvedSelectionAsync(cue.Id, original, completion);
+            queued++;
+        }
+
+        DownloadRepairNote = queued == 0
+            ? "all YouTube cues are already ready"
+            : $"queued {queued} YouTube cue{(queued == 1 ? "" : "s")} — downloads continue in the background";
+        Rerun();
+    }
+
+    private async Task AdoptResolvedSelectionAsync(
+        Guid cueId,
+        string originalUri,
+        Task<YouTubePreparationResult> completion)
+    {
+        var result = await completion.ConfigureAwait(false);
+        if (result.Prepared is not { } prepared)
+            return;
+
+        var resolvedUri = YouTubeSourceUri.Build(prepared.Manifest.VideoId, prepared.ResolvedSelection);
+        if (string.Equals(resolvedUri, originalUri, StringComparison.Ordinal))
+            return;
+
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (_journal is null
+                || _journal.IsReadOnly
+                || Project.FindCue(cueId) is not MediaCueNode cue
+                || !string.Equals(cue.MediaPath, originalUri, StringComparison.Ordinal))
+                return;
+
+            _journal.Do(new SetValueCommand<string>(
+                cue.Id, "mediaPath", "cues",
+                () => cue.MediaPath, value => cue.MediaPath = value,
+                resolvedUri, "pin resolved YouTube streams"));
+            Rerun();
+        });
+    }
+
+    private void OnYouTubeDownloadChanged() => Avalonia.Threading.Dispatcher.UIThread.Post(RefreshDownloadRepairNote);
+
+    private void OnYouTubeReadinessChanged() => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+    {
+        RefreshDownloadRepairNote();
+        Rerun();
+    });
+
+    private void RefreshDownloadRepairNote()
+    {
+        if (_youTubeDownloads is null)
+            return;
+
+        var snapshot = _youTubeDownloads.Snapshot(
+            Project.AllCues().OfType<MediaCueNode>().Select(cue => cue.MediaPath));
+        DownloadRepairNote = snapshot.Downloading > 0
+            ? $"downloading YouTube {snapshot.Fraction * 100:0}%"
+              + (snapshot.Queued > 0 ? $" · {snapshot.Queued} queued" : "")
+            : snapshot.Queued > 0
+                ? $"{snapshot.Queued} YouTube cue{(snapshot.Queued == 1 ? "" : "s")} queued"
+                : snapshot.Failed > 0
+                    ? $"download failed — {snapshot.LastError ?? "use Fix to retry"}"
+                    : DownloadRepairNote.StartsWith("queued ", StringComparison.Ordinal)
+                        ? "YouTube downloads finished"
+                        : DownloadRepairNote;
+    }
+
+    [ObservableProperty]
+    private string _downloadRepairNote = "";
+
+    public void Dispose()
+    {
+        if (_youTubeDownloads is null)
+            return;
+        _youTubeDownloads.Changed -= OnYouTubeDownloadChanged;
+        _youTubeDownloads.ReadinessChanged -= OnYouTubeReadinessChanged;
     }
 
     public string Summary => Report.Summary;

@@ -3,6 +3,8 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
+using HaCue2.Engine;
 using HaCue2.Session;
 using HaCue2.Presentation;
 using HaCue2.ViewModels;
@@ -16,6 +18,7 @@ public partial class ShellWindow : Window
     private ProjectStatusWindow? _projectStatus;
     private OutputInfoWindow? _outputInfo;
     private readonly EmergencyKeySequence _emergencyKeys = new();
+    private S.Media.Source.YouTube.YouTubePreparationQueue? _youTubeDownloads;
 
     public ShellWindow() => InitializeComponent();
 
@@ -28,10 +31,43 @@ public partial class ShellWindow : Window
     /// </remarks>
     protected override void OnDataContextChanged(EventArgs e)
     {
+        DetachYouTubeDownloads();
         base.OnDataContextChanged(e);
 
         if (DataContext is ShellViewModel shell)
+        {
             shell.OpenRecent = OnOpenRecent;
+            _youTubeDownloads = YouTubeRuntime.Downloads;
+            _youTubeDownloads.Changed += OnYouTubeDownloadChanged;
+            _youTubeDownloads.ReadinessChanged += OnYouTubeReadinessChanged;
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        DetachYouTubeDownloads();
+        base.OnClosed(e);
+    }
+
+    private void OnYouTubeDownloadChanged() => Dispatcher.UIThread.Post(() =>
+    {
+        if (DataContext is ShellViewModel shell)
+            shell.RefreshYouTubeDownloadProgress();
+    });
+
+    private void OnYouTubeReadinessChanged() => Dispatcher.UIThread.Post(() =>
+    {
+        if (DataContext is ShellViewModel shell)
+            shell.RefreshYouTubeReadiness();
+    });
+
+    private void DetachYouTubeDownloads()
+    {
+        if (_youTubeDownloads is null)
+            return;
+        _youTubeDownloads.Changed -= OnYouTubeDownloadChanged;
+        _youTubeDownloads.ReadinessChanged -= OnYouTubeReadinessChanged;
+        _youTubeDownloads = null;
     }
 
     /// <summary>
@@ -421,7 +457,8 @@ public partial class ShellWindow : Window
                     Shell.Project,
                     Shell.Environment,
                     Shell.Journal,
-                    Shell.HasPath ? Shell.Path : null),
+                    Shell.HasPath ? Shell.Path : null,
+                    YouTubeRuntime.Downloads),
             });
 
     /// <summary>

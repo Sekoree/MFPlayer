@@ -131,6 +131,7 @@ public static class ProjectStatus
         var checks = new List<StatusCheck>
         {
             CheckMedia(project, projectPath, environment),
+            CheckPreparedSources(project, environment),
             CheckAudioLines(project, environment),
             CheckVideoOutputs(project, environment, documentIssues),
             CheckAudition(project),
@@ -141,6 +142,75 @@ public static class ProjectStatus
         checks.AddRange(DocumentChecks(documentIssues));
 
         return new ProjectStatusReport(checks, Stopwatch.GetElapsedTime(started).TotalSeconds);
+    }
+
+    /// <summary>YouTube cues are local-cache playback sources, so their payload is a get-in fact.</summary>
+    private static StatusCheck CheckPreparedSources(HaCueProject project, IProjectEnvironment environment)
+    {
+        var cues = project.AllCues().OfType<MediaCueNode>()
+            .Where(cue => SourceUri.KindOf(cue.MediaPath) == SourceKind.YouTube)
+            .ToList();
+        if (cues.Count == 0)
+            return new StatusCheck("YouTube cache", CheckOutcome.Passed, "no YouTube cues", "", []);
+
+        var issues = new List<ShowValidationIssue>();
+        var unknown = 0;
+        var ready = 0;
+        var preparing = 0;
+
+        foreach (var cue in cues)
+        {
+            var description = $"Q{cue.Number} {cue.Label}".TrimEnd();
+            switch (environment.PreparedSource(cue.MediaPath))
+            {
+                case PreparedSourceAvailability.Ready:
+                    ready++;
+                    break;
+                case PreparedSourceAvailability.Preparing:
+                    preparing++;
+                    issues.Add(new ShowValidationIssue(
+                        ShowValidationSeverity.Error,
+                        $"{description} is downloading in the background and cannot fire yet.",
+                        "cue", cue.Id.ToString()));
+                    break;
+                case PreparedSourceAvailability.Failed:
+                    issues.Add(new ShowValidationIssue(
+                        ShowValidationSeverity.Error,
+                        $"{description} could not be downloaded; retry it or edit the cue to reselect streams.",
+                        "cue", cue.Id.ToString()));
+                    break;
+                case PreparedSourceAvailability.Missing:
+                    issues.Add(new ShowValidationIssue(
+                        ShowValidationSeverity.Error,
+                        $"{description} is not in this machine's YouTube cache.",
+                        "cue", cue.Id.ToString()));
+                    break;
+                default:
+                    unknown++;
+                    break;
+            }
+        }
+
+        if (issues.Count > 0)
+        {
+            var missing = issues.Count - preparing;
+            var detail = preparing > 0 && missing == 0
+                ? $"{preparing} downloading"
+                : preparing > 0
+                    ? $"{missing} missing or failed · {preparing} downloading"
+                    : $"{missing} missing or failed";
+            return new StatusCheck(
+                "YouTube cache", CheckOutcome.Failed, detail, "Download missing ›", issues);
+        }
+
+        return unknown > 0
+            ? new StatusCheck(
+                "YouTube cache", CheckOutcome.NotChecked,
+                $"{unknown} source{(unknown == 1 ? "" : "s")} not checked on this machine",
+                "open Project status on the playback machine", [])
+            : new StatusCheck(
+                "YouTube cache", CheckOutcome.Passed,
+                $"{ready} cue{(ready == 1 ? "" : "s")} ready offline", "", []);
     }
 
     /// <summary>

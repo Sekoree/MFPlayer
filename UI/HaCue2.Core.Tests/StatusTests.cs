@@ -44,6 +44,32 @@ public sealed class StatusTests
         Assert.Equal(CheckOutcome.Passed, Assert.Single(report.Checks, c => c.Name == "Media files").Outcome);
     }
 
+    [Theory]
+    [InlineData(PreparedSourceAvailability.Missing, CheckOutcome.Failed, "not in this machine")]
+    [InlineData(PreparedSourceAvailability.Preparing, CheckOutcome.Failed, "downloading in the background")]
+    [InlineData(PreparedSourceAvailability.Failed, CheckOutcome.Failed, "could not be downloaded")]
+    [InlineData(PreparedSourceAvailability.Ready, CheckOutcome.Passed, "ready offline")]
+    [InlineData(PreparedSourceAvailability.Unknown, CheckOutcome.NotChecked, "not checked")]
+    public void YouTubeCacheReadinessIsARealPreflightCheck(
+        PreparedSourceAvailability availability,
+        CheckOutcome expected,
+        string detail)
+    {
+        var fixture = new TestProject().WithFoldbackFed();
+        fixture.Track.MediaPath = "youtube://dQw4w9WgXcQ?v=1080p%7Cavc1%7Cmp4&a=opus%7Cwebm%7Cen";
+        var environment = new FakeEnvironment();
+        environment.PreparedSources[fixture.Track.MediaPath] = availability;
+
+        var check = Assert.Single(
+            ProjectStatus.Run(fixture.Project, environment: environment).Checks,
+            item => item.Name == "YouTube cache");
+
+        Assert.Equal(expected, check.Outcome);
+        Assert.Contains(detail, check.Issues.FirstOrDefault()?.Message ?? check.Detail);
+        if (expected == CheckOutcome.Failed)
+            Assert.Contains("Download missing", check.Fix);
+    }
+
     /// <summary>
     /// The honesty property: a machine that could not enumerate devices says so rather than showing a
     /// green row nobody verified.
@@ -203,6 +229,8 @@ public sealed class StatusTests
         public HashSet<string> Files { get; } = new(StringComparer.Ordinal);
         public Dictionary<Guid, DeviceAvailability> AudioLines { get; } = [];
         public Dictionary<Guid, DeviceAvailability> VideoOutputs { get; } = [];
+        public Dictionary<string, PreparedSourceAvailability> PreparedSources { get; } =
+            new(StringComparer.Ordinal);
 
         public bool MediaExists(string resolvedPath) => Files.Contains(resolvedPath);
 
@@ -211,5 +239,8 @@ public sealed class StatusTests
 
         public DeviceAvailability VideoOutput(VideoOutputDefinition output) =>
             VideoOutputs.GetValueOrDefault(output.Id, DeviceAvailability.Present);
+
+        public PreparedSourceAvailability PreparedSource(string sourceUri) =>
+            PreparedSources.GetValueOrDefault(sourceUri, PreparedSourceAvailability.Unknown);
     }
 }

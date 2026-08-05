@@ -12,17 +12,17 @@
         Foreground="{DynamicResource BoothInk}"
         FontSize="{DynamicResource FontSizeBase}">
 
-  <!-- Its own window rather than a prompt: a network round trip, two real stream choices and a
-       download measured in minutes do not fit a box with two fields and a verb. -->
+  <!-- Its own window rather than a prompt: a network round trip and two real stream choices do not
+       fit a box with two fields and a verb. The long download continues after this window closes. -->
 
   <c:PanelBox Header="{Binding Title}"
-              Hint="the video is downloaded now so the cue fires instantly later"
+              Hint="adding queues an offline copy; Project status verifies it before show time"
               Margin="7">
     <DockPanel>
 
       <Border DockPanel.Dock="Bottom" Classes="chain">
         <DockPanel LastChildFill="False">
-          <Button DockPanel.Dock="Right" Classes="primary" Content="DOWNLOAD &amp; ADD"
+          <Button DockPanel.Dock="Right" Classes="primary" Content="ADD &amp; DOWNLOAD IN BACKGROUND"
                   IsEnabled="{Binding CanPrepare}" Command="{Binding PrepareCommand}" />
           <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
                   Content="CANCEL" Click="OnCancel" />
@@ -80,11 +80,6 @@
           <TextBlock Classes="mono dim3 micro" Margin="12,7,10,0" TextWrapping="Wrap"
                      Text="{Binding CacheNote}" />
 
-        </StackPanel>
-
-        <StackPanel Margin="10,8,10,0" IsVisible="{Binding IsBusy}">
-          <ProgressBar Minimum="0" Maximum="1" Value="{Binding Progress}" Height="6" />
-          <TextBlock Classes="mono dim3 micro" Margin="0,4,0,0" Text="{Binding ProgressNote}" />
         </StackPanel>
 
       </StackPanel>

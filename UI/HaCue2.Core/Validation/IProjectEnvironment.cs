@@ -23,6 +23,17 @@ public enum DeviceAvailability
     Absent,
 }
 
+/// <summary>Whether a source whose playback depends on prepared machine-local data can fire now.</summary>
+public enum PreparedSourceAvailability
+{
+    /// <summary>This environment cannot inspect the source's cache.</summary>
+    Unknown,
+    Ready,
+    Missing,
+    Preparing,
+    Failed,
+}
+
 /// <summary>
 /// What the status pass needs to ask the machine.
 /// </summary>
@@ -41,6 +52,12 @@ public interface IProjectEnvironment
 
     /// <summary>Whether this machine has the screen or sink the show wants.</summary>
     DeviceAvailability VideoOutput(VideoOutputDefinition output);
+
+    /// <summary>
+    /// Whether a prepared source URI resolves to its machine-local payload. The default keeps older,
+    /// headless environments honest: they did not inspect a source cache and therefore say unknown.
+    /// </summary>
+    PreparedSourceAvailability PreparedSource(string sourceUri) => PreparedSourceAvailability.Unknown;
 }
 
 /// <summary>

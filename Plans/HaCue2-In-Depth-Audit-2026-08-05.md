@@ -696,3 +696,51 @@ equipment or human assistive-technology session and should remain on the release
 
 Subject to those rig checks, the original HAC-001-through-HAC-008 release block is cleared by the
 implementation and production-root verification above.
+
+---
+
+# YouTube background preparation and cache recovery follow-up
+
+**Implemented:** 2026-08-05
+**Status:** complete
+
+YouTube cue authoring no longer holds its dialog open for the full download/remux. After the manifest
+and stream selection are resolved, HaCue2 writes the cue immediately with a concrete, portable source
+URI, closes the authoring window, and hands preparation to one application-wide background queue. The
+queue is deliberately serialized by default to limit network, disk and remux contention while a show
+is otherwise in use. Duplicate requests coalesce, progress remains visible in the shell status bar,
+failures remain retryable, and application shutdown cancels outstanding work without exposing partial
+assets to playback. GO retains the reliable-mode contract: it never downloads and opens only an
+atomically committed local asset.
+
+Project Status now has a machine-local **YouTube cache** check. A cue is reported as ready,
+downloading, missing, failed or not checked; missing/downloading/failed payloads remain preflight
+errors because those cues cannot fire yet. **Download missing** queues every non-ready source and
+continues after the Project Status window closes. This covers a cache cleared between launches and a
+project copied from another machine. Old unpinned “best” source URIs are rewritten through the project
+journal to the concrete streams returned by the repair, preserving deterministic offline playback and
+undo. Clearing the YouTube cache from Settings notifies the open shell immediately and is refused while
+a background writer is active.
+
+Generated YouTube captions are now machine-derived at compile time from the portable source URI.
+Absolute caption paths left by older projects are neither relinked nor consolidated and cannot make a
+moved project point back at another machine's cache. This exception is limited to URIs that explicitly
+request a YouTube caption language; a normal user-added external subtitle sidecar on a YouTube cue
+continues to participate in media operations and playback.
+
+## Follow-up verification
+
+| Check | Result |
+|---|---|
+| `HaCue2.Desktop` Debug build | ✅ 0 warnings, 0 errors |
+| `HaCue2.Core.Tests` | ✅ 693 passed |
+| `HaCue2.Tests` | ✅ 319 passed |
+| `S.Media.Source.YouTube.Tests` | ✅ 37 passed, 2 opt-in live-network skips |
+| Updated extended total | ✅ **2,364 passed, 5 skipped** |
+| Isolated JIT desktop launch | ✅ sample shell remained running for the smoke interval |
+
+The added regressions prove that cue creation returns while the transfer is still running, identical
+requests share one job, deleting a committed `.mkv` changes readiness to missing and creates a new
+repair task, persistent stream legs are reused for the repair, every cache state reaches Project
+Status with the correct severity, the Project Status fix repairs and journal-pins a moved cue, and a
+prepared caption path comes from this machine rather than an old serialized cache location.

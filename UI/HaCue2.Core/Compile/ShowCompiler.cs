@@ -345,7 +345,11 @@ public static class ShowCompiler
         MediaCueNode media,
         ShowCompileContext context,
         ResolvedMediaTracks? tracks) =>
-        media.Subtitles.Count == 0
+        context.PreparedSubtitlePaths.TryGetValue(media.Id, out var prepared)
+            ? [new ShowSubtitleSelection(prepared, -1)]
+            : SourceUri.YouTubeSubtitleLanguage(media.MediaPath) is not null
+            ? null
+            : media.Subtitles.Count == 0
             ? null
             : [.. media.Subtitles.Select((selection, index) => new ShowSubtitleSelection(
                 selection.Path.Length > 0

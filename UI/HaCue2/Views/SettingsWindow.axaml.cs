@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using HaCue2.ViewModels;
+using HaCue2.Engine;
 
 namespace HaCue2.Views;
 
@@ -44,7 +45,15 @@ public partial class SettingsWindow : Window
             return;
 
         if (kind == "youtube")
+        {
+            if (YouTubeRuntime.Downloads.Snapshot().HasWork)
+            {
+                settings.CacheNote = "YouTube download in progress — wait for it to finish before clearing the cache";
+                return;
+            }
             settings.ClearYouTubeCache();
+            YouTubeRuntime.Downloads.NotifyCacheChanged();
+        }
         else
             settings.ClearWaveformCache();
     }

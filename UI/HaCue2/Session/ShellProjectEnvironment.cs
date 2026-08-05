@@ -14,7 +14,8 @@ namespace HaCue2.Session;
 /// </remarks>
 public sealed class ShellProjectEnvironment(
     IProjectEnvironment? machine,
-    IProjectEnvironment runtime) : IProjectEnvironment
+    IProjectEnvironment runtime,
+    Func<string, PreparedSourceAvailability>? preparedSource = null) : IProjectEnvironment
 {
     public bool MediaExists(string resolvedPath) =>
         machine?.MediaExists(resolvedPath) ?? runtime.MediaExists(resolvedPath);
@@ -24,4 +25,9 @@ public sealed class ShellProjectEnvironment(
 
     public DeviceAvailability VideoOutput(VideoOutputDefinition output) =>
         runtime.VideoOutput(output);
+
+    public PreparedSourceAvailability PreparedSource(string sourceUri) =>
+        preparedSource?.Invoke(sourceUri)
+        ?? machine?.PreparedSource(sourceUri)
+        ?? runtime.PreparedSource(sourceUri);
 }

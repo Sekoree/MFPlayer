@@ -128,6 +128,36 @@ public sealed class ImplementationRegressionTests
     }
 
     [Fact]
+    public void YouTubeCaptionsAreMachineDerived_NotAStaleCachePathInTheProject()
+    {
+        var fixture = new TestProject();
+        fixture.Track.MediaPath =
+            "youtube://dQw4w9WgXcQ?v=1080p%7Cavc1%7Cmp4&a=opus%7Cwebm%7Cen&sub=en";
+        fixture.Track.Subtitles = [new SubtitleSelection { Path = "/old-machine/cache/caption.ass" }];
+        const string preparedHere = "/this-machine/cache/caption.ass";
+
+        Assert.DoesNotContain(
+            MediaPaths.ReferencesIn(fixture.Project),
+            reference => reference.SubjectId == fixture.Track.Id.ToString() && reference.SubjectKind == "subtitle");
+
+        var clip = Assert.Single(ShowCompiler.Compile(fixture.Project, new ShowCompileContext
+        {
+            PreparedSubtitlePaths = new Dictionary<Guid, string> { [fixture.Track.Id] = preparedHere },
+        }).Clips);
+        var subtitle = Assert.Single(clip.GetSubtitleSelections());
+
+        Assert.Equal(preparedHere, subtitle.Path);
+        Assert.Equal(-1, subtitle.StreamIndex);
+
+        // A normal external sidecar remains a normal portable media reference when the YouTube URI
+        // itself did not request generated captions.
+        fixture.Track.MediaPath = "youtube://dQw4w9WgXcQ?v=1080p%7Cavc1%7Cmp4&a=opus%7Cwebm%7Cen";
+        Assert.Contains(
+            MediaPaths.ReferencesIn(fixture.Project),
+            reference => reference.Path == "/old-machine/cache/caption.ass");
+    }
+
+    [Fact]
     public void ValidatorRejectsNonFiniteCurvesLanesAndMapping()
     {
         var fixture = new TestProject();

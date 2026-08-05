@@ -118,6 +118,22 @@ public static class SourceUri
         return query >= 0 ? body[..query] : body;
     }
 
+    /// <summary>
+    /// The generated-caption language carried by a YouTube source, or null when captions are not part
+    /// of that source. Kept here so portable project operations can distinguish an old machine-cache
+    /// path from an ordinary user-added subtitle sidecar without depending on the YouTube provider.
+    /// </summary>
+    public static string? YouTubeSubtitleLanguage(string? uri)
+    {
+        if (KindOf(uri) != SourceKind.YouTube)
+            return null;
+
+        var (_, values) = Split(uri!, "youtube");
+        return values.TryGetValue("sub", out var language) && !string.IsNullOrWhiteSpace(language)
+            ? language
+            : null;
+    }
+
     // ── ndi ───────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Builds <c>ndi://&lt;name&gt;?…</c>, the grammar <c>S.Media.NDI</c> parses.</summary>

@@ -594,6 +594,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
                 ProjectPath = _compileContext.ProjectPath,
                 Durations = durations,
                 Tracks = _compileContext.Tracks,
+                PreparedSubtitlePaths = _compileContext.PreparedSubtitlePaths,
             }).ConfigureAwait(false);
 
     /// <summary>Recompiles using the current machine's resolved media context.</summary>

@@ -290,6 +290,90 @@ public sealed class YouTubeModuleTests : IDisposable
         Assert.Null(prepared.SubtitlePath);
     }
 
+    // ---- background queue ----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Queue_ReturnsWhileDownloadRuns_AndCoalescesTheSameSource()
+    {
+        var gateway = new FakeGateway { DownloadDelay = TimeSpan.FromMilliseconds(200) };
+        using var queue = new YouTubePreparationQueue(NewPreparer(gateway));
+        var uri = YouTubeSourceUri.Build(
+            "dQw4w9WgXcQ", new YouTubeStreamSelection("1080p|avc1|mp4", "opus|webm|en"));
+        var initialRevision = queue.ContentRevision;
+
+        var first = queue.Enqueue(uri);
+        var joined = queue.Enqueue(uri);
+
+        Assert.Same(first, joined);
+        Assert.False(first.IsCompleted);
+        Assert.Equal(initialRevision, queue.ContentRevision); // queued/downloading is not cache content
+        Assert.True(queue.StateOf(uri) is YouTubeCacheState.Queued or YouTubeCacheState.Downloading);
+
+        var result = await first;
+
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.Equal(YouTubeCacheState.Ready, queue.StateOf(uri));
+        Assert.True(queue.ContentRevision > initialRevision);
+        Assert.True(File.Exists(result.Prepared!.AssetPath));
+    }
+
+    [Fact]
+    public async Task Queue_NoticesADeletedCommittedAsset_AndReallyPreparesItAgain()
+    {
+        var gateway = new FakeGateway();
+        using var queue = new YouTubePreparationQueue(NewPreparer(gateway));
+        var uri = YouTubeSourceUri.Build(
+            "dQw4w9WgXcQ", new YouTubeStreamSelection("720p|avc1|mp4", "opus|webm|ja"));
+
+        var first = await queue.Enqueue(uri);
+        Assert.True(first.IsSuccess, first.Error);
+        var oldCompletion = queue.Enqueue(uri);
+        File.Delete(first.Prepared!.AssetPath);
+
+        Assert.Equal(YouTubeCacheState.Missing, queue.StateOf(uri));
+        var repaired = queue.Enqueue(uri);
+        Assert.NotSame(oldCompletion, repaired);
+
+        var result = await repaired;
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.True(File.Exists(result.Prepared!.AssetPath));
+        Assert.Equal(YouTubeCacheState.Ready, queue.StateOf(uri));
+        // The persistent per-stream legs make repair a local remux when only the committed file vanished.
+        Assert.Equal(2, gateway.DownloadCalls);
+    }
+
+    [Fact]
+    public async Task Queue_DoesNotHideACaptionFailureBehindTheAlreadyCommittedVideo_AndCanRetry()
+    {
+        var gateway = new FakeGateway { CaptionWritesPartialThenCancels = true };
+        using var queue = new YouTubePreparationQueue(NewPreparer(gateway));
+        var uri = YouTubeSourceUri.Build(
+            "dQw4w9WgXcQ",
+            new YouTubeStreamSelection("1080p|avc1|mp4", "opus|webm|en", "en"));
+
+        var failed = await queue.Enqueue(uri);
+        Assert.False(failed.IsSuccess);
+        Assert.Equal(YouTubeCacheState.Failed, queue.StateOf(uri));
+        Assert.True(File.Exists(queue.Preparer.AssetPathFor(
+            "dQw4w9WgXcQ", "1080p|avc1|mp4", "opus|webm|en", includeThumbnail: false)));
+
+        gateway.CaptionWritesPartialThenCancels = false;
+        var repaired = await queue.Enqueue(uri);
+
+        Assert.True(repaired.IsSuccess, repaired.Error);
+        Assert.Equal(YouTubeCacheState.Ready, queue.StateOf(uri));
+        var subtitle = Assert.IsType<string>(queue.PreparedSubtitlePath(uri));
+        Assert.Equal(2, gateway.DownloadCalls); // retry reused the already-downloaded A/V legs
+
+        File.Delete(subtitle);
+        Assert.Equal(YouTubeCacheState.Missing, queue.StateOf(uri));
+        var captionRepair = await queue.Enqueue(uri);
+        Assert.True(captionRepair.IsSuccess, captionRepair.Error);
+        Assert.Equal(YouTubeCacheState.Ready, queue.StateOf(uri));
+        Assert.NotNull(queue.PreparedSubtitlePath(uri));
+        Assert.Equal(2, gateway.DownloadCalls); // a sidecar-only repair still reuses both media legs
+    }
+
     // ---- provider --------------------------------------------------------------------------------
 
     [Fact]

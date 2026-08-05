@@ -53,7 +53,11 @@ public partial class App : Application
             desktop.MainWindow = Environment.GetEnvironmentVariable(StartVariable) == "main"
                 ? OpenShell()
                 : OpenLauncher();
-            desktop.Exit += (_, _) => AppLogging.Current?.Dispose();
+            desktop.Exit += (_, _) =>
+            {
+                YouTubeRuntime.Shutdown();
+                AppLogging.Current?.Dispose();
+            };
         }
 
         base.OnFrameworkInitializationCompleted();

@@ -90,6 +90,19 @@ public sealed class YouTubePreparer
     public string AssetPathFor(string videoId, string? videoDescriptor, string? audioDescriptor, bool includeThumbnail = false) =>
         Path.Combine(_cacheRoot, CacheKey(videoId, videoDescriptor, audioDescriptor, includeThumbnail) + ".mkv");
 
+    /// <summary>The machine-local ASS sidecar path paired with a concrete prepared selection.</summary>
+    public string? SubtitlePathFor(
+        string videoId,
+        string? videoDescriptor,
+        string? audioDescriptor,
+        string? subtitleLanguage,
+        bool includeThumbnail = false) =>
+        subtitleLanguage is { Length: > 0 } language
+            ? Path.Combine(
+                _cacheRoot,
+                $"{CacheKey(videoId, videoDescriptor, audioDescriptor, includeThumbnail)}.{language}.ass")
+            : null;
+
     public bool IsPrepared(string videoId, string? videoDescriptor, string? audioDescriptor, bool includeThumbnail = false) =>
         File.Exists(AssetPathFor(videoId, videoDescriptor, audioDescriptor, includeThumbnail));
 
@@ -331,9 +344,9 @@ public sealed class YouTubePreparer
         Directory.CreateDirectory(_cacheRoot);
         var key = CacheKey(videoId, videoDescriptor, audioDescriptor, selection.IncludeThumbnail);
         var assetPath = Path.Combine(_cacheRoot, key + ".mkv");
-        var subtitlePath = selection.SubtitleLanguage is { Length: > 0 } lang
-            ? Path.Combine(_cacheRoot, $"{key}.{lang}.ass")
-            : null;
+        var subtitlePath = SubtitlePathFor(
+            videoId, videoDescriptor, audioDescriptor,
+            selection.SubtitleLanguage, selection.IncludeThumbnail);
 
         var assetLease = await AcquireAssetLeaseAsync(assetPath, cancellationToken).ConfigureAwait(false);
         try

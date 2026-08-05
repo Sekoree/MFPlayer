@@ -13,20 +13,20 @@ namespace HaCue2.ViewModels;
 /// <para>
 /// This has its own window rather than a prompt because of what it does between the URL and the cue.
 /// Resolving the manifest is a network round trip, the stream lists that come back are a real choice —
-/// a 4 K VP9 leg and a 1080p H.264 leg are different decode costs on show night — and DOWNLOADING is a
-/// progress bar measured in minutes. None of that fits a box with two fields and a verb.
+/// a 4 K VP9 leg and a 1080p H.264 leg are different decode costs on show night. None of that fits a
+/// box with two fields and a verb; the resulting download is handed to the app-wide background queue.
 /// </para>
 /// <para>
 /// And the download is not optional. The registry's youtube provider plays only from the prepared local
 /// asset and refuses to fetch on the fire path, which is the right refusal: a GO that started a network
 /// transfer would be a cue that begins four minutes late, on a machine that may have no network at the
-/// venue at all. Preparing here is what makes the cue instant later, and what makes it work offline.
+/// venue at all. Queuing preparation while authoring is what makes the cue instant later and work offline.
 /// </para>
 /// </remarks>
 public sealed partial class YouTubeCueViewModel : ObservableObject
 {
     private readonly IYouTubeGateway _gateway;
-    private readonly YouTubePreparer _preparer;
+    private readonly YouTubePreparationQueue _downloads;
     private readonly MediaCueNode? _editing;
     private YouTubeMediaManifest? _manifest;
     private CancellationTokenSource? _work;
@@ -35,11 +35,12 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
         CuesViewModel cues,
         IYouTubeGateway gateway,
         YouTubePreparer preparer,
+        YouTubePreparationQueue? downloads = null,
         MediaCueNode? editing = null)
     {
         Cues = cues;
         _gateway = gateway;
-        _preparer = preparer;
+        _downloads = downloads ?? new YouTubePreparationQueue(preparer);
         _editing = editing;
 
         if (editing is not null)
@@ -86,12 +87,6 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
 
     [ObservableProperty]
     private string _cacheNote = "";
-
-    [ObservableProperty]
-    private double _progress;
-
-    [ObservableProperty]
-    private string _progressNote = "";
 
     public bool IsIdle => !IsBusy;
 
@@ -206,46 +201,25 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
         }
     }
 
-    /// <summary>Downloads the chosen streams into the shared cache, then makes the cue.</summary>
+    /// <summary>Makes the cue immediately and queues its reliable local asset in the background.</summary>
     [RelayCommand]
-    private async Task PrepareAsync()
+    private void Prepare()
     {
         if (_manifest is not { } manifest)
             return;
 
         Problem = "";
-        var work = Restart();
-        IsBusy = true;
-        Progress = 0;
-        ProgressNote = "starting…";
-
         var selection = Selection();
+        // Every picker choice came from the resolved manifest, so this URI is concrete and maps to one
+        // cache key offline. GO still refuses it until the queue atomically commits that file.
+        var uri = YouTubeSourceUri.Build(manifest.VideoId, selection);
+        var duration = (int)Math.Round(manifest.Duration?.TotalMilliseconds ?? 0);
 
         try
         {
-            var prepared = await _preparer.PrepareAsync(
-                manifest.VideoId,
-                selection,
-                new Progress<YouTubePrepareProgress>(step =>
-                {
-                    Progress = Math.Clamp(step.Fraction, 0, 1);
-                    ProgressNote = $"{Phase(step.Phase)} · {Progress * 100:0}%";
-                }),
-                work.Token).ConfigureAwait(true);
-            work.Token.ThrowIfCancellationRequested();
-
-            // The RESOLVED descriptors, not the requested ones: "best" is a policy that means something
-            // different next month, and a show must play the same streams it was built against.
-            var uri = YouTubeSourceUri.Build(manifest.VideoId, prepared.ResolvedSelection);
-            var duration = (int)Math.Round(manifest.Duration?.TotalMilliseconds ?? 0);
-
-            var subtitles = prepared.SubtitlePath is { Length: > 0 } path
-                ? new List<SubtitleSelection> { new() { Path = path } }
-                : [];
-
             var saved = _editing is null
-                ? Cues.AddSourceCue(uri, Name, duration, subtitles) is not null
-                : Cues.SetSource(_editing.Id, uri, Name, duration, subtitles);
+                ? Cues.AddSourceCue(uri, Name, duration, subtitles: []) is not null
+                : Cues.SetSource(_editing.Id, uri, Name, duration, subtitles: []);
 
             if (!saved)
             {
@@ -255,23 +229,16 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
                 return;
             }
 
+            _ = _downloads.Enqueue(uri);
             Finished?.Invoke();
-        }
-        catch (OperationCanceledException)
-        {
-            ProgressNote = "cancelled";
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            Problem = $"could not download — {failure.Message}";
-        }
-        finally
-        {
-            Finish(work);
+            Problem = $"could not queue download — {failure.Message}";
         }
     }
 
-    /// <summary>Abandons an in-flight resolve or download. The cache keeps whatever finished.</summary>
+    /// <summary>Abandons an in-flight manifest lookup. Background downloads belong to the app.</summary>
     public void Cancel()
     {
         try
@@ -346,10 +313,15 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
 
         var selection = Selection();
 
-        CacheNote = _preparer.IsPrepared(
-            manifest.VideoId, selection.Video, selection.Audio, selection.IncludeThumbnail)
-            ? "already downloaded — adding is instant"
-            : "not downloaded yet — adding will fetch it";
+        var uri = YouTubeSourceUri.Build(manifest.VideoId, selection);
+        CacheNote = _downloads.StateOf(uri) switch
+        {
+            YouTubeCacheState.Ready => "already downloaded — adding is instant",
+            YouTubeCacheState.Queued => "already queued for background download",
+            YouTubeCacheState.Downloading => "currently downloading in the background",
+            YouTubeCacheState.Failed => "last download failed — adding will retry it",
+            _ => "not downloaded yet — adding queues it in the background",
+        };
     }
 
     private static int Pick(IEnumerable<string> descriptors, string? wanted)
@@ -381,13 +353,4 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
             ? length.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
             : length.ToString(@"m\:ss", CultureInfo.InvariantCulture);
 
-    private static string Phase(YouTubePreparePhase phase) => phase switch
-    {
-        YouTubePreparePhase.Resolving => "resolving",
-        YouTubePreparePhase.DownloadingVideo => "downloading video",
-        YouTubePreparePhase.DownloadingAudio => "downloading audio",
-        YouTubePreparePhase.DownloadingThumbnail => "downloading thumbnail",
-        YouTubePreparePhase.Remuxing => "assembling",
-        _ => "ready",
-    };
 }

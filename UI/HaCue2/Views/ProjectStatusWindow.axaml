@@ -39,6 +39,8 @@
       <Grid ColumnDefinitions="Auto,*,Auto">
         <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding ErrorNote}"
                    Classes.ok="{Binding IsClean}" Classes.err="{Binding !IsClean}" />
+        <TextBlock Grid.Column="1" Classes="mono dim2 small" HorizontalAlignment="Center"
+                   Text="{Binding DownloadRepairNote}" />
         <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding HeadlessNote}" />
       </Grid>
     </Border>

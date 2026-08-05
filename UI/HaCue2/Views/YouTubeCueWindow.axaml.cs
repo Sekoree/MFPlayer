@@ -20,8 +20,8 @@ public partial class YouTubeCueWindow : Window
         DataContext = model;
         model.Finished += Close;
 
-        // A download abandoned by closing the window must not keep running: the cache would still be
-        // written, but the progress it was reporting to has gone.
+        // Closing cancels only manifest lookup. A queued download belongs to the application-level
+        // background queue and deliberately survives this authoring window.
         Closed += (_, _) => model.Cancel();
     }
 

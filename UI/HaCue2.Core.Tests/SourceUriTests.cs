@@ -133,6 +133,15 @@ public class SourceUriTests
         Assert.Equal("input · default device", SourceUri.Describe("padev://"));
     }
 
+    [Fact]
+    public void AYouTubeCaptionLanguageCanBeIdentifiedWithoutTreatingSidecarsAsProviderData()
+    {
+        Assert.Equal("de-DE", SourceUri.YouTubeSubtitleLanguage(
+            "youtube://dQw4w9WgXcQ?v=1080p&sub=de-DE"));
+        Assert.Null(SourceUri.YouTubeSubtitleLanguage("youtube://dQw4w9WgXcQ?v=1080p"));
+        Assert.Null(SourceUri.YouTubeSubtitleLanguage("video.mp4?sub=de-DE"));
+    }
+
     // ── what must not happen to a URI ─────────────────────────────────────────────────────────────
 
     /// <summary>

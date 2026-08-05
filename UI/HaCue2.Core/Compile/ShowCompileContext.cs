@@ -18,6 +18,13 @@ public sealed record ShowCompileContext
     /// <summary>Only contains cues whose media has been probed on this machine.</summary>
     public IReadOnlyDictionary<Guid, ResolvedMediaTracks> Tracks { get; init; } =
         new Dictionary<Guid, ResolvedMediaTracks>();
+
+    /// <summary>
+    /// Machine-derived subtitle sidecars for prepared sources. These paths deliberately do not travel
+    /// in the project: a YouTube cache root on one booth machine is meaningless on another.
+    /// </summary>
+    public IReadOnlyDictionary<Guid, string> PreparedSubtitlePaths { get; init; } =
+        new Dictionary<Guid, string>();
 }
 
 /// <summary>The stream choices after signatures have been checked against the current file.</summary>

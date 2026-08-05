@@ -93,6 +93,12 @@ public static class MediaPaths
                 found.Add(new MediaReference(cue.MediaPath, "cue", cue.Id.ToString(),
                     $"Q{cue.Number} {cue.Label}".TrimEnd()));
 
+            // YouTube caption sidecars are derived into the machine cache from the language carried
+            // by the source URI. Older documents stored an absolute cache path here, which broke as
+            // soon as the project moved to another machine; ignore those generated paths now.
+            if (SourceUri.YouTubeSubtitleLanguage(cue.MediaPath) is not null)
+                continue;
+
             for (var index = 0; index < cue.Subtitles.Count; index++)
             {
                 if (!string.IsNullOrWhiteSpace(cue.Subtitles[index].Path))

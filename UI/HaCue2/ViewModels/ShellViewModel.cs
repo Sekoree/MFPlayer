@@ -62,7 +62,9 @@ public partial class ShellViewModel : ObservableObject
 
         Environment = new ShellProjectEnvironment(
             machine.Environment,
-            new RuntimeEnvironment(Runtime, project, () => ProjectPath));
+            new RuntimeEnvironment(Runtime, project, () => ProjectPath),
+            YouTubeRuntime.Availability);
+        _youTubeContentRevision = YouTubeRuntime.Downloads.ContentRevision;
 
         Cues = new CuesViewModel(Journal, Runtime)
         {
@@ -700,6 +702,7 @@ public partial class ShellViewModel : ObservableObject
         ProjectPath = ProjectPath,
         Durations = Runtime.MediaDurations,
         Tracks = Machine.Media.TracksIn(Project, ProjectPath),
+        PreparedSubtitlePaths = YouTubeRuntime.PreparedSubtitlePaths(Project),
     };
 
     public bool HasPath => Path.Length > 0;
@@ -930,6 +933,51 @@ public partial class ShellViewModel : ObservableObject
                 : $"▲ {count} issue{(count == 1 ? "" : "s")} · Project status";
         }
     }
+
+    /// <summary>Small persistent readout for work that outlives the YouTube authoring dialog.</summary>
+    public string YouTubeDownloadSummary
+    {
+        get
+        {
+            var snapshot = YouTubeRuntime.Downloads.Snapshot(
+                Project.AllCues().OfType<MediaCueNode>().Select(cue => cue.MediaPath));
+            if (snapshot.Downloading > 0)
+            {
+                var phase = snapshot.Phase switch
+                {
+                    S.Media.Source.YouTube.YouTubePreparePhase.DownloadingVideo => "video",
+                    S.Media.Source.YouTube.YouTubePreparePhase.DownloadingAudio => "audio",
+                    S.Media.Source.YouTube.YouTubePreparePhase.DownloadingThumbnail => "thumbnail",
+                    S.Media.Source.YouTube.YouTubePreparePhase.Remuxing => "assembling",
+                    _ => "resolving",
+                };
+                return $"↓ YouTube {phase} {snapshot.Fraction * 100:0}%"
+                       + (snapshot.Queued > 0 ? $" · {snapshot.Queued} queued" : "");
+            }
+            if (snapshot.Queued > 0)
+                return $"↓ {snapshot.Queued} YouTube queued";
+            return snapshot.Failed > 0
+                ? $"▲ {snapshot.Failed} YouTube download{(snapshot.Failed == 1 ? "" : "s")} failed"
+                : "";
+        }
+    }
+
+    /// <summary>Progress-only refresh; deliberately does not recompile the show.</summary>
+    public void RefreshYouTubeDownloadProgress() =>
+        OnPropertyChanged(nameof(YouTubeDownloadSummary));
+
+    /// <summary>A committed/deleted/failed asset changes preflight and can change playable subtitles.</summary>
+    public void RefreshYouTubeReadiness()
+    {
+        Status = ProjectStatus.Run(Project, ProjectPath, Environment);
+        OnPropertyChanged(nameof(YouTubeDownloadSummary));
+        var contentRevision = YouTubeRuntime.Downloads.ContentRevision;
+        if (Host is not null && contentRevision != _youTubeContentRevision)
+            ScheduleReload();
+        _youTubeContentRevision = contentRevision;
+    }
+
+    private long _youTubeContentRevision;
 
     public string UnsavedSummary => Journal.IsDirty
         ? $"{Journal.Log.Count} unsaved edit{(Journal.Log.Count == 1 ? "" : "s")}"

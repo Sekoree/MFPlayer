@@ -9,7 +9,11 @@ namespace HaCue2.Views;
 
 public partial class ProjectStatusWindow : Window
 {
-    public ProjectStatusWindow() => InitializeComponent();
+    public ProjectStatusWindow()
+    {
+        InitializeComponent();
+        Closed += (_, _) => (DataContext as IDisposable)?.Dispose();
+    }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
 
@@ -76,6 +80,12 @@ public partial class ProjectStatusWindow : Window
     {
         if (sender is not Control { Tag: string destination } || destination.Length == 0)
             return;
+
+        if (destination == "YOUTUBE_CACHE" && DataContext is ProjectStatusViewModel status)
+        {
+            status.QueueMissingYouTube();
+            return;
+        }
 
         if (Owner is ShellWindow shell)
             shell.Shell.SelectedView = destination;

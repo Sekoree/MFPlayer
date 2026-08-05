@@ -447,6 +447,7 @@ public sealed record CheckRow
         "Compositions" or "Video outputs" or "Recordings" => "VIDEO",
         "Trigger inputs" => "TARGETS",
         "Cues" or "Cue lists" or "Media files" or "Compiles" => "CUES",
+        "YouTube cache" => "YOUTUBE_CACHE",
         _ => "",
     };
 
