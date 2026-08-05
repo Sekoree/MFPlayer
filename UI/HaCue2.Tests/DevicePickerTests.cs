@@ -49,13 +49,15 @@ public class DevicePickerTests
         var combos = window.GetVisualDescendants().OfType<ComboBox>().ToList();
 
         // The template builds every control kind and hides the unused ones, so there is a ComboBox per
-        // FIELD — four of them, two bound to the empty option list of a text field. The ones that
-        // matter are the two the picker actually filled.
+        // FIELD, each bound to that field's option list — empty for a plain text field, and populated
+        // for the driver and device pickers AND for the sample-rate suggestions, whose own control is
+        // a flyout rather than this combo. Assert on the two that the picker fills rather than on how
+        // many fields happen to carry options, which is a fact about the dialog's shape and not about
+        // whether the device list arrived.
         var filled = combos
             .Where(box => box.ItemsSource?.Cast<object>().Any() == true)
             .ToList();
 
-        Assert.Equal(2, filled.Count);
         Assert.Equal(["any", "ALSA", "JACK"], filled[0].ItemsSource!.Cast<string>());
         Assert.Equal(3, filled[1].ItemsSource!.Cast<object>().Count());
 
@@ -80,6 +82,66 @@ public class DevicePickerTests
         Assert.Equal(before + 1, audio.Lines.Count);
         Assert.Contains(audio.Lines, row => row.Name == "Main output");
     });
+
+    /// <summary>A 44.1 kHz-only interface, on a show that mixes at 48.</summary>
+    private sealed class FortyFourOne : S.Media.Core.Audio.IAudioBackend
+    {
+        public string Name => "fake";
+        public IReadOnlyList<S.Media.Core.Audio.AudioDeviceInfo> EnumerateOutputDevices() =>
+        [
+            new("0", "Cheap USB codec", 2, 44_100, true, "ALSA"),
+            new("1", "Scarlett 2i2 3rd Gen Pro", 2, 48_000, false, "ALSA"),
+        ];
+        public IReadOnlyList<S.Media.Core.Audio.AudioDeviceInfo> EnumerateInputDevices() => [];
+        public S.Media.Core.Audio.IAudioOutput CreateOutput(string? i, S.Media.Core.Audio.AudioFormat f, S.Media.Core.Audio.AudioBackendOptions? o = null) => throw new NotSupportedException();
+        public S.Media.Core.Audio.IAudioSource CreateInput(string? i, S.Media.Core.Audio.AudioFormat f, S.Media.Core.Audio.AudioBackendOptions? o = null) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void ADeviceThatDoesNotRunAtTheMixRateFillsInItsOwn()
+    {
+        var journal = new ProjectJournal(ProjectFiles.Create("Show"));
+        var prompt = Dialogs.AddAudioLine(
+            journal, AudioLineKind.LocalAudio, new AudioDevices(new FortyFourOne()));
+
+        var rate = prompt.Fields.Single(field => field.Label == "Sample rate");
+        var device = prompt.Fields.Single(field => field.Label == "Device");
+
+        // Opens already pointing at the default device, which here is the 44.1 one — no click needed.
+        Assert.Equal(0, device.SelectedIndex);
+
+        // Forcing a 44.1 interface to open at the show's 48 is exactly what this field exists to
+        // prevent, so the dialog fills it in rather than leaving the operator to notice.
+        Assert.Equal("44100", rate.Value);
+        Assert.Contains("44,100", rate.Hint, StringComparison.Ordinal);
+
+        prompt.Fields.Single(field => field.Label == "Name").Value = "Foldback";
+        prompt.Commit();
+
+        Assert.Equal(44_100, journal.Project.AudioLines.Single().SampleRate);
+    }
+
+    [Fact]
+    public void ADeviceThatAgreesWithTheShowStoresNoRateAtAll()
+    {
+        var journal = new ProjectJournal(ProjectFiles.Create("Show"));
+        var prompt = Dialogs.AddAudioLine(
+            journal, AudioLineKind.LocalAudio, new AudioDevices(new FortyFourOne()));
+
+        var rate = prompt.Fields.Single(field => field.Label == "Sample rate");
+        var device = prompt.Fields.Single(field => field.Label == "Device");
+
+        device.SelectedIndex = 1;
+
+        Assert.Equal("", rate.Value);
+
+        prompt.Fields.Single(field => field.Label == "Name").Value = "Main";
+        prompt.Commit();
+
+        // Null, not 48000: the two behave identically today, and null is the one that keeps following
+        // the mix rate if the show is ever re-clocked.
+        Assert.Null(journal.Project.AudioLines.Single().SampleRate);
+    }
 
     [Fact]
     public void ANewProjectCannotPatchYetAndSaysSoRatherThanDoingNothing()

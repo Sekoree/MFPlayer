@@ -80,13 +80,32 @@ public static class ShowCompiler
     /// The runtime group id for ONE cue that must not share a transport with its siblings.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A session group holds exactly one active voice: firing a second cue into it releases the first.
-    /// That is right for a playlist, where the whole point is that items REPLACE each other — and wrong
-    /// for a timeline, where a stab at five seconds must play over the bed rather than cut it. So a
-    /// timeline's children get one group each.
+    /// That is right for a PLAYLIST, where the whole point is that items replace each other — and wrong
+    /// for every mode whose children are meant to sound at once, which is both the timeline (a stab at
+    /// five seconds must play over the bed rather than cut it) and all-together.
+    /// </para>
+    /// <para>
+    /// All-together shared its parent's transport, so firing a group of thirteen stems played the
+    /// thirteenth: each fire displaced the one before it, and the group went silent except for whichever
+    /// child happened to be last in the list. The mode's entire meaning is simultaneity, so it needs a
+    /// voice per child exactly as the timeline does.
+    /// </para>
     /// </remarks>
     public static string GroupId(CueList list, GroupCueNode group, CueNode child) =>
         $"{list.Id:N}:{group.Id:N}:{child.Id:N}";
+
+    /// <summary>
+    /// Whether a group's children each need their own transport, rather than sharing one.
+    /// </summary>
+    /// <remarks>
+    /// The question is "do two of these ever sound at the same time". Only a playlist can answer no —
+    /// it is defined by items succeeding one another — so it is the one mode that keeps a shared
+    /// transport, and the crossfade between its items depends on that sharing.
+    /// </remarks>
+    private static bool LayersChildren(GroupCueNode group) =>
+        group.FireMode is GroupFireMode.Timeline or GroupFireMode.AllTogether;
 
     private static void Append(
         HaCueProject project,
@@ -108,11 +127,11 @@ public static class ShowCompiler
         {
             foreach (var node in nodes)
             {
-                // A timeline's children each get their own transport, so they LAYER rather than
-                // replacing one another. Everything else shares its parent's, which is what makes a
-                // playlist a playlist. A LOCAL rather than reassigning the parameter: the shared id
-                // has to survive the loop for the siblings that still use it.
-                var id = layering is { } timeline ? GroupId(list, timeline, node) : groupId;
+                // A layering group's children each get their own transport, so they sound TOGETHER
+                // rather than replacing one another. A playlist shares its parent's, which is what
+                // makes a playlist a playlist. A LOCAL rather than reassigning the parameter: the
+                // shared id has to survive the loop for the siblings that still use it.
+                var id = layering is { } layered ? GroupId(list, layered, node) : groupId;
 
                 switch (node)
                 {
@@ -121,10 +140,10 @@ public static class ShowCompiler
                         // what firing it MEANS is the fire mode's business and is resolved app-side.
                         cues.Add(Definition(group, ++running, id));
 
-                        // Nested groups collapse into their OUTERMOST ancestor, as HaPlay's mapper
-                        // does: the whole tree moves on one clock rather than splitting across a clock
-                        // per subgroup. A TIMELINE is the exception, and Walk gives its children one
-                        // group each — see the overload above for why.
+                        // Nested PLAYLISTS collapse into their outermost ancestor, as HaPlay's mapper
+                        // does: the whole chain moves on one clock rather than splitting across a
+                        // clock per subgroup. A group whose children sound together is the exception,
+                        // and Walk gives its children one group each — see LayersChildren for why.
                         Walk(
                             group.Children,
                             id == listGroup ? GroupId(list, group) : id,
@@ -135,7 +154,7 @@ public static class ShowCompiler
                             group is { FireMode: GroupFireMode.Playlist, CrossfadeMs: > 0 }
                                 ? TimeSpan.FromMilliseconds(group.CrossfadeMs)
                                 : TimeSpan.Zero,
-                            group.FireMode == GroupFireMode.Timeline ? group : null,
+                            LayersChildren(group) ? group : null,
                             MergeLanes(group.EffectLanes, inheritedLanes));
                         break;
 

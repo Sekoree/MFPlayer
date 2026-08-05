@@ -61,6 +61,24 @@ public static class Dialogs
             Label = "Channels", Kind = PromptFieldKind.Number, Value = "2",
         };
 
+        var mixRate = journal.Project.AudioPatch.MixSampleRate;
+
+        // Left EMPTY unless there is something to say. Empty means "open at the show's mix rate",
+        // which is what every line did before this field existed, so an operator who ignores it gets
+        // exactly the old behaviour. A device that does not run at the mix rate is wrapped through the
+        // bay's resampler; the CLOCK MASTER is the one line that cannot be, and the project status
+        // pass names that rather than letting the show open with a silently re-clocked master.
+        var rate = local
+            ? new PromptField
+            {
+                Label = "Sample rate",
+                Kind = PromptFieldKind.Suggestion,
+                Options = CommonSampleRates,
+                Value = "",
+                Hint = $"empty follows the show's {mixRate:N0} Hz · set it when the device cannot",
+            }
+            : null;
+
         if (catalog is null)
         {
             var typed = new PromptField
@@ -72,7 +90,9 @@ public static class Dialogs
                 Hint = "matched by name · leave empty for the default device",
             };
 
-            return Build(journal, kind, name, () => typed.Value.Trim(), channels, [name, typed, channels]);
+            return Build(
+                journal, kind, name, () => typed.Value.Trim(), channels, rate,
+                rate is null ? [name, typed, channels] : [name, typed, channels, rate]);
         }
 
         var hosts = catalog.HostApis;
@@ -108,18 +128,53 @@ public static class Dialogs
             device.SelectedIndex = Math.Max(0, found.ToList().FindIndex(item => item.IsDefault));
         }
 
-        Fill();
-        host.Picked += _ => Fill();
-
-        device.Picked += _ =>
+        // Everything that FOLLOWS the chosen device. Called explicitly as well as on Picked, because
+        // Picked fires on a CHANGE of index and the list opens already pointing at the default device:
+        // an operator who accepts that default — the common case — changed nothing, so nothing fired,
+        // and the line was created with the two channels the field was born with rather than the
+        // eight the device has.
+        void FollowDevice()
         {
             var chosen = host.Choice == "any" ? "" : host.Choice;
             var found = catalog.OutputsFor(chosen);
 
-            if (device.SelectedIndex >= 0 && device.SelectedIndex < found.Count)
-                channels.Value = Math.Clamp(found[device.SelectedIndex].MaxChannels, 1, 64)
-                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (device.SelectedIndex < 0 || device.SelectedIndex >= found.Count)
+                return;
+
+            var picked = found[device.SelectedIndex];
+
+            channels.Value = Math.Clamp(picked.MaxChannels, 1, 64)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            if (rate is null)
+                return;
+
+            // Filled in ONLY when the device's own rate differs from the show's. Prefilling every line
+            // with its device rate would write an explicit rate into projects that never needed one and
+            // turn a clock master into a validation error the moment its driver reported 44.1 — and
+            // leaving it blank when the device genuinely cannot do the mix rate is the case the field
+            // exists for. So the dialog takes a position exactly when there is a disagreement to see.
+            var native = (int)Math.Round(picked.DefaultSampleRate);
+
+            rate.Value = native > 0 && native != mixRate
+                ? native.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : "";
+
+            rate.Hint = native > 0 && native != mixRate
+                ? $"“{picked.Name}” reports {native:N0} Hz · the show mixes at {mixRate:N0} Hz"
+                : $"empty follows the show's {mixRate:N0} Hz · set it when the device cannot";
+        }
+
+        Fill();
+        FollowDevice();
+
+        host.Picked += _ =>
+        {
+            Fill();
+            FollowDevice();
         };
+
+        device.Picked += _ => FollowDevice();
 
         return Build(
             journal,
@@ -135,8 +190,19 @@ public static class Dialogs
                     : "";
             },
             channels,
-            [name, host, device, channels]);
+            rate,
+            rate is null ? [name, host, device, channels] : [name, host, device, channels, rate]);
     }
+
+    /// <summary>
+    /// The rates a device picker offers. Typed values are still accepted — it is a suggestion list.
+    /// </summary>
+    /// <remarks>
+    /// The two families and their multiples, because a device that will not do 48 k is almost always a
+    /// 44.1 k one, and a rig running at 96 k has usually chosen it deliberately.
+    /// </remarks>
+    private static IReadOnlyList<string> CommonSampleRates { get; } =
+        ["44100", "48000", "88200", "96000", "176400", "192000"];
 
     /// <summary>One device row: its name, its width, and whether the machine calls it the default.</summary>
     private static string Label(S.Media.Core.Audio.AudioDeviceInfo device) =>
@@ -148,6 +214,7 @@ public static class Dialogs
         PromptField name,
         Func<string> hint,
         PromptField channels,
+        PromptField? rate,
         IReadOnlyList<PromptField> fields) =>
         new(
             $"Add {Describe(kind)} line",
@@ -161,10 +228,32 @@ public static class Dialogs
                     Kind = kind,
                     DeviceHint = hint(),
                     Channels = Math.Clamp(channels.Number(2), 1, 64),
+                    SampleRate = NativeRate(rate),
                 },
                 journal.Project.AudioLines.Count,
                 "audio",
                 $"add line “{name.Value.Trim()}”")));
+
+    /// <summary>
+    /// A line's own sample rate, or null to follow the show's mix rate.
+    /// </summary>
+    /// <remarks>
+    /// Null rather than the mix rate for an empty field: the two behave identically when the show
+    /// opens, and null is the one that keeps FOLLOWING the mix rate if it is ever changed. Writing the
+    /// number would silently pin the line to whatever the rate happened to be on the day it was added.
+    /// Anything unparseable or outside the range the validator accepts is treated as empty rather than
+    /// stored — a typo must not become a line that fails the status pass with no way to see why.
+    /// </remarks>
+    private static int? NativeRate(PromptField? rate) =>
+        rate is not null
+        && int.TryParse(
+            rate.Value.Trim(),
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var parsed)
+        && parsed is >= 8_000 and <= 384_000
+            ? parsed
+            : null;
 
     /// <summary>
     /// Confirms deleting an audio line, naming everything that goes with it.
@@ -566,11 +655,14 @@ public static class Dialogs
                 // TYPED, not picked. The composition pane edits size and rate as free text, so a
                 // dropdown here taught the operator that the common rates were the only ones — and a
                 // projector at 23.976 or a LED wall at 47.95 is an ordinary thing to have to match.
+                // 60 — the same default CompositionDefinition itself carries. This field said 30, so
+                // every composition made through the dialog contradicted the model's own default and
+                // ran a 60p source at half rate unless the operator noticed and retyped it.
                 new PromptField
                 {
                     Label = "Rate",
                     Kind = PromptFieldKind.Text,
-                    Value = "30",
+                    Value = "60",
                     Hint = "frames per second · 23.976 · 25 · 29.97 · 30 · 50 · 59.94 · 60",
                 },
             ],
@@ -588,7 +680,7 @@ public static class Dialogs
                         prompt["Rate"].Value.Trim().Replace(',', '.'),
                         System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture,
-                        out var rate) && rate is > 0 and <= 480 ? rate : 30,
+                        out var rate) && rate is > 0 and <= 480 ? rate : 60,
                 },
                 project.Compositions.Count,
                 "video",
@@ -667,7 +759,9 @@ public static class Dialogs
                 Label = "Presentation",
                 Kind = PromptFieldKind.Choice,
                 Options = ["fullscreen", "windowed"],
-                Hint = "a windowed output opens as soon as it is added, if the show is running",
+                // Both open the moment they are added to a running show. The hint used to name only
+                // the windowed one, which read as a promise that fullscreen behaved differently.
+                Hint = "either opens as soon as it is added, if the show is running",
             };
 
             var size = new PromptField

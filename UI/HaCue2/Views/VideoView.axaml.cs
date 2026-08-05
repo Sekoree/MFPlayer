@@ -42,7 +42,15 @@ public partial class VideoView : UserControl
                 ],
             });
 
-        if (files.FirstOrDefault()?.TryGetLocalPath() is { } path)
+        if (files.FirstOrDefault()?.TryGetLocalPath() is not { } path)
+            return;
+
+        // The composition this button belongs to, not "the selected one". Each pane carries its own
+        // editor now, so relying on the selection would put the picked image on whichever canvas was
+        // last clicked — which is usually the right one and occasionally, silently, is not.
+        if ((sender as Control)?.DataContext is CompositionPaneViewModel pane)
+            pane.IdleImage = path;
+        else
             video.CompositionIdleImage = path;
     }
 
@@ -183,6 +191,10 @@ public partial class VideoView : UserControl
         switch (field)
         {
             case "composition":
+                // Through the SELECTION here, unlike the other per-pane editors: these buttons live in
+                // a flyout, so their DataContext is the size string rather than the pane. Opening that
+                // flyout means clicking inside the pane, and the pane's own PointerPressed selects the
+                // composition before the popup opens — so the selection is that pane by construction.
                 video.CompositionSize = size;
                 break;
             case "window":

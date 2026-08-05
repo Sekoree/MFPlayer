@@ -487,8 +487,13 @@ public partial class InspectorViewModel : ObservableObject
             if (Cue is not { } cue || value < 0 || value == cue.ColorTag)
                 return;
 
-            Edit("colorTag", "cues", () => cue.ColorTag, tag => cue.ColorTag = tag,
-                Math.Clamp(value, 0, CueColors.Names.Count - 1), "set colour tag");
+            // The multi-aware overload: a colour tag belongs to every cue kind, and "tag this block of
+            // twelve as blue" is the reason the feature exists. It used to write only the lead cue.
+            Edit(
+                "colorTag",
+                target => target.ColorTag,
+                (target, tag) => target.ColorTag = tag,
+                Math.Clamp(value, 0, CueColors.Names.Count - 1));
         }
     }
 

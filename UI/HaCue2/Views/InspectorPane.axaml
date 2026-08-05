@@ -172,9 +172,13 @@
 
             <ContentControl Theme="{StaticResource Subhead}" Content="Sends → logical outputs" />
             <!-- The bottom padding is for the horizontal scrollbar: it is an overlay, so without room
-                 of its own it sits on top of the last row of cells and hides the gain there. -->
+                 of its own it sits on top of the last row of cells and hides the gain there. Twelve
+                 covered the bar at rest and not the ~18px it expands to under the pointer — which is
+                 exactly when somebody is reading that row — so the last row was clipped in half. The
+                 margin adds the gap to the PRESETS strip that the padding used to be doing double
+                 duty as. -->
             <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
-                          Margin="10,2,10,0" Padding="0,0,0,12">
+                          Margin="10,2,10,6" Padding="0,0,0,20">
               <!-- The same gesture vocabulary as the patch: an operator who learns it on one matrix
                    must find it true on the other. -->
               <c:MatrixView Columns="{Binding SendColumns}" Rows="{Binding SendRows}"

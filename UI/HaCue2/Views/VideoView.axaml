@@ -290,133 +290,152 @@
            canvas below is simply that cue's placement (register item 21). -->
       <Grid IsVisible="{Binding IsCompositionsPane}" ColumnDefinitions="*,360" Margin="7" ColumnSpacing="7">
 
-        <!-- One pane per composition, at the composition's own aspect ratio. Two hard-coded panels
-             would stop agreeing with the document the first time somebody added a third canvas. -->
-        <ScrollViewer Grid.Column="0">
-          <Panel>
-            <c:EmptyState IsVisible="{Binding HasNoCompositions}"
-                          Headline="No compositions"
-                          Detail="A composition is a canvas cues are placed on. Add one on the right, then send it to an output." />
-            <ItemsControl IsVisible="{Binding !HasNoCompositions}" ItemsSource="{Binding Compositions}">
-              <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate><StackPanel Spacing="7" /></ItemsPanelTemplate>
-              </ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="vm:CompositionPaneViewModel">
-                  <c:PanelBox Header="{Binding Name}" Hint="{Binding Hint}"
+        <!-- One EXPANDER per composition, each carrying its own editor. A single shared editor pane
+             driven by a click on a pane that gave no sign it was selectable stopped scaling at the
+             second canvas — and a show with a projector and a stream has two on day one. Collapsing
+             is what makes six of them manageable; the header keeps the name, size and feed count
+             visible while closed, so the list still answers "what is on this rig" at a glance. -->
+        <DockPanel Grid.Column="0">
+
+          <!-- ADD / REMOVE at the foot, exactly where the outputs pane puts them. -->
+          <Border DockPanel.Dock="Bottom" Classes="chain">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <Button Classes="tight" Content="+ ADD…" Click="OnDialog" Tag="composition" />
+              <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="composition:remove"
+                      IsEnabled="{Binding HasComposition}" />
+              <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                         Text="remove takes the composition the last-touched pane belongs to" />
+            </StackPanel>
+          </Border>
+
+          <ScrollViewer>
+            <Panel>
+              <c:EmptyState IsVisible="{Binding HasNoCompositions}"
+                            Headline="No compositions"
+                            Detail="A composition is a canvas cues are placed on. Add one below, then send it to an output." />
+              <ItemsControl IsVisible="{Binding !HasNoCompositions}" ItemsSource="{Binding Compositions}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><StackPanel Spacing="7" /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:CompositionPaneViewModel">
+                    <Expander IsExpanded="True" HorizontalAlignment="Stretch"
                               PointerPressed="OnSelectComposition">
-                    <c:PanelBox.Footer>
-                      <Border Classes="chain">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                          <Border Classes="badge"><TextBlock Text="FEEDS" /></Border>
-                          <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                                     IsVisible="{Binding HasNoFeeds}"
-                                     Text="no output shows this canvas — assign one on the right" />
-                          <ItemsControl ItemsSource="{Binding Feeds}">
-                            <ItemsControl.ItemsPanel>
-                              <ItemsPanelTemplate>
-                                <WrapPanel Orientation="Horizontal" ItemSpacing="6" LineSpacing="4" />
-                              </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                              <DataTemplate x:DataType="vm:CompositionFeedRow">
-                                <TextBlock Classes="mono small" VerticalAlignment="Center"
-                                           Classes.ok="{Binding IsLive}" Classes.warn="{Binding !IsLive}"
-                                           Text="{Binding Name}" ToolTip.Tip="{Binding State}" />
-                              </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                          </ItemsControl>
-                        </StackPanel>
-                      </Border>
-                    </c:PanelBox.Footer>
-                    <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding Aspect}">
-                      <!-- The screen boundaries are snap targets: a cue can be dropped exactly onto
-                           one projector of a wall without working out what fraction that is. -->
-                      <c:PlacementCanvas Boxes="{Binding Layers}"
-                                         GuidesX="{Binding GuidesX}"
-                                         GuidesY="{Binding GuidesY}"
-                                         Gesture="OnLayerGesture"
-                                         GestureCompleted="OnGestureCompleted" />
-                    </c:AspectBox>
-                  </c:PanelBox>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </Panel>
-        </ScrollViewer>
+                      <Expander.Header>
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                            <TextBlock Classes="mono" FontWeight="SemiBold" Text="{Binding Name}"
+                                       VerticalAlignment="Center" />
+                            <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                                       Text="{Binding Hint}" />
+                          </StackPanel>
+                          <!-- Kept in the header so a collapsed composition still says who receives
+                               it: a canvas feeding nothing looks identical to one feeding three
+                               projectors, which is the most expensive thing to discover at a get-in. -->
+                          <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
+                                     Text="{Binding LayoutSummary}" />
+                        </Grid>
+                      </Expander.Header>
+
+                      <StackPanel Spacing="6">
+
+                        <!-- The OUTPUT LAYOUT, not the cue layers: which screen covers which part of
+                             this canvas, where two overlap and where nothing does. This was behind an
+                             EDIT › button; it is the reason the screen exists. -->
+                        <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding Aspect}">
+                          <c:PlacementCanvas Boxes="{Binding OutputBoxes}"
+                                             GuidesX="{Binding GuidesX}"
+                                             GuidesY="{Binding GuidesY}" />
+                        </c:AspectBox>
+
+                        <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
+                          <TextBox Text="{Binding EditName}" />
+                        </HeaderedContentControl>
+                        <HeaderedContentControl Theme="{StaticResource Field}" Header="Size / rate">
+                          <Grid ColumnDefinitions="*,Auto,*" ColumnSpacing="4">
+                            <TextBox Grid.Column="0" Text="{Binding Size}" />
+                            <Button Grid.Column="1" Classes="icon" Content="▾"
+                                    ToolTip.Tip="Common sizes, this machine's screens first. Anything can still be typed.">
+                              <Button.Flyout>
+                                <Flyout>
+                                  <ItemsControl ItemsSource="{Binding Resolutions}">
+                                    <ItemsControl.ItemTemplate>
+                                      <DataTemplate x:DataType="sys:String">
+                                        <Button Classes="tight block" HorizontalAlignment="Stretch"
+                                                Click="OnPickResolution" Tag="composition" Content="{Binding}" />
+                                      </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                  </ItemsControl>
+                                </Flyout>
+                              </Button.Flyout>
+                            </Button>
+                            <TextBox Grid.Column="2" Text="{Binding Rate}" />
+                          </Grid>
+                        </HeaderedContentControl>
+                        <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle image">
+                          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                            <TextBox Grid.Column="0" Text="{Binding IdleImage}" PlaceholderText="black" />
+                            <Button Grid.Column="1" Classes="tight" Content="BROWSE…" Click="OnBrowseIdleImage" />
+                          </Grid>
+                        </HeaderedContentControl>
+                        <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fit">
+                          <ComboBox ItemsSource="{Binding IdleFits}" SelectedIndex="{Binding IdleFitIndex}" />
+                        </HeaderedContentControl>
+
+                        <Border Classes="chain">
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Border Classes="badge"><TextBlock Text="FEEDS" /></Border>
+                            <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                                       IsVisible="{Binding HasNoFeeds}"
+                                       Text="no output shows this canvas — assign one on the right" />
+                            <ItemsControl ItemsSource="{Binding Feeds}">
+                              <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                  <WrapPanel Orientation="Horizontal" ItemSpacing="6" LineSpacing="4" />
+                                </ItemsPanelTemplate>
+                              </ItemsControl.ItemsPanel>
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:CompositionFeedRow">
+                                  <TextBlock Classes="mono small" VerticalAlignment="Center"
+                                             Classes.ok="{Binding IsLive}" Classes.warn="{Binding !IsLive}"
+                                             Text="{Binding Name}" ToolTip.Tip="{Binding State}" />
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </StackPanel>
+                        </Border>
+                      </StackPanel>
+                    </Expander>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </Panel>
+          </ScrollViewer>
+        </DockPanel>
 
         <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
 
-          <!-- The editor says what it edits. Disabled blank fields with a header reading "no
-               composition" looked like a broken panel and never suggested they were for EDITING the
-               canvas rather than describing it. -->
-          <c:PanelBox Grid.Row="0" Header="{Binding CompositionHeader}"
-                      Hint="{Binding CompositionEditorHint}">
-            <c:PanelBox.Footer>
-              <Border Classes="chain">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Button Classes="tight" Content="+ ADD…" Click="OnDialog" Tag="composition" />
-                  <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="composition:remove"
-                          IsEnabled="{Binding HasComposition}" />
-                </StackPanel>
-              </Border>
-            </c:PanelBox.Footer>
+          <!-- The name, size, rate and idle image moved onto each composition's own pane, where they
+               belong: they are properties OF that canvas, and editing them through a selection meant
+               the fields could describe a different composition from the one being looked at. What is
+               left here is the one thing that is not a property of a single canvas — dividing it
+               between the screens that show it, which needs the mapping editor. -->
+          <c:PanelBox Grid.Row="0" Header="Output layout"
+                      Hint="which part of the canvas each screen covers">
             <Panel>
-              <!-- Nothing to edit: say which of the two reasons it is, and name the way out of each.
-                   An empty form gives an operator no way to tell "none exists" from "none picked". -->
               <c:EmptyState IsVisible="{Binding !IsEditingComposition}"
                             Headline="Nothing selected"
                             Detail="{Binding CompositionEditorHint}" />
 
-            <StackPanel Margin="0,6,0,8" IsVisible="{Binding IsEditingComposition}">
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
-                <TextBox Text="{Binding CompositionName}" />
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Size / rate">
-                <Grid ColumnDefinitions="*,Auto,*" ColumnSpacing="4">
-                  <TextBox Grid.Column="0" Text="{Binding CompositionSize}" />
-                  <Button Grid.Column="1" Classes="icon" Content="▾"
-                          ToolTip.Tip="Common sizes, this machine's screens first. Anything can still be typed.">
-                    <Button.Flyout>
-                      <Flyout>
-                        <ItemsControl ItemsSource="{Binding Resolutions}">
-                          <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="sys:String">
-                              <Button Classes="tight block" HorizontalAlignment="Stretch"
-                                      Click="OnPickResolution" Tag="composition" Content="{Binding}" />
-                            </DataTemplate>
-                          </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                      </Flyout>
-                    </Button.Flyout>
-                  </Button>
-                  <TextBox Grid.Column="2" Text="{Binding CompositionRate}" />
-                </Grid>
-              </HeaderedContentControl>
-              <!-- Typing a path is how a slate ends up pointing at nothing on the night, so there is a
-                   picker beside it — and still a text box, because pasting one is faster and a path on
-                   the show machine may not exist on this one. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle image">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                  <TextBox Grid.Column="0" Text="{Binding CompositionIdleImage}" PlaceholderText="black" />
-                  <Button Grid.Column="1" Classes="tight" Content="BROWSE…" Click="OnBrowseIdleImage" />
-                </Grid>
-              </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fit">
-                <ComboBox ItemsSource="{Binding IdleFits}"
-                          SelectedIndex="{Binding CompositionIdleFitIndex}" />
-              </HeaderedContentControl>
-              <!-- Which PART of this canvas each of its outputs shows. On the composition because it
-                   is a question about all of them at once: overlap is a blend zone and canvas nobody
-                   covers is a gap, and neither is visible one output at a time. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Output layout">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                  <TextBlock Grid.Column="0" Classes="mono dim3 small" VerticalAlignment="Center"
-                             TextWrapping="Wrap" Text="{Binding LayoutSummary}" />
-                  <Button Grid.Column="1" Classes="tight" Content="EDIT ›" Click="OnEditLayout" />
-                </Grid>
-              </HeaderedContentControl>
-            </StackPanel>
+              <StackPanel Margin="0,6,0,8" IsVisible="{Binding IsEditingComposition}">
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{Binding CompositionHeader}">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                    <TextBlock Grid.Column="0" Classes="mono dim3 small" VerticalAlignment="Center"
+                               TextWrapping="Wrap" Text="{Binding LayoutSummary}" />
+                    <Button Grid.Column="1" Classes="tight" Content="EDIT ›" Click="OnEditLayout" />
+                  </Grid>
+                </HeaderedContentControl>
+              </StackPanel>
             </Panel>
           </c:PanelBox>
 

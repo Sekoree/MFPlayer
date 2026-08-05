@@ -258,9 +258,18 @@ public static class CuePresentation
     /// Fills a group header's clock, progress and upcoming chain from what its children will do.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The whole group's remaining, not the current item's: a playlist's operator is waiting for the
     /// LIST to finish. Lengths come from the probe, so a group whose files nobody has looked at shows a
     /// count and no clock rather than a number that would be a guess.
+    /// </para>
+    /// <para>
+    /// <b>Only a playlist adds up.</b> Its items succeed one another, so its clock is the sum of their
+    /// lengths and its count-down is the current item's remainder plus everything after it. Every other
+    /// mode's children sound at the SAME time, so the group is exactly as long as its longest child —
+    /// summing them reported a group of eleven three-minute stems, fired all together, as running for
+    /// half an hour, and drove the progress bar from a total the group never had.
+    /// </para>
     /// </remarks>
     private static void Aggregate(
         GroupCueNode group,
@@ -272,28 +281,59 @@ public static class CuePresentation
         // Everything the group still owes: what is playing now, plus the chain after it. An
         // ALL-TOGETHER group owes nothing beyond what is already up — they all started at once.
         var chained = group.FireMode is GroupFireMode.Playlist or GroupFireMode.Timeline;
+
+        // A playlist accumulates; the simultaneous modes take the longest. A TIMELINE is simultaneous
+        // too — its children overlap — but each starts at its authored offset, so its span is measured
+        // from the group's own zero rather than from each child's start.
+        var overlaps = group.FireMode is not GroupFireMode.Playlist;
+        var offsets = group.FireMode is GroupFireMode.Timeline;
+
+        var playing = group.Children.Where(child => child.Enabled).ToList();
+        var known = playing.All(child => Played(child, durations) is not null);
+
+        TimeSpan Start(CueNode child) =>
+            offsets ? TimeSpan.FromMilliseconds(child.TimelineOffsetMs) : TimeSpan.Zero;
+
+        TimeSpan End(CueNode child) => Start(child) + (Played(child, durations) ?? TimeSpan.Zero);
+
+        // How far into the group the show is. Read from a SOUNDING child's own playhead rather than
+        // accumulated, because with overlapping children there is no chain to accumulate along: the
+        // group's clock is whichever child has got furthest through the group's span.
+        var elapsed = TimeSpan.Zero;
+
+        foreach (var child in playing.Where(child => sounding.Contains(child.Id)))
+        {
+            var into = Start(child) + header.Children.First(row => row.CueId == child.Id).Position;
+            if (into > elapsed)
+                elapsed = into;
+        }
+
+        var total = overlaps
+            ? playing.Aggregate(TimeSpan.Zero, (longest, child) =>
+                End(child) is var ends && ends > longest ? ends : longest)
+            : playing.Aggregate(TimeSpan.Zero, (sum, child) => sum + (Played(child, durations) ?? TimeSpan.Zero));
+
+        var remaining = overlaps
+            ? (total > elapsed ? total - elapsed : TimeSpan.Zero)
+            : TimeSpan.Zero;
+
         var reached = false;
         var ahead = TimeSpan.Zero;
-        var total = TimeSpan.Zero;
-        var remaining = TimeSpan.Zero;
-        var known = true;
 
-        foreach (var child in group.Children.Where(child => child.Enabled))
+        foreach (var child in playing)
         {
-            var length = Played(child, durations);
-
-            if (length is null)
-                known = false;
-
-            total += length ?? TimeSpan.Zero;
-
             if (sounding.Contains(child.Id))
             {
                 reached = true;
-                var row = header.Children.First(item => item.CueId == child.Id);
-                var left = row.Duration is { } span ? span - row.Position : TimeSpan.Zero;
-                remaining += left > TimeSpan.Zero ? left : TimeSpan.Zero;
-                ahead = remaining;
+
+                if (!overlaps)
+                {
+                    var row = header.Children.First(item => item.CueId == child.Id);
+                    var span = row.Duration is { } length ? length - row.Position : TimeSpan.Zero;
+                    remaining += span > TimeSpan.Zero ? span : TimeSpan.Zero;
+                    ahead = remaining;
+                }
+
                 continue;
             }
 
@@ -302,14 +342,23 @@ public static class CuePresentation
             if (!reached || !chained)
                 continue;
 
+            // A timeline cue is due at its own offset; a playlist item is due when everything queued
+            // before it has finished. Both are already inside `total`, so neither extends it.
+            var starts = overlaps
+                ? (Start(child) > elapsed ? Start(child) - elapsed : TimeSpan.Zero)
+                : ahead;
+
             header.Upcoming.Add(new UpcomingCueRow(
                 Number(child.Number),
                 child.Label,
-                length is { } run ? Clock(run) : "—",
-                $"in {Clock(ahead)}"));
+                Played(child, durations) is { } run ? Clock(run) : "—",
+                $"in {Clock(starts)}"));
 
-            remaining += length ?? TimeSpan.Zero;
-            ahead += length ?? TimeSpan.Zero;
+            if (!overlaps)
+            {
+                remaining += Played(child, durations) ?? TimeSpan.Zero;
+                ahead += Played(child, durations) ?? TimeSpan.Zero;
+            }
         }
 
         header.Clock = known && total > TimeSpan.Zero

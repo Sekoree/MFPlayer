@@ -191,7 +191,12 @@ public sealed class ProjectVideoOutputs : IDisposable
                     continue;
                 }
 
-                if (OpenWindow(output, output.WindowWidth, output.WindowHeight) is { } dark)
+                // 1280×720 rather than the output's own zeros. A fullscreen output carries no window
+                // size at all — the add dialog greys that field out — so passing them through opened a
+                // 160×90 stub (the floor in OpenWindow) and asked the window manager to promote THAT to
+                // fullscreen. A refused or slow promotion left a chip of a window nobody could find,
+                // which reads exactly like an output that never opened.
+                if (OpenWindow(output, 1280, 720) is { } dark)
                 {
                     opened.Add(new OpenVideoOutput(output.Id, null, dark));
                     continue;

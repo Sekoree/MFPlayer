@@ -349,4 +349,35 @@ public sealed class ShowCompilerTests
         Assert.Equal(Group(inner), Group(alsoInner));
         Assert.NotEqual(Group(inner), Group(bed));
     }
+
+    [Fact]
+    public void EveryChildOfAnAllTogetherGroupGetsItsOwnTransportSoTheyAllSound()
+    {
+        // The shape of the report that found this: a stack of stems plus two video layers, fired as
+        // one all-together group. Sharing a transport played the LAST child only — the group went
+        // silent (its final child was a video with no sends) and only that video's layer appeared.
+        var children = Enumerable.Range(1, 11)
+            .Select(index => new MediaCueNode
+            {
+                Number = $"1.{index}", Label = $"Stem {index}", MediaPath = $"stem{index}.wav",
+            })
+            .ToList();
+
+        var group = new GroupCueNode
+        {
+            Number = "1", Label = "Band", FireMode = GroupFireMode.AllTogether,
+            Children = [.. children],
+        };
+
+        var project = new HaCueProject { CueLists = [new CueList { Name = "Act 1", Cues = [group] }] };
+        var document = ShowCompiler.Compile(project);
+
+        var groups = children
+            .Select(child => document.Cues.First(cue => cue.Id == child.Id.ToString()).GroupId)
+            .ToList();
+
+        // One transport each, or firing the group releases ten of the eleven stems as it goes.
+        Assert.Equal(children.Count, groups.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(groups, id => Assert.Contains(group.Id.ToString("N"), id!, StringComparison.Ordinal));
+    }
 }

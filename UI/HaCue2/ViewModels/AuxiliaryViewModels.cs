@@ -1480,8 +1480,21 @@ public partial class ProjectStatusViewModel : ObservableObject
     public string Summary => Report.Summary;
 
     public string ErrorNote => Report.Errors == 0
-        ? "no errors — the status token is green"
+        ? Report.Warnings == 0
+            ? "all checks passed — nothing to fix before the show"
+            : $"no errors · {Report.Warnings} warning{(Report.Warnings == 1 ? "" : "s")} — the status token is green"
         : $"{Report.Errors} error{(Report.Errors == 1 ? "" : "s")} keep the status token red";
+
+    /// <summary>
+    /// Whether the foot of the window should read GREEN.
+    /// </summary>
+    /// <remarks>
+    /// The note was painted with the error colour unconditionally, so a show with nothing wrong
+    /// announced "no errors" in red — the one glance an operator takes before doors, answered in the
+    /// colour that means stop. Errors are what turn it red, because errors are what
+    /// <c>hacue2-check</c> exits 1 on; warnings keep it green and say so in the text.
+    /// </remarks>
+    public bool IsClean => Report.Errors == 0;
 
     /// <summary>The headless twin is <c>hacue2-check</c>, exit 1 while errors remain (register item 25).</summary>
     public string HeadlessNote { get; } = "hacue2-check exits 1 while errors remain";

@@ -63,6 +63,26 @@ public partial class ProjectStatusWindow : Window
         status.NoteCopied();
     }
 
+    /// <summary>
+    /// Takes the operator to the screen that owns the thing this check is complaining about.
+    /// </summary>
+    /// <remarks>
+    /// The status window is a collector: it can say an output is unpatched but the patch itself lives
+    /// on the Audio screen, so the only useful thing a fix button can do is put that screen in front of
+    /// the operator. The window stays open behind it — the list is a work queue, and closing it after
+    /// one fix would mean re-running the checks to find the next.
+    /// </remarks>
+    private void OnFix(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { Tag: string destination } || destination.Length == 0)
+            return;
+
+        if (Owner is ShellWindow shell)
+            shell.Shell.SelectedView = destination;
+
+        Owner?.Activate();
+    }
+
     private void OnConsolidate(object? sender, RoutedEventArgs e) =>
         (DataContext as ProjectStatusViewModel)?.Consolidate();
 

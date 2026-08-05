@@ -37,7 +37,8 @@
 
     <Border Classes="statusbar" DockPanel.Dock="Bottom">
       <Grid ColumnDefinitions="Auto,*,Auto">
-        <TextBlock Grid.Column="0" Classes="mono err small" Text="{Binding ErrorNote}" />
+        <TextBlock Grid.Column="0" Classes="mono small" Text="{Binding ErrorNote}"
+                   Classes.ok="{Binding IsClean}" Classes.err="{Binding !IsClean}" />
         <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{Binding HeadlessNote}" />
       </Grid>
     </Border>
@@ -67,10 +68,13 @@
                              Classes.err="{Binding Result.IsBad}" />
                   <TextBlock Grid.Column="2" Classes="mono dim3 small ellipsis" Text="{Binding Detail}" />
                   <!-- Every failing row carries its own fix; a status list that only reports is a list
-                       the operator has to translate into actions under time pressure. -->
+                       the operator has to translate into actions under time pressure. The click takes
+                       the operator to the screen that owns the thing — without it the button was
+                       decoration, which is worse than no button. -->
                   <Button Grid.Column="3" Theme="{StaticResource LinkButton}"
                           Foreground="{DynamicResource GelCongo}"
-                          IsVisible="{Binding HasFix}" Content="{Binding Fix}" />
+                          IsVisible="{Binding CanFix}" Content="{Binding Fix}"
+                          Tag="{Binding Destination}" Click="OnFix" />
                 </Grid>
               </DataTemplate>
             </ListBox.ItemTemplate>

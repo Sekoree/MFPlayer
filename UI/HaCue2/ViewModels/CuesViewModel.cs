@@ -218,6 +218,64 @@ public partial class CuesViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Restores a WHOLE selection after a rebuild, lead first.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The single-row overload sets <see cref="ITreeDataGridRowSelectionModel{T}.SelectedIndex"/>,
+    /// which REPLACES the selection. Refresh used it with only the lead row's id, so every edit made
+    /// on a multi-selection collapsed that selection to one cue as soon as it was applied: the first
+    /// change reached all eleven stems and every change after it reached only the lead, which reads as
+    /// multi-edit simply not working.
+    /// </para>
+    /// <para>
+    /// The lead is selected first so it stays <c>SelectedItem</c> — the inspector's single-value fields
+    /// read from it, and having those jump to a different cue after every keystroke would be its own
+    /// bug. Batched so the tree raises one selection change rather than one per row.
+    /// </para>
+    /// </remarks>
+    private void RestoreSelection(IReadOnlyList<Guid> ids)
+    {
+        if (ids.Count <= 1)
+        {
+            RestoreSelection(ids.Count == 0 ? null : AllRows.FirstOrDefault(row => row.Id == ids[0]));
+            return;
+        }
+
+        var paths = ids
+            .Select(id => AllRows.FirstOrDefault(row => row.Id == id))
+            .OfType<CueRow>()
+            .Select(IndexOf)
+            .OfType<IndexPath>()
+            .ToList();
+
+        _restoringSelection = true;
+        try
+        {
+            var selection = CueSource.RowSelection!;
+            selection.BeginBatchUpdate();
+
+            try
+            {
+                selection.Clear();
+                foreach (var path in paths)
+                    selection.Select(path);
+            }
+            finally
+            {
+                selection.EndBatchUpdate();
+            }
+
+            // The batch suppressed the event the single-row path relies on to publish the lead.
+            SetProperty(ref _selectedCue, selection.SelectedItem, nameof(SelectedCue));
+        }
+        finally
+        {
+            _restoringSelection = false;
+        }
+    }
+
     /// <summary>Where a row sits in the tree, as the index path the selection model speaks in.</summary>
     private IndexPath? IndexOf(CueRow target)
     {
@@ -1294,7 +1352,17 @@ public partial class CuesViewModel : ObservableObject
     /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>
     public void Refresh()
     {
-        var selected = SelectedCue?.Id;
+        // The WHOLE selection, lead first — not just the lead. An edit applied to eleven selected cues
+        // refreshes, and a refresh that remembered one of them left the next edit landing on one cue.
+        var selected = new List<Guid>();
+
+        if (SelectedCue?.Id is { } lead)
+            selected.Add(lead);
+
+        selected.AddRange(CueSource.RowSelection!.SelectedItems
+            .OfType<CueRow>()
+            .Select(row => row.Id)
+            .Where(id => id != SelectedCue?.Id));
 
         // Scopes FIRST: the rows are built for whichever scope is selected, and a scope whose group was
         // just deleted has to be resolved before anything tries to list its contents.
@@ -1302,7 +1370,7 @@ public partial class CuesViewModel : ObservableObject
         Rebuild();
         // By ID, not by reference: Rebuild replaces every row object, so the old instance is gone even
         // though the cue it stood for is still there.
-        RestoreSelection(AllRows.FirstOrDefault(row => row.Id == selected));
+        RestoreSelection(selected);
         Inspector.Facts = FactsFor(SelectedCue);
         Inspector.Reload();
         Timeline.Refresh();

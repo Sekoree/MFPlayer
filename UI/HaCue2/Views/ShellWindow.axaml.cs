@@ -32,7 +32,15 @@ public partial class ShellWindow : Window
             shell.OpenRecent = OnOpenRecent;
     }
 
-    private ShellViewModel Shell =>
+    /// <summary>
+    /// The shell's view-model.
+    /// </summary>
+    /// <remarks>
+    /// Internal rather than private so an auxiliary window can steer the main one: the Project status
+    /// window's FIX buttons switch the shell to the screen that owns the failing thing, and its only
+    /// handle on the shell is <see cref="Window.Owner"/>.
+    /// </remarks>
+    internal ShellViewModel Shell =>
         DataContext as ShellViewModel ?? throw new InvalidOperationException("The shell has no view-model.");
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);

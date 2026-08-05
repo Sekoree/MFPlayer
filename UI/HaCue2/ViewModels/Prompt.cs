@@ -57,8 +57,17 @@ public sealed partial class PromptField : ObservableObject
 
     partial void OnSelectedIndexChanged(int value) => Picked?.Invoke(this);
 
-    /// <summary>A line under the field, for the thing that is not obvious from its name.</summary>
-    public string Hint { get; init; } = "";
+    /// <summary>
+    /// A line under the field, for the thing that is not obvious from its name.
+    /// </summary>
+    /// <remarks>
+    /// Settable and observed, not init-only: a hint that depends on another field has to be able to
+    /// change with it. The audio line's rate field says what the CHOSEN device reports against what the
+    /// show mixes at, and a fixed sentence could not name either.
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasHint))]
+    private string _hint = "";
 
     [ObservableProperty]
     private string _value = "";

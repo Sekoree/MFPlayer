@@ -163,6 +163,7 @@ public partial class VideoViewModel : ObservableObject
     private IReadOnlyList<CompositionPaneViewModel> Panes() =>
     [
         .. _project.Compositions.Select(composition => new CompositionPaneViewModel(
+            this,
             composition.Id,
             composition.Name,
             $"{composition.Width}×{composition.Height} · {composition.FramesPerSecond:0.##} · idle: "
@@ -170,6 +171,7 @@ public partial class VideoViewModel : ObservableObject
             (double)composition.Width / composition.Height)
         {
             Layers = VideoPresentation.Layers(_project, composition),
+            OutputBoxes = OutputSlices(composition.Id),
             Feeds = Feeds(composition.Id),
             GuidesX = SliceGuides(composition.Id, horizontal: true),
             GuidesY = SliceGuides(composition.Id, horizontal: false),
@@ -566,6 +568,18 @@ public partial class VideoViewModel : ObservableObject
             ? _project.Compositions.FirstOrDefault(composition => composition.Id == id)
             : _project.Compositions.FirstOrDefault();
 
+    /// <summary>
+    /// One composition by id, for the editor attached to its own pane.
+    /// </summary>
+    /// <remarks>
+    /// The compositions screen edits each canvas in place rather than through a single pane driven by
+    /// a selection, so every editor field has to name the composition it belongs to. Read through the
+    /// document each time: the panes are mutated rather than rebuilt, and a copy taken when the pane
+    /// was made would go stale the moment anything else edited the same canvas.
+    /// </remarks>
+    internal CompositionDefinition? CompositionOf(Guid id) =>
+        _project.Compositions.FirstOrDefault(composition => composition.Id == id);
+
     /// <summary>Which composition the second pane edits; null follows the first.</summary>
     [ObservableProperty]
     private Guid? _selectedCompositionId;
@@ -579,46 +593,54 @@ public partial class VideoViewModel : ObservableObject
             : "";
         set
         {
-            if (SelectedComposition is not { } composition)
-                return;
-
-            // Accepts the × it renders and the x anybody types. Refusing the operator's own keyboard
-            // would be a strange thing for a field whose value is shown with a character they cannot
-            // easily produce.
-            var parts = value.Split(['×', 'x', 'X'], StringSplitOptions.TrimEntries);
-
-            if (parts.Length != 2
-                || !int.TryParse(parts[0], out var width)
-                || !int.TryParse(parts[1], out var height)
-                || width <= 0
-                || height <= 0)
-            {
-                OnPropertyChanged(nameof(CompositionSize));
-                return;
-            }
-
-            if (composition.Width == width && composition.Height == height)
-                return;
-
-            // ONE composite: a size is one edit, and an undo that took the width back without the
-            // height would leave a canvas nobody authored — and every placement in the show is
-            // expressed as a fraction of it.
-            using (_journal.Composite($"“{composition.Name}” {width}×{height}", "video"))
-            {
-                _journal.Do(new SetValueCommand<int>(
-                    composition.Id, "width", "video",
-                    () => composition.Width, number => composition.Width = number, width,
-                    $"“{composition.Name}” width"));
-                _journal.Do(new SetValueCommand<int>(
-                    composition.Id, "height", "video",
-                    () => composition.Height, number => composition.Height = number, height,
-                    $"“{composition.Name}” height"));
-            }
-
-            _journal.CloseGroup();
-
-            RaiseCompositionFields();
+            if (SelectedComposition is { } picked)
+                SetCompositionSize(picked.Id, value);
         }
+    }
+
+    /// <summary>Resizes one composition, named by id — see <see cref="CompositionOf"/>.</summary>
+    internal void SetCompositionSize(Guid id, string value)
+    {
+        if (CompositionOf(id) is not { } composition)
+            return;
+
+        // Accepts the × it renders and the x anybody types. Refusing the operator's own keyboard
+        // would be a strange thing for a field whose value is shown with a character they cannot
+        // easily produce.
+        var parts = value.Split(['×', 'x', 'X'], StringSplitOptions.TrimEntries);
+
+        if (parts.Length != 2
+            || !int.TryParse(parts[0], out var width)
+            || !int.TryParse(parts[1], out var height)
+            || width <= 0
+            || height <= 0)
+        {
+            OnPropertyChanged(nameof(CompositionSize));
+            return;
+        }
+
+        if (composition.Width == width && composition.Height == height)
+            return;
+
+        // ONE composite: a size is one edit, and an undo that took the width back without the
+        // height would leave a canvas nobody authored — and every placement in the show is
+        // expressed as a fraction of it.
+        using (_journal.Composite($"“{composition.Name}” {width}×{height}", "video"))
+        {
+            _journal.Do(new SetValueCommand<int>(
+                composition.Id, "width", "video",
+                () => composition.Width, number => composition.Width = number, width,
+                $"“{composition.Name}” width"));
+            _journal.Do(new SetValueCommand<int>(
+                composition.Id, "height", "video",
+                () => composition.Height, number => composition.Height = number, height,
+                $"“{composition.Name}” height"));
+        }
+
+        _journal.CloseGroup();
+
+        RaiseCompositionFields();
+        Refresh();
     }
 
     public string CompositionRate
@@ -626,25 +648,32 @@ public partial class VideoViewModel : ObservableObject
         get => SelectedComposition?.FramesPerSecond.ToString("0.##", CultureInfo.InvariantCulture) ?? "";
         set
         {
-            if (SelectedComposition is not { } composition
-                || !double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var rate)
-                || rate is <= 0 or > 240)
-            {
-                OnPropertyChanged(nameof(CompositionRate));
-                return;
-            }
-
-            if (Math.Abs(composition.FramesPerSecond - rate) < 0.001)
-                return;
-
-            _journal.Do(new SetValueCommand<double>(
-                composition.Id, "fps", "video",
-                () => composition.FramesPerSecond, number => composition.FramesPerSecond = number, rate,
-                $"“{composition.Name}” {rate:0.##} fps"));
-            _journal.CloseGroup();
-
-            RaiseCompositionFields();
+            if (SelectedComposition is { } picked)
+                SetCompositionRate(picked.Id, value);
         }
+    }
+
+    internal void SetCompositionRate(Guid id, string value)
+    {
+        if (CompositionOf(id) is not { } composition
+            || !double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var rate)
+            || rate is <= 0 or > 240)
+        {
+            OnPropertyChanged(nameof(CompositionRate));
+            return;
+        }
+
+        if (Math.Abs(composition.FramesPerSecond - rate) < 0.001)
+            return;
+
+        _journal.Do(new SetValueCommand<double>(
+            composition.Id, "fps", "video",
+            () => composition.FramesPerSecond, number => composition.FramesPerSecond = number, rate,
+            $"“{composition.Name}” {rate:0.##} fps"));
+        _journal.CloseGroup();
+
+        RaiseCompositionFields();
+        Refresh();
     }
 
     /// <summary>Register item 21/23: shown when the canvas is empty, ahead of an output's fallback.</summary>
@@ -653,17 +682,24 @@ public partial class VideoViewModel : ObservableObject
         get => SelectedComposition?.IdleImagePath ?? "";
         set
         {
-            if (SelectedComposition is not { } composition || composition.IdleImagePath == value)
-                return;
-
-            _journal.Do(new SetValueCommand<string>(
-                composition.Id, "idleImage", "video",
-                () => composition.IdleImagePath, path => composition.IdleImagePath = path, value,
-                $"“{composition.Name}” idle image"));
-            _journal.CloseGroup();
-
-            RaiseCompositionFields();
+            if (SelectedComposition is { } picked)
+                SetCompositionIdleImage(picked.Id, value);
         }
+    }
+
+    internal void SetCompositionIdleImage(Guid id, string value)
+    {
+        if (CompositionOf(id) is not { } composition || composition.IdleImagePath == value)
+            return;
+
+        _journal.Do(new SetValueCommand<string>(
+            composition.Id, "idleImage", "video",
+            () => composition.IdleImagePath, path => composition.IdleImagePath = path, value,
+            $"“{composition.Name}” idle image"));
+        _journal.CloseGroup();
+
+        RaiseCompositionFields();
+        Refresh();
     }
 
     /// <summary>How the composition's idle image fills the canvas.</summary>
@@ -672,19 +708,26 @@ public partial class VideoViewModel : ObservableObject
         get => SelectedComposition is { } composition ? (int)composition.IdleImageFit : -1;
         set
         {
-            if (value < 0
-                || SelectedComposition is not { } composition
-                || (int)composition.IdleImageFit == value)
-                return;
-
-            _journal.Do(new SetValueCommand<LayerFit>(
-                composition.Id, "idleImageFit", "video",
-                () => composition.IdleImageFit, fit => composition.IdleImageFit = fit, (LayerFit)value,
-                $"“{composition.Name}” idle fit: {IdleFits[value]}"));
-            _journal.CloseGroup();
-
-            RaiseCompositionFields();
+            if (SelectedComposition is { } picked)
+                SetCompositionIdleFit(picked.Id, value);
         }
+    }
+
+    internal void SetCompositionIdleFit(Guid id, int value)
+    {
+        if (value < 0
+            || CompositionOf(id) is not { } composition
+            || (int)composition.IdleImageFit == value)
+            return;
+
+        _journal.Do(new SetValueCommand<LayerFit>(
+            composition.Id, "idleImageFit", "video",
+            () => composition.IdleImageFit, fit => composition.IdleImageFit = fit, (LayerFit)value,
+            $"“{composition.Name}” idle fit: {IdleFits[value]}"));
+        _journal.CloseGroup();
+
+        RaiseCompositionFields();
+        Refresh();
     }
 
     public string CompositionHeader => SelectedComposition?.Name ?? "no composition";
@@ -696,23 +739,56 @@ public partial class VideoViewModel : ObservableObject
         get => SelectedComposition?.Name ?? "";
         set
         {
-            var name = (value ?? "").Trim();
-
-            if (SelectedComposition is not { } composition || name.Length == 0 || composition.Name == name)
-            {
-                OnPropertyChanged(nameof(CompositionName));
-                return;
-            }
-
-            _journal.Do(new SetValueCommand<string>(
-                composition.Id, "name", "video",
-                () => composition.Name, text => composition.Name = text, name,
-                $"rename composition to “{name}”"));
-            _journal.CloseGroup();
-
-            RaiseCompositionFields();
-            Refresh();
+            if (SelectedComposition is { } picked)
+                SetCompositionName(picked.Id, value);
         }
+    }
+
+    internal void SetCompositionName(Guid id, string value)
+    {
+        var name = (value ?? "").Trim();
+
+        if (CompositionOf(id) is not { } composition || name.Length == 0 || composition.Name == name)
+        {
+            OnPropertyChanged(nameof(CompositionName));
+            return;
+        }
+
+        _journal.Do(new SetValueCommand<string>(
+            composition.Id, "name", "video",
+            () => composition.Name, text => composition.Name = text, name,
+            $"rename composition to “{name}”"));
+        _journal.CloseGroup();
+
+        RaiseCompositionFields();
+        Refresh();
+    }
+
+    /// <summary>
+    /// How this canvas is divided between the outputs showing it, for the pane that owns it.
+    /// </summary>
+    /// <remarks>
+    /// The same sentence <see cref="LayoutSummary"/> gives the selected composition, addressed by id so
+    /// every pane can state its own. This is the answer to "is any of my canvas uncovered", which is
+    /// why it belongs on the composition rather than behind a button.
+    /// </remarks>
+    internal string LayoutSummaryOf(Guid id)
+    {
+        var outputs = _project.VideoOutputs
+            .Where(output => output.CompositionId == id && output.Kind == VideoOutputKind.LocalScreen)
+            .ToList();
+
+        if (CompositionOf(id) is null)
+            return "";
+
+        if (outputs.Count == 0)
+            return "no output shows this canvas yet — assign one under FEEDS";
+
+        var whole = outputs.Count(output => SliceOf(output) is { X: 0, Y: 0, Width: 1, Height: 1 });
+
+        return whole == outputs.Count
+            ? $"{outputs.Count} output(s), each showing the whole canvas"
+            : $"{outputs.Count} output(s) · {outputs.Count - whole} showing a slice";
     }
 
     // ── which outputs a composition feeds (assignment lives HERE) ──────────────────────────────
@@ -1584,6 +1660,35 @@ public partial class VideoViewModel : ObservableObject
     /// of the canvas goes to this piece of the screen. An output with no mapping shows the whole
     /// canvas, which is both the honest answer and the one every output starts with.
     /// </remarks>
+    /// <summary>
+    /// One box per screen showing this canvas, at the slice of it that screen covers.
+    /// </summary>
+    /// <remarks>
+    /// Local screens only. An NDI sender and a recorder both take the WHOLE canvas by definition, so
+    /// drawing them would put a box over everything and hide the very overlaps and gaps the layout is
+    /// there to show. They are named under FEEDS instead, which is where "who receives this" belongs.
+    /// </remarks>
+    private IReadOnlyList<PlacementBox> OutputSlices(Guid compositionId) =>
+    [
+        .. _project.VideoOutputs
+            .Where(output => output.CompositionId == compositionId
+                             && output.Kind == VideoOutputKind.LocalScreen)
+            .Select(output =>
+            {
+                var slice = SliceOf(output);
+
+                return new PlacementBox
+                {
+                    SubjectId = output.Id,
+                    Label = output.Name,
+                    Left = slice.X,
+                    Top = slice.Y,
+                    Width = slice.Width,
+                    Height = slice.Height,
+                };
+            }),
+    ];
+
     private static NormalizedRect SliceOf(VideoOutputDefinition output) =>
         output.Mapping.FirstOrDefault(section => section.Enabled) is { } section
             ? new NormalizedRect(
@@ -1961,16 +2066,84 @@ public sealed partial class MappingSectionRow : ObservableObject
 /// wrong aspect does not tell you what will hit the wall.
 /// </param>
 public sealed partial class CompositionPaneViewModel(
-    Guid id, string name, string hint, double aspect) : ObservableObject
+    VideoViewModel owner, Guid id, string name, string hint, double aspect) : ObservableObject
 {
     public Guid Id { get; } = id;
+
+    /// <summary>The header's name — a snapshot, so the expander title does not rewrite itself per keystroke.</summary>
     public string Name { get; } = name;
+
     public string Hint { get; } = hint;
     public double Aspect { get; } = aspect;
+
+    // ── the editor, attached to THIS composition ──────────────────────────────────────────────
+    //
+    // These used to live on the screen's single right-hand pane, driven by a selection: one canvas
+    // was editable at a time and which one was decided by a click on a pane that gave no sign it was
+    // selectable. With more than one composition that is unmanageable — which is exactly the state a
+    // show with a projector and a stream is in from the first day. Every pane now carries its own
+    // fields, and they read and write through the owner so there is still one implementation of what
+    // an edit means and one journal entry per edit.
+
+    /// <summary>The editable name. Renaming refreshes the screen, which rebuilds this pane.</summary>
+    public string EditName
+    {
+        get => owner.CompositionOf(Id)?.Name ?? "";
+        set => owner.SetCompositionName(Id, value);
+    }
+
+    public string Size
+    {
+        get => owner.CompositionOf(Id) is { } composition
+            ? $"{composition.Width}×{composition.Height}"
+            : "";
+        set => owner.SetCompositionSize(Id, value);
+    }
+
+    public string Rate
+    {
+        get => owner.CompositionOf(Id)?.FramesPerSecond
+            .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) ?? "";
+        set => owner.SetCompositionRate(Id, value);
+    }
+
+    public string IdleImage
+    {
+        get => owner.CompositionOf(Id)?.IdleImagePath ?? "";
+        set => owner.SetCompositionIdleImage(Id, value);
+    }
+
+    public int IdleFitIndex
+    {
+        get => owner.CompositionOf(Id) is { } composition ? (int)composition.IdleImageFit : -1;
+        set => owner.SetCompositionIdleFit(Id, value);
+    }
+
+    /// <summary>The option lists, forwarded so the template can bind them without reaching past the pane.</summary>
+    public static IReadOnlyList<string> IdleFits => VideoViewModel.IdleFits;
+
+    public IReadOnlyList<string> Resolutions => owner.Resolutions;
+
+    /// <summary>How the outputs showing this canvas divide it — on the pane, not behind a button.</summary>
+    public string LayoutSummary => owner.LayoutSummaryOf(Id);
 
     /// <summary>Settable so a drag updates the boxes without replacing the canvas drawing them.</summary>
     [ObservableProperty]
     private IReadOnlyList<PlacementBox> _layers = [];
+
+    /// <summary>
+    /// The OUTPUT LAYOUT: which part of this canvas each screen showing it covers.
+    /// </summary>
+    /// <remarks>
+    /// The canvas on a composition pane used to draw the cue LAYERS. That is a picture of the show's
+    /// content, which the operator is already looking at on the Cues screen and in the preview, and it
+    /// changes with every cue — so the compositions screen spent its largest element re-answering a
+    /// question nobody was asking there. What the screen is FOR is the wiring: overlap between two
+    /// projectors is a blend zone and canvas nobody covers is a gap, and neither can be seen one
+    /// output at a time. That answer was behind an EDIT › button in a submenu.
+    /// </remarks>
+    [ObservableProperty]
+    private IReadOnlyList<PlacementBox> _outputBoxes = [];
 
     /// <summary>
     /// The outputs this canvas is sent to, named on the canvas itself.

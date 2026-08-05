@@ -423,6 +423,35 @@ public sealed record CheckRow
     public string Detail { get; init; } = "";
     public string Fix { get; init; } = "";
     public bool HasFix => Fix.Length > 0;
+
+    /// <summary>
+    /// The main-window screen this check's FIX button takes the operator to.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Derived from the check NAME rather than from the button's label: "Show ›" is the label on
+    /// cues, cue lists, compositions, snapshots and trigger inputs, which live on three different
+    /// screens, so the label alone cannot say where to go.
+    /// </para>
+    /// <para>
+    /// Empty for a check with nowhere to send anybody. The button reads its own destination, so a
+    /// fix that cannot navigate is simply not offered rather than offered and inert — which is what
+    /// every one of them was: the template bound the label and never wired a click, so "Patch ›"
+    /// looked like the way to patch an unpatched output and did nothing at all.
+    /// </para>
+    /// </remarks>
+    public string Destination => Check switch
+    {
+        "Logical outputs" or "Patch snapshots" or "Audio devices"
+            or "Clock master and mix" or "Audition rig" => "AUDIO",
+        "Compositions" or "Video outputs" or "Recordings" => "VIDEO",
+        "Trigger inputs" => "TARGETS",
+        "Cues" or "Cue lists" or "Media files" or "Compiles" => "CUES",
+        _ => "",
+    };
+
+    /// <summary>A fix is offered only when it has both a label and somewhere to go.</summary>
+    public bool CanFix => HasFix && Destination.Length > 0;
 }
 
 /// <summary>Screen 15 — one audio-bay terminal or lease.</summary>
