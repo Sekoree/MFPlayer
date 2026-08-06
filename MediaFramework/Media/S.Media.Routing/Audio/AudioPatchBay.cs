@@ -78,11 +78,18 @@ public sealed class AudioPatchBay : IDisposable
         // through this late-bound proxy: no master (yet, or after removal) degrades every producer
         // clock to the wall-clock fallback domain, and a master appearing later is picked up as an
         // announced re-anchor - both behaviors inherited from the extracted AudibleClientClock.
+        // Producers get the RAW master proxy: each subtracts its OWN ring plus the downstream lead.
+        var rawMaster = new MasterClockProxy(this);
         _bus = new ProgramBusSource(
             logicalChannels,
             mixSampleRate,
             producerRingFrames,
-            new ProgramBusClockContext(new MasterClockProxy(this), DownstreamLeadTicks));
+            new ProgramBusClockContext(rawMaster, DownstreamLeadTicks));
+        // The show clock handed to voices with no producer subtracts the same lead a sounding voice
+        // does, so a silent video cue lands on the audible programme instead of running ahead of it by
+        // the whole audio path. Same low-passing as any client clock - the lead is a live measurement.
+        _masterClock = new AudibleClientClock(
+            rawMaster, () => _bus.DeepestProducerLeadTicks() + DownstreamLeadTicks());
         _busId = _router.AddSource(_bus, "program-bus");
         _resamplerFactory = resamplerFactory;
         _adaptiveRateWrapper = adaptiveRateWrapper;
@@ -282,6 +289,21 @@ public sealed class AudioPatchBay : IDisposable
     /// <summary>The terminal currently pacing the router, or null when the bay has no clock master
     /// (producer clocks then ride the wall-clock fallback domain).</summary>
     public string? ClockMasterTerminalId => _masterTerminalId;
+
+    /// <summary>
+    /// The show's authoritative time base: a late-bound view of whichever terminal currently holds the
+    /// clock-master role, so a master swap retargets every reader without re-binding.
+    /// </summary>
+    /// <remarks>
+    /// The bay hands this out so a voice that has NO producer of its own - a silent video cue, whose
+    /// audio is routed nowhere - can still be timed by the same crystal as everything the audience
+    /// hears. Without it such a voice free-runs on a Stopwatch and its picture drifts against the
+    /// sound. Reads throw while no master is attached (see <see cref="MasterClockProxy"/>), which
+    /// consumers treat as a terminal outage rather than a fault.
+    /// </remarks>
+    public IPlaybackClock MasterClock => _masterClock;
+
+    private readonly IPlaybackClock _masterClock;
 
     /// <summary>
     /// Moves the clock-master role to an already-attached terminal without replacing any device.

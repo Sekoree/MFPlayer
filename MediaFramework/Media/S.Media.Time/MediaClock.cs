@@ -414,7 +414,18 @@ public sealed class MediaClock : IMediaClock, IDisposable
 
             if (sleep > TimeSpan.Zero)
             {
-                if (waitHandle.WaitOne(sleep)) break;
+                // WaitHandle.WaitOne(TimeSpan) TRUNCATES to whole milliseconds, so a sub-millisecond
+                // remainder waits zero and returns instantly - and this loop then re-runs, and waits
+                // zero again, until the deadline finally passes. That busy-spin was the STEADY STATE,
+                // not an edge case: the three deadlines (10 ms audio, 16.667 ms video, 33 ms position)
+                // practically never land on a whole-millisecond boundary together, so nearly every wait
+                // gave back its fraction to be spun. ~59 ms of every second, on a thread at
+                // AboveNormal priority - and a show runs one clock PER VOICE, so a 13-stem cue paid it
+                // thirteen times over (measured ~10.5% of a core per clock thread, ~1.5 cores total).
+                // Rounding up costs at most a millisecond of lateness on one tick; the accumulators
+                // below still advance by exact intervals, so the cadence itself does not drift.
+                var waitMs = (int)Math.Ceiling(sleep.TotalMilliseconds);
+                if (waitHandle.WaitOne(waitMs)) break;
             }
 
             elapsed = Stopwatch.GetElapsedTime(sessionStart);

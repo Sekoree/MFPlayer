@@ -1222,7 +1222,12 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             PublishItemMetadata(binding);
             WireRouterAlerts(player, binding.ClipId);
 
-            armed.Start();
+            // One show, one time base. A voice whose audio reaches no clocked output (a silent video
+            // cue) would otherwise be timed by a Stopwatch while everything audible is timed by the
+            // audio device, and the picture would slide away from the sound for as long as the show
+            // runs. Only consumed when the player has no pacing primary of its own - a sounding voice
+            // is already mastered by its own program lease, which is the same clock one lead further on.
+            armed.Start(videoOnlyMaster: _programAudio?.MasterClock);
             // Commit: the displaced voice moves to its release (ramp armed inside the handoff) or is
             // butt-spliced away, and this voice becomes the group's Active.
             await CommitVoiceAsync(groupId, group, voice, crossfade).ConfigureAwait(false);
@@ -1283,13 +1288,24 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// (prepare) and fire (arm) paths, so a warmed clip is found by its key (cue id + media path).</summary>
     private ClipSpec BuildClipSpec(ShowClipBinding binding, string? variant = null)
     {
-        var targetAudioRate = binding.AudioRoutes switch
-        {
-            { Count: 0 } => null, // explicitly silent: do not infer anything from the default hardware device
-            { } routes => routes.Select(route => route.SampleRate).FirstOrDefault(rate => rate is > 0)
-                          ?? ResolveBackendSampleRate(routes.FirstOrDefault()?.DeviceId),
-            null => ResolveBackendSampleRate(null), // standalone/group-routing compatibility (cache resolves default-else-first fresh)
-        };
+        // A clip that plays into the PROGRAM BUS must decode at the project's mix rate, not at any
+        // device's. Its clip router submits into a bay producer, and the bay bridges a foreign rate by
+        // wrapping that producer in a resampler - which hides the producer's IClockedOutput surface, so
+        // the router is refused it as a pacing primary (AudioRouter.Playback.cs) and free-runs on its
+        // own stopwatch instead. Nothing then ties the voice to the device that actually consumes it:
+        // the two crystals drift, the producer ring fills, and the bus drops oldest frames for the rest
+        // of the show. Matching the rate keeps the producer clocked, which genlocks every voice to the
+        // master terminal. Falling back to ResolveBackendSampleRate(null) here was doubly wrong - it
+        // reads the backend's DEFAULT device, which need not be a device the show plays on at all.
+        var targetAudioRate = binding.LogicalSends is not null && _programAudio is { } programTarget
+            ? programTarget.SampleRate
+            : binding.AudioRoutes switch
+            {
+                { Count: 0 } => null, // explicitly silent: do not infer anything from the default hardware device
+                { } routes => routes.Select(route => route.SampleRate).FirstOrDefault(rate => rate is > 0)
+                              ?? ResolveBackendSampleRate(routes.FirstOrDefault()?.DeviceId),
+                null => ResolveBackendSampleRate(null), // standalone/group-routing compatibility (cache resolves default-else-first fresh)
+            };
         // Multi-track select (03 §6): null indices are the automatic default, so one shape covers both.
         var options = S.Media.Players.MediaPlayerOpenOptions.Default with
         {

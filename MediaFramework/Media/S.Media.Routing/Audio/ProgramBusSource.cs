@@ -148,6 +148,29 @@ public sealed class ProgramBusSource : IAudioSource, IDisposable
         return destination.Length;
     }
 
+    /// <summary>
+    /// How far ahead of the speaker a voice's audio currently sits BEFORE the bus - the deepest live
+    /// producer ring, in ticks. Zero when nothing is playing.
+    /// </summary>
+    /// <remarks>
+    /// This is the lead a sounding voice's own clock already subtracts. A voice with no producer at all
+    /// (a silent video cue) has to borrow it, or its picture runs early by exactly this much: the audio
+    /// for the frame on screen has been mixed but is still queued. Deepest rather than average on
+    /// purpose - aligning to the last audio to become audible is what keeps the picture from LEADING
+    /// any part of the programme.
+    /// </remarks>
+    internal long DeepestProducerLeadTicks()
+    {
+        ProgramBusProducer[] producers;
+        lock (_producersGate)
+            producers = _producers;
+
+        var frames = 0;
+        foreach (var producer in producers)
+            frames = Math.Max(frames, producer.BufferedFrames);
+        return frames > 0 ? (long)frames * TimeSpan.TicksPerSecond / _sampleRate : 0;
+    }
+
     /// <summary>One diagnostics row per live producer lease. Snapshots the array under the gate, then
     /// reads each producer's own volatile counters - so it never blocks a submit.</summary>
     internal IReadOnlyList<ProducerDiagnostics> SnapshotProducers()
@@ -251,6 +274,11 @@ public sealed class ProgramBusProducer :
     private float[] _scratch = [];
     private long _overflowFloats;
     private long _underrunFloats;
+    /// <summary>Floats this producer has GRANTED to <see cref="WaitForCapacity"/> but not yet seen in
+    /// <see cref="Submit"/> - the audio in flight between the upstream router's mix loop and this ring
+    /// (its output pump queues whole chunks). Without this term the same free space is handed out once
+    /// per pump slot and the router overproduces by the pump depth, permanently overflowing the ring.</summary>
+    private long _grantedFloats;
     private bool _observedFlowing;
     private int _disposed;
 
@@ -302,6 +330,11 @@ public sealed class ProgramBusProducer :
     {
         if (_disposed != 0)
             return;
+
+        // This audio has arrived, so it is no longer "in flight" against a capacity grant. Clamped at
+        // zero because a router that never paces from this producer (wall clock, or a non-primary
+        // attachment) submits without ever having asked - it simply never accrues a grant.
+        ReleaseGrant(samples.Length);
 
         var written = _ring.Write(samples);
         if (written == samples.Length)
@@ -372,27 +405,48 @@ public sealed class ProgramBusProducer :
     /// <inheritdoc cref="AudibleClientClock.IsAdvancing" />
     public bool IsAdvancing => _clock.IsAdvancing;
 
-    /// <summary>Blocks until a chunk fits in the producer ring (the upstream router's backpressure
-    /// hook). Returns false on cancel/teardown - the ClientInput reset-then-recheck pattern.</summary>
+    /// <summary>
+    /// Blocks until a chunk fits in the producer ring (the upstream router's backpressure hook).
+    /// Returns false on cancel/teardown - the ClientInput reset-then-recheck pattern.
+    /// </summary>
+    /// <remarks>
+    /// <para>A grant counts the audio ALREADY in flight (<see cref="_grantedFloats"/>), not just what is
+    /// sitting in the ring. The router does not submit the chunk it is granted - it mixes it into its
+    /// output pump, and a drainer thread submits it some time later. Answering "does one more chunk
+    /// fit?" from the ring alone hands the same free space to every pump slot in turn, so the router is
+    /// waved through <c>pumpCapacityChunks</c> times per chunk actually consumed. That is an OPEN LOOP:
+    /// production settles at the drainer's speed rather than the bus's, the ring pins at capacity and
+    /// <see cref="Submit"/> drops oldest frames for the rest of the run (measured ~3.4x overproduction
+    /// and 240% of the stream discarded at a pump depth of 8).</para>
+    /// <para>Pacing targets HALF the ring rather than all of it: the remainder is the jitter headroom a
+    /// drainer hiccup spends instead of dropping audio. Steady state is therefore ~half the ring of
+    /// latency, and the producer is genlocked to whatever consumes the bus - transitively, the show's
+    /// master device clock.</para>
+    /// </remarks>
     public bool WaitForCapacity(int chunkSamples, CancellationToken token)
     {
         if (chunkSamples <= 0)
             return _disposed == 0 && !token.IsCancellationRequested;
 
         var needFloats = chunkSamples * _sourceChannels;
+        // Half the ring, but never so tight that the producer cannot keep one chunk buffered while a
+        // second is in flight - on a ring only a couple of chunks deep, half of it would leave the
+        // router waiting on a few frames of slack. Capped at the real capacity so an oversized chunk is
+        // still granted against a drained ring rather than stalling the run loop forever.
+        var targetFloats = Math.Clamp(_ring.CapacityFloats / 2, Math.Min(needFloats * 2, _ring.CapacityFloats), _ring.CapacityFloats);
         Interlocked.Increment(ref _activeWaiters);
         try
         {
             while (_disposed == 0 && !token.IsCancellationRequested)
             {
-                if (_ring.BufferedFloats + needFloats <= _ring.CapacityFloats)
+                if (TryTakeGrant(needFloats, targetFloats))
                     return true;
 
                 _spaceAvailable.Reset();
                 if (_disposed != 0)
                     return false;
-                if (_ring.BufferedFloats + needFloats <= _ring.CapacityFloats)
-                    continue;
+                if (TryTakeGrant(needFloats, targetFloats))
+                    return true;
                 try
                 {
                     if (!_spaceAvailable.Wait(TimeSpan.FromSeconds(5), token))
@@ -413,6 +467,29 @@ public sealed class ProgramBusProducer :
         }
     }
 
+    /// <summary>Accrues a capacity grant when the ring plus everything already in flight leaves room for
+    /// one more chunk below the pacing target.</summary>
+    private bool TryTakeGrant(int needFloats, int targetFloats)
+    {
+        if (_ring.BufferedFloats + Volatile.Read(ref _grantedFloats) + needFloats > targetFloats)
+            return false;
+        Interlocked.Add(ref _grantedFloats, needFloats);
+        return true;
+    }
+
+    /// <summary>Retires a grant as its audio lands, without letting an ungranted submit drive the
+    /// counter negative (a wall-clock-paced router never calls <see cref="WaitForCapacity"/>).</summary>
+    private void ReleaseGrant(int floats)
+    {
+        while (true)
+        {
+            var granted = Volatile.Read(ref _grantedFloats);
+            var next = Math.Max(0, granted - floats);
+            if (Interlocked.CompareExchange(ref _grantedFloats, next, granted) == granted)
+                return;
+        }
+    }
+
     /// <summary>Discards buffered audio and re-anchors the producer clock to zero with a fresh
     /// <see cref="EpochId"/> - the seek/flush contract, with no backwards read (high-waters reset
     /// with the epoch, not against it).</summary>
@@ -420,6 +497,11 @@ public sealed class ProgramBusProducer :
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
         _ring.Clear();
+        // Drop outstanding capacity grants with the audio they were issued for. AudioRouter's
+        // FlushOutputBuffers abandons the output pump's queue and then calls this, so those chunks will
+        // never arrive to retire their own grants; carrying them would leak pacing credit on every
+        // pause/seek until the producer could no longer be granted a chunk at all.
+        Volatile.Write(ref _grantedFloats, 0);
         _clock.Reanchor();
         SignalSpaceAvailable();
     }

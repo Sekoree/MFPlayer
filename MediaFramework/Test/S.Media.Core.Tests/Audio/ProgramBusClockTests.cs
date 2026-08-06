@@ -123,8 +123,15 @@ public class ProgramBusClockTests
         var waiter = Task.Run(() => producer.WaitForCapacity(Frames, cts.Token));
         Assert.NotSame(waiter, await Task.WhenAny(waiter, Task.Delay(100))); // full - must block
 
+        // Consumption is what opens capacity. It takes more than one chunk here because pacing targets
+        // HALF the ring, keeping the rest as headroom (see WaitForCapacity) - a producer let go the
+        // instant a single chunk drains would sit pinned at capacity, one hiccup from dropping audio.
         var mix = new float[Frames * 1];
-        bus.ReadInto(mix); // the bus consumes a chunk - capacity opens up
+        for (var reads = 0; reads < 8 && !waiter.IsCompleted; reads++)
+        {
+            bus.ReadInto(mix);
+            await Task.WhenAny(waiter, Task.Delay(20));
+        }
         Assert.True(await waiter.WaitAsync(TimeSpan.FromSeconds(5)));
 
         producer.Dispose();

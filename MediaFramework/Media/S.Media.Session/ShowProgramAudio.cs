@@ -1,5 +1,6 @@
 using S.Media.Core.Audio;
 using S.Media.Routing;
+using S.Media.Time;
 
 namespace S.Media.Session;
 
@@ -20,6 +21,18 @@ public interface IShowProgramAudioTarget
 
     /// <summary>The project's logical channels, in bus order - stable ids, index = bus channel.</summary>
     IReadOnlyList<string> LogicalChannelIds { get; }
+
+    /// <summary>
+    /// The show's authoritative time base - the clock every voice should be timed by, whether or not it
+    /// has audio of its own. Null when the target has none, which leaves such voices free-running.
+    /// </summary>
+    /// <remarks>
+    /// A silent video cue (audio routed nowhere) acquires no program input, so nothing gives its player
+    /// a clock and it falls back to a Stopwatch - wall time, while every sounding voice is on the audio
+    /// device's crystal. The two drift apart without bound. The session passes this to the clip's start
+    /// as its master so one show has one time base. Default null keeps custom targets compiling.
+    /// </remarks>
+    IPlaybackClock? MasterClock => null;
 
     /// <summary>
     /// Acquires the V-wide program input for one voice. <paramref name="format"/> is what the
@@ -112,6 +125,9 @@ public sealed class PatchBayShowProgramAudioTarget : IShowProgramAudioTarget
     public int SampleRate => _bay.MixSampleRate;
 
     public IReadOnlyList<string> LogicalChannelIds => _logicalChannelIds;
+
+    /// <inheritdoc />
+    public IPlaybackClock? MasterClock => _bay.MasterClock;
 
     public ProgramAudioInputLease AcquireInput(string voiceId, AudioFormat format)
     {

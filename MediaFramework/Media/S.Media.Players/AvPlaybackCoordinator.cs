@@ -56,6 +56,23 @@ internal static class AvPlaybackCoordinator
                     "Play: sync video presentation did not complete before audio start (timeout={Timeout}, queued={Queued}, latestDecoded={Latest})",
                     SyncStartVideoOutputTimeout, video.QueuedFrameCount, video.LatestDecodedPresentationTime);
             }
+            // A clip can HAVE an audio router and still have no authoritative clock: its audio reaches
+            // no clocked output, so nothing promoted a pacing primary and this MediaClock free-runs on
+            // a Stopwatch. That is the case for a silent video cue - a .mov whose audio is routed
+            // nowhere - and it means such a voice is timed by WALL time while every sounding voice is
+            // timed by the audio DEVICE. The two are never the same crystal, so the picture slides away
+            // from the sound without bound (measured 0.72%/s on this rig: seconds apart within minutes).
+            // Genlock it to the show's clock instead, which is exactly what videoOnlyMaster is for - the
+            // old branch just never reached it, because it keyed on "has an audio router" rather than
+            // "has a clock worth trusting".
+            if (videoOnlyMaster is not null && audioClock.Master is null)
+            {
+                audioClock.SetMaster(videoOnlyMaster);
+                Trace.LogDebug(
+                    "Play: audio router has no pacing primary - mastering this voice's clock to the show clock ({ClockType}) so its video cannot drift against the audio device",
+                    videoOnlyMaster.GetType().Name);
+            }
+
             audioRouter.Start();
             audioClock.Start();
         }
