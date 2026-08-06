@@ -96,6 +96,26 @@ public sealed class PlacementRectTests
     }
 
     [Fact]
+    public void MappingEditorRegionsMayOverhangWithoutChangingSize()
+    {
+        var section = new MappingSection();
+
+        RectEdits.MappingSource(
+                section, new NormalizedRect(-0.25, 0.2, 0.4, 0.3), allowOutsideFrame: true)
+            .Apply(new HaCueProject());
+        RectEdits.MappingTarget(
+                section, new NormalizedRect(0.9, -0.2, 0.5, 0.4), allowOutsideFrame: true)
+            .Apply(new HaCueProject());
+
+        Assert.Equal(-0.25, section.SourceX, 6);
+        Assert.Equal(0.4, section.SourceWidth, 6);
+        Assert.Equal(0.9, section.TargetX, 6);
+        Assert.Equal(-0.2, section.TargetY, 6);
+        Assert.Equal(0.5, section.TargetWidth, 6);
+        Assert.Equal(0.4, section.TargetHeight, 6);
+    }
+
+    [Fact]
     public void AnOutOfFramePlacementIsNotAValidationError()
     {
         var fixture = new TestProject();

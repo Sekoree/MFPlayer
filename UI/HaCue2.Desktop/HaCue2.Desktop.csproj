@@ -28,6 +28,20 @@
              *detailed* IL2xxx/IL3xxx code, which stays fatal (BUILD-03) - including the Mond IL2026 that
              HaPlay accepts and this app has no reason to. -->
         <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2104;IL3053</WarningsNotAsErrors>
+
+        <!-- The SAME GC configuration HaPlay.Desktop and HaViz.Desktop ship, and for the same reason:
+             this is a real-time audio application whose video path allocates canvas-sized frame buffers
+             continuously. A show layering two 1080p60 ProRes clips over eleven stems allocates tens of
+             megabytes a second straight into the large-object heap, and under workstation GC — which is
+             what this head silently ran, being the only one of the three that never asked — the
+             resulting blocking gen2 pauses stall the audio drainer for long enough to drain the router's
+             ring. That is heard as the stutter and the pops, and seen as a composition that will not
+             hold 60 fps, with nothing in the app's own code accounting for either.
+             Server GC spreads collection across cores and keeps those pauses short; background
+             collection keeps the ones that remain from blocking. Drop ServerGarbageCollection if you
+             ever suspect GC-thread contention with JACK, exactly as HaPlay's note says. -->
+        <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+        <ServerGarbageCollection>true</ServerGarbageCollection>
     </PropertyGroup>
 
     <ItemGroup>

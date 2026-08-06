@@ -44,12 +44,17 @@
       <c:PanelBox Grid.Column="0">
         <StackPanel Margin="0,6">
           <TextBlock Classes="caps" Margin="12,9,12,4" Text="APPLICATION · THIS MACHINE" />
+          <!-- Each nav binds its OWN selection. Both bound the one shared property, and a ListBox
+               whose SelectedItem is not among its items clears itself and writes that null back — so
+               picking any project pane blanked the window (every Is*Pane read null.Name). -->
           <ListBox Theme="{StaticResource NavList}"
-                   ItemsSource="{Binding ApplicationPanes}" SelectedItem="{Binding SelectedPane}"
+                   ItemsSource="{Binding ApplicationPanes}"
+                   SelectedItem="{Binding SelectedApplicationPane}"
                    ItemTemplate="{StaticResource ScopeItemTemplate}" />
           <TextBlock Classes="caps" Margin="12,12,12,4" Text="{Binding ProjectScopeHeading}" />
           <ListBox Theme="{StaticResource NavList}"
-                   ItemsSource="{Binding ProjectPanes}" SelectedItem="{Binding SelectedPane}"
+                   ItemsSource="{Binding ProjectPanes}"
+                   SelectedItem="{Binding SelectedProjectPane}"
                    ItemTemplate="{StaticResource ScopeItemTemplate}" />
         </StackPanel>
       </c:PanelBox>
@@ -434,6 +439,27 @@
                 </ListBox.ItemTemplate>
               </ListBox>
             </DockPanel>
+          </c:PanelBox>
+
+          <!-- ══ Project status ══════════════════════════════════════════════════════════════
+               The nav has listed this pane since the screen was drawn and nothing was behind it,
+               so selecting it emptied the right-hand side. The report is a page of checks rather
+               than a settings form, so this is the door to the window that already renders it. -->
+          <c:PanelBox IsVisible="{Binding IsProjectStatusPane}" VerticalAlignment="Top"
+                      Header="Project status" Hint="checks this show against this machine">
+            <StackPanel Margin="0,6,0,8" Spacing="8">
+              <ContentControl Theme="{StaticResource FieldWide}">
+                <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap"
+                           Text="Media that cannot be found, audio lines and screens this machine does not have, outputs nothing is patched to, and whether the show still compiles. Run it after a get-in, and before doors." />
+              </ContentControl>
+              <StackPanel Orientation="Horizontal" Margin="10,0" Spacing="8">
+                <Button Theme="{StaticResource ChipButton}" Content="OPEN PROJECT STATUS"
+                        IsVisible="{Binding CanOpenProjectStatus}" Click="OnOpenProjectStatus" />
+                <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
+                           IsVisible="{Binding !CanOpenProjectStatus}"
+                           Text="open a project first — there is nothing to check yet" />
+              </StackPanel>
+            </StackPanel>
           </c:PanelBox>
 
         </Panel>

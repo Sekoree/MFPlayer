@@ -203,6 +203,44 @@ public sealed class EffectCatalogTests
     }
 
     [Fact]
+    public void OutputMappingDestinationOverhangIsClippedWithoutStretchingTheVisibleRemainder()
+    {
+        var source = new VideoFormat(96, 54, PixelFormat.Bgra32, new Rational(60, 1));
+        var output = new VideoFormat(64, 36, PixelFormat.Bgra32, new Rational(60, 1));
+        var spec = new ClipOutputMappingSpec(
+            [
+                new ClipOutputMappingSection(
+                    "tile", true,
+                    SrcX: 0, SrcY: 0, SrcWidth: 1, SrcHeight: 1,
+                    DestX: 0, DestY: -output.Height / 2d,
+                    DestWidth: output.Width, DestHeight: output.Height),
+            ],
+            output.Width,
+            output.Height);
+
+        var section = Assert.Single(OutputMappingResolver.Resolve(spec, source.Width, source.Height));
+        Assert.Equal(-output.Height / 2f, section.Transform.Apply(0, 0).Y, 4);
+        Assert.Equal(output.Height / 2f, section.Transform.Apply(0, source.Height).Y, 4);
+
+        using var compositor = new CpuVideoCompositor(output);
+        using var frame = SolidBgra(source, b: 30, g: 80, r: 220);
+        using var mapped = compositor.Composite(
+            [
+                new CompositorLayer(frame, section.Transform, 1, BlendMode.Source)
+                {
+                    SourceCrop = section.SourceCrop,
+                },
+            ],
+            TimeSpan.Zero);
+
+        var stride = mapped.Strides[0];
+        var topAlpha = mapped.Planes[0].Span[(output.Height / 4 * stride) + (output.Width / 2 * 4) + 3];
+        var bottomAlpha = mapped.Planes[0].Span[(output.Height * 3 / 4 * stride) + (output.Width / 2 * 4) + 3];
+        Assert.Equal(255, topAlpha);
+        Assert.Equal(0, bottomAlpha);
+    }
+
+    [Fact]
     public void OutputMappingMeshUsesOnlyTheVisiblePartOfAnOverhangingSourceDomain()
     {
         var spec = new ClipOutputMappingSpec(

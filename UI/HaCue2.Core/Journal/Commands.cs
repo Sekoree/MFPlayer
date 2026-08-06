@@ -614,8 +614,9 @@ public sealed class SetRectCommand : ICoalescingCommand
         _read = read;
         _write = write;
         _before = read();
-        // A mapping's source and target are both regions OF something and stay inside it. A layer
-        // placement is a picture positioned ON a canvas and may hang off it.
+        // Most mapping edits are regions OF a frame and use the safe clamped default. Editors with an
+        // explicit offstage work area opt into Free as well: an overhanging source becomes black and
+        // an overhanging destination is clipped by the output. Layer placements always use that route.
         _after = allowOutsideFrame ? value.Free() : value.Clamped();
         Key = new CoalesceKey(subject, property);
         Domain = domain;
@@ -677,7 +678,8 @@ public static class RectEdits
             },
             rect, "move source region", allowOutsideFrame);
 
-    public static SetRectCommand MappingTarget(MappingSection section, NormalizedRect rect) =>
+    public static SetRectCommand MappingTarget(
+        MappingSection section, NormalizedRect rect, bool allowOutsideFrame = false) =>
         new(section.Id, "target", "mapping",
             () => new NormalizedRect(
                 section.TargetX, section.TargetY, section.TargetWidth, section.TargetHeight),
@@ -688,5 +690,5 @@ public static class RectEdits
                 section.TargetWidth = value.Width;
                 section.TargetHeight = value.Height;
             },
-            rect, "move output region");
+            rect, "move output region", allowOutsideFrame);
 }

@@ -371,11 +371,29 @@ public static class ShowCompiler
     /// see and undo rather than a route that vanished.
     /// </para>
     /// </remarks>
-    private static IEnumerable<ShowClipLogicalSend> Sends(MediaCueNode media) =>
-        media.Sends.Select(send => new ShowClipLogicalSend(
-            send.SourceChannel,
-            send.LogicalChannelId.ToString(),
-            send.Muted ? 0f : Linear(send.GainDb + media.LevelDb)));
+    private static IEnumerable<ShowClipLogicalSend> Sends(MediaCueNode media) => LogicalSends(media);
+
+    /// <summary>
+    /// One cue's sends as the engine takes them — the same values a fire would compile.
+    /// </summary>
+    /// <remarks>
+    /// Public because the inspector pushes these at a PLAYING voice when the operator edits a send or a
+    /// level, rather than reloading the document (which would restart the cue). Composing the gain a
+    /// second time in the view would be a second implementation of the level rule — including the
+    /// detail that a muted send is emitted at silence rather than dropped — and the two would drift.
+    /// </remarks>
+    public static IReadOnlyList<ShowClipLogicalSend> LogicalSends(MediaCueNode media)
+    {
+        ArgumentNullException.ThrowIfNull(media);
+
+        return
+        [
+            .. media.Sends.Select(send => new ShowClipLogicalSend(
+                send.SourceChannel,
+                send.LogicalChannelId.ToString(),
+                send.Muted ? 0f : Linear(send.GainDb + media.LevelDb))),
+        ];
+    }
 
     /// <summary>
     /// A text cue as a clip: its rendered card, held on screen or shown for an authored duration.

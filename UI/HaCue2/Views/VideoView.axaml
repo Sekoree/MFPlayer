@@ -673,8 +673,8 @@
             </ListBox>
           </c:PanelBox>
 
-          <c:PanelBox Grid.Column="1" Header="Source · what it samples"
-                      Hint="fractions of the composition">
+          <c:PanelBox Grid.Column="1" Header="Source crop · what it samples"
+                      Hint="dragging here slides sampled content · use OUTPUT TILE to move it on screen">
             <DockPanel>
               <!-- The numeric half of register item 22. Source is in FRACTIONS because it has to
                    survive the composition being resized; destination is in OUTPUT PIXELS because
@@ -684,20 +684,20 @@
                       ColumnSpacing="5" RowSpacing="4" Margin="2">
                   <TextBlock Grid.Row="0" Grid.Column="0" Classes="mono dim3 small"
                              VerticalAlignment="Center" Text="Src X" />
-                  <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="-1" Maximum="2" Increment="0.01"
+                  <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="-2" Maximum="3" Increment="0.01"
                                  FormatString="0.###" Value="{Binding SourceX}" />
                   <TextBlock Grid.Row="0" Grid.Column="2" Classes="mono dim3 small"
                              VerticalAlignment="Center" Text="Src Y" />
-                  <NumericUpDown Grid.Row="0" Grid.Column="3" Minimum="-1" Maximum="2" Increment="0.01"
+                  <NumericUpDown Grid.Row="0" Grid.Column="3" Minimum="-2" Maximum="3" Increment="0.01"
                                  FormatString="0.###" Value="{Binding SourceY}" />
 
                   <TextBlock Grid.Row="1" Grid.Column="0" Classes="mono dim3 small"
                              VerticalAlignment="Center" Text="Src W" />
-                  <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="0.001" Maximum="2" Increment="0.01"
+                  <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="0.001" Maximum="5" Increment="0.01"
                                  FormatString="0.###" Value="{Binding SourceWidth}" />
                   <TextBlock Grid.Row="1" Grid.Column="2" Classes="mono dim3 small"
                              VerticalAlignment="Center" Text="Src H" />
-                  <NumericUpDown Grid.Row="1" Grid.Column="3" Minimum="0.001" Maximum="2" Increment="0.01"
+                  <NumericUpDown Grid.Row="1" Grid.Column="3" Minimum="0.001" Maximum="5" Increment="0.01"
                                  FormatString="0.###" Value="{Binding SourceHeight}" />
 
                   <TextBlock Grid.Row="2" Grid.Column="0" Classes="mono dim3 small"
@@ -721,6 +721,7 @@
               </Border>
               <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding MappingSourceAspect}">
                 <c:PlacementCanvas Boxes="{Binding MappingSource}"
+                                   AllowOutside="True"
                                    PreserveAspect="{Binding PreserveMappingAspect}"
                                    SnapEnabled="{Binding SnapMapping}"
                                    AutomationProperties.Name="Mapping source sections"
@@ -732,7 +733,7 @@
           </c:PanelBox>
 
           <c:PanelBox Grid.Column="2" Header="{Binding SectionHeader}"
-                      Hint="where it lands · pixels of the output raster">
+                      Hint="OUTPUT TILE · drag to move · outside is clipped, not stretched">
             <DockPanel>
               <Border DockPanel.Dock="Bottom" Classes="chain" IsEnabled="{Binding HasSection}">
                 <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto"
@@ -818,6 +819,7 @@
               <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding MappingTargetAspect}">
                 <!-- No grid on the output half: the reference here is the wall, not a nominal frame. -->
                 <c:PlacementCanvas Boxes="{Binding MappingTarget}" ShowGrid="False"
+                                   AllowOutside="True"
                                    PreserveAspect="{Binding PreserveMappingAspect}"
                                    SnapEnabled="{Binding SnapMapping}"
                                    AutomationProperties.Name="Mapping destination sections"

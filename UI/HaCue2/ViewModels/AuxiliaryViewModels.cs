@@ -857,26 +857,88 @@ public partial class SettingsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsAuthoringPane))]
     [NotifyPropertyChangedFor(nameof(IsOverridesPane))]
     [NotifyPropertyChangedFor(nameof(IsSavePane))]
+    [NotifyPropertyChangedFor(nameof(IsProjectStatusPane))]
     [NotifyPropertyChangedFor(nameof(IsApplicationScope))]
+    [NotifyPropertyChangedFor(nameof(SelectedApplicationPane))]
+    [NotifyPropertyChangedFor(nameof(SelectedProjectPane))]
     [NotifyPropertyChangedFor(nameof(ScopeNote))]
     [NotifyPropertyChangedFor(nameof(ScopeFile))]
-    private SettingsPane _selectedPane;
+    // Nullable because a ListBox WILL write null into whatever its SelectedItem binds to the moment
+    // the chosen item is not among its own items. The two properties below are what the navs bind, and
+    // they refuse that null; this stays honest about the fact that the write can happen at all.
+    private SettingsPane? _selectedPane;
+
+    /// <summary>
+    /// The application list's own selection — null while a PROJECT pane is showing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Both navs used to bind <c>SelectedItem</c> straight to <see cref="SelectedPane"/>. Two
+    /// selectors sharing one selection do not co-operate: choosing "Show behaviour" set the shared
+    /// property, the APPLICATION list then found its own selection missing from its items, cleared
+    /// itself, and wrote that null straight back — so every property below dereferenced null the
+    /// moment the operator touched the project half, and the right-hand side went blank.
+    /// </para>
+    /// <para>
+    /// Each list gets its own view of the one selection instead, and a null write (a list clearing
+    /// itself because the choice belongs to the other one) is ignored rather than adopted.
+    /// </para>
+    /// </remarks>
+    public SettingsPane? SelectedApplicationPane
+    {
+        get => IsApplicationScope ? SelectedPane : null;
+        set
+        {
+            if (value is not null)
+                SelectedPane = value;
+        }
+    }
+
+    /// <summary>The project list's own selection — null while an APPLICATION pane is showing.</summary>
+    public SettingsPane? SelectedProjectPane
+    {
+        get => IsApplicationScope ? null : SelectedPane;
+        set
+        {
+            if (value is not null)
+                SelectedPane = value;
+        }
+    }
 
     public bool IsApplicationScope => ApplicationPanes.Contains(SelectedPane);
 
     // The inventory table on screen 12 is the living contract for this view: every pane it lists has
     // to exist, or a nav row leads to nothing and the reader cannot tell "not built" from "empty".
-    public bool IsAppearancePane => SelectedPane.Name == "Appearance & layout";
-    public bool IsTransportPane => SelectedPane.Name == "Transport defaults";
-    public bool IsHotkeysPane => SelectedPane.Name == "Hotkeys";
-    public bool IsNewProjectPane => SelectedPane.Name == "New project defaults";
-    public bool IsRemoteApiPane => SelectedPane.Name == "Remote API";
-    public bool IsCachePane => SelectedPane.Name == "Media cache";
-    public bool IsLoggingPane => SelectedPane.Name == "Logging & crash reports";
-    public bool IsShowBehaviourPane => SelectedPane.Name == "Show behaviour";
-    public bool IsAuthoringPane => SelectedPane.Name == "Authoring defaults";
-    public bool IsOverridesPane => SelectedPane.Name == "Overrides";
-    public bool IsSavePane => SelectedPane.Name == "Save, autosave & recovery";
+    //
+    // Read through a null-conditional even though the setters above filter nulls: these are bound
+    // from XAML, this is the failure that blanked the whole window, and a pane that quietly reads
+    // "not selected" is a far better failure than an exception per property.
+    public bool IsAppearancePane => SelectedPane?.Name == "Appearance & layout";
+    public bool IsTransportPane => SelectedPane?.Name == "Transport defaults";
+    public bool IsHotkeysPane => SelectedPane?.Name == "Hotkeys";
+    public bool IsNewProjectPane => SelectedPane?.Name == "New project defaults";
+    public bool IsRemoteApiPane => SelectedPane?.Name == "Remote API";
+    public bool IsCachePane => SelectedPane?.Name == "Media cache";
+    public bool IsLoggingPane => SelectedPane?.Name == "Logging & crash reports";
+    public bool IsShowBehaviourPane => SelectedPane?.Name == "Show behaviour";
+    public bool IsAuthoringPane => SelectedPane?.Name == "Authoring defaults";
+    public bool IsOverridesPane => SelectedPane?.Name == "Overrides";
+    public bool IsSavePane => SelectedPane?.Name == "Save, autosave & recovery";
+    public bool IsProjectStatusPane => SelectedPane?.Name == "Project status";
+
+    /// <summary>
+    /// Opens the Project status window, when the host offered one.
+    /// </summary>
+    /// <remarks>
+    /// The nav has listed "Project status" since screen 13 was built and nothing was behind it: the
+    /// right-hand side simply went empty, which reads as a broken pane rather than as a link. The
+    /// report itself belongs in its own window — it is a page of checks, not a settings form — so this
+    /// pane is the door to it. The launcher, which has no project open, leaves this null and the pane
+    /// says so instead of offering a button that would do nothing.
+    /// </remarks>
+    public Action? OpenProjectStatus { get; set; }
+
+    public bool CanOpenProjectStatus => OpenProjectStatus is not null;
 
     /// <summary>
     /// The scope split is the whole point of this screen: application settings save immediately and

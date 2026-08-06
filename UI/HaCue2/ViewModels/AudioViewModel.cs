@@ -19,6 +19,9 @@ public partial class AudioViewModel : ObservableObject
     /// <summary>Authoring is disabled by the shell's lock; live audition and recorder controls remain available.</summary>
     public bool CanAuthor => !_journal.IsReadOnly;
 
+    /// <summary>The running show, used only to make a patch gain drag audible while it is happening.</summary>
+    public ShowHost? Host { get; set; }
+
     public AudioViewModel(ProjectJournal journal, ShowRuntime runtime)
     {
         _journal = journal;
@@ -717,9 +720,18 @@ public partial class AudioViewModel : ObservableObject
                 break;
 
             case MatrixGestureKind.Adjust:
-                _drag ??= _journal.Composite("adjust patch gain", "patch");
+                // QUIET, and pushed straight at the bay instead. A gain drag emits a command per
+                // pointer sample; announcing each one ran the shell's entire edit reaction — a media
+                // re-probe, four view-model refreshes, and a compile — per pixel, and still gave the
+                // operator NOTHING to hear, because every sample restarted the reload debounce behind
+                // it. The patch is not part of the compiled document, so it can be reconciled under
+                // running voices directly: the drag is now audible as it happens and costs one shell
+                // refresh, on release.
+                _drag ??= _journal.Composite("adjust patch gain", "patch", quiet: true);
                 ProjectEdits.NudgeGroupGain(
                     _journal, channelId, row.LineId, row.LineChannel, gesture.DeltaDb);
+                PushPatchLive();
+                OnPropertyChanged(nameof(PatchRows));
                 break;
 
             case MatrixGestureKind.Mute when existing is not null:
@@ -739,7 +751,32 @@ public partial class AudioViewModel : ObservableObject
         _drag?.Dispose();
         _drag = null;
         _journal.CloseGroup();
+        PushPatchLive();
         Refresh();
+    }
+
+    /// <summary>
+    /// Reconciles the live bay's cells with the document's, under whatever is playing.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort and deliberately silent on failure: the authored value stands either way, and the
+    /// reload that follows the gesture is the recovery path. A patch drag must never be able to throw
+    /// out of a pointer handler.
+    /// </remarks>
+    private void PushPatchLive()
+    {
+        if (Host is not { } host)
+            return;
+
+        try
+        {
+            host.ApplyPatch(_journal.Project);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            System.Diagnostics.Trace.TraceWarning(
+                $"Live patch update failed: {failure.GetType().Name}: {failure.Message}");
+        }
     }
 
     /// <summary>The open drag, if one is in progress. Null between gestures.</summary>

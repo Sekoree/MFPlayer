@@ -436,13 +436,19 @@ public partial class ShellWindow : Window
     private void OnSettings(object? sender, RoutedEventArgs e)
         => _settings = Reopen(
             _settings,
-            () => new SettingsWindow
+            () =>
             {
-                DataContext = new SettingsViewModel(
+                var settings = new SettingsViewModel(
                     Shell.Project,
                     Shell.Journal,
                     Shell.Settings,
-                    Shell.ApplyApplicationSettings),
+                    Shell.ApplyApplicationSettings)
+                {
+                    // The one settings pane whose content is a whole window of its own.
+                    OpenProjectStatus = () => OnProjectStatus(this, new RoutedEventArgs()),
+                };
+
+                return new SettingsWindow { DataContext = settings };
             });
 
     private void OnDiagnostics(object? sender, RoutedEventArgs e)

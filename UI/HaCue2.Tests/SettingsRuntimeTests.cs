@@ -1,3 +1,4 @@
+using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Machine;
 using HaCue2.Session;
@@ -88,5 +89,71 @@ public sealed class SettingsRuntimeTests
         AppHotkeys.Reset(app);
         app.HotkeyProfile = "Laptop";
         Assert.Equal("Ctrl+Up", AppHotkeys.Gesture(app, AppHotkeys.StandbyUp));
+    }
+
+    // ── the scope nav (screens 12/13) ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void SelectingAProjectPaneDoesNotBlankTheWindow()
+    {
+        var project = ShellFixture.Project();
+        var settings = new SettingsViewModel(project, new ProjectJournal(project));
+
+        // What the two navs did to each other: both bound SelectedItem to ONE property, so choosing a
+        // project pane left the application list holding a value it did not have, which cleared itself
+        // and wrote that null straight back. Every Is*Pane below then dereferenced null and the whole
+        // right-hand side went blank — an exception per property, per pane.
+        settings.SelectedProjectPane = settings.ProjectPanes.Single(pane => pane.Name == "Show behaviour");
+
+        Assert.True(settings.IsShowBehaviourPane);
+        Assert.False(settings.IsApplicationScope);
+        Assert.Null(settings.SelectedApplicationPane);
+
+        // The null the application list writes on its way out is REFUSED rather than adopted.
+        settings.SelectedApplicationPane = null;
+        Assert.True(settings.IsShowBehaviourPane);
+        Assert.Equal("Project settings are journaled — ⌘Z works here", settings.ScopeNote);
+    }
+
+    [Fact]
+    public void EveryPaneTheNavListsHasSomethingBehindIt()
+    {
+        var project = ShellFixture.Project();
+        var settings = new SettingsViewModel(project, new ProjectJournal(project));
+
+        // The nav is the contract: a row that leads to an empty right-hand side cannot be told apart
+        // from a broken one. "Project status" was exactly that until it gained a pane.
+        var panes = settings.ApplicationPanes.Concat(settings.ProjectPanes).ToList();
+
+        foreach (var pane in panes)
+        {
+            settings.SelectedPane = pane;
+
+            var shown =
+                settings.IsAppearancePane || settings.IsTransportPane || settings.IsHotkeysPane
+                || settings.IsNewProjectPane || settings.IsRemoteApiPane || settings.IsCachePane
+                || settings.IsLoggingPane || settings.IsShowBehaviourPane || settings.IsAuthoringPane
+                || settings.IsOverridesPane || settings.IsSavePane || settings.IsProjectStatusPane;
+
+            Assert.True(shown, $"the “{pane.Name}” nav row shows no pane");
+        }
+    }
+
+    [Fact]
+    public void TheProjectStatusPaneOffersItsWindowOnlyWhenTheHostSuppliedOne()
+    {
+        var project = ShellFixture.Project();
+        var settings = new SettingsViewModel(project, new ProjectJournal(project));
+
+        // The launcher has no project open and supplies nothing, so the pane says so rather than
+        // offering a button that would do nothing.
+        Assert.False(settings.CanOpenProjectStatus);
+
+        var opened = 0;
+        settings.OpenProjectStatus = () => opened++;
+
+        Assert.True(settings.CanOpenProjectStatus);
+        settings.OpenProjectStatus.Invoke();
+        Assert.Equal(1, opened);
     }
 }

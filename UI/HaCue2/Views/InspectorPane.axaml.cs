@@ -146,7 +146,14 @@ public partial class InspectorPane : UserControl
     private void OnSendGestureEnded(object? sender, Avalonia.Input.PointerReleasedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector)
-            inspector.EndEdit();
+            inspector.EndSendGesture();
+    }
+
+    /// <summary>One of the four send presets the PRESETS strip names.</summary>
+    private void OnSendPreset(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is string preset)
+            inspector.ApplySendPreset(preset);
     }
 
     /// <summary>

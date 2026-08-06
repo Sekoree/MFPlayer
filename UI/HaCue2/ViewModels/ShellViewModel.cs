@@ -258,7 +258,13 @@ public partial class ShellViewModel : ObservableObject
         Cues.Engine = Host;
         Video.Host = Host;
         Targets.Host = Host;
+        Audio.Host = Host;
         Host.MachinePanicFadeMs = Settings.PanicFadeMs;
+
+        // An edit the engine declined mid-show lands here, on the way into the next fire. Marshalled
+        // because a fire can arrive from the MIDI/OSC thread or the remote API, while the reload reads
+        // the document the UI is editing.
+        Host.PendingEditFlush = () => Dispatcher.UIThread.InvokeAsync(FlushPendingEditAsync);
         Audio.NoteAudioStarted();
 
         _engine = new EngineRuntime(Host, Runtime, Project, Settings);
@@ -266,6 +272,13 @@ public partial class ShellViewModel : ObservableObject
         {
             Cues.Refresh();
             OnPropertyChanged(nameof(TransportHint));
+
+            // What is sounding just changed, which is the ONLY thing that can turn a held edit into an
+            // applicable one. Retrying here rather than on a timer is what keeps the deferral free: a
+            // poll would have to recompile the document to find out, and doing that every couple of
+            // seconds for the length of a track is the cost this mechanism exists to avoid.
+            if (_editPending)
+                _ = FlushPendingEditAsync();
         };
 
         // The Active panel's clocks move continuously; the tree does not. Two signals rather than one
@@ -332,8 +345,24 @@ public partial class ShellViewModel : ObservableObject
 
     private static readonly TimeSpan ReloadDelay = TimeSpan.FromMilliseconds(300);
 
+    /// <summary>
+    /// The backstop for a held edit, behind the transport events that normally apply it.
+    /// </summary>
+    /// <remarks>
+    /// A held edit is retried when what is SOUNDING changes and on the way into the next fire, which
+    /// between them cover every way a cue can stop. This is the safety net for anything those miss, and
+    /// it is deliberately slow: each attempt recompiles the document to ask whether it is safe yet, and
+    /// doing that several times a second for a fifty-minute track would re-introduce, on the UI thread,
+    /// exactly the cost this whole mechanism exists to remove.
+    /// </remarks>
+    private static readonly TimeSpan HeldEditRetry = TimeSpan.FromSeconds(15);
+
+    /// <summary>An edit the engine has not adopted yet — see <see cref="ReloadEngineAsync"/>.</summary>
+    private bool _editPending;
+
     private void ScheduleReload()
     {
+        _editPending = true;
         _reload ??= new DispatcherTimer(ReloadDelay, DispatcherPriority.Background, (_, _) =>
         {
             _reload!.Stop();
@@ -341,29 +370,85 @@ public partial class ShellViewModel : ObservableObject
         });
 
         _reload.Stop();
+        _reload.Interval = ReloadDelay;
         _reload.Start();
     }
 
     /// <summary>Whether a session is running behind the transport buttons.</summary>
     public bool IsLive => Host is not null;
 
+    /// <summary>True while an edit is waiting for the show to be idle before the engine adopts it.</summary>
+    /// <remarks>
+    /// Surfaced rather than hidden — the transport row says so. An operator who edits a playing cue's
+    /// trim and hears nothing change is owed the reason; the alternative was to restart their cue,
+    /// which is worse and was what the app used to do.
+    /// </remarks>
+    public bool HasHeldEdit => _heldEdit;
+
+    private bool _heldEdit;
+
+    private void NoteHeldEdit(bool held)
+    {
+        if (_heldEdit == held)
+            return;
+
+        _heldEdit = held;
+        // The visible transport hint is the cue view's, which is the row an operator is actually
+        // looking at while a show runs.
+        Cues.HasHeldEdit = held;
+        OnPropertyChanged(nameof(HasHeldEdit));
+        OnPropertyChanged(nameof(TransportHint));
+    }
+
     public string TransportHint => Host is null
         ? "GO always works — editing never blocks playback"
-        : Host.Problems.Count == 0
-            ? "live · editing never blocks playback"
-            : $"live · {Host.Problems.Count} line(s) would not open";
+        : _heldEdit
+            ? "live · an edit is waiting for this cue to end"
+            : Host.Problems.Count == 0
+                ? "live · editing never blocks playback"
+                : $"live · {Host.Problems.Count} line(s) would not open";
 
+    /// <summary>
+    /// Hands the current document to the engine, unless doing so would interrupt the show.
+    /// </summary>
+    /// <remarks>
+    /// The engine refuses a reload that would restart a playing voice (see
+    /// <c>ShowHost.TryReloadAsync</c>). When it does the edit stays pending, and it is re-offered the
+    /// moment what is sounding changes, on the way into the next fire, and on a slow backstop timer —
+    /// so it lands as soon as the cue it would have cut is out of the way.
+    /// </remarks>
     private async Task ReloadEngineAsync()
     {
         if (Host is not { } host)
             return;
+
+        // One at a time. This is reached from the debounce, from the transport's own change signal and
+        // from a fire on any thread; two overlapping attempts would compile the same document twice and
+        // race each other's held-edit bookkeeping.
+        if (_reloadInFlight)
+            return;
+
+        _reloadInFlight = true;
 
         try
         {
             // Durations go with the document: without them the compiler cannot convert an out-point
             // into the engine's end-offset, and an effect lane on an untrimmed cue has no length to
             // stretch over and is dropped.
-            await host.ReloadAsync(Project, CompileContext()).ConfigureAwait(true);
+            var adopted = await host.TryReloadAsync(Project, CompileContext()).ConfigureAwait(true);
+
+            if (!adopted)
+            {
+                // Held, not lost. Re-armed here rather than left to the next edit: an operator who
+                // makes one change and then watches the show would otherwise never see it applied.
+                ScheduleHeldEditRetry();
+                NoteHeldEdit(true);
+                return;
+            }
+
+            _editPending = false;
+            NoteHeldEdit(false);
+
             await EnsureRemoteApiAsync().ConfigureAwait(true);
             OnPropertyChanged(nameof(TransportHint));
         }
@@ -371,6 +456,37 @@ public partial class ShellViewModel : ObservableObject
         {
             FileMessage = $"engine reload failed — {failure.Message}";
         }
+        finally
+        {
+            _reloadInFlight = false;
+        }
+    }
+
+    private bool _reloadInFlight;
+
+    private void ScheduleHeldEditRetry()
+    {
+        ScheduleReload();
+        _reload!.Stop();
+        _reload.Interval = HeldEditRetry;
+        _reload.Start();
+    }
+
+    /// <summary>
+    /// Applies a held edit before something needs the document to be current.
+    /// </summary>
+    /// <remarks>
+    /// Called on the way into a fire and after a stop. A cue fired against a document the operator has
+    /// since edited plays the old version of itself, which is the one failure this whole deferral must
+    /// not introduce — so the moment a reload can be adopted, it is.
+    /// </remarks>
+    public async Task FlushPendingEditAsync()
+    {
+        if (!_editPending || Host is null)
+            return;
+
+        _reload?.Stop();
+        await ReloadEngineAsync().ConfigureAwait(true);
     }
 
     /// <summary>
@@ -593,6 +709,13 @@ public partial class ShellViewModel : ObservableObject
         Cues.Engine = null;
         Video.Host = null;
         Targets.Host = null;
+        Audio.Host = null;
+
+        // Nothing is holding the edit back any more, and StartEngineAsync loads the current document
+        // outright — so a flag left set here would only buy the next session one pointless reload.
+        _reload?.Stop();
+        _editPending = false;
+        NoteHeldEdit(false);
 
         await _remoteLifecycle.WaitAsync().ConfigureAwait(true);
         try
@@ -1032,11 +1155,6 @@ public partial class ShellViewModel : ObservableObject
     {
         try
         {
-            // Re-running the status pass on every keystroke would be wasteful on a big show; it is
-            // cheap here and the honest behaviour, and a bulk edit asks the journal for one quiet
-            // composite rather than making this run per cue.
-            Status = ProjectStatus.Run(Project, ProjectPath, Environment);
-
             // An edit can ADD media, and until this the runtime only learned what a file was at load
             // and after a save — so a cue added at 19:50 read "—" for its length until the show was
             // saved. The adopt is a dictionary walk over what is already known (which is where a
@@ -1045,6 +1163,8 @@ public partial class ShellViewModel : ObservableObject
             AdoptProbeResults();
             Machine.Media.Refresh(Project, ProjectPath);
 
+            // The status pass is DEFERRED; the views are not. See ScheduleStatus for why.
+            ScheduleStatus();
             Refresh();
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
@@ -1054,6 +1174,54 @@ public partial class ShellViewModel : ObservableObject
             // hearing about edits is not.
             FileMessage = $"the project view could not be refreshed — {failure.Message}";
             MediaDiagnostics.LogError(failure, "HaCue2: refreshing the shell after an edit failed");
+        }
+    }
+
+    private DispatcherTimer? _statusPass;
+
+    /// <summary>
+    /// Coalesces the project-status pass, which used to run on every single journal command.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="ProjectStatus.Run"/> is not a cheap read: it COMPILES the whole show and runs the
+    /// engine's document validator over the result, on top of touching the filesystem once per media
+    /// reference. Running that synchronously per command meant a mesh-warp drag or a send-matrix drag —
+    /// gestures that emit one command per pointer sample — compiled and validated the entire project
+    /// tens of times a second on the UI thread, which is what made live editing crawl. Under workstation
+    /// GC the resulting garbage was also heard, not just seen.
+    /// </para>
+    /// <para>
+    /// Deferred rather than dropped: the status bar's counts are a few hundred milliseconds behind a
+    /// burst of typing and exactly right the moment it stops, which is the same trade the engine reload
+    /// beside it has always made. The pass still runs in full — nothing here decides that an edit
+    /// "cannot" have changed the answer, because that judgement is precisely what a validator is for.
+    /// </para>
+    /// </remarks>
+    private void ScheduleStatus()
+    {
+        _statusPass ??= new DispatcherTimer(StatusDelay, DispatcherPriority.Background, (_, _) =>
+        {
+            _statusPass!.Stop();
+            RunStatus();
+        });
+
+        _statusPass.Stop();
+        _statusPass.Start();
+    }
+
+    private static readonly TimeSpan StatusDelay = TimeSpan.FromMilliseconds(250);
+
+    private void RunStatus()
+    {
+        try
+        {
+            Status = ProjectStatus.Run(Project, ProjectPath, Environment);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            FileMessage = $"the project checks could not be run — {failure.Message}";
+            MediaDiagnostics.LogError(failure, "HaCue2: the project status pass failed");
         }
     }
 

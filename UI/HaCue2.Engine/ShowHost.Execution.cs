@@ -124,6 +124,65 @@ public sealed partial class ShowHost
         return true;
     }
 
+    /// <summary>
+    /// Opens a batch of clip cues concurrently and commits them on one edge.
+    /// </summary>
+    /// <remarks>
+    /// Each cue keeps the transport group the COMPILER gave it — an all-together group's children
+    /// already get one each, which is what lets them sound at once — so this changes when they open and
+    /// when they start, and nothing about where they land. A cue with no compiled group is not a member
+    /// of a batch at all and is left to the caller.
+    /// </remarks>
+    async Task<IReadOnlyList<Guid>> ICueExecutionHost.PlayTogetherAsync(
+        IReadOnlyList<CueNode> cues, CueList? list)
+    {
+        var targets = cues
+            .Select(cue => (Cue: cue, Group: GroupOf(cue.Id)))
+            .Where(item => item.Group.Length > 0)
+            .ToList();
+
+        if (targets.Count == 0)
+            return [];
+
+        IReadOnlyList<CueExecutionStatus> statuses;
+
+        try
+        {
+            statuses = await _session.FireCuesIndependentAsync(
+                [.. targets.Select(item => (item.Cue.Id.ToString(), item.Group))],
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // One batch that could not run must not take the GO down. Reported by name, and the caller
+            // falls back to firing them one at a time — a staircase start beats a silent group.
+            Report($"“{list?.Name ?? "a group"}” could not be fired together — {failure.Message}");
+            return [];
+        }
+
+        var started = new List<Guid>();
+
+        for (var index = 0; index < targets.Count; index++)
+        {
+            var (cue, group) = targets[index];
+
+            if (statuses[index] != CueExecutionStatus.Fired)
+            {
+                if (statuses[index] == CueExecutionStatus.Failed)
+                    Report($"“{cue.Label}” did not fire");
+
+                continue;
+            }
+
+            Remember(cue.Id, list?.Id ?? Guid.Empty, group);
+            if (PlayedLength(cue) is { } duration)
+                _outbound.Start(cue, duration);
+            started.Add(cue.Id);
+        }
+
+        return started;
+    }
+
     private TimeSpan? PlayedLength(CueNode cue)
     {
         if (cue is TextCueNode { DurationMs: > 0 } text)

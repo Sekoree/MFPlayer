@@ -6,6 +6,7 @@ using HaCue2.Core.Model;
 using HaCue2.Engine;
 using HaCue2.Presentation;
 using HaCue2.Session;
+using S.Media.Session;
 
 namespace HaCue2.ViewModels;
 
@@ -45,13 +46,21 @@ public partial class VideoViewModel : ObservableObject
 
     /// <summary>The composite open for the duration of one drag, so the whole gesture is one ⌘Z.</summary>
     private IDisposable? _drag;
+    private bool _refreshing;
     private readonly HashSet<Guid> _calibrating = [];
+    private readonly LatestOnlyPublisher<LiveMappingKey, ClipOutputMappingSpec?> _liveMappings;
 
     public VideoViewModel(HaCueProject project, ShowRuntime runtime, ProjectJournal journal)
     {
         _project = project;
         _runtime = runtime;
         _journal = journal;
+        _liveMappings = new LatestOnlyPublisher<LiveMappingKey, ClipOutputMappingSpec?>(
+            static (key, mapping) => key.Host.ApplyOutputMappingAsync(
+                key.CompositionId, key.OutputId, mapping),
+            TimeSpan.FromMilliseconds(33),
+            static failure => System.Diagnostics.Trace.TraceWarning(
+                $"Live output mapping update failed: {failure.GetType().Name}: {failure.Message}"));
 
         Record = new RecordEditor(journal, project, runtime);
 
@@ -379,6 +388,9 @@ public partial class VideoViewModel : ObservableObject
                 return;
 
             var (width, height) = Dialogs.WindowSize(value);
+
+            if (output.MappingWidth == width && output.MappingHeight == height)
+                return;
 
             using (_journal.Composite($"“{output.Name}” output raster", "video"))
             {
@@ -1609,17 +1621,42 @@ public partial class VideoViewModel : ObservableObject
             return;
         SelectedWarpPoint = gesture.Index;
         var changed = section.WarpOffsets.ToList();
-        changed[gesture.Index * 2] = Math.Clamp(gesture.OffsetX, -1, 1);
-        changed[gesture.Index * 2 + 1] = Math.Clamp(gesture.OffsetY, -1, 1);
+        var x = Math.Clamp(gesture.OffsetX, -1, 1);
+        var y = Math.Clamp(gesture.OffsetY, -1, 1);
+        var at = gesture.Index * 2;
+
+        if (NearlyEqual(changed[at], x) && NearlyEqual(changed[at + 1], y))
+            return;
+
+        changed[at] = x;
+        changed[at + 1] = y;
+
+        // QUIET, like the canvas-slice drag beside it. Without a scope this emitted a journal command
+        // per native pointer sample, and every one of them ran the shell's whole edit reaction —
+        // re-probing media references, refreshing four view-models, and (until it was deferred) a full
+        // compile-and-validate of the show. Dragging one mesh point did that fifty times a second.
+        // The finished warp is one undo step and one shell refresh, on release.
+        _drag ??= _journal.Composite($"“{section.Name}” mesh warp", "mapping", quiet: true);
+
         _journal.Do(new SetValueCommand<List<double>>(
             section.Id, $"warpPoint:{gesture.Index}", "mapping",
             () => section.WarpOffsets, values => section.WarpOffsets = values,
             changed, "drag warp point"));
+        ApplyLiveMapping(MappedOutput);
+
+        // The pane still follows the pointer: these are the only values a warp drag changes, and the
+        // mesh canvas re-reads the section itself.
+        OnPropertyChanged(nameof(WarpOffsetX));
+        OnPropertyChanged(nameof(WarpOffsetY));
+        OnPropertyChanged(nameof(Sections));
     }
 
     public void EndWarpGesture()
     {
+        _drag?.Dispose();
+        _drag = null;
         _journal.CloseGroup();
+        ApplyLiveMapping(MappedOutput);
         Refresh();
     }
 
@@ -1633,26 +1670,32 @@ public partial class VideoViewModel : ObservableObject
 
     private void WriteRect(bool target, RectPart part, double value)
     {
-        if (Section is not { } section || !double.IsFinite(value))
+        if (_refreshing || Section is not { } section || !double.IsFinite(value))
             return;
 
-        var rect = target
+        var current = target
             ? new NormalizedRect(
                 section.TargetX, section.TargetY, section.TargetWidth, section.TargetHeight)
             : new NormalizedRect(
                 section.SourceX, section.SourceY, section.SourceWidth, section.SourceHeight);
 
-        rect = part switch
+        var rect = part switch
         {
-            RectPart.X => rect with { X = value },
-            RectPart.Y => rect with { Y = value },
-            RectPart.Width => rect with { Width = value },
-            _ => rect with { Height = value },
+            RectPart.X => current with { X = value },
+            RectPart.Y => current with { Y = value },
+            RectPart.Width => current with { Width = value },
+            _ => current with { Height = value },
         };
 
+        // NumericUpDown is decimal-backed while the document uses doubles. A source notification can
+        // therefore return a microscopically different representation of the value it just received.
+        // It is still the same rectangle and must not become an undoable edit.
+        if (NearlyEqual(current, rect) || NearlyEqual(current, rect.Free()))
+            return;
+
         _journal.Do(target
-            ? RectEdits.MappingTarget(section, rect)
-            : RectEdits.MappingSource(section, rect));
+            ? RectEdits.MappingTarget(section, rect, allowOutsideFrame: true)
+            : RectEdits.MappingSource(section, rect, allowOutsideFrame: true));
 
         // A typed value is one decision, not a gesture in progress: close the step immediately so the
         // next field's edit is separately undoable.
@@ -1664,7 +1707,7 @@ public partial class VideoViewModel : ObservableObject
         double value, string property, double minimum, double maximum,
         Func<MappingSection, double> read, Action<MappingSection, double> write)
     {
-        if (Section is not { } section || !double.IsFinite(value))
+        if (_refreshing || Section is not { } section || !double.IsFinite(value))
             return;
 
         var clamped = Math.Clamp(value, minimum, maximum);
@@ -1864,11 +1907,19 @@ public partial class VideoViewModel : ObservableObject
             is not { } target)
             return;
 
+        var authored = gesture.AuthoredRect().Free();
+        var previous = VideoPresentation.Slice(target);
+
+        // Avalonia's two-way numeric binding can echo a freshly announced Slice value into this
+        // method. Opening even a quiet composite for that echo makes its close raise Changed, which
+        // refreshes the bindings and repeats the echo until the process exhausts its stack.
+        if (NearlyEqual(previous, authored))
+            return;
+
         // RefreshLayout below keeps this pane following the pointer. Withhold the journal's global
         // Changed event until release so the shell does not validate and rebuild the show per pixel.
         _drag ??= _journal.Composite($"“{target.Name}” canvas slice", "video", quiet: true);
 
-        var authored = gesture.AuthoredRect().Free();
         var sections = target.Mapping
             .Where(section => section.SourceWidth > 0 && section.SourceHeight > 0)
             .ToList();
@@ -1882,7 +1933,6 @@ public partial class VideoViewModel : ObservableObject
             sections.Add(section);
         }
 
-        var previous = VideoPresentation.Slice(target);
         foreach (var section in sections)
         {
             var source = new NormalizedRect(
@@ -2015,7 +2065,7 @@ public partial class VideoViewModel : ObservableObject
     /// </remarks>
     private void WriteSlice(NormalizedRect rect)
     {
-        if (MappedOutput is not { } output)
+        if (_refreshing || MappedOutput is not { } output || NearlyEqual(Slice, rect))
             return;
 
         ApplyLayoutGesture(new PlacementGesture(0, output.Id, 0, rect));
@@ -2033,11 +2083,14 @@ public partial class VideoViewModel : ObservableObject
 
 
     public void ApplyMappingSourceGesture(PlacementGesture gesture) =>
-        ApplyMappingGesture(gesture, (section, rect) => RectEdits.MappingSource(section, rect),
+        ApplyMappingGesture(gesture,
+            (section, rect) => RectEdits.MappingSource(section, rect, allowOutsideFrame: true),
             "move source region");
 
     public void ApplyMappingTargetGesture(PlacementGesture gesture) =>
-        ApplyMappingGesture(gesture, RectEdits.MappingTarget, "move output region");
+        ApplyMappingGesture(gesture,
+            (section, rect) => RectEdits.MappingTarget(section, rect, allowOutsideFrame: true),
+            "move output region");
 
     private void ApplyMappingGesture(
         PlacementGesture gesture,
@@ -2047,11 +2100,20 @@ public partial class VideoViewModel : ObservableObject
         if (MappedOutput?.Mapping.FirstOrDefault(item => item.Id == gesture.SubjectId) is not { } section)
             return;
 
+        var edit = command(section, gesture.Rect);
+        if (NearlyEqual(edit.Current, gesture.Rect.Free()))
+        {
+            SelectedSection = gesture.Index;
+            return;
+        }
+
         _drag ??= _journal.Composite(description, "mapping", quiet: true);
-        _journal.Do(command(section, gesture.Rect));
+        _journal.Do(edit);
         SelectedSection = gesture.Index;
         ApplyLiveMapping(MappedOutput);
-        Refresh();
+        OnPropertyChanged(nameof(MappingSource));
+        OnPropertyChanged(nameof(MappingTarget));
+        RaiseMappingRectFields();
     }
 
     private void ApplyLiveMapping(VideoOutputDefinition? output)
@@ -2061,23 +2123,13 @@ public partial class VideoViewModel : ObservableObject
             || _project.Compositions.FirstOrDefault(item => item.Id == compositionId) is not { } composition)
             return;
 
-        _ = ObserveLiveMappingAsync(host, output, composition);
+        var key = new LiveMappingKey(host, composition.Id, output.Id);
+        var snapshot = OutputMapping.Spec(output, composition.Width, composition.Height);
+        _liveMappings.Offer(key, snapshot);
     }
 
-    private static async Task ObserveLiveMappingAsync(
-        ShowHost host,
-        VideoOutputDefinition output,
-        CompositionDefinition composition)
-    {
-        try
-        {
-            await host.ApplyOutputMappingAsync(output, composition).ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException)
-        {
-            // A final pointer event can race engine shutdown; the journal still persists the mapping.
-        }
-    }
+    private readonly record struct LiveMappingKey(
+        ShowHost Host, Guid CompositionId, Guid OutputId);
 
     /// <summary>
     /// Ends the gesture: closes the undo step so the next drag starts a new one.
@@ -2093,6 +2145,22 @@ public partial class VideoViewModel : ObservableObject
 
     /// <summary>Re-reads every canvas from the document — after an edit here, or an undo anywhere.</summary>
     public void Refresh()
+    {
+        if (_refreshing)
+            return;
+
+        _refreshing = true;
+        try
+        {
+            RefreshCore();
+        }
+        finally
+        {
+            _refreshing = false;
+        }
+    }
+
+    private void RefreshCore()
     {
         OnPropertyChanged(nameof(CanAuthor));
 
@@ -2129,12 +2197,24 @@ public partial class VideoViewModel : ObservableObject
             pane.NoteLayoutChanged();
         }
 
-        // Rows, not panes: nothing drags in this list, so it is rebuilt outright and the selection is
-        // carried across by id.
+        // Preserve rows whose projected contents did not change. Replacing an equal ItemsSource makes
+        // Avalonia tear down and rebuild its selection anyway, which writes null/new SelectedItem
+        // values back through the view-model and re-announces all of the two-way numeric editors.
         var selected = SelectedOutput?.Id;
-        Outputs = VideoPresentation.Outputs(_project, _runtime);
-        OnPropertyChanged(nameof(Outputs));
-        OnPropertyChanged(nameof(HasNoOutputs));
+        var currentById = Outputs.ToDictionary(row => row.Id);
+        IReadOnlyList<VideoOutputRow> nextOutputs =
+        [
+            .. VideoPresentation.Outputs(_project, _runtime).Select(row =>
+                currentById.TryGetValue(row.Id, out var current) && current == row ? current : row),
+        ];
+
+        if (!Outputs.SequenceEqual(nextOutputs))
+        {
+            Outputs = nextOutputs;
+            OnPropertyChanged(nameof(Outputs));
+            OnPropertyChanged(nameof(HasNoOutputs));
+        }
+
         SelectedOutput = Outputs.FirstOrDefault(row => row.Id == selected) ?? Outputs.FirstOrDefault();
 
         // Changing outputs/sections can replace a 5×5 mesh with a 3×2 one. Keep the selected handle
@@ -2153,8 +2233,11 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(RasterHeight));
         OnPropertyChanged(nameof(RasterNote));
         RaiseSectionFields();
+        // Output rows no longer have to be replaced to refresh this pane. Re-announce its document
+        // fields explicitly so an external edit, undo or redo is still reflected even when the row's
+        // projected columns did not change.
+        RaiseOutputFields();
         RaiseCompositionFields();
-        RaiseSliceFields();
     }
 
     /// <summary>
@@ -2211,14 +2294,7 @@ public partial class VideoViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(MappingSourceAspect));
         OnPropertyChanged(nameof(MappingTargetAspect));
-        OnPropertyChanged(nameof(SourceX));
-        OnPropertyChanged(nameof(SourceY));
-        OnPropertyChanged(nameof(SourceWidth));
-        OnPropertyChanged(nameof(SourceHeight));
-        OnPropertyChanged(nameof(DestX));
-        OnPropertyChanged(nameof(DestY));
-        OnPropertyChanged(nameof(DestWidth));
-        OnPropertyChanged(nameof(DestHeight));
+        RaiseMappingRectFields();
         OnPropertyChanged(nameof(RotationDegrees));
         OnPropertyChanged(nameof(Opacity));
         OnPropertyChanged(nameof(Brightness));
@@ -2232,6 +2308,29 @@ public partial class VideoViewModel : ObservableObject
         OnPropertyChanged(nameof(WarpOffsetX));
         OnPropertyChanged(nameof(WarpOffsetY));
     }
+
+    /// <summary>Only the values changed by a rectangle drag; keeps pointer motion from rebuilding
+    /// unrelated mesh controls on every sample.</summary>
+    private void RaiseMappingRectFields()
+    {
+        OnPropertyChanged(nameof(SourceX));
+        OnPropertyChanged(nameof(SourceY));
+        OnPropertyChanged(nameof(SourceWidth));
+        OnPropertyChanged(nameof(SourceHeight));
+        OnPropertyChanged(nameof(DestX));
+        OnPropertyChanged(nameof(DestY));
+        OnPropertyChanged(nameof(DestWidth));
+        OnPropertyChanged(nameof(DestHeight));
+    }
+
+    private static bool NearlyEqual(double left, double right) =>
+        Math.Abs(left - right) < 0.000001;
+
+    private static bool NearlyEqual(NormalizedRect left, NormalizedRect right) =>
+        NearlyEqual(left.X, right.X)
+        && NearlyEqual(left.Y, right.Y)
+        && NearlyEqual(left.Width, right.Width)
+        && NearlyEqual(left.Height, right.Height);
 }
 
 /// <summary>

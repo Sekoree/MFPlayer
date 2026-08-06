@@ -248,6 +248,75 @@ public class CueExecutorTests
     }
 
     [Fact]
+    public async Task AnAllTogetherGroupOpensItsChildrenAsOneBatch()
+    {
+        var group = new GroupCueNode { Number = new CueNumber("1"), FireMode = GroupFireMode.AllTogether };
+        group.Children.AddRange([Media("1.1"), Media("1.2"), Media("1.3")]);
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+
+        // ONE batch, not three fires. Opened one after another, each child's media is opened before the
+        // next is even asked for, so a group of eleven stems starts as a staircase — each late by the
+        // sum of every open before it — and the GO costs the sum of all of them.
+        var batch = Assert.Single(host.PlayedTogether);
+        Assert.Equal(group.Children.Select(child => child.Id), batch);
+    }
+
+    [Fact]
+    public async Task AChildWithAPreWaitIsNotBatchedWithTheRest()
+    {
+        var group = new GroupCueNode { Number = new CueNumber("1"), FireMode = GroupFireMode.AllTogether };
+        var late = Media("1.3");
+        late.PreWaitMs = 2_000;
+        group.Children.AddRange([Media("1.1"), Media("1.2"), late]);
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+
+        // A pre-wait is a cue asking to start LATER; putting it in a batch whose whole purpose is one
+        // start edge would either lose the wait or hold the others back behind it.
+        var batch = Assert.Single(host.PlayedTogether);
+        Assert.Equal(2, batch.Count);
+        Assert.DoesNotContain(late.Id, batch);
+
+        // It still plays, and the group still fires everything.
+        Assert.Equal(3, host.Played.Count);
+        Assert.Contains(late.Id, host.Played);
+    }
+
+    [Fact]
+    public async Task AnAllTogetherGroupWithOneChildDoesNotNeedABatch()
+    {
+        var group = new GroupCueNode { Number = new CueNumber("1"), FireMode = GroupFireMode.AllTogether };
+        var only = Media("1.1");
+        group.Children.Add(only);
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+
+        Assert.Empty(host.PlayedTogether);
+        Assert.Equal([only.Id], host.Played);
+    }
+
+    [Fact]
+    public async Task ANonClipChildOfAnAllTogetherGroupStillFiresOnItsOwnPath()
+    {
+        var group = new GroupCueNode { Number = new CueNumber("1"), FireMode = GroupFireMode.AllTogether };
+        var action = new ActionCueNode { Number = new CueNumber("1.3"), Label = "Lights" };
+        group.Children.AddRange([Media("1.1"), Media("1.2"), action]);
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+
+        // An action cue is not a clip and has nothing to open, so it is not part of the batch — but it
+        // still has to happen, and the batch must not swallow it.
+        var batch = Assert.Single(host.PlayedTogether);
+        Assert.Equal(2, batch.Count);
+        Assert.Single(host.Actions);
+    }
+
+    [Fact]
     public async Task AGroupItselfIsNeverPlayed()
     {
         var group = new GroupCueNode { Number = new CueNumber("1") };

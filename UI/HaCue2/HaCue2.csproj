@@ -57,4 +57,8 @@
         <ProjectReference Include="..\HaCue2.Engine\HaCue2.Engine.csproj"/>
     </ItemGroup>
 
+    <ItemGroup>
+        <InternalsVisibleTo Include="HaCue2.Tests" />
+    </ItemGroup>
+
 </Project>

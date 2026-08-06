@@ -2,6 +2,7 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using HaCue2.Core.Model;
 using HaCue2.Views;
 using Xunit;
 
@@ -82,6 +83,15 @@ public class InspectorPaneRenderTests
         ShellFixture.WithShell(shell =>
         {
             var cue = ShellFixture.Bed(shell.Project);
+            for (var index = 0; index < 12; index++)
+            {
+                shell.Project.AudioPatch.LogicalChannels.Add(new LogicalAudioChannel
+                {
+                    Name = $"Aux {index + 1}",
+                    SortOrder = 100 + index,
+                });
+            }
+
             ShellFixture.Select(shell.Cues, cue.Id);
             shell.Cues.Inspector.SelectedTab = "AUDIO";
 
@@ -91,11 +101,21 @@ public class InspectorPaneRenderTests
                 var viewport = pane.GetVisualDescendants()
                     .OfType<ScrollViewer>()
                     .Single(scroll => scroll.Name == "CueSendMatrixViewport");
+                var content = pane.GetVisualDescendants()
+                    .OfType<Border>()
+                    .Single(border => border.Name == "CueSendMatrixContent");
+                var matrix = pane.GetVisualDescendants()
+                    .OfType<HaCue2.Controls.MatrixView>()
+                    .Single();
 
                 Assert.Equal("Auto", viewport.HorizontalScrollBarVisibility.ToString());
                 Assert.Equal("Auto", viewport.VerticalScrollBarVisibility.ToString());
                 Assert.Equal(360, viewport.MaxHeight);
-                Assert.True(viewport.Padding.Bottom >= 40);
+                Assert.True(content.Padding.Bottom >= 40);
+                Assert.True(matrix.Rows.Count >= 2);
+                Assert.True(matrix.Bounds.Height >= 60);
+                Assert.True(viewport.Extent.Height >= matrix.Bounds.Height + content.Padding.Bottom);
+                Assert.True(viewport.Extent.Width > viewport.Viewport.Width);
             }
             finally
             {

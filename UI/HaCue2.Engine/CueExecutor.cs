@@ -173,14 +173,56 @@ public sealed class CueExecutor(ICueExecutionHost host)
                 return true;
 
             default:
-                // Sequentially awaited rather than fanned out with Task.WhenAll: the session runs
-                // commands on one dispatcher, so concurrent fires queue behind each other anyway, and
-                // in order means the group's layer order is the order the canvas receives them in.
-                foreach (var child in children)
-                    await FireAsync(child.Id, depth + 1).ConfigureAwait(false);
-
-                return true;
+                return await FireTogetherAsync(children, depth).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// ALL TOGETHER: every child opens at once and starts on the same edge.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Firing them one after another meant each child's media was opened before the next was even
+    /// asked for, so the group started as a staircase — each cue late by the sum of every open before
+    /// it. On eleven stems plus two 1080p60 ProRes clips that is flam between the stems, two video
+    /// layers arriving at visibly different moments, and a GO that costs the sum of thirteen opens
+    /// rather than the longest one. The mode's entire meaning is simultaneity.
+    /// </para>
+    /// <para>
+    /// Only PLAIN clip children go in the batch. A child with a pre-wait is asking to start later by
+    /// definition; one with a post-wait would hold the session's fire lock after starting, which is the
+    /// one thing a batch must not do; one that auto-continues starts a chain; and a nested group, a
+    /// jump or an action is not a clip at all. Those keep the ordinary one-at-a-time path, which is
+    /// also the fallback if the batch itself cannot run — a staircase start beats a silent group.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> FireTogetherAsync(IReadOnlyList<CueNode> children, int depth)
+    {
+        var batched = children
+            .Where(child => child is MediaCueNode or TextCueNode
+                            && child.PreWaitMs == 0
+                            && child.PostWaitMs == 0
+                            && child.Trigger != CueTrigger.Continue
+                            && !IsSequenceOwned(child.Id))
+            .ToList();
+
+        var started = batched.Count > 1
+            ? await host.PlayTogetherAsync(batched, Project.ListOf(batched[0].Id)).ConfigureAwait(false)
+            : [];
+
+        var fired = new HashSet<Guid>(started);
+
+        // In authored order, so anything not in the batch still reaches the canvas in the order the
+        // list shows — and so a batch that could not run degrades to exactly the old behaviour.
+        foreach (var child in children)
+        {
+            if (fired.Contains(child.Id))
+                continue;
+
+            await FireAsync(child.Id, depth + 1).ConfigureAwait(false);
+        }
+
+        return true;
     }
 
     /// <summary>Advances Follow and playlist runs from the framework's authoritative natural-end edge.</summary>

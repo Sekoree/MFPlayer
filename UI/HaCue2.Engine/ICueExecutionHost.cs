@@ -36,6 +36,25 @@ public interface ICueExecutionHost
         TimeSpan? crossfade = null,
         FadeShape crossfadeCurve = default);
 
+    /// <summary>
+    /// Opens several clip cues at once and starts them on the same edge.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// What "all together" actually means, and the reason it needs its own verb. Fired one after
+    /// another, each cue's media is OPENED before the next one is even asked for — so a group of eleven
+    /// stems began playing as a staircase, each stem late by the sum of every open before it. On files
+    /// large enough to take a moment to open (a 1080p60 ProRes clip is), that is audible as flam and
+    /// visible as two layers arriving at different times, and the whole GO takes as long as all the
+    /// opens added together instead of as long as the slowest one.
+    /// </para>
+    /// <para>
+    /// The session opens them concurrently and holds every one at a barrier until the last is ready,
+    /// so they commit on one edge. Cues that did not start are simply absent from the result.
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyList<Guid>> PlayTogetherAsync(IReadOnlyList<CueNode> cues, CueList? list);
+
     /// <summary>Moves a list's cursor, or clears it when the cue is null.</summary>
     Task SetStandbyAsync(CueList list, Guid? cueId);
 

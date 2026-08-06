@@ -721,6 +721,95 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         return true;
     }
 
+    /// <summary>
+    /// Whether loading <paramref name="document"/> would leave every playing voice exactly as it is.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For hosts that reload the whole merged document after any edit. Such a host has only two blunt
+    /// choices otherwise: reload always — which restarts any cue whose binding the edit touched, heard
+    /// as a pop and seen as a clip jumping back to its in-point — or defer every reload while anything
+    /// is playing, which is safe but leaves ordinary edits (a label, a cue nobody is playing) waiting
+    /// on a fifty-minute track.
+    /// </para>
+    /// <para>
+    /// This is the third answer, and it is exactly the load's own rule rather than an approximation of
+    /// it: the same <see cref="RetainableGroupIds"/> that decides what survives, asked in advance and
+    /// with nothing torn down. True means "adopt it now, nothing playing will notice"; false means the
+    /// caller should hold the edit until the show is idle.
+    /// </para>
+    /// <para>
+    /// Answered against the preserving flags, because a host that reloads per edit is the caller that
+    /// passes them. A caller that would load with preservation off gets no useful answer from this and
+    /// should not ask.
+    /// </para>
+    /// </remarks>
+    public Task<bool> WouldPreservePlaybackAsync(ShowDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return InvokeAsync(() => Task.FromResult(WouldPreservePlaybackCore(document)));
+    }
+
+    private bool WouldPreservePlaybackCore(ShowDocument document)
+    {
+        // The same normalization the load does. Without it a document whose optional arrays are null
+        // would throw here rather than answering, and the caller would treat that as "unsafe" forever.
+        document = document with
+        {
+            Cues = document.Cues ?? [],
+            Clips = document.Clips ?? [],
+            Compositions = document.Compositions ?? [],
+            Routes = document.Routes ?? [],
+            AudioOutputs = document.AudioOutputs ?? [],
+        };
+
+        var playing = _groups
+            .Where(entry => entry.Value.Voices.Count > 0)
+            .Select(entry => entry.Key)
+            .ToList();
+
+        // Nothing is holding a voice, so nothing can be interrupted.
+        if (playing.Count == 0)
+            return true;
+
+        var retained = RetainableGroupIds(
+            document.Clips.ToDictionary(clip => clip.ClipId, StringComparer.Ordinal),
+            document,
+            PreservableCompositionIds(document));
+
+        return playing.All(retained.Contains);
+    }
+
+    /// <summary>
+    /// The live compositions an incoming document describes identically, and which may therefore be
+    /// kept in place rather than rebuilt.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the load and by <see cref="WouldPreservePlaybackAsync"/> so the prediction cannot
+    /// drift from what the load actually does — the whole value of the prediction is that it is the
+    /// same rule.
+    /// </remarks>
+    private HashSet<string> PreservableCompositionIds(ShowDocument document)
+    {
+        var preserved = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var comp in document.Compositions)
+        {
+            if (_compositions.TryGetValue(comp.Id, out var live)
+                && _compositionDefinitions.TryGetValue(comp.Id, out var previous)
+                && SameComposition(previous, comp)
+                && live.CanvasFormat.Width == comp.Width
+                && live.CanvasFormat.Height == comp.Height
+                && live.CanvasFormat.FrameRate.Numerator == comp.FrameRateNum
+                && live.CanvasFormat.FrameRate.Denominator == comp.FrameRateDen)
+            {
+                preserved.Add(comp.Id);
+            }
+        }
+
+        return preserved;
+    }
+
     private async Task LoadDocumentCoreAsync(
         ShowDocument document,
         bool preserveMatchingCompositions = false,
@@ -745,23 +834,9 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         // Preservation (opt-in): a live composition whose id + raster + rate match an incoming one is kept
         // alive across the reload (its GL thread/context + any attached visualizer). We reuse it instead of
         // building a replacement, and skip disposing it below.
-        var preservedIds = new HashSet<string>(StringComparer.Ordinal);
-        if (preserveMatchingCompositions)
-        {
-            foreach (var comp in document.Compositions)
-            {
-                if (_compositions.TryGetValue(comp.Id, out var live)
-                    && _compositionDefinitions.TryGetValue(comp.Id, out var previous)
-                    && SameComposition(previous, comp)
-                    && live.CanvasFormat.Width == comp.Width
-                    && live.CanvasFormat.Height == comp.Height
-                    && live.CanvasFormat.FrameRate.Numerator == comp.FrameRateNum
-                    && live.CanvasFormat.FrameRate.Denominator == comp.FrameRateDen)
-                {
-                    preservedIds.Add(comp.Id);
-                }
-            }
-        }
+        var preservedIds = preserveMatchingCompositions
+            ? PreservableCompositionIds(document)
+            : new HashSet<string>(StringComparer.Ordinal);
 
         // Stage the replacement graph in locals. If a composition fails to construct (or the host video factory
         // throws), dispose only the partially-built NEW compositions and rethrow - the live show is untouched.

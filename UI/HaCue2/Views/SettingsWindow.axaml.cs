@@ -64,5 +64,14 @@ public partial class SettingsWindow : Window
             settings.CacheNote = settings.OpenLogFolder();
     }
 
+    /// <summary>Hands the Project status pane's button back to whoever opened this window.</summary>
+    /// <remarks>
+    /// The settings window cannot build the report itself — it holds the project and the journal, not
+    /// the machine environment or the project path — so the host supplies the verb and this is the
+    /// button that calls it.
+    /// </remarks>
+    private void OnOpenProjectStatus(object? sender, RoutedEventArgs e) =>
+        (DataContext as SettingsViewModel)?.OpenProjectStatus?.Invoke();
+
     private void OnClose(object? sender, RoutedEventArgs e) => Close();
 }

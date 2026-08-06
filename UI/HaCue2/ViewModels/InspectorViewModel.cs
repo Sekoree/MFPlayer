@@ -10,6 +10,7 @@ using HaCue2.Machine;
 using HaCue2.Controls;
 using HaCue2.Presentation;
 using HaCue2.Sample;
+using HaCue2.Session;
 using S.Media.Session;
 
 namespace HaCue2.ViewModels;
@@ -120,11 +121,25 @@ public partial class InspectorViewModel : ObservableObject
             _rememberedTab[KindOf(old)] = previous;
 
         _selection = cueIds;
-        Reload();
+
+        // A SELECTION change re-chooses the pane; an edit does not. See Reload.
+        Reload(keepTab: false);
     }
 
-    /// <summary>Re-reads the document after an edit or an undo, keeping the selection.</summary>
-    public void Reload()
+    /// <summary>Re-reads the document after an edit or an undo, keeping the selection and the tab.</summary>
+    public void Reload() => Reload(keepTab: true);
+
+    /// <param name="keepTab">
+    /// True for an EDIT, false for a selection change.
+    /// <para>
+    /// This is the difference between an inspector that stays where the operator put it and one that
+    /// snaps back to General on every keystroke — which is what it did, because every edit ran the tab
+    /// choice below from scratch and the remembered tab was only ever written when the SELECTION
+    /// changed. Editing a level on the Audio pane therefore recomputed "media cue ⇒ GENERAL" and threw
+    /// the operator out of the pane they were working in, once per character.
+    /// </para>
+    /// </param>
+    private void Reload(bool keepTab)
     {
         var lead = Cue;
 
@@ -139,13 +154,18 @@ public partial class InspectorViewModel : ObservableObject
 
         SelectedTab = lead is null
             ? null
-            : RememberTabs && _rememberedTab.TryGetValue(KindOf(lead), out var remembered) && Tabs.Contains(remembered)
-                ? remembered
-                // General carries the complete clip window for finite media, so it is the useful
-                // starting pane there. Other kinds still open on their kind-specific second tab.
-                : lead is MediaCueNode media && !SourceUri.IsLive(media.MediaPath)
-                    ? "GENERAL"
-                    : Tabs.Skip(1).FirstOrDefault() ?? Tabs.FirstOrDefault();
+            // Still a tab this selection has: stay on it. An edit is not a reason to move.
+            : keepTab && SelectedTab is { } open && Tabs.Contains(open)
+                ? open
+                : RememberTabs
+                  && _rememberedTab.TryGetValue(KindOf(lead), out var remembered)
+                  && Tabs.Contains(remembered)
+                    ? remembered
+                    // General carries the complete clip window for finite media, so it is the useful
+                    // starting pane there. Other kinds still open on their kind-specific second tab.
+                    : lead is MediaCueNode media && !SourceUri.IsLive(media.MediaPath)
+                        ? "GENERAL"
+                        : Tabs.Skip(1).FirstOrDefault() ?? Tabs.FirstOrDefault();
 
         OnPropertyChanged(nameof(Cue));
         OnPropertyChanged(nameof(Selected));
@@ -181,6 +201,8 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(SendToVisualizerValue));
         OnPropertyChanged(nameof(SendColumns));
         OnPropertyChanged(nameof(SendRows));
+        OnPropertyChanged(nameof(SendPresetTarget));
+        OnPropertyChanged(nameof(HasSendPresetTarget));
         OnPropertyChanged(nameof(RouteChain));
         OnPropertyChanged(nameof(Placements));
         OnPropertyChanged(nameof(PlacementGuidesX));
@@ -215,6 +237,9 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(EffectLanes));
         OnPropertyChanged(nameof(HasEffectLanes));
         OnPropertyChanged(nameof(CanCarryLanes));
+        OnPropertyChanged(nameof(CanAddVolumeLane));
+        OnPropertyChanged(nameof(CanAddOpacityLane));
+        OnPropertyChanged(nameof(CanAddOutboundLane));
         OnPropertyChanged(nameof(FadeInCurve));
         OnPropertyChanged(nameof(FadeOutCurve));
         OnPropertyChanged(nameof(CrossfadeCurve));
@@ -322,7 +347,52 @@ public partial class InspectorViewModel : ObservableObject
         _ => ["GENERAL", "NOTE"],
     };
 
-    private static IReadOnlyList<string> TabsFor(CueNode cue) => TabsFor(KindOf(cue));
+    /// <summary>
+    /// The tabs a particular cue actually has — the kind's set, less anything its media cannot do.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A media cue's kind says it MIGHT carry video; the file says whether it does. A WAV stem was
+    /// offered a Video tab with an empty composition picker, a placement list that could never have an
+    /// entry, and a crop editor over nothing — eleven of them in a stem group. Worse, "place on
+    /// composition" was reachable there, and a placement on a cue with no video stream is a layer that
+    /// renders nothing and cannot be told apart from a broken one.
+    /// </para>
+    /// <para>
+    /// Only removed when the probe has actually ANSWERED. A file nobody has looked at yet keeps its
+    /// Video tab: hiding a tab because the answer has not arrived is the same failure as painting a cue
+    /// red before anybody looked at it. Live sources (<c>ndi:</c> and friends) are never probed at all
+    /// and keep it for the same reason — what a camera is carrying is a fact about the moment it
+    /// fires, not about the document.
+    /// </para>
+    /// <para>
+    /// EFFECTS stays either way: a volume lane is automation an audio-only cue can perfectly well
+    /// carry, and the lane picker itself now offers only the kinds that apply.
+    /// </para>
+    /// </remarks>
+    private IReadOnlyList<string> TabsFor(CueNode cue)
+    {
+        var tabs = TabsFor(KindOf(cue));
+
+        if (cue is not MediaCueNode media
+            || SourceUri.IsLive(media.MediaPath)
+            || FactsFor(media) is not { IsKnown: true, HasPlaceableVideo: false })
+            return tabs;
+
+        return [.. tabs.Where(tab => tab != "VIDEO")];
+    }
+
+    /// <summary>
+    /// What the probe knows about one cue's file.
+    /// </summary>
+    /// <remarks>
+    /// The lead's copy first — the shell pushes it on selection and it is the freshest answer — then
+    /// the lookup. The fallback matters: <see cref="Facts"/> is only written when the selection comes
+    /// through the cue tree, so anything that shows a cue by id (a jump, a search result, a test) would
+    /// otherwise decide the lead's tabs on a null.
+    /// </remarks>
+    private MediaFacts? FactsFor(MediaCueNode media) =>
+        (ReferenceEquals(media, Cue) ? Facts : null) ?? MediaFacts?.Invoke(media);
 
     public bool IsGeneralPane => SelectedTab == "GENERAL";
     public bool IsAudioPane => SelectedTab == "AUDIO";
@@ -430,8 +500,15 @@ public partial class InspectorViewModel : ObservableObject
         get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Db(media.LevelDb) : "—");
         set
         {
-            if (TryParseDb(value, out var db))
-                EditMedia("level", media => media.LevelDb, (media, parsed) => media.LevelDb = parsed, db);
+            if (!TryParseDb(value, out var db))
+                return;
+
+            EditMedia("level", media => media.LevelDb, (media, parsed) => media.LevelDb = parsed, db);
+
+            // The level is folded into the compiled sends, so it reaches a PLAYING cue the same way a
+            // send edit does — as a matrix reconciliation on the running voice, not as a reload that
+            // would restart it.
+            PushLiveSends();
         }
     }
 
@@ -724,43 +801,255 @@ public partial class InspectorViewModel : ObservableObject
     /// </remarks>
     public void ApplySendGesture(MatrixGesture gesture)
     {
-        if (Cue is not MediaCueNode cue
+        // EVERY selected media cue, not just the lead. Routing a stem group to a different logical
+        // output is the archetypal multi-selection edit, and this pane silently applied it to the first
+        // row only — leaving the other ten cues on the old send with nothing on screen saying so.
+        //
+        // The lead still decides WHAT the gesture means (which cell, whether it is being added or
+        // removed, which direction a mute toggles), because that is what the operator clicked on. The
+        // others follow it, so the whole selection ends up in the state the lead's cell now shows
+        // rather than each cue toggling its own way and the matrix reading "mixed" afterwards.
+        if (Cue is not MediaCueNode lead
             || gesture.Row >= SendRows.Count
             || gesture.Column >= SendColumns.Count)
             return;
 
         var source = SendRows[gesture.Row].LineChannel;
         var channelId = SendColumns[gesture.Column].ChannelId;
-        var existing = cue.Sends.FirstOrDefault(
+        var targets = Selected.OfType<MediaCueNode>().ToList();
+
+        CueAudioSend? SendOn(MediaCueNode cue) => cue.Sends.FirstOrDefault(
             send => send.SourceChannel == source && send.LogicalChannelId == channelId);
+
+        var existing = SendOn(lead);
 
         switch (gesture.Kind)
         {
             case MatrixGestureKind.Toggle:
-                _journal.Do(new SetCueSendCommand(
-                    cue, source, channelId,
-                    existing is null ? 0 : null,
-                    existing is null ? false : null,
-                    existing is null ? "route send at unity" : "remove send"));
+            {
+                var routing = existing is null;
+                Each(routing ? "route send at unity" : "remove send", (cue, current) =>
+                    new SetCueSendCommand(
+                        cue, source, channelId,
+                        routing ? 0 : null,
+                        routing ? false : null,
+                        routing ? "route send at unity" : "remove send"));
                 _journal.CloseGroup();
                 break;
+            }
 
             case MatrixGestureKind.Adjust when existing is not null:
-                _journal.Do(new SetCueSendCommand(
-                    cue, source, channelId, existing.GainDb + gesture.DeltaDb, existing.Muted,
-                    "set send gain"));
-                break;
+                // A drag emits one command per pointer sample. Quiet, so the shell reacts once on
+                // release instead of re-probing and re-refreshing the whole project per pixel.
+                _drag ??= _journal.Composite("adjust send gain", "cues", quiet: true);
+                Each("set send gain", (cue, current) => current is null
+                    ? null
+                    : new SetCueSendCommand(
+                        cue, source, channelId, current.GainDb + gesture.DeltaDb, current.Muted,
+                        "set send gain"));
+                PushLiveSends();
+                OnPropertyChanged(nameof(SendRows));
+                OnPropertyChanged(nameof(RouteChain));
+                return;
 
             case MatrixGestureKind.Mute when existing is not null:
-                _journal.Do(new SetCueSendCommand(
-                    cue, source, channelId, existing.GainDb, !existing.Muted,
-                    existing.Muted ? "unmute send" : "mute send"));
+            {
+                var muting = !existing.Muted;
+                Each(muting ? "mute send" : "unmute send", (cue, current) => current is null
+                    ? null
+                    : new SetCueSendCommand(
+                        cue, source, channelId, current.GainDb, muting,
+                        muting ? "mute send" : "unmute send"));
                 _journal.CloseGroup();
                 break;
+            }
         }
 
+        PushLiveSends();
+        Reload();
+        return;
+
+        void Each(string description, Func<MediaCueNode, CueAudioSend?, SetCueSendCommand?> build)
+        {
+            if (targets.Count > 1)
+            {
+                using (_journal.Composite($"{description} on {targets.Count} cues", "cues"))
+                    foreach (var cue in targets)
+                    {
+                        if (build(cue, SendOn(cue)) is { } command)
+                            _journal.Do(command);
+                    }
+
+                return;
+            }
+
+            if (build(lead, existing) is { } single)
+                _journal.Do(single);
+        }
+    }
+
+    // ── send presets ──────────────────────────────────────────────────────────────────────────
+    //
+    // Screen 05 has always shown a PRESETS strip reading "stereo → Main · mono from L · swap · clear".
+    // It was a caption: a Border with a TextBlock in it and nothing behind either, so the four things
+    // it names could not be clicked and never happened. HaPlay's cue player had the feature; this is it.
+    //
+    // They exist because the matrix is the slow way to do the four routings almost every cue wants.
+    // Eleven stems into Main is twenty-two clicks placed exactly right, and the commonest authoring
+    // mistake in a cue player is a stem that is quietly mono into one side because one of them missed.
+
+    /// <summary>The pair of logical channels a stereo preset targets, in sort order.</summary>
+    /// <remarks>
+    /// The first Output GROUP with at least two members, because that is what a stereo pair IS in this
+    /// document (register item 9) — falling back to the first two logical channels for a project that
+    /// never grouped anything. Named rather than assumed so the button can say where it is sending.
+    /// </remarks>
+    private IReadOnlyList<LogicalAudioChannel> StereoTarget
+    {
+        get
+        {
+            var patch = Project.AudioPatch;
+            var ordered = patch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
+
+            var pair = patch.Groups
+                .Select(group => group.MemberIds
+                    .Select(id => ordered.FirstOrDefault(channel => channel.Id == id))
+                    .OfType<LogicalAudioChannel>()
+                    .OrderBy(channel => channel.SortOrder)
+                    .ToList())
+                .FirstOrDefault(members => members.Count >= 2);
+
+            return pair ?? [.. ordered.Take(2)];
+        }
+    }
+
+    /// <summary>Where the stereo presets would send — on the buttons, so nobody has to guess.</summary>
+    public string SendPresetTarget => StereoTarget switch
+    {
+        { Count: >= 2 } pair => $"{pair[0].Name} · {pair[1].Name}",
+        { Count: 1 } single => single[0].Name,
+        _ => "no logical outputs",
+    };
+
+    /// <summary>False on a project with nothing to send TO — the buttons say so rather than no-op.</summary>
+    public bool HasSendPresetTarget => StereoTarget.Count >= 2;
+
+    /// <summary>
+    /// Applies one send preset to every selected media cue.
+    /// </summary>
+    /// <remarks>
+    /// Written as "replace this cue's sends with exactly these", not as a series of toggles: a preset
+    /// whose result depended on what was already routed would give two cues in one selection different
+    /// answers, which is the whole failure the presets exist to avoid.
+    /// </remarks>
+    public void ApplySendPreset(string preset)
+    {
+        var targets = Selected.OfType<MediaCueNode>().ToList();
+        if (targets.Count == 0)
+            return;
+
+        var pair = StereoTarget;
+        if (preset != "clear" && pair.Count < 2)
+            return;
+
+        // (source channel, logical channel) at unity. Empty means "route nothing".
+        IReadOnlyList<(int Source, Guid Channel)> wanted = preset switch
+        {
+            "stereo" => [(0, pair[0].Id), (1, pair[1].Id)],
+            // One channel to both sides, so a mono stem sits in the middle instead of hard left.
+            "monoL" => [(0, pair[0].Id), (0, pair[1].Id)],
+            "swap" => [(1, pair[0].Id), (0, pair[1].Id)],
+            "clear" => [],
+            _ => [],
+        };
+
+        if (preset is not ("stereo" or "monoL" or "swap" or "clear"))
+            return;
+
+        var description = preset switch
+        {
+            "stereo" => $"stereo → {SendPresetTarget}",
+            "monoL" => $"mono from L → {SendPresetTarget}",
+            "swap" => "swap L/R sends",
+            _ => "clear sends",
+        };
+
+        using (_journal.Composite(
+                   targets.Count > 1 ? $"{description} on {targets.Count} cues" : description, "cues"))
+        {
+            foreach (var cue in targets)
+            {
+                // Remove what the preset does not want FIRST, so a swap cannot momentarily double up
+                // on a channel and so "clear" is simply the empty case of the same operation.
+                foreach (var send in cue.Sends.ToList())
+                {
+                    if (wanted.Any(want =>
+                            want.Source == send.SourceChannel && want.Channel == send.LogicalChannelId))
+                        continue;
+
+                    _journal.Do(new SetCueSendCommand(
+                        cue, send.SourceChannel, send.LogicalChannelId, null, null, description));
+                }
+
+                foreach (var (source, channel) in wanted)
+                    _journal.Do(new SetCueSendCommand(cue, source, channel, 0, false, description));
+            }
+        }
+
+        _journal.CloseGroup();
+        PushLiveSends();
         Reload();
     }
+
+    /// <summary>Closes the send-gain drag's undo step, on pointer release.</summary>
+    public void EndSendGesture()
+    {
+        _drag?.Dispose();
+        _drag = null;
+        _journal.CloseGroup();
+        Reload();
+    }
+
+    /// <summary>
+    /// Re-applies the selection's sends to whatever is currently sounding.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A send or level edit changes the cue's clip binding, so the engine will not adopt it while that
+    /// cue is playing — a reload would restart the cue, which on a group of stems is a pop and eleven
+    /// re-opened files for one fader move. The running voice gets the new matrix directly instead, and
+    /// the document catches up when the show is idle.
+    /// </para>
+    /// <para>
+    /// Best-effort on every count. An idle cue simply has no active voice and the session says so; the
+    /// authored value stands either way.
+    /// </para>
+    /// </remarks>
+    private void PushLiveSends()
+    {
+        if (Host is not { } host)
+            return;
+
+        foreach (var media in Selected.OfType<MediaCueNode>())
+            _liveSends.Offer(new LiveSendKey(host, media.Id), ShowCompiler.LogicalSends(media));
+    }
+
+    /// <summary>
+    /// Serializes live send pushes per cue, keeping only the newest.
+    /// </summary>
+    /// <remarks>
+    /// A gain drag emits one of these per pointer sample and each crosses the session dispatcher, which
+    /// is the same thread playback runs its commands on. Queueing every sample makes the fader lag the
+    /// mouse and starves the show; the publisher lets one finish and replaces the rest.
+    /// </remarks>
+    private readonly LatestOnlyPublisher<LiveSendKey, IReadOnlyList<ShowClipLogicalSend>> _liveSends =
+        new(
+            static (key, sends) => key.Host.ApplyActiveSendsAsync(key.CueId, sends),
+            TimeSpan.FromMilliseconds(33),
+            static failure => System.Diagnostics.Trace.TraceWarning(
+                $"Live send update failed: {failure.GetType().Name}: {failure.Message}"));
+
+    private readonly record struct LiveSendKey(ShowHost Host, Guid CueId);
 
     // ── the Video pane ────────────────────────────────────────────────────────────────────────
     public IReadOnlyList<PlacementBox> Placements
@@ -1313,6 +1602,121 @@ public partial class InspectorViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Writes one property of a KIND-SPECIFIC pane across the whole selection.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The general fields (label, level, trigger, waits) have always applied to every selected cue; the
+    /// per-kind panes did not. Their setters closed over the LEAD cue's payload — <c>() =&gt;
+    /// group.Shuffle</c> — so selecting five fade cues and typing a duration changed exactly one of
+    /// them, silently, while the field showed the new value for the whole selection.
+    /// </para>
+    /// <para>
+    /// Resolved per cue by TYPE, which is also the safety rule: a selection of mixed kinds only sees a
+    /// pane at all when every member has that tab (the tab set is the intersection), and anything that
+    /// is not a <typeparamref name="TCue"/> is skipped rather than coerced.
+    /// </para>
+    /// <para>
+    /// Cues already holding the value are left out entirely, so a multi-selection edit produces one
+    /// undo step containing only the cues it actually changed — and none at all when it changed
+    /// nothing, which is what keeps a combo box re-announcing its own value from filling the stack.
+    /// </para>
+    /// </remarks>
+    /// <param name="lead">
+    /// The cue whose pane the operator is looking at. Present only so <typeparamref name="TCue"/> can
+    /// be inferred at the call site — the edit itself is resolved against the selection, and the lead
+    /// gets no special treatment beyond being one of them.
+    /// </param>
+    private void EditEach<TCue, T>(
+        TCue lead,
+        string property,
+        string domain,
+        Func<TCue, T> read,
+        Action<TCue, T> write,
+        T value,
+        string description)
+        where TCue : CueNode
+    {
+        _ = lead;
+
+        var targets = Selected
+            .OfType<TCue>()
+            .Where(cue => !EqualityComparer<T>.Default.Equals(read(cue), value))
+            .ToList();
+
+        if (targets.Count == 0)
+            return;
+
+        if (targets.Count > 1)
+        {
+            using (_journal.Composite($"{description} on {targets.Count} cues", domain))
+                foreach (var cue in targets)
+                    _journal.Do(Write(cue));
+        }
+        else
+        {
+            _journal.Do(Write(targets[0]));
+        }
+
+        _journal.CloseGroup();
+        Reload();
+        return;
+
+        SetValueCommand<T> Write(TCue cue) => new(
+            cue.Id, property, domain, () => read(cue), parsed => write(cue, parsed), value, description);
+    }
+
+    /// <summary>
+    /// The same, for a property whose new value has to be computed per cue.
+    /// </summary>
+    /// <remarks>
+    /// Needed by every LIST-valued property here — a fade's targets, a jump's destination, a
+    /// visualizer's feed. Handing one <c>List&lt;Guid&gt;</c> to eleven cues would alias them all onto
+    /// a single instance, so editing one afterwards would silently edit the rest; and a relative change
+    /// ("add this channel") means something different on each cue and must be recomputed from that
+    /// cue's own state rather than from the lead's.
+    /// </remarks>
+    private void EditEach<TCue, T>(
+        TCue lead,
+        string property,
+        string domain,
+        Func<TCue, T> read,
+        Action<TCue, T> write,
+        Func<TCue, T> value,
+        string description)
+        where TCue : CueNode
+    {
+        _ = lead;
+
+        var targets = Selected
+            .OfType<TCue>()
+            .Select(cue => (Cue: cue, Value: value(cue)))
+            .Where(pair => !EqualityComparer<T>.Default.Equals(read(pair.Cue), pair.Value))
+            .ToList();
+
+        if (targets.Count == 0)
+            return;
+
+        if (targets.Count > 1)
+        {
+            using (_journal.Composite($"{description} on {targets.Count} cues", domain))
+                foreach (var (cue, next) in targets)
+                    _journal.Do(Write(cue, next));
+        }
+        else
+        {
+            _journal.Do(Write(targets[0].Cue, targets[0].Value));
+        }
+
+        _journal.CloseGroup();
+        Reload();
+        return;
+
+        SetValueCommand<T> Write(TCue cue, T next) => new(
+            cue.Id, property, domain, () => read(cue), parsed => write(cue, parsed), next, description);
+    }
+
+    /// <summary>
     /// A drag on the inspector's placement preview.
     /// </summary>
     /// <remarks>
@@ -1452,8 +1856,8 @@ public partial class InspectorViewModel : ObservableObject
             if (Group is not { } group || value < 0 || (GroupFireMode)value == group.FireMode)
                 return;
 
-            Edit("fireMode", "cues",
-                () => group.FireMode, mode => group.FireMode = mode, (GroupFireMode)value,
+            EditEach(group, "fireMode", "cues",
+                cue => cue.FireMode, (cue, mode) => cue.FireMode = mode, (GroupFireMode)value,
                 $"fire {FireModes[value]}");
         }
     }
@@ -1475,7 +1879,8 @@ public partial class InspectorViewModel : ObservableObject
         set
         {
             if (Group is { } group && value != group.Shuffle)
-                Edit("shuffle", "cues", () => group.Shuffle, on => group.Shuffle = on, value,
+                EditEach(group, "shuffle", "cues",
+                cue => cue.Shuffle, (cue, on) => cue.Shuffle = on, value,
                     value ? "shuffle" : "play in order");
         }
     }
@@ -1486,8 +1891,8 @@ public partial class InspectorViewModel : ObservableObject
         set
         {
             if (Group is { } group && value != group.ReshuffleEachPass)
-                Edit("reshuffle", "cues",
-                    () => group.ReshuffleEachPass, on => group.ReshuffleEachPass = on, value,
+                EditEach(group, "reshuffle", "cues",
+                cue => cue.ReshuffleEachPass, (cue, on) => cue.ReshuffleEachPass = on, value,
                     "reshuffle each pass");
         }
     }
@@ -1505,8 +1910,8 @@ public partial class InspectorViewModel : ObservableObject
         set
         {
             if (Group is { } group && value != group.AvoidImmediateRepeat)
-                Edit("avoidRepeat", "cues",
-                    () => group.AvoidImmediateRepeat, on => group.AvoidImmediateRepeat = on, value,
+                EditEach(group, "avoidRepeat", "cues",
+                cue => cue.AvoidImmediateRepeat, (cue, on) => cue.AvoidImmediateRepeat = on, value,
                     value ? "avoid immediate repeats" : "allow immediate repeats");
         }
     }
@@ -1518,8 +1923,8 @@ public partial class InspectorViewModel : ObservableObject
         set
         {
             if (Group is { } group && value >= 0 && value != group.LoopCount)
-                Edit("loopCount", "cues",
-                    () => group.LoopCount, count => group.LoopCount = count, Math.Clamp(value, 0, 999),
+                EditEach(group, "loopCount", "cues",
+                cue => cue.LoopCount, (cue, count) => cue.LoopCount = count, Math.Clamp(value, 0, 999),
                     value == 0 ? "loop forever" : $"play {value} pass(es)");
         }
     }
@@ -1535,8 +1940,8 @@ public partial class InspectorViewModel : ObservableObject
             var count = value is null ? (int?)null : Math.Max(1, (int)value.Value);
             if (count == group.PlayCount)
                 return;
-            Edit("playCount", "cues", () => group.PlayCount, set => group.PlayCount = set,
-                count, count is null ? "play every item per pass" : $"play {count} item(s) per pass");
+            EditEach(group, "playCount", "cues",
+                cue => cue.PlayCount, (cue, set) => cue.PlayCount = set, count, count is null ? "play every item per pass" : $"play {count} item(s) per pass");
         }
     }
 
@@ -1551,9 +1956,8 @@ public partial class InspectorViewModel : ObservableObject
                     NumberStyles.Float, CultureInfo.CurrentCulture, out var seconds))
                 return;
 
-            Edit("crossfade", "cues",
-                () => group.CrossfadeMs, ms => group.CrossfadeMs = ms,
-                (int)Math.Clamp(seconds * 1000, 0, 60_000), "set crossfade");
+            EditEach(group, "crossfade", "cues",
+                cue => cue.CrossfadeMs, (cue, ms) => cue.CrossfadeMs = ms, (int)Math.Clamp(seconds * 1000, 0, 60_000), "set crossfade");
         }
     }
 
@@ -1567,7 +1971,8 @@ public partial class InspectorViewModel : ObservableObject
             if (Group is not { } group || value < 0 || (AtListEnd)value == group.AtEnd)
                 return;
 
-            Edit("atEnd", "cues", () => group.AtEnd, at => group.AtEnd = at, (AtListEnd)value,
+            EditEach(group, "atEnd", "cues",
+                cue => cue.AtEnd, (cue, at) => cue.AtEnd = at, (AtListEnd)value,
                 $"at end: {AtEndOptions[value]}");
         }
     }
@@ -1738,13 +2143,15 @@ public partial class InspectorViewModel : ObservableObject
             : fallback;
     }
 
+    // Every control on the TEXT pane goes through here, so making this one method selection-aware is
+    // what makes "select three cards, set the font" work — it used to change the first one only.
     private void EditCard<T>(
         string property, Func<TextCueNode, T> read, Action<TextCueNode, T> write, T value)
     {
-        if (Card is not { } card || EqualityComparer<T>.Default.Equals(read(card), value))
+        if (Card is not { } card)
             return;
 
-        Edit(property, "cues", () => read(card), number => write(card, number), value, "edit text cue");
+        EditEach(card, property, "cues", read, write, value, "edit text cue");
     }
 
     private VisualizerCueNode? Visualizer => Cue as VisualizerCueNode;
@@ -1774,16 +2181,28 @@ public partial class InspectorViewModel : ObservableObject
         if (on == fade.TargetChannelIds.Contains(channelId))
             return;
 
-        var target = fade;
-        var next = new List<Guid>(fade.TargetChannelIds);
+        // Computed PER CUE. Ticking "Main L" on a five-fade selection adds that one channel to each of
+        // them; copying the lead's finished list across would replace every other cue's own targets
+        // with the lead's, which is a different edit and not the one that was asked for.
+        EditEach(fade, "fadeTargets", "cues",
+            cue => cue.TargetChannelIds,
+            (cue, ids) => cue.TargetChannelIds = ids,
+            cue =>
+            {
+                var next = new List<Guid>(cue.TargetChannelIds);
 
-        if (on)
-            next.Add(channelId);
-        else
-            next.Remove(channelId);
+                if (on)
+                {
+                    if (!next.Contains(channelId))
+                        next.Add(channelId);
+                }
+                else
+                {
+                    next.Remove(channelId);
+                }
 
-        Edit("fadeTargets", "cues",
-            () => target.TargetChannelIds, ids => target.TargetChannelIds = ids, next,
+                return next;
+            },
             on ? "add fade target" : "remove fade target");
     }
 
@@ -1811,9 +2230,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = fade;
-            Edit("fadeLevel", "cues",
-                () => target.ToLevelDb, set => target.ToLevelDb = set,
-                Math.Clamp(db, GainRange.SilenceFloorDb, 12), "set fade level");
+            EditEach(target, "fadeLevel", "cues",
+                cue => cue.ToLevelDb, (cue, set) => cue.ToLevelDb = set, Math.Clamp(db, GainRange.SilenceFloorDb, 12), "set fade level");
         }
     }
 
@@ -1825,8 +2243,8 @@ public partial class InspectorViewModel : ObservableObject
             if (Fade is { } fade && TryParseSeconds(value, out var ms))
             {
                 var target = fade;
-                Edit("fadeDuration", "cues",
-                    () => target.DurationMs, set => target.DurationMs = set, ms, "set fade duration");
+                EditEach(target, "fadeDuration", "cues",
+                cue => cue.DurationMs, (cue, set) => cue.DurationMs = set, ms, "set fade duration");
             }
         }
     }
@@ -1840,8 +2258,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = fade;
-            Edit("fadeEverything", "cues",
-                () => target.FadeEverythingSounding, on => target.FadeEverythingSounding = on, value,
+            EditEach(target, "fadeEverything", "cues",
+                cue => cue.FadeEverythingSounding, (cue, on) => cue.FadeEverythingSounding = on, value,
                 value ? "fade everything sounding" : "fade only the targets");
         }
     }
@@ -1855,8 +2273,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = fade;
-            Edit("fadeStops", "cues",
-                () => target.StopTargetsWhenComplete, on => target.StopTargetsWhenComplete = on, value,
+            EditEach(target, "fadeStops", "cues",
+                cue => cue.StopTargetsWhenComplete, (cue, on) => cue.StopTargetsWhenComplete = on, value,
                 value ? "stop targets when complete" : "leave targets running");
         }
     }
@@ -1907,9 +2325,11 @@ public partial class InspectorViewModel : ObservableObject
             if (chosen.SequenceEqual(jump.TargetCueIds))
                 return;
 
-            var target = jump;
-            Edit("jumpTarget", "cues",
-                () => target.TargetCueIds, ids => target.TargetCueIds = ids, chosen,
+            // A fresh list per cue: one shared instance would alias every selected jump onto the same
+            // object, so editing one afterwards would silently edit the others.
+            EditEach(jump, "jumpTarget", "cues",
+                cue => cue.TargetCueIds, (cue, ids) => cue.TargetCueIds = ids,
+                _ => new List<Guid>(chosen),
                 chosen.Count == 0 ? "clear jump target" : "set jump target");
         }
     }
@@ -1929,8 +2349,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = jump;
-            Edit("jumpCondition", "cues",
-                () => target.Condition, condition => target.Condition = condition, (JumpCondition)value,
+            EditEach(target, "jumpCondition", "cues",
+                cue => cue.Condition, (cue, condition) => cue.Condition = condition, (JumpCondition)value,
                 $"jump {JumpConditions[value]}");
             OnPropertyChanged(nameof(IsCountedJump));
         }
@@ -1948,8 +2368,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             count = Math.Clamp(count, 1, 10_000);
-            Edit("jumpCount", "cues",
-                () => jump.JumpCount, number => jump.JumpCount = number, count,
+            EditEach(jump, "jumpCount", "cues",
+                cue => cue.JumpCount, (cue, number) => cue.JumpCount = number, count,
                 $"jump {count} times, then continue");
         }
     }
@@ -1963,8 +2383,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = jump;
-            Edit("jumpRandom", "cues",
-                () => target.PickAtRandom, on => target.PickAtRandom = on, value,
+            EditEach(target, "jumpRandom", "cues",
+                cue => cue.PickAtRandom, (cue, on) => cue.PickAtRandom = on, value,
                 value ? "pick at random" : "always the first target");
         }
     }
@@ -1978,8 +2398,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = jump;
-            Edit("jumpFires", "cues",
-                () => target.FireOnArrival, on => target.FireOnArrival = on, value,
+            EditEach(target, "jumpFires", "cues",
+                cue => cue.FireOnArrival, (cue, on) => cue.FireOnArrival = on, value,
                 value ? "fire on arrival" : "move standby only");
         }
     }
@@ -2024,8 +2444,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = action;
-            Edit("actionEndpoint", "cues",
-                () => target.EndpointId, id => target.EndpointId = id, chosen, "set action endpoint");
+            EditEach(target, "actionEndpoint", "cues",
+                cue => cue.EndpointId, (cue, id) => cue.EndpointId = id, chosen, "set action endpoint");
         }
     }
 
@@ -2038,8 +2458,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = action;
-            Edit("actionAddress", "cues",
-                () => target.Address, address => target.Address = address, value, "set action address");
+            EditEach(target, "actionAddress", "cues",
+                cue => cue.Address, (cue, address) => cue.Address = address, value, "set action address");
         }
     }
 
@@ -2052,8 +2472,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = action;
-            Edit("actionArguments", "cues",
-                () => target.Arguments, args => target.Arguments = args, value, "set action arguments");
+            EditEach(target, "actionArguments", "cues",
+                cue => cue.Arguments, (cue, args) => cue.Arguments = args, value, "set action arguments");
         }
     }
 
@@ -2138,8 +2558,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = patch;
-            Edit("patchSnapshot", "cues",
-                () => target.SnapshotId, id => target.SnapshotId = id, chosen, "set patch snapshot");
+            EditEach(target, "patchSnapshot", "cues",
+                cue => cue.SnapshotId, (cue, id) => cue.SnapshotId = id, chosen, "set patch snapshot");
         }
     }
 
@@ -2151,8 +2571,8 @@ public partial class InspectorViewModel : ObservableObject
             if (Patch is { } patch && TryParseSeconds(value, out var ms))
             {
                 var target = patch;
-                Edit("patchFade", "cues",
-                    () => target.FadeMs, set => target.FadeMs = set, ms, "set patch fade");
+                EditEach(target, "patchFade", "cues",
+                cue => cue.FadeMs, (cue, set) => cue.FadeMs = set, ms, "set patch fade");
             }
         }
     }
@@ -2189,8 +2609,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = visualizer;
-            Edit("presetPack", "cues",
-                () => target.PresetPack, pack => target.PresetPack = pack, value, "set preset pack");
+            EditEach(target, "presetPack", "cues",
+                cue => cue.PresetPack, (cue, pack) => cue.PresetPack = pack, value, "set preset pack");
         }
     }
 
@@ -2202,8 +2622,8 @@ public partial class InspectorViewModel : ObservableObject
             if (Visualizer is { } visualizer && TryParseSeconds(value, out var ms))
             {
                 var target = visualizer;
-                Edit("visualizerHold", "cues",
-                    () => target.HoldMs, set => target.HoldMs = set, ms, "set preset hold");
+                EditEach(target, "visualizerHold", "cues",
+                cue => cue.HoldMs, (cue, set) => cue.HoldMs = set, ms, "set preset hold");
             }
         }
     }
@@ -2216,8 +2636,8 @@ public partial class InspectorViewModel : ObservableObject
             if (Visualizer is { } visualizer && TryParseSeconds(value, out var ms))
             {
                 var target = visualizer;
-                Edit("visualizerBlend", "cues",
-                    () => target.BlendMs, set => target.BlendMs = set, ms, "set preset blend");
+                EditEach(target, "visualizerBlend", "cues",
+                cue => cue.BlendMs, (cue, set) => cue.BlendMs = set, ms, "set preset blend");
             }
         }
     }
@@ -2231,8 +2651,8 @@ public partial class InspectorViewModel : ObservableObject
                 return;
 
             var target = visualizer;
-            Edit("visualizerLock", "cues",
-                () => target.LockPreset, on => target.LockPreset = on, value,
+            EditEach(target, "visualizerLock", "cues",
+                cue => cue.LockPreset, (cue, on) => cue.LockPreset = on, value,
                 value ? "lock the preset" : "auto-advance presets");
         }
     }
@@ -2244,8 +2664,8 @@ public partial class InspectorViewModel : ObservableObject
         {
             if (Visualizer is not { } visualizer || value == visualizer.FeedAll)
                 return;
-            Edit("visualizerFeedAll", "cues", () => visualizer.FeedAll,
-                on => visualizer.FeedAll = on, value,
+            EditEach(visualizer, "visualizerFeedAll", "cues",
+                cue => cue.FeedAll, (cue, on) => cue.FeedAll = on, value,
                 value ? "feed all sounding media to the visualizer" : "use a selective visualizer feed");
         }
     }
@@ -2272,8 +2692,9 @@ public partial class InspectorViewModel : ObservableObject
                 .ToList();
             if (wanted.SequenceEqual(visualizer.FeedCueIds))
                 return;
-            Edit("visualizerFeedCues", "cues", () => visualizer.FeedCueIds,
-                ids => visualizer.FeedCueIds = ids, wanted, "set visualizer audio feed cues");
+            EditEach(visualizer, "visualizerFeedCues", "cues",
+                cue => cue.FeedCueIds, (cue, ids) => cue.FeedCueIds = ids,
+                _ => new List<Guid>(wanted), "set visualizer audio feed cues");
         }
     }
 
@@ -2634,11 +3055,17 @@ public partial class InspectorViewModel : ObservableObject
     // generator or the timeline's duck helper happened to write one.
 
     /// <summary>The lanes on the selected cue, or empty for a kind that cannot carry one.</summary>
-    private List<EffectLane>? Lanes => Cue switch
+    private List<EffectLane>? Lanes => LanesOf(Cue);
+
+    // A text card carries EffectLanes in the model and is given the EFFECTS tab by TabsFor — it was
+    // simply missing here, so its pane always read "this kind cannot carry automation" over a cue that
+    // could. Kept as one lookup so the two cannot disagree again.
+    private static List<EffectLane>? LanesOf(CueNode? cue) => cue switch
     {
         MediaCueNode media => media.EffectLanes,
         GroupCueNode group => group.EffectLanes,
         VisualizerCueNode visualizer => visualizer.EffectLanes,
+        TextCueNode card => card.EffectLanes,
         _ => null,
     };
 
@@ -2680,7 +3107,74 @@ public partial class InspectorViewModel : ObservableObject
         return $"{lane.Points.Count} points";
     }
 
-    public IReadOnlyList<string> LaneKinds { get; } = ["volume", "opacity", "osc ramp", "midi ramp"];
+    /// <summary>Every lane kind there is, in <see cref="EffectLaneKind"/> order.</summary>
+    private static readonly IReadOnlyList<string> AllLaneKinds =
+        ["volume", "opacity", "osc ramp", "midi ramp"];
+
+    /// <summary>
+    /// The lane kinds THIS cue can actually carry.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The picker offered all four to everything, so a WAV stem was offered an opacity lane with
+    /// nothing on a canvas to fade, and a visualizer cue was offered a volume lane over a renderer that
+    /// has no audio at all. Both compile to a lane the engine reads and then has nowhere to apply —
+    /// the worst kind of authoring control, because it appears to have worked.
+    /// </para>
+    /// <para>
+    /// The two OUTBOUND kinds are offered to everything on purpose: an osc or midi ramp sends to an
+    /// endpoint over the cue's length and needs nothing from the media at all. That is exactly why a
+    /// comment cue is still the one kind with no lanes — it has no length either.
+    /// </para>
+    /// <para>
+    /// Unknown means allowed, like the Video tab's rule: a file nobody has probed yet must not have its
+    /// authoring narrowed on a guess.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<string> LaneKinds => AllLaneKinds;
+
+    /// <summary>Whether the picker offers a volume lane — audio the cue actually has.</summary>
+    public bool CanAddVolumeLane => KindApplies(EffectLaneKind.Volume, Cue);
+
+    /// <summary>Whether the picker offers an opacity lane — something of the cue's on a canvas.</summary>
+    public bool CanAddOpacityLane => KindApplies(EffectLaneKind.Opacity, Cue);
+
+    /// <summary>Whether the picker offers the outbound ramps. True for every kind that can carry a lane.</summary>
+    public bool CanAddOutboundLane => KindApplies(EffectLaneKind.OscRamp, Cue);
+
+    /// <summary>The kind a picker row means, or null when this cue cannot carry it.</summary>
+    private EffectLaneKind? LaneKindAt(int index) =>
+        index >= 0
+        && index < AllLaneKinds.Count
+        && KindApplies((EffectLaneKind)index, Cue)
+            ? (EffectLaneKind)index
+            : null;
+
+    private bool KindApplies(EffectLaneKind kind, CueNode? cue) => kind switch
+    {
+        // Audio. A visualizer renders from a feed and has none of its own; a card is silent.
+        EffectLaneKind.Volume => cue switch
+        {
+            MediaCueNode media => SourceUri.IsLive(media.MediaPath)
+                                  || FactsFor(media) is not { IsKnown: true } facts
+                                  || facts.AudioTracks.Count > 0,
+            GroupCueNode => true,
+            _ => false,
+        },
+
+        // Something on a canvas. A group's children may be placed even when the group is not.
+        EffectLaneKind.Opacity => cue switch
+        {
+            MediaCueNode media => SourceUri.IsLive(media.MediaPath)
+                                  || FactsFor(media) is not { IsKnown: true } facts
+                                  || facts.HasPlaceableVideo,
+            GroupCueNode or VisualizerCueNode or TextCueNode => true,
+            _ => false,
+        },
+
+        // Outbound: nothing about the media is involved.
+        _ => LanesOf(cue) is not null,
+    };
 
     /// <summary>
     /// Adds a lane of the given kind.
@@ -2698,10 +3192,11 @@ public partial class InspectorViewModel : ObservableObject
     /// </remarks>
     public void AddLane(int kindIndex)
     {
-        if (Lanes is not { } lanes || Cue is not { } cue || kindIndex < 0 || kindIndex >= LaneKinds.Count)
+        // Through LaneKindAt, because the picker now shows only the kinds this cue can carry — its
+        // row 1 is no longer necessarily EffectLaneKind.Opacity. Reading the index as the enum would
+        // add the wrong kind of lane on any cue that had one filtered out above it.
+        if (Lanes is not { } lanes || LaneKindAt(kindIndex) is not { } kind)
             return;
-
-        var kind = (EffectLaneKind)kindIndex;
 
         if (lanes.Any(lane => lane.Kind == kind))
             return;
@@ -2722,9 +3217,8 @@ public partial class InspectorViewModel : ObservableObject
     /// <summary>Whether a kind can still be added — the picker greys out what is already there.</summary>
     public bool CanAddLane(int kindIndex) =>
         Lanes is { } lanes
-        && kindIndex >= 0
-        && kindIndex < LaneKinds.Count
-        && lanes.All(lane => lane.Kind != (EffectLaneKind)kindIndex);
+        && LaneKindAt(kindIndex) is { } kind
+        && lanes.All(lane => lane.Kind != kind);
 
     /// <summary>Removes a lane. Undoable, like everything else this panel does.</summary>
     public void RemoveLane(int index)

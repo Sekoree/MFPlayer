@@ -1,3 +1,4 @@
+using HaCue2.Controls;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Engine;
@@ -135,6 +136,35 @@ public sealed class ImplementationRegressionTests
         Assert.Equal(0, output.Mapping[0].WarpOffsets[9], 6);
     }
 
+    [Fact]
+    public void WarpPointMotionImmediatelyProducesTheLatestEngineSnapshot()
+    {
+        var composition = new CompositionDefinition { Name = "Canvas" };
+        var section = new MappingSection
+        {
+            Name = "Warp",
+            MeshColumns = 2,
+            MeshRows = 2,
+            WarpOffsets = [0, 0, 0, 0, 0, 0, 0, 0],
+        };
+        var output = new VideoOutputDefinition
+        {
+            Name = "Projector",
+            CompositionId = composition.Id,
+            Mapping = [section],
+        };
+        var project = new HaCueProject { Compositions = [composition], VideoOutputs = [output] };
+        var video = new VideoViewModel(project, new ShowRuntime(), new ProjectJournal(project));
+
+        video.MoveWarpPoint(new WarpPointGesture(3, .1, -.2));
+
+        var snapshot = OutputMapping.Spec(output, composition.Width, composition.Height);
+        Assert.NotNull(snapshot);
+        var point = snapshot.Sections[0].MeshPoints![3];
+        Assert.Equal(1.1, point.X, 6);
+        Assert.Equal(.8, point.Y, 6);
+    }
+
     /// <summary>
     /// Growing a mesh keeps the handles the operator has already placed.
     /// </summary>
@@ -249,6 +279,42 @@ public sealed class ImplementationRegressionTests
                 Assert.Equal(.5, right.TargetX, 6);
                 Assert.Equal(.5, right.TargetWidth, 6);
             });
+    }
+
+    [Fact]
+    public void MappingCanvasMovesMayCrossSourceAndOutputEdgesWithoutResizing()
+    {
+        var composition = new CompositionDefinition { Name = "Canvas" };
+        var section = new MappingSection
+        {
+            Name = "Panel",
+            SourceWidth = .25,
+            SourceHeight = .4,
+            TargetWidth = .25,
+            TargetHeight = .4,
+        };
+        var output = new VideoOutputDefinition
+        {
+            Name = "Projector",
+            CompositionId = composition.Id,
+            Mapping = [section],
+        };
+        var project = new HaCueProject { Compositions = [composition], VideoOutputs = [output] };
+        var video = new VideoViewModel(project, new ShowRuntime(), new ProjectJournal(project));
+
+        video.ApplyMappingSourceGesture(new PlacementGesture(
+            0, section.Id, 0, new NormalizedRect(-.15, .2, .25, .4)));
+        video.EndGesture();
+        video.ApplyMappingTargetGesture(new PlacementGesture(
+            0, section.Id, 0, new NormalizedRect(.9, -.2, .25, .4)));
+        video.EndGesture();
+
+        Assert.Equal(-.15, section.SourceX, 6);
+        Assert.Equal(.25, section.SourceWidth, 6);
+        Assert.Equal(.9, section.TargetX, 6);
+        Assert.Equal(-.2, section.TargetY, 6);
+        Assert.Equal(.25, section.TargetWidth, 6);
+        Assert.Equal(.4, section.TargetHeight, 6);
     }
 
     /// <summary>

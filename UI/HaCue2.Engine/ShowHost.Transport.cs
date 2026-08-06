@@ -43,6 +43,8 @@ public sealed partial class ShowHost
     {
         ArgumentNullException.ThrowIfNull(list);
 
+        await FlushPendingEditAsync().ConfigureAwait(false);
+
         if (_project.CueLists.FirstOrDefault(candidate => candidate.Id == list.Id) is not { } runtimeList)
             return null;
 
@@ -133,11 +135,54 @@ public sealed partial class ShowHost
     /// scene wants is the state the show would be in AT that moment, bed and all, which is why a clip
     /// straddling the playhead is started part-way through rather than skipped.
     /// </remarks>
-    public Task FireTimelineFromAsync(GroupCueNode group, TimeSpan from) =>
-        Executor.FireTimelineAsync(group, from);
+    public async Task FireTimelineFromAsync(GroupCueNode group, TimeSpan from)
+    {
+        await FlushPendingEditAsync().ConfigureAwait(false);
+        await Executor.FireTimelineAsync(group, from).ConfigureAwait(false);
+    }
 
     /// <summary>Fires one cue by id, whatever the cursor is doing.</summary>
-    public Task<bool> FireAsync(Guid cueId) => Executor.FireAsync(cueId);
+    public async Task<bool> FireAsync(Guid cueId)
+    {
+        await FlushPendingEditAsync().ConfigureAwait(false);
+        return await Executor.FireAsync(cueId).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// An edit the host declined to adopt mid-show, offered again now that something is about to fire.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Set by the shell. A cue fired against a document the operator has since edited would play the
+    /// old version of itself — the one failure the deferral in <see cref="TryReloadAsync"/> must not
+    /// introduce — so every fire passes through here first.
+    /// </para>
+    /// <para>
+    /// Only the OPERATOR's verbs go through this: the executor's own internal fires (a playlist
+    /// advancing, an auto-continue, a timeline child reaching its offset) call the executor directly and
+    /// deliberately do not, because flushing between two items of a running playlist is precisely the
+    /// interruption being avoided.
+    /// </para>
+    /// </remarks>
+    public Func<Task>? PendingEditFlush { get; set; }
+
+    private async Task FlushPendingEditAsync()
+    {
+        if (PendingEditFlush is not { } flush)
+            return;
+
+        try
+        {
+            await flush().ConfigureAwait(false);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // A flush that failed must never stop the GO. The operator pressed a transport button; the
+            // worst case is that it fires the document the engine already had, which is what would have
+            // happened anyway.
+            Report($"a held edit could not be applied before firing — {failure.Message}");
+        }
+    }
 
     /// <summary>
     /// Stops one cue — the bare STOP.

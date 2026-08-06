@@ -65,10 +65,18 @@ internal sealed class FileLogProvider : ILoggerProvider
         if (_writer is null)
             return;
 
-        await foreach (var line in _lines.Reader.ReadAllAsync().ConfigureAwait(false))
-            await _writer.WriteLineAsync(line).ConfigureAwait(false);
+        // Drain each available burst and flush it before waiting again. StreamWriter otherwise keeps
+        // even the startup line in its character buffer until graceful shutdown, leaving a zero-byte
+        // log when a native crash or forced termination is exactly what the file was meant to explain.
+        while (await _lines.Reader.WaitToReadAsync().ConfigureAwait(false))
+        {
+            // Bound a burst so a continuously chatty source cannot postpone the flush forever.
+            var count = 0;
+            while (count++ < 256 && _lines.Reader.TryRead(out var line))
+                await _writer.WriteLineAsync(line).ConfigureAwait(false);
 
-        await _writer.FlushAsync().ConfigureAwait(false);
+            await _writer.FlushAsync().ConfigureAwait(false);
+        }
     }
 
     public void Dispose()
@@ -144,4 +152,3 @@ internal sealed class FileLogProvider : ILoggerProvider
         };
     }
 }
-

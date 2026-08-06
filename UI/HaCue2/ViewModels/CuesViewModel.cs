@@ -393,7 +393,32 @@ public partial class CuesViewModel : ObservableObject
     /// <summary>What the transport row says about itself.</summary>
     public string TransportHint => Engine is null
         ? "GO always works — editing never blocks playback"
-        : "live · editing never blocks playback";
+        : HasHeldEdit
+            ? "live · an edit waits for the cue it would restart"
+            : "live · editing never blocks playback";
+
+    /// <summary>
+    /// True while the engine has declined an edit rather than restart a playing cue.
+    /// </summary>
+    /// <remarks>
+    /// Said out loud rather than left silent. The engine refuses a reload that would tear down a
+    /// sounding voice, so an operator who trims a playing cue and hears nothing change is owed the
+    /// reason — the alternative is to restart their cue mid-show, which is what the app used to do.
+    /// The edit lands by itself the moment that cue ends, and immediately on the next GO.
+    /// </remarks>
+    public bool HasHeldEdit
+    {
+        get;
+        set
+        {
+            if (field == value)
+                return;
+
+            field = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TransportHint));
+        }
+    }
 
     /// <summary>
     /// Stops the selected active cue — the bare STOP.

@@ -601,8 +601,39 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     public async Task ReloadAsync(HaCueProject project, ShowCompileContext context)
         => await ReloadAsync(project, context, alreadyDetached: false).ConfigureAwait(false);
 
+    /// <summary>
+    /// Recompiles, but only adopts the result when doing so cannot interrupt anything playing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// What the shell calls after an edit. A reload restarts any group whose voices the edit changed —
+    /// re-opening the media, re-seeking it, and taking the audio with it, which on a show layering two
+    /// 1080p60 ProRes clips over eleven stems is heard as a pop and a stutter and seen as the picture
+    /// jumping back to its in-point. Doing that 300 ms after every drag, keystroke and matrix click is
+    /// what made editing during playback feel broken.
+    /// </para>
+    /// <para>
+    /// The overwhelming majority of edits cannot disturb anything: a label, a note, an idle cue, an
+    /// output's crop, a patch cell. Those are adopted immediately, exactly as before. Only an edit that
+    /// would actually restart a playing voice is refused here, and the shell holds it until the show is
+    /// idle — geometry and level edits reach the running picture and the running mix through the live
+    /// paths meanwhile, so the operator sees their edit either way.
+    /// </para>
+    /// </remarks>
+    /// <returns>False when the edit was NOT adopted and must be offered again later.</returns>
+    public Task<bool> TryReloadAsync(HaCueProject project, ShowCompileContext context)
+        => ReloadAsync(project, context, alreadyDetached: false, onlyIfUndisruptive: true);
+
     private async Task ReloadAsync(
         HaCueProject project, ShowCompileContext context, bool alreadyDetached)
+        => await ReloadAsync(project, context, alreadyDetached, onlyIfUndisruptive: false)
+            .ConfigureAwait(false);
+
+    private async Task<bool> ReloadAsync(
+        HaCueProject project,
+        ShowCompileContext context,
+        bool alreadyDetached,
+        bool onlyIfUndisruptive)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(context);
@@ -617,6 +648,14 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
                 ? context with { Durations = _durations }
                 : context;
             var document = ShowCompiler.Compile(next, nextContext);
+
+            // Asked BEFORE anything is torn down, and asked of the session rather than guessed at here:
+            // "would loading this keep every playing voice" is the load's own retention rule, and a
+            // second implementation of it in the host would drift from the one that actually decides.
+            if (onlyIfUndisruptive
+                && !await _session.WouldPreservePlaybackAsync(document).ConfigureAwait(false))
+                return false;
+
             var cueGroups = document.Cues
                 .Where(cue => Guid.TryParse(cue.Id, out _) && cue.GroupId is { Length: > 0 })
                 .ToDictionary(cue => Guid.Parse(cue.Id), cue => cue.GroupId!);
@@ -668,6 +707,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             await _triggers.ReloadAsync(next).ConfigureAwait(false);
             _recorders.Adopt(next);
             _actions.Adopt(next);
+            return true;
         }
         finally
         {
@@ -769,6 +809,41 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         _session.UpdateActivePlacementAsync(
             cueId.ToString(), compositionId.ToString(), layerIndex, placement);
 
+    /// <summary>
+    /// Re-applies a sounding cue's logical sends, so a send or level edit is heard immediately.
+    /// </summary>
+    /// <remarks>
+    /// The audio counterpart of the live placement push. A send edit DOES change the cue's clip
+    /// binding, so a reload would restart the cue to apply it — on an eleven-stem group that is a pop
+    /// and eleven re-opened files, for a fader move. The session reconciles the matrix on the running
+    /// voice instead, as a click-free ramp, and the document reload happens later when it is free.
+    /// Returns false when the cue is not the active voice on any group, which is the ordinary case for
+    /// an idle cue and not a failure.
+    /// </remarks>
+    public Task<bool> ApplyActiveSendsAsync(Guid cueId, IReadOnlyList<ShowClipLogicalSend> sends)
+    {
+        ArgumentNullException.ThrowIfNull(sends);
+        return _session.ApplyActiveLogicalSendsAsync(cueId.ToString(), sends);
+    }
+
+    /// <summary>
+    /// Pushes the project's patch cells onto the live bay without reloading the document.
+    /// </summary>
+    /// <remarks>
+    /// The audio counterpart of <see cref="UpdateActivePlacementAsync"/> and
+    /// <see cref="ApplyOutputMappingAsync"/>. The patch is not part of the compiled document — the
+    /// second matrix belongs to the rig — so it can be reconciled under running voices at any time, and
+    /// a gain drag has no reason to wait for the debounced reload behind it. It used to: every sample
+    /// restarted that debounce, so the operator heard nothing at all until they let go.
+    /// </remarks>
+    public void ApplyPatch(HaCueProject project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+
+        foreach (var failure in _bay.Apply(project))
+            Report(failure);
+    }
+
     /// <summary>Applies an output's current crop/warp to its open composition immediately.</summary>
     public Task<bool> ApplyOutputMappingAsync(
         VideoOutputDefinition output,
@@ -776,11 +851,22 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(composition);
-        return _session.ApplyOutputMappingAsync(
-            composition.Id.ToString(),
-            output.Id.ToString("N"),
+        return ApplyOutputMappingAsync(
+            composition.Id,
+            output.Id,
             OutputMapping.Spec(output, composition.Width, composition.Height));
     }
+
+    /// <summary>
+    /// Applies an immutable mapping snapshot. Pointer publishers use this overload so a delayed update
+    /// cannot observe a project object that has already moved on to a later pointer sample.
+    /// </summary>
+    public Task<bool> ApplyOutputMappingAsync(
+        Guid compositionId,
+        Guid outputId,
+        ClipOutputMappingSpec? mapping) =>
+        _session.ApplyOutputMappingAsync(
+            compositionId.ToString(), outputId.ToString("N"), mapping);
 
     /// <summary>
     /// Paints black on every window that is open but shows no canvas.

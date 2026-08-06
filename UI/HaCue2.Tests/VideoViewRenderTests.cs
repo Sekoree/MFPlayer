@@ -129,6 +129,24 @@ public class VideoViewRenderTests
         Assert.NotNull(split);
     });
 
+    [Fact]
+    public Task BothMappingCanvasesExposeAnOverflowWorkArea() => ShellFixture.WithShell(shell =>
+    {
+        var (video, _, _) = Rig(shell);
+        video.OpenMapping();
+        video.Refresh();
+        var window = Host(new VideoView(), video);
+
+        var mappingCanvases = window.GetVisualDescendants()
+            .OfType<HaCue2.Controls.PlacementCanvas>()
+            .Where(canvas => canvas.IsEffectivelyVisible && canvas.Boxes.Count > 0)
+            .ToList();
+
+        Assert.Equal(2, mappingCanvases.Count);
+        Assert.All(mappingCanvases, canvas => Assert.True(canvas.AllowOutside));
+        window.Close();
+    });
+
     /// <summary>
     /// Replacing sections while their two-way numeric editors are mounted must not write an old
     /// full-raster value into the newly selected first panel.
@@ -154,6 +172,56 @@ public class VideoViewRenderTests
             Assert.Equal(1d / 3, section.TargetWidth, 6);
             Assert.Equal(1d / 3, section.TargetHeight, 6);
         });
+
+        window.Close();
+    });
+
+    /// <summary>
+    /// Refresh and selection notifications may fill the mounted two-way numeric controls, but those
+    /// values are projections of the document rather than new operator edits.
+    /// </summary>
+    [Fact]
+    public Task BoundGeometryNotificationsDoNotWriteBackIntoTheJournal() => ShellFixture.WithShell(shell =>
+    {
+        var (video, output, _) = Rig(shell);
+        output.Mapping.Add(new MappingSection
+        {
+            Name = "Detail",
+            SourceX = .123456789,
+            SourceY = .234567891,
+            SourceWidth = .345678912,
+            SourceHeight = .456789123,
+            TargetX = .111111111,
+            TargetY = .222222222,
+            TargetWidth = .333333333,
+            TargetHeight = .444444444,
+        });
+        video.OpenMapping();
+        video.Refresh();
+
+        var window = Host(new VideoView(), video);
+        var outputs = video.Outputs;
+        var selectedOutput = video.SelectedOutput;
+        var edits = shell.Journal.Log.Count;
+
+        // A routine refresh used to replace an equal ItemsSource, which reset SelectedItem and
+        // re-announced every numeric property through a TwoWay binding.
+        video.Refresh();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Same(outputs, video.Outputs);
+        Assert.Same(selectedOutput, video.SelectedOutput);
+        Assert.Equal(edits, shell.Journal.Log.Count);
+
+        // This is the other route from the crash trace: selecting a section changes all eight
+        // rectangle fields at once. Their decimal-backed controls must not echo them as commands.
+        video.SelectSection(1);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(1, video.SelectedSection);
+        Assert.Equal(edits, shell.Journal.Log.Count);
+        Assert.Equal(.123456789, output.Mapping[1].SourceX, 9);
+        Assert.Equal(.444444444, output.Mapping[1].TargetHeight, 9);
 
         window.Close();
     });

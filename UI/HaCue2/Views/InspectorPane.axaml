@@ -195,22 +195,45 @@
                           AutomationProperties.Name="Cue send matrix viewport"
                           HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
                           MaxHeight="360"
-                          Margin="10,2,10,6" Padding="0,0,20,40">
-              <!-- The same gesture vocabulary as the patch: an operator who learns it on one matrix
-                   must find it true on the other. -->
-              <c:MatrixView Columns="{Binding SendColumns}" Rows="{Binding SendRows}"
-                            AutomationProperties.Name="Cue audio send matrix"
-                            RowHeaderWidth="44"
-                            Gesture="OnSendGesture"
-                            PointerReleased="OnSendGestureEnded"
-                            ToolTip.Tip="Click routes at unity · drag adjusts gain · right-click mutes." />
+                          Margin="10,2,10,6">
+              <!-- Padding belongs to the CONTENT, not the ScrollViewer. ScrollViewer padding is
+                   removed from the child's arrange slot and used to crush this 68 px matrix to its
+                   28 px header; content padding becomes part of the scroll extent instead. -->
+              <Border Name="CueSendMatrixContent" Padding="0,0,20,40">
+                <!-- The same gesture vocabulary as the patch: an operator who learns it on one matrix
+                     must find it true on the other. -->
+                <c:MatrixView Columns="{Binding SendColumns}" Rows="{Binding SendRows}"
+                              AutomationProperties.Name="Cue audio send matrix"
+                              RowHeaderWidth="44"
+                              Gesture="OnSendGesture"
+                              PointerReleased="OnSendGestureEnded"
+                              ToolTip.Tip="Click routes at unity · drag adjusts gain · right-click mutes." />
+              </Border>
             </ScrollViewer>
 
+            <!-- The four routings almost every cue wants, which the matrix above can only do one
+                 careful click at a time. They apply to the WHOLE selection, so a stem group goes to
+                 Main in one gesture and one undo. -->
             <Border Classes="chain flush">
               <StackPanel Orientation="Horizontal" Spacing="7">
                 <Border Classes="badge"><TextBlock Text="PRESETS" /></Border>
+                <Button Theme="{StaticResource ChipButton}" Content="STEREO → MAIN"
+                        Click="OnSendPreset" Tag="stereo"
+                        IsEnabled="{Binding HasSendPresetTarget}"
+                        ToolTip.Tip="Source 1 and 2 to the first stereo pair, at unity" />
+                <Button Theme="{StaticResource ChipButton}" Content="MONO FROM L"
+                        Click="OnSendPreset" Tag="monoL"
+                        IsEnabled="{Binding HasSendPresetTarget}"
+                        ToolTip.Tip="Source 1 to both sides — a mono stem in the middle, not hard left" />
+                <Button Theme="{StaticResource ChipButton}" Content="SWAP"
+                        Click="OnSendPreset" Tag="swap"
+                        IsEnabled="{Binding HasSendPresetTarget}"
+                        ToolTip.Tip="Exchange the two source channels' sends" />
+                <Button Theme="{StaticResource ChipButton}" Content="CLEAR"
+                        Click="OnSendPreset" Tag="clear"
+                        ToolTip.Tip="Remove every send on this cue" />
                 <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                           Text="stereo → Main · mono from L · swap · clear" />
+                           Text="{Binding SendPresetTarget}" />
               </StackPanel>
             </Border>
 
@@ -386,11 +409,17 @@
               <Button Classes="block" Content="+ ADD EFFECT LANE ▾" IsEnabled="{Binding CanCarryLanes}">
                 <Button.Flyout>
                   <MenuFlyout>
-                    <MenuItem Header="Volume" Click="OnAddLane" Tag="0" />
-                    <MenuItem Header="Opacity" Click="OnAddLane" Tag="1" />
-                    <Separator />
-                    <MenuItem Header="OSC ramp" Click="OnAddLane" Tag="2" />
-                    <MenuItem Header="MIDI ramp" Click="OnAddLane" Tag="3" />
+                    <!-- Only what this cue can carry. A volume lane over a visualizer and an opacity
+                         lane over a WAV both compile to automation the engine has nowhere to apply. -->
+                    <MenuItem Header="Volume" Click="OnAddLane" Tag="0"
+                              IsVisible="{Binding CanAddVolumeLane}" />
+                    <MenuItem Header="Opacity" Click="OnAddLane" Tag="1"
+                              IsVisible="{Binding CanAddOpacityLane}" />
+                    <Separator IsVisible="{Binding CanAddOutboundLane}" />
+                    <MenuItem Header="OSC ramp" Click="OnAddLane" Tag="2"
+                              IsVisible="{Binding CanAddOutboundLane}" />
+                    <MenuItem Header="MIDI ramp" Click="OnAddLane" Tag="3"
+                              IsVisible="{Binding CanAddOutboundLane}" />
                   </MenuFlyout>
                 </Button.Flyout>
               </Button>

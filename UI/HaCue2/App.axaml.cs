@@ -8,6 +8,7 @@ using HaCue2.Sample;
 using HaCue2.Session;
 using HaCue2.Engine;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using HaCue2.ViewModels;
 using HaCue2.Views;
 
@@ -50,9 +51,10 @@ public partial class App : Application
             // it and closing itself, and under OnMainWindowClose that hand-off is indistinguishable from
             // the user quitting.
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnLastWindowClose;
-            desktop.MainWindow = Environment.GetEnvironmentVariable(StartVariable) == "main"
-                ? OpenShell()
-                : OpenLauncher();
+            desktop.MainWindow = OpenNamedProject(desktop.Args)
+                                 ?? (Environment.GetEnvironmentVariable(StartVariable) == "main"
+                                     ? OpenShell()
+                                     : (Window)OpenLauncher());
             desktop.Exit += (_, _) =>
             {
                 YouTubeRuntime.Shutdown();
@@ -140,6 +142,43 @@ public partial class App : Application
     }
 
     private static ShellWindow OpenShell() => Open(SampleProject.Create(), "");
+
+    /// <summary>
+    /// Opens a project named on the command line, straight into the shell.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// What a file manager does when a <c>.hacue2proj</c> is double-clicked, what a desktop entry's
+    /// <c>%f</c> passes, and what a booth start-up script wants — none of which had any route in: the
+    /// app always opened the launcher and made somebody click through it.
+    /// </para>
+    /// <para>
+    /// A path that cannot be opened falls through to the LAUNCHER rather than failing: the operator
+    /// still gets a window they can pick a different show from, which is the same rule the launcher's
+    /// own file picker follows. Reading the file synchronously is deliberate — this runs before any
+    /// window exists, and there is nothing yet to show a spinner on.
+    /// </para>
+    /// </remarks>
+    private static ShellWindow? OpenNamedProject(IReadOnlyList<string>? args)
+    {
+        var named = args?.FirstOrDefault(argument =>
+            !argument.StartsWith('-')
+            && argument.EndsWith(ProjectFiles.Extension, StringComparison.OrdinalIgnoreCase));
+
+        if (named is null)
+            return null;
+
+        try
+        {
+            var (project, result) = ProjectFiles.OpenAsync(named).GetAwaiter().GetResult();
+            return project is null ? null : Open(project, result.Path);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            MediaDiagnostics.LogError(failure, "HaCue2: opening the project named on the command line failed");
+            return null;
+        }
+    }
 
     /// <summary>
     /// The machine-scope settings, loaded once at start-up.

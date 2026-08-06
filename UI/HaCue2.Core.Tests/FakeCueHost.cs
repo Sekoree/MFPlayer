@@ -72,6 +72,28 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
         return Task.FromResult(true);
     }
 
+    /// <summary>Batches recorded as batches, so a test can tell "all together" from "one after another".</summary>
+    public List<IReadOnlyList<Guid>> PlayedTogether { get; } = [];
+
+    public Task<IReadOnlyList<Guid>> PlayTogetherAsync(IReadOnlyList<CueNode> cues, CueList? list)
+    {
+        if (PlayFails)
+            return Task.FromResult<IReadOnlyList<Guid>>([]);
+
+        // Recorded into the SAME lists a one-at-a-time fire writes, in the batch's order: the executor's
+        // existing expectations are about what played and in what order, and batching changes neither.
+        foreach (var cue in cues)
+        {
+            Played.Add(cue.Id);
+            Transitions.Add((cue.Id, null, default));
+            SoundingCues.Add(cue.Id);
+        }
+
+        IReadOnlyList<Guid> started = [.. cues.Select(cue => cue.Id)];
+        PlayedTogether.Add(started);
+        return Task.FromResult(started);
+    }
+
     public Task SetStandbyAsync(CueList list, Guid? cueId)
     {
         Standby.Add((list.Id, cueId));
