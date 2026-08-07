@@ -209,9 +209,12 @@ public sealed partial class ShowSession
             var canvas = composition.CanvasFormat;
             if (!_testPatternSlots.TryGetValue(compositionId, out var existing))
             {
+                // A calibration grid is a STATIC frame (PresentationTime 0) - Latest, explicitly:
+                // PTS-aligning it against a running clock would judge it permanently "too old".
                 existing = composition.AddLayer(
                     canvas,
-                    new VideoPlacementSpec(compositionId, int.MaxValue, Placement: "stretch"));
+                    new VideoPlacementSpec(compositionId, int.MaxValue, Placement: "stretch"),
+                    SlotKeepPolicy.Latest);
                 _testPatternSlots[compositionId] = existing;
             }
 

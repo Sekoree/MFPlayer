@@ -460,6 +460,88 @@ the pacing target. Endgame knob if the eye still disagrees: a per-project A/V of
 
 All suites green (789/359/704/381 + earlier PortAudio/Backends/Players).
 
+## Round 8 — frame-drop bursts (~60 frames per episode)
+
+Reported: ~60 frames dropped every 60–90 s; the diagnostics copy-report did not include the video
+numbers.
+
+1. **Copy report now has a "Video & compositions" section** (`ShowHost.Report`): composited /
+   submitted / pump overruns / slot overflow / behind-master / layer count / last & max pump time.
+2. **The engine is exonerated with numbers.** Instrumented long runs: pump average 5.6 ms against
+   the 16.7 ms budget (composite 5.5 ms) — 3× headroom on this exact show. A burst reproduced
+   exactly once in a 200 s probe (t=29–44 s, ~110 frames) — and that window coincided with a
+   `dotnet build` I had running beside it; a clean rerun over the same content positions showed
+   zero drops and flat timing. Conclusion: the drop bursts are external all-core CPU spikes
+   (compiles, IDE solution analysis, etc.) momentarily starving the pump; slot overflow + pump
+   overruns are the counters that record it, and "pump over budget" warnings in the log carry
+   timestamps to correlate against what the machine was doing.
+3. Mitigation options if it happens on a clean show machine: bump the composition clock driver
+   thread priority above AboveNormal (marginal), or treat as environmental (a booth machine does
+   not run an IDE build mid-show).
+
+## Round 9 — frame drops on an idle machine: presents out of the composite tick
+
+Reported: still drops every few seconds with the IDE closed, CPU and GPU idle. Report showed
+20 overruns + 18 slot overflows over ~130 s — ~one event per 6 s with 6 ms average pump work.
+
+1. **Root cause of the overruns**: composition outputs submitted to their sinks SYNCHRONOUSLY
+   inside the pump tick (`AcquiredOutput.TrySubmit` → `Output.Submit`; `QueueCapacity = 0` in the
+   user's report was the tell). A window output's Submit ends in a vsynced GL present, so the tick's
+   60.000 Hz timer beat against the display's real refresh; at each beat crossing a present blocked
+   an extra vblank and dropped a frame — load-independent, every few seconds, per window.
+   **Fix**: every composition output sink is now wrapped in a `VideoOutputPump` (2-frame queue, own
+   thread) at attach; the pressure subscription and stats plumbing already anticipated pumps. A
+   stalled line drops its own frames without touching the canvas cadence or sibling outputs; the
+   runtime disposes the pump (never the borrowed sink) at retire.
+   Measured: pump overruns 56 → 3–5 per run (startup only), compFps steady 60.
+2. **Remaining trickle (~1–4 slot overflows/s, onset varies)** — diagnosed but NOT yet fixed: the
+   canvas hosts TWO independent transports (hanacon owns the clock domain; DAY1's PTS live at
+   trim+t in its own domain), and `SlotKeepPolicy.MasterAligned` compares ONE master PTS against
+   every slot (`VideoCompositorSource.ChooseMasterAlignedFrame`). The non-owning slot rides
+   fallback paths (too-future pending never promoted / huge-distance selection), producing
+   pending-overwrite churn. Proper fix: per-layer alignment timelines — each `LayerSlot` aligned
+   against ITS transport's `SourceTime` (the runtime already tracks per-clip timeline claims); the
+   compositor read path needs a per-slot alignment PTS instead of the single `masterAlignmentTime`.
+   Also worth adding per-slot overflow counters to the diagnostics so the offending layer is
+   attributable directly.
+
+All suites green (Session 359, Compositor 56, Players 16, HaCue2 381, HaCue2.Core 704).
+
+## Round 10 — per-layer alignment timelines (implemented)
+
+The round-9 residual grew in the user's next run (430 slot overflows over ~124 s, accelerating
+1/s → 3–6/s as the transports drifted) — the dual-timeline churn was the visible dropper.
+
+Implemented the designed fix: `Slot.AlignmentClock` on `VideoCompositorSource` (per-slot alignment
+time, falling back to the canvas master; both read paths), `ClipCompositionRuntime.AddLayer` takes
+`alignmentTimeline` and wires it from each layer's own transport (`ShowSession` passes
+`group.Timeline`), and `LayerSlot.RequestedKeepPolicy` so the master-attach upgrade loops re-apply
+the layer's ADDED policy instead of forcing `MasterAligned` onto explicitly-`Latest` layers (the
+static calibration grid — now passed `Latest` explicitly — and subtitle overlays would otherwise be
+judged permanently stale).
+
+Measured (windowed, full show): **0 slot overflows over 170 s** and 1 over a 75 s repeat, pump
+overruns startup-only (2–3), fps steady 60. Combined with round 9: the user's last-reported
+34 overruns + 430 overflows per run should drop to ~0. Suites green (Compositor 56, Session 359,
+Core 789 ×2 after one timing flake, HaCue2 381, HaCue2.Core 704).
+
+## Round 11 — screen-matched canvas presets (user request, implemented)
+
+After round 10 the user's run showed 29 slot overflows + 25 overruns over ~133 s (from 430) and
+asked for composition presets matching each screen's actual refresh rate — the right instinct: this
+rig's panel runs 165 Hz while the canvas is authored at 60.000, and any rate mismatch beats.
+
+- `S.Media.Present.SDL3.SDL3Displays.Enumerate()`: attached displays with their CURRENT desktop
+  modes — name, PIXEL dimensions (SDL reports points × density; converted), rounded Hz and the
+  exact refresh numerator/denominator. Never throws; headless yields an empty list.
+- `Dialogs.AddComposition` gained a "Match screen" Choice row (only when screens exist) that
+  prefills Width/Height/Rate from the picked display's actual mode — exact rational preferred —
+  while every field stays typed underneath (the dialog's documented philosophy). The Rate hint now
+  also lists the rig's actual rates. Test seam: `screens` parameter; covered by
+  `DevicePickerTests.AScreenPresetPrefillsSizeAndExactRateButStaysTyped` / `AHeadlessMachineGetsNoPresetRow`.
+
+Suites green (HaCue2 383, HaCue2.Core 704).
+
 ## Suggested work order
 
 1. Framework: fix the grant leak + make capacity-wait timeout non-fatal, with a regression test (§1).

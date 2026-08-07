@@ -641,31 +641,83 @@ public static class Dialogs
     // ── video ─────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>A new composition: a canvas cues can be placed on.</summary>
-    public static PromptViewModel AddComposition(ProjectJournal journal)
+    /// <param name="screens">Test seam: the connected screens to offer as prefills. Null asks SDL
+    /// for the real ones; empty suppresses the preset row (what a headless machine gets).</param>
+    public static PromptViewModel AddComposition(
+        ProjectJournal journal,
+        IReadOnlyList<S.Media.Present.SDL3.SDL3DisplayInfo>? screens = null)
     {
         var project = journal.Project;
+
+        var width = new PromptField { Label = "Width", Kind = PromptFieldKind.Number, Value = "1920" };
+        var height = new PromptField { Label = "Height", Kind = PromptFieldKind.Number, Value = "1080" };
+        // TYPED, not picked. The composition pane edits size and rate as free text, so a
+        // dropdown here taught the operator that the common rates were the only ones — and a
+        // projector at 23.976 or a LED wall at 47.95 is an ordinary thing to have to match.
+        // 60 — the same default CompositionDefinition itself carries. This field said 30, so
+        // every composition made through the dialog contradicted the model's own default and
+        // ran a 60p source at half rate unless the operator noticed and retyped it.
+        var rate = new PromptField
+        {
+            Label = "Rate",
+            Kind = PromptFieldKind.Text,
+            Value = "60",
+            Hint = "frames per second · 23.976 · 25 · 29.97 · 30 · 50 · 59.94 · 60",
+        };
+
+        var fields = new List<PromptField>
+        {
+            new() { Label = "Name", Value = "" },
+            width,
+            height,
+            rate,
+        };
+
+        // The rig's own screens as PREFILLS, still typed underneath: a canvas that does not match
+        // the panel it feeds beats against its refresh — a 60.000 canvas on a 59.94 (or 165) panel
+        // drops one frame per beat crossing, on a schedule nobody can attribute. The rates come from
+        // the ACTUAL desktop modes (exact numerator/denominator when the platform reports them), so
+        // "match the projector" is one pick instead of reading the EDID off a service menu. Absent
+        // (headless, no SDL) the dialog simply has no preset row.
+        var displays = screens ?? S.Media.Present.SDL3.SDL3Displays.Enumerate();
+        if (displays.Count > 0)
+        {
+            static string RateText(S.Media.Present.SDL3.SDL3DisplayInfo display) =>
+                display is { RefreshNumerator: > 0, RefreshDenominator: > 0 }
+                    ? ((double)display.RefreshNumerator / display.RefreshDenominator)
+                        .ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+                    : display.RefreshHz.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+
+            var preset = new PromptField
+            {
+                Label = "Match screen",
+                Kind = PromptFieldKind.Choice,
+                Options =
+                [
+                    "custom",
+                    .. displays.Select(display =>
+                        $"{display.Name} · {display.Width}×{display.Height} @ {RateText(display)} Hz"),
+                ],
+                Hint = "prefills size and rate from a connected screen — everything stays editable",
+            };
+            preset.Picked += picked =>
+            {
+                var display = picked.SelectedIndex - 1;
+                if (display < 0 || display >= displays.Count)
+                    return;
+                width.Value = displays[display].Width.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                height.Value = displays[display].Height.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                rate.Value = RateText(displays[display]);
+            };
+            fields.Insert(1, preset);
+            rate.Hint = "frames per second · this rig: "
+                + string.Join(" · ", displays.Select(display => $"{RateText(display)} Hz"));
+        }
 
         return new PromptViewModel(
             "Add composition",
             "a canvas · size, rate and idle image, and nothing else (register item 21)",
-            [
-                new PromptField { Label = "Name", Value = "" },
-                new PromptField { Label = "Width", Kind = PromptFieldKind.Number, Value = "1920" },
-                new PromptField { Label = "Height", Kind = PromptFieldKind.Number, Value = "1080" },
-                // TYPED, not picked. The composition pane edits size and rate as free text, so a
-                // dropdown here taught the operator that the common rates were the only ones — and a
-                // projector at 23.976 or a LED wall at 47.95 is an ordinary thing to have to match.
-                // 60 — the same default CompositionDefinition itself carries. This field said 30, so
-                // every composition made through the dialog contradicted the model's own default and
-                // ran a 60p source at half rate unless the operator noticed and retyped it.
-                new PromptField
-                {
-                    Label = "Rate",
-                    Kind = PromptFieldKind.Text,
-                    Value = "60",
-                    Hint = "frames per second · 23.976 · 25 · 29.97 · 30 · 50 · 59.94 · 60",
-                },
-            ],
+            fields,
             prompt => journal.Do(new AddItemCommand<CompositionDefinition>(
                 project.Compositions,
                 new CompositionDefinition

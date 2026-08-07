@@ -87,6 +87,24 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     /// <summary>Cumulative number of composite frames emitted from <see cref="TryReadNextFrame"/>.</summary>
     public long CompositesEmitted => Volatile.Read(ref _compositesEmitted);
 
+    /// <summary>The time a slot's <see cref="SlotKeepPolicy.MasterAligned"/> selection is judged
+    /// against: the slot's own clock when it has one (layers from independent transports live in
+    /// different PTS domains - see <see cref="Slot.AlignmentClock"/>), the canvas master otherwise.
+    /// A clock that throws mid-teardown falls back to the canvas master for this composite.</summary>
+    private static TimeSpan? SlotAlignmentTime(Slot slot, TimeSpan? masterAlignmentTime)
+    {
+        if (slot.AlignmentClock is not { } own)
+            return masterAlignmentTime;
+        try
+        {
+            return own() ?? masterAlignmentTime;
+        }
+        catch
+        {
+            return masterAlignmentTime;
+        }
+    }
+
     /// <summary>Snapshot of all slots in insertion order (back-to-front for the compositor).</summary>
     public IReadOnlyList<Slot> Slots
     {
@@ -295,7 +313,8 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 {
                     // Acquire holds a read-ref on the slot's frame (the slot won't dispose it until we
                     // ReleaseFrame below). Track the slot, not a per-call lease object, to release it.
-                    var f = slot.KeepPolicy == SlotKeepPolicy.MasterAligned && masterAlignmentTime is { } masterPts
+                    var f = slot.KeepPolicy == SlotKeepPolicy.MasterAligned
+                            && SlotAlignmentTime(slot, masterAlignmentTime) is { } masterPts
                         ? slot.AcquireMasterAlignedFrame(masterPts, _ptsStep)
                         : slot.AcquireLatestFrame();
                     if (f is null) continue;
@@ -368,7 +387,8 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 {
                     // Acquire holds a read-ref on the slot's frame (the slot won't dispose it until we
                     // ReleaseFrame below). Track the slot, not a per-call lease object, to release it.
-                    var f = slot.KeepPolicy == SlotKeepPolicy.MasterAligned && masterAlignmentTime is { } masterPts
+                    var f = slot.KeepPolicy == SlotKeepPolicy.MasterAligned
+                            && SlotAlignmentTime(slot, masterAlignmentTime) is { } masterPts
                         ? slot.AcquireMasterAlignedFrame(masterPts, _ptsStep)
                         : slot.AcquireLatestFrame();
                     if (f is null) continue;
@@ -688,6 +708,20 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         /// <summary>Which submitted frame is exposed at composite time. Default
         /// <see cref="SlotKeepPolicy.Latest"/>.</summary>
         public SlotKeepPolicy KeepPolicy { get; set; } = SlotKeepPolicy.Latest;
+
+        /// <summary>
+        /// This slot's OWN alignment clock for <see cref="SlotKeepPolicy.MasterAligned"/>, or null to
+        /// use the canvas-wide master time. Read once per composite, like <see cref="KeepPolicy"/>.
+        /// </summary>
+        /// <remarks>
+        /// A canvas can host layers from INDEPENDENT transports whose frame timestamps live in
+        /// different time domains (two clips with different trims composite together every day).
+        /// Judging every slot against the one canvas master aligned only the clock-owning layer; the
+        /// other rode the too-old/too-future fallbacks, churning its pending frames — a steady
+        /// trickle of slot overflow and a visible single-frame judder that grew as the domains
+        /// drifted apart. Each layer aligned against its own transport's source time is the fix.
+        /// </remarks>
+        public Func<TimeSpan?>? AlignmentClock { get; set; }
 
         /// <summary>Frames replaced before the compositor could read them.</summary>
         public long OverflowFrames => Volatile.Read(ref _overflowFrames);

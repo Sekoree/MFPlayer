@@ -376,10 +376,30 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     public IReadOnlyList<ClipCompositionRuntimeStats> CompositionStats() =>
         _session.GetAllCompositionStats();
 
-    /// <summary>The whole bay as plain text — what "Copy report" puts on the clipboard.</summary>
-    public string Report() =>
-        AudioPatchBayReport.Render(Diagnostics(), $"HaCue2 · {_project.Title}")
-        + (Problems.Count == 0 ? "" : "\nProblems\n  " + string.Join("\n  ", Problems) + "\n");
+    /// <summary>The whole rig as plain text — what "Copy report" puts on the clipboard.</summary>
+    /// <remarks>The VIDEO section rides along with the audio bay: the report exists so a stutter can
+    /// be pasted into a bug thread, and the frame-drop symptoms (slot overflow, pump overruns,
+    /// behind-master) lived only in the on-screen table — the one place a report cannot quote.</remarks>
+    public string Report()
+    {
+        var report = AudioPatchBayReport.Render(Diagnostics(), $"HaCue2 · {_project.Title}");
+
+        var compositions = CompositionStats();
+        if (compositions.Count > 0)
+        {
+            var lines = compositions.Select(item =>
+                $"  {item.CompositionId} · {item.CompositorBackend} · " +
+                $"composited {item.FramesComposited} · submitted {item.FramesSubmitted} · " +
+                $"pump overruns {item.PumpOverruns} · slot overflow {item.SlotOverflowFrames} · " +
+                $"behind master {item.FramesBehindMaster} · layers {item.LayerCount} · " +
+                $"last pump {item.LastPumpFrameTime.TotalMilliseconds:0.0} ms · " +
+                $"max pump {item.MaxPumpFrameTime.TotalMilliseconds:0.0} ms");
+            report += "\nVideo & compositions\n" + string.Join("\n", lines) + "\n";
+        }
+
+        return report
+               + (Problems.Count == 0 ? "" : "\nProblems\n  " + string.Join("\n  ", Problems) + "\n");
+    }
 
     private void Report(string problem)
     {

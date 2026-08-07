@@ -1130,7 +1130,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                             continue;
                         var slot = comp.AddLayer(
                             videoSource.Format,
-                            BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement));
+                            BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement),
+                            alignmentTimeline: group.Timeline);
                         layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, slot));
                         player.AttachVideoOutput(slot.Output, id: $"comp{fanoutIndex++}"); // unique id ⇒ router fans out
                         if (mastered.Add(placement.CompositionId))

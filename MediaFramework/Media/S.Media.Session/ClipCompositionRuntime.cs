@@ -603,7 +603,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             _transportTimeline = null;
             _masterOwnedByTransportClaim = false;
             foreach (var layer in _slots)
-                layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
+                layer.RawSlot.KeepPolicy = layer.RequestedKeepPolicy;
             clockToRetarget = _slaveClock;
         }
 
@@ -637,7 +637,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             _masterOwnedByTransportClaim = false;
             clockToRetarget = _slaveClock;
             foreach (var layer in _slots)
-                layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
+                layer.RawSlot.KeepPolicy = layer.RequestedKeepPolicy;
         }
 
         clockToRetarget?.SetMaster(timeline);
@@ -673,7 +673,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                 clockToRetarget = _slaveClock;
                 becameMaster = true;
                 foreach (var layer in _slots)
-                    layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
+                    layer.RawSlot.KeepPolicy = layer.RequestedKeepPolicy;
             }
         }
 
@@ -771,9 +771,17 @@ public sealed class ClipCompositionRuntime : IDisposable
             Interlocked.Exchange(ref _owner, null)?.ReleaseTransportTimeline(this);
     }
 
+    /// <param name="alignmentTimeline">The transport timeline THIS layer's frames are stamped
+    /// against, when the caller has one. A canvas hosts layers from independent transports whose
+    /// PTS live in different domains (two clips with different trims), and judging them all against
+    /// the single canvas master aligned only the clock-owning layer — the other churned its pending
+    /// frames on the too-old/too-future fallbacks (a steady slot-overflow trickle and a visible
+    /// single-frame judder that grew as the domains drifted). With its own timeline the layer is
+    /// PTS-aligned regardless of which transport owns the canvas clock.</param>
     public LayerSlot AddLayer(
         VideoFormat sourceFormat, VideoPlacementSpec placement,
-        SlotKeepPolicy keepPolicy = SlotKeepPolicy.MasterAligned)
+        SlotKeepPolicy keepPolicy = SlotKeepPolicy.MasterAligned,
+        ITransportTimeline? alignmentTimeline = null)
     {
         LayerSlot layer;
         lock (_gate)
@@ -784,9 +792,28 @@ public sealed class ClipCompositionRuntime : IDisposable
             // are latest-wins. Callers whose frames carry no meaningful PTS (subtitle overlays are
             // pump-driven and re-rendered in place at PresentationTime 0) must opt into Latest explicitly -
             // MasterAligned would freeze on the first frame, since every frame is equidistant from the clock.
-            if (_master is not null)
+            if (alignmentTimeline is not null && keepPolicy == SlotKeepPolicy.MasterAligned)
+            {
+                rawSlot.AlignmentClock = () =>
+                {
+                    try
+                    {
+                        return alignmentTimeline.GetSnapshot().SourceTime;
+                    }
+                    catch
+                    {
+                        return null; // torn down mid-composite - the canvas master covers this tick
+                    }
+                };
+                // Own-clock alignment needs no canvas master; it engages immediately.
                 rawSlot.KeepPolicy = keepPolicy;
-            layer = new LayerSlot(this, rawSlot, sourceFormat, placement, Interlocked.Increment(ref _nextLayerSequence));
+            }
+            else if (_master is not null)
+                rawSlot.KeepPolicy = keepPolicy;
+            layer = new LayerSlot(this, rawSlot, sourceFormat, placement, Interlocked.Increment(ref _nextLayerSequence))
+            {
+                RequestedKeepPolicy = keepPolicy,
+            };
             try
             {
                 layer.ApplyPlacement();
@@ -1839,7 +1866,23 @@ public sealed class ClipCompositionRuntime : IDisposable
         public AcquiredOutput(ClipCompositionOutputLease lease)
         {
             _lease = lease;
+            // Every sink is decoupled from the composite tick through a pump. A raw window output's
+            // Submit ends in a vsynced GL present, and presenting INSIDE the tick made the canvas
+            // hostage to display timing: the tick's 60.000 Hz beats against the display's actual
+            // refresh, and at every beat crossing a present blocked an extra vblank - one dropped
+            // frame every few seconds on an idle machine, per window. Two frames of queue keep
+            // worst-case added display latency at ~33 ms while the pump's own thread absorbs the
+            // blocking; a stalled line drops ITS OWN frames (visible as pump pressure) without
+            // touching the canvas cadence or its sibling outputs.
+            _output = lease.Output is null or VideoOutputPump
+                ? lease.Output
+                : new VideoOutputPump(
+                    lease.Output, maxQueuedFrames: 2, name: $"CompositionOut:{lease.DisplayName}");
+            _ownsPump = !ReferenceEquals(_output, lease.Output);
         }
+
+        private readonly IVideoOutput? _output;
+        private readonly bool _ownsPump;
 
         /// <summary>This output's calibration frame, or null. Owned by the output: the pump only reads it,
         /// so it survives across frames and is disposed when replaced, cleared, or retired.</summary>
@@ -1880,7 +1923,7 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         public string DisplayName => _lease.DisplayName;
 
-        public IVideoOutput Output => _lease.Output;
+        public IVideoOutput Output => _output!;
 
         public Action? Release => _lease.Release;
 
@@ -2020,7 +2063,12 @@ public sealed class ClipCompositionRuntime : IDisposable
                     retireStaticFrame(idle);
                 UnsubscribePumpPressureCore();
 
-                if (DisposeOutputOnRuntimeDispose && Output is IDisposable disposable)
+                // Our pump goes down first (joins its thread, flushes its queue) so nothing can be
+                // mid-Submit into the lease's output when that output is released below. The pump
+                // never owns the inner sink - the lease's dispose policy stays the authority.
+                if (_ownsPump && _output is IDisposable pumpDisposable)
+                    MediaDiagnostics.SwallowDisposeErrors(pumpDisposable.Dispose, $"{operation}: output pump dispose");
+                if (DisposeOutputOnRuntimeDispose && _lease.Output is IDisposable disposable)
                     MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, $"{operation}: output dispose");
                 if (Release is not null)
                     MediaDiagnostics.SwallowDisposeErrors(Release, $"{operation}: output release");
@@ -2317,6 +2365,12 @@ public sealed class ClipCompositionRuntime : IDisposable
     {
         private readonly ClipCompositionRuntime _owner;
         internal VideoCompositorSource.Slot RawSlot { get; }
+
+        /// <summary>The policy this layer was ADDED with. The master-attach upgrade re-applies this
+        /// rather than forcing MasterAligned onto every slot: an explicitly-Latest layer (the static
+        /// calibration grid, a subtitle overlay re-rendered in place at PTS 0) must stay Latest, or
+        /// the clock judges its one frame permanently stale.</summary>
+        internal SlotKeepPolicy RequestedKeepPolicy { get; set; } = SlotKeepPolicy.MasterAligned;
         private readonly VideoFormat _source;
         private VideoPlacementSpec _placement;
         private int _disposed;

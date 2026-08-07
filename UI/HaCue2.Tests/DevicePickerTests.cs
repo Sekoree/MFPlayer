@@ -267,6 +267,46 @@ public class DevicePickerTests
     }
 
     [Fact]
+    public void AScreenPresetPrefillsSizeAndExactRateButStaysTyped()
+    {
+        var journal = new ProjectJournal(new HaCueProject());
+        var prompt = Dialogs.AddComposition(journal, screens:
+        [
+            new S.Media.Present.SDL3.SDL3DisplayInfo(0, "Projector", 1920, 1080, 59.94, 60000, 1001),
+            new S.Media.Present.SDL3.SDL3DisplayInfo(1, "Wall", 2560, 1600, 165, 165000, 1000),
+        ]);
+
+        // Picking a screen fills size and rate from its ACTUAL desktop mode - the exact rational,
+        // because a canvas at 60.000 against a 59.94 panel beats once every ~17 s and drops a frame
+        // at each crossing, on a schedule nobody can attribute.
+        var preset = prompt.Fields.Single(f => f.Label == "Match screen");
+        Assert.Equal(["custom", "Projector · 1920×1080 @ 59.94 Hz", "Wall · 2560×1600 @ 165 Hz"], preset.Options);
+        preset.SelectedIndex = 1;
+
+        Assert.Equal("1920", prompt.Fields.Single(f => f.Label == "Width").Value);
+        Assert.Equal("1080", prompt.Fields.Single(f => f.Label == "Height").Value);
+        Assert.Equal("59.94", prompt.Fields.Single(f => f.Label == "Rate").Value);
+
+        // Still typed underneath: the operator can overrule the prefill, exactly as before.
+        prompt.Fields.Single(f => f.Label == "Rate").Value = "23.976";
+        prompt.Fields.Single(f => f.Label == "Name").Value = "Cyc";
+        prompt.Commit();
+
+        var composition = Assert.Single(journal.Project.Compositions);
+        Assert.Equal(1920, composition.Width);
+        Assert.Equal(23.976, composition.FramesPerSecond, 3);
+    }
+
+    [Fact]
+    public void AHeadlessMachineGetsNoPresetRow()
+    {
+        var journal = new ProjectJournal(new HaCueProject());
+        var prompt = Dialogs.AddComposition(journal, screens: []);
+
+        Assert.DoesNotContain(prompt.Fields, f => f.Label == "Match screen");
+    }
+
+    [Fact]
     public void ALocalOutputCanBeCreatedWindowedWithItsOwnSize()
     {
         var journal = new ProjectJournal(new HaCueProject());
