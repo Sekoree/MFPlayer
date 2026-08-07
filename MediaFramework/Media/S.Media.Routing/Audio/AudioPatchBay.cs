@@ -92,11 +92,17 @@ public sealed class AudioPatchBay : IDisposable
             producerRingFrames,
             new ProgramBusClockContext(rawMaster, DownstreamLeadTicks),
             pacingTargetFrames: producerPacingTargetFrames);
-        // The show clock handed to voices with no producer subtracts the same lead a sounding voice
-        // does, so a silent video cue lands on the audible programme instead of running ahead of it by
-        // the whole audio path. Same low-passing as any client clock - the lead is a live measurement.
-        _masterClock = new AudibleClientClock(
-            rawMaster, () => _bus.DeepestProducerLeadTicks() + DownstreamLeadTicks());
+        // The show clock handed to voices with no producer of their own. Its lead term is the
+        // DOWNSTREAM path only - the bus-to-speaker depth - and deliberately NOT the producer rings:
+        // a MediaClock slaved to this clock anchors RELATIVELY (any absolute offset cancels at its
+        // Start), so the only place the lead value acts is the silent voice's START DEFERRAL, and
+        // the correct deferral is "how long until audio leaving the bus NOW is audible". Sample 0 of
+        // a group fire sits at the HEAD of its pre-rolled ring and departs on the first read - the
+        // ring's depth is content queued BEHIND it, not part of its journey. Counting the deepest
+        // ring here anchored every genlocked picture one full producer fill (~200 ms) late, which
+        // was the reported lip-sync error. Bonus: the downstream depth is far steadier than the
+        // deepest-ring sweep, so the low-pass feeds the video clock less churn.
+        _masterClock = new AudibleClientClock(rawMaster, DownstreamLeadTicks);
         _busId = _router.AddSource(_bus, "program-bus");
         _resamplerFactory = resamplerFactory;
         _adaptiveRateWrapper = adaptiveRateWrapper;

@@ -415,13 +415,35 @@ public sealed partial class ShowHost
                     var wall = Stopwatch.GetElapsedTime(entry.Value.StartedTicks);
                     var playhead = playheads.GetValueOrDefault(entry.Value.GroupId);
 
+                    // The group's position when it has one, and wall time otherwise — a visualizer
+                    // cue holds no transport at all, and counting up is better than standing still.
+                    var elapsed = playhead is { IsActive: true } ? playhead.ClipPosition : wall;
+                    var length = playhead is { ClipDuration.Ticks: > 0 }
+                        ? (TimeSpan?)playhead.ClipDuration
+                        : null;
+
+                    // The transport reports MEDIA time; the operator reads CUE time. A trimmed cue's
+                    // playhead therefore starts at its trim-in and its transport duration is the whole
+                    // file — a cue trimmed to start at 36:00 read "38:17 of 2:36:09" two minutes in,
+                    // beside siblings reading "02:17", and the panel looked half an hour out of sync.
+                    if (playhead is { IsActive: true }
+                        && _project.FindCue(entry.Key) is MediaCueNode media)
+                    {
+                        if (media.TrimInMs > 0)
+                        {
+                            var relative = elapsed - TimeSpan.FromMilliseconds(media.TrimInMs);
+                            elapsed = relative > TimeSpan.Zero ? relative : TimeSpan.Zero;
+                        }
+
+                        if (length is { } fullLength && media.TrimmedLength(fullLength) is { } trimmed)
+                            length = trimmed;
+                    }
+
                     return new ActiveCueState(
                         entry.Key,
                         entry.Value.ListId,
-                        // The group's position when it has one, and wall time otherwise — a visualizer
-                        // cue holds no transport at all, and counting up is better than standing still.
-                        playhead is { IsActive: true } ? playhead.ClipPosition : wall,
-                        playhead is { ClipDuration.Ticks: > 0 } ? playhead.ClipDuration : null,
+                        elapsed,
+                        length,
                         entry.Value.IsFading,
                         entry.Value.StartedTicks);
                 }),

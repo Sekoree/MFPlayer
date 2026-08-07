@@ -429,6 +429,37 @@ Known follow-ups:
 - MiniAudio backend still uses a managed device callback (same hazard class if anyone selects it).
 - A/V offset fine-trim (video vs programme) once the user judges direction by eye.
 
+## Round 7 — A/V alignment + operator readouts (implemented)
+
+With the audio finally clean, the user measured video ~200–400 ms out of lip-sync and asked for
+milliseconds in the Active panel.
+
+1. **The lip-sync error was the deferral counting the pre-rolled ring.** The silent-video start
+   deferral used deepest-ring + downstream, but a group fire's sample 0 sits at the HEAD of its
+   pre-rolled ring — its journey to the speaker is the downstream path only. With the round-6 200 ms
+   fill this anchored every genlocked picture a full fill late. `AudioPatchBay`'s master clock lead
+   is now DOWNSTREAM-ONLY (safe: its only consumer anchors relatively; the lead's sole effect is the
+   deferral), and it is steadier as a bonus.
+2. **Producer clock pre-roll baseline**: the clock's lead now subtracts the fill captured at
+   release (`_preRollBaselineFloats`) — pre-rolled content is elapsed-to-be, not delay — so the
+   stems' millisecond readouts agree with what is audible. `SubmitToOutputLatency` keeps the
+   un-baselined truth for diagnostics. Reset on Flush.
+3. **Milliseconds in the Active panel** (`CuePresentation.PreciseClock`) on the live playhead
+   column only.
+4. **Trimmed-cue readout**: `ShowHost.SnapshotAsync` now converts the transport's MEDIA
+   position/duration to CUE-relative (subtract trim-in, `TrimmedLength`), so a cue trimmed to 36:00
+   no longer reads "38:17 of 2:36:09" beside siblings at "02:17". (This also retires the round-6
+   "readout race" note — the absolute reading was the transport's normal answer, visible whenever
+   the playhead was live.)
+
+Measured: total 13-cue clock spread 60–98 ms; stems 3–9 ms; videos ~30–60 ms behind stem clocks
+(≈1–2 display frames of physical offset). Known cosmetic residual: a voice released mid-ring-fill
+carries its fill shortfall as a readout offset (observed −95 ms once) — audio is release-aligned
+regardless; if it bothers, gate the start edge on ring-fill completion or normalize the baseline to
+the pacing target. Endgame knob if the eye still disagrees: a per-project A/V offset trim.
+
+All suites green (789/359/704/381 + earlier PortAudio/Backends/Players).
+
 ## Suggested work order
 
 1. Framework: fix the grant leak + make capacity-wait timeout non-fatal, with a regression test (§1).

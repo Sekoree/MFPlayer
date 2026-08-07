@@ -350,6 +350,9 @@ public sealed class ProgramBusProducer :
     /// <summary>1 while pre-rolling: the ring accepts audio but <see cref="MixInto"/> skips it, and
     /// the pacing wait never concludes the bus is dead. See <see cref="IPreRollableOutput"/>.</summary>
     private int _held;
+    /// <summary>Ring fill at the moment the pre-roll was released - content that counts as ALREADY
+    /// elapsed for the clock's lead (see the ctor), because the audible playhead starts at its head.</summary>
+    private long _preRollBaselineFloats;
     private bool _observedFlowing;
     private int _disposed;
 
@@ -373,14 +376,23 @@ public sealed class ProgramBusProducer :
         _ring = new FrameAlignedFloatRing(sourceChannels, (long)ringFrames * sourceChannels);
         var rate = owner.Format.SampleRate;
         _leadTicks = clockContext is { } context
-            ? () => RingTicks(rate) + context.DownstreamLeadTicks()
-            : () => RingTicks(rate);
-        _clock = new AudibleClientClock(clockContext?.TerminalClock, _leadTicks);
+            ? () => RingTicks(rate, baselineFloats: 0) + context.DownstreamLeadTicks()
+            : () => RingTicks(rate, baselineFloats: 0);
+        // The CLOCK's lead differs from the latency diagnostic by the pre-roll baseline: audio that
+        // was already sitting in the ring when the voice was released does not delay the sample at
+        // the ring's HEAD - it IS the content behind it. Counting it made every pre-rolled voice's
+        // position read one full ring fill (~200 ms) behind what the audience was hearing, which the
+        // millisecond clock made visible. A NEW submission still waits behind the whole ring, so
+        // SubmitToOutputLatency keeps the un-baselined measurement.
+        Func<long> clockLeadTicks = clockContext is { } clockContext2
+            ? () => RingTicks(rate, Volatile.Read(ref _preRollBaselineFloats)) + clockContext2.DownstreamLeadTicks()
+            : () => RingTicks(rate, Volatile.Read(ref _preRollBaselineFloats));
+        _clock = new AudibleClientClock(clockContext?.TerminalClock, clockLeadTicks);
     }
 
-    private long RingTicks(int sampleRate)
+    private long RingTicks(int sampleRate, long baselineFloats)
     {
-        var framesBuffered = _ring.BufferedFloats / _sourceChannels;
+        var framesBuffered = (_ring.BufferedFloats - baselineFloats) / _sourceChannels;
         return framesBuffered > 0 ? framesBuffered * TimeSpan.TicksPerSecond / sampleRate : 0;
     }
 
@@ -645,6 +657,8 @@ public sealed class ProgramBusProducer :
         // never arrive to retire their own grants; carrying them would leak pacing credit on every
         // pause/seek until the producer could no longer be granted a chunk at all.
         Volatile.Write(ref _grantedFloats, 0);
+        // The pre-rolled content the baseline stood for went with the ring.
+        Volatile.Write(ref _preRollBaselineFloats, 0);
         _clock.Reanchor();
         SignalSpaceAvailable();
     }
@@ -657,6 +671,9 @@ public sealed class ProgramBusProducer :
     {
         if (Interlocked.Exchange(ref _held, 0) == 0)
             return;
+        // The pre-rolled fill becomes the clock's lead baseline: the sample at the ring's head is
+        // the playhead, and the fill behind it is elapsed-to-be, not delay.
+        Volatile.Write(ref _preRollBaselineFloats, _ring.BufferedFloats);
         // The clock is TIME-based (terminal time minus lead), so it kept advancing through the hold
         // - a release without a re-anchor would report positions that lead the audible content by
         // the whole hold duration. Re-anchoring puts it back at zero, clamped there until the

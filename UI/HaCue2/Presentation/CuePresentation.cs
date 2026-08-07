@@ -157,7 +157,11 @@ public static class CuePresentation
                 Qualifier = project.CueLists.Count > 1
                     ? project.CueLists.FirstOrDefault(list => list.Id == state.ListId)?.Name ?? ""
                     : "",
-                Clock = Clock(state.Elapsed),
+                // Milliseconds on the LIVE clock only (remaining/length keep the calm second grid):
+                // the Active panel is where an operator judges whether two cues are actually
+                // together, and a seconds readout hides everything below the one threshold that
+                // matters for sync questions.
+                Clock = PreciseClock(state.Elapsed),
                 // Counted DOWN, and marked as such. "How long have I got" is the question somebody
                 // driving a show asks; "how long has it been" is the question they ask afterwards.
                 Remaining = remaining is { } left ? $"−{Clock(left)}" : "",
@@ -428,6 +432,10 @@ public static class CuePresentation
         value.TotalHours >= 1
             ? $"{(int)value.TotalHours}:{value.Minutes:00}:{value.Seconds:00}"
             : $"{value.Minutes:00}:{value.Seconds:00}";
+
+    /// <summary><see cref="Clock"/> with milliseconds - the Active panel's live playhead.</summary>
+    private static string PreciseClock(TimeSpan value) =>
+        $"{Clock(value)}.{value.Milliseconds:000}";
 
     /// <summary>
     /// A media cue carrying a placement IS the mockup's video cue.
