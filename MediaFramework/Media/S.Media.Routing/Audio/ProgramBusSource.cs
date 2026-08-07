@@ -40,6 +40,28 @@ internal interface IGrantPacedOutput
     void OnGrantedChunkDropped(int floats);
 }
 
+/// <summary>
+/// An output that can PRE-ROLL: accept audio while held back from the mix, then join it on release.
+/// </summary>
+/// <remarks>
+/// This is the group-fire alignment primitive. A batch of sibling voices prepares off one barrier
+/// and starts off a second, but each voice's audio still has to travel decode → ring → bus after
+/// its clocks start, and that journey's length is scheduler weather — measured 0–180 ms of start
+/// scatter between stems of one song, quantized by the pump depth. Pre-roll removes the journey
+/// from the critical path: each sibling's router runs during PREPARE with its producer held (the
+/// ring fills with the clip's first samples; the bus skips it), and the start edge releases every
+/// sibling together — they join the same (or the adjacent) mix chunk, and their clocks anchor on
+/// that first read.
+/// </remarks>
+public interface IPreRollableOutput
+{
+    /// <summary>Accept submissions but stay out of the mix; the pacing wait never faults while held.</summary>
+    void BeginPreRoll();
+
+    /// <summary>Join the mix from the next read. Idempotent; a no-op when not held.</summary>
+    void EndPreRoll();
+}
+
 public sealed class ProgramBusSource : IAudioSource, IDisposable
 {
     /// <summary>How long a producer waits for capacity before concluding nobody is consuming the
@@ -279,6 +301,7 @@ public sealed class ProgramBusProducer :
     IClockedOutput,
     IFlushableOutput,
     IGrantPacedOutput,
+    IPreRollableOutput,
     IPlaybackClock,
     IAudioOutputLatency,
     IDisposable
@@ -311,6 +334,9 @@ public sealed class ProgramBusProducer :
     /// (its output pump queues whole chunks). Without this term the same free space is handed out once
     /// per pump slot and the router overproduces by the pump depth, permanently overflowing the ring.</summary>
     private long _grantedFloats;
+    /// <summary>1 while pre-rolling: the ring accepts audio but <see cref="MixInto"/> skips it, and
+    /// the pacing wait never concludes the bus is dead. See <see cref="IPreRollableOutput"/>.</summary>
+    private int _held;
     private bool _observedFlowing;
     private int _disposed;
 
@@ -365,38 +391,45 @@ public sealed class ProgramBusProducer :
         if (_disposed != 0)
             return;
 
-        // This audio has arrived, so it is no longer "in flight" against a capacity grant. Clamped at
-        // zero because a router that never paces from this producer (wall clock, or a non-primary
-        // attachment) submits without ever having asked - it simply never accrues a grant.
-        ReleaseGrant(samples.Length);
-
-        var written = _ring.Write(samples);
-        if (written == samples.Length)
+        // The grant is retired AFTER the ring write (finally below): releasing first woke the pacing
+        // waiter against the pre-write ring, and the re-grant it took let the ring overshoot the
+        // pacing target by a chunk. Retiring after keeps ring + outstanding ≤ target invariant.
+        // Clamped at zero inside ReleaseGrant because a router that never paces from this producer
+        // (wall clock, or a non-primary attachment) submits without ever having asked.
+        try
         {
-            // Disposal may race a submission that passed the fast pre-check. Re-clear after the
-            // write so no audio can remain queued once owner invalidation has completed.
+            var written = _ring.Write(samples);
+            if (written == samples.Length)
+            {
+                // Disposal may race a submission that passed the fast pre-check. Re-clear after the
+                // write so no audio can remain queued once owner invalidation has completed.
+                if (_disposed != 0)
+                    _ring.Clear();
+                return;
+            }
+
+            // Ring full: rebase to the newest audio. Keep room for the remainder, then write it.
+            var rest = samples[written..];
+            if (rest.Length >= _ring.CapacityFloats)
+            {
+                // The submission alone exceeds the whole ring - keep only its newest ring-full.
+                Interlocked.Add(ref _overflowFloats, _ring.BufferedFloats + rest.Length - _ring.CapacityFloats);
+                _ring.Clear();
+                rest = rest[^_ring.CapacityFloats..];
+            }
+            else
+            {
+                Interlocked.Add(ref _overflowFloats, _ring.DropOldestKeepingFloats(_ring.CapacityFloats - rest.Length));
+            }
+
+            _ring.Write(rest);
             if (_disposed != 0)
                 _ring.Clear();
-            return;
         }
-
-        // Ring full: rebase to the newest audio. Keep room for the remainder, then write it.
-        var rest = samples[written..];
-        if (rest.Length >= _ring.CapacityFloats)
+        finally
         {
-            // The submission alone exceeds the whole ring - keep only its newest ring-full.
-            Interlocked.Add(ref _overflowFloats, _ring.BufferedFloats + rest.Length - _ring.CapacityFloats);
-            _ring.Clear();
-            rest = rest[^_ring.CapacityFloats..];
+            ReleaseGrant(samples.Length);
         }
-        else
-        {
-            Interlocked.Add(ref _overflowFloats, _ring.DropOldestKeepingFloats(_ring.CapacityFloats - rest.Length));
-        }
-
-        _ring.Write(rest);
-        if (_disposed != 0)
-            _ring.Clear();
     }
 
     /// <summary>Replaces the N×V send matrix (same layout/validation as the acquire). The next bus
@@ -489,6 +522,11 @@ public sealed class ProgramBusProducer :
                 {
                     if (!_spaceAvailable.Wait(_capacityWaitTimeout, token))
                     {
+                        // Pre-roll: the bus is deliberately not consuming this producer, and the
+                        // start edge that releases it may be behind a slow-arming sibling. Not a
+                        // starvation - keep waiting.
+                        if (Volatile.Read(ref _held) != 0)
+                            continue;
                         // Every drop path is supposed to report through OnGrantedChunkDropped, but
                         // pacing credit is a liveness invariant: one unreported discard anywhere
                         // must never become a permanently silent voice (it did - the HaCue2
@@ -532,10 +570,25 @@ public sealed class ProgramBusProducer :
         SignalSpaceAvailable();
     }
 
-    /// <summary>Accrues a capacity grant when the ring plus everything already in flight leaves room for
-    /// one more chunk below the pacing target.</summary>
+    /// <summary>
+    /// Accrues a capacity grant when the ring plus everything already in flight leaves room for one
+    /// more chunk below the pacing target — AND no more than one other chunk is already in flight.
+    /// </summary>
+    /// <remarks>
+    /// The outstanding cap is the ring's floor. Granted-but-unsubmitted audio counts against the
+    /// pacing target, so every chunk sitting in the pump queue is a chunk the RING is allowed to be
+    /// short: with the pump's full eight chunks in flight the ring's share of the half-ring target
+    /// fell below a single mix chunk, and every bus read in that window substituted a few
+    /// milliseconds of silence — an audible tick, roughly once a second, whenever drainer scheduling
+    /// lagged under load (the HaCue2 dropout report: tens of thousands of underrun floats per lease,
+    /// zero overflow, terminal clean). Two chunks outstanding keeps the router's mix-ahead burst
+    /// bounded, which pins the ring's steady state well above one chunk while changing throughput
+    /// not at all — production is still paced by consumption, just without the queue-depth wobble.
+    /// </remarks>
     private bool TryTakeGrant(int needFloats, int targetFloats)
     {
+        if (Volatile.Read(ref _grantedFloats) + needFloats > needFloats * 2)
+            return false;
         if (_ring.BufferedFloats + Volatile.Read(ref _grantedFloats) + needFloats > targetFloats)
             return false;
         Interlocked.Add(ref _grantedFloats, needFloats);
@@ -543,15 +596,22 @@ public sealed class ProgramBusProducer :
     }
 
     /// <summary>Retires a grant as its audio lands, without letting an ungranted submit drive the
-    /// counter negative (a wall-clock-paced router never calls <see cref="WaitForCapacity"/>).</summary>
+    /// counter negative (a wall-clock-paced router never calls <see cref="WaitForCapacity"/>). Wakes
+    /// the pacing waiter: with the outstanding-grant cap, the waiter can be blocked on the CAP rather
+    /// than on ring space, and only a submit retires cap credit — a bus read alone cannot.</summary>
     private void ReleaseGrant(int floats)
     {
         while (true)
         {
             var granted = Volatile.Read(ref _grantedFloats);
+            if (granted == 0)
+                return;
             var next = Math.Max(0, granted - floats);
             if (Interlocked.CompareExchange(ref _grantedFloats, next, granted) == granted)
+            {
+                SignalSpaceAvailable();
                 return;
+            }
         }
     }
 
@@ -571,9 +631,31 @@ public sealed class ProgramBusProducer :
         SignalSpaceAvailable();
     }
 
+    /// <inheritdoc />
+    public void BeginPreRoll() => Volatile.Write(ref _held, 1);
+
+    /// <inheritdoc />
+    public void EndPreRoll()
+    {
+        if (Interlocked.Exchange(ref _held, 0) == 0)
+            return;
+        // The clock is TIME-based (terminal time minus lead), so it kept advancing through the hold
+        // - a release without a re-anchor would report positions that lead the audible content by
+        // the whole hold duration. Re-anchoring puts it back at zero, clamped there until the
+        // pre-rolled audio actually reaches the speaker - the same contract a fresh voice has.
+        _clock.Reanchor();
+        // The pacing waiter may be parked against a full ring that nobody was reading; the next bus
+        // read starts draining, but wake it now so production resumes without waiting out a timeout.
+        SignalSpaceAvailable();
+    }
+
     internal void MixInto(Span<float> destination, int frames, int busChannels)
     {
-        if (_disposed != 0)
+        // A held producer is not "underrunning" and not even silent-contributing - it is simply not
+        // in the mix yet. No read, no signal, no counters. (The voice's own MediaClock is parked by
+        // not being STARTED until the release edge; this clock's hold-spanning advance is cancelled
+        // by the re-anchor in EndPreRoll.)
+        if (_disposed != 0 || Volatile.Read(ref _held) != 0)
             return;
 
         var need = frames * _sourceChannels;

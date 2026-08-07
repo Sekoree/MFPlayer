@@ -194,6 +194,105 @@ public sealed class ProgramBusPacingTests
         producer.Dispose();
     }
 
+    /// <summary>
+    /// Regression (HaCue2 once-a-second ticks): granted-but-unsubmitted audio counts against the
+    /// pacing target, so every chunk the pump queue holds is a chunk the RING is allowed to be
+    /// short — at the pump's full depth the ring's share fell below one mix chunk and bus reads
+    /// substituted silence whenever drainer scheduling lagged. Outstanding grants are therefore
+    /// capped at two chunks: the ring's steady state keeps a floor of target minus two chunks.
+    /// </summary>
+    [Fact]
+    public void OutstandingGrants_AreCapped_SoTheRingKeepsAFloor()
+    {
+        using var bus = new ProgramBusSource(2, Rate, producerRingFrames: 4800);
+        var producer = bus.AcquireProducer(2, [1f, 0f, 0f, 1f], "voice");
+        var chunk = new float[Chunk * 2];
+
+        Assert.True(producer.WaitForCapacity(Chunk, new CancellationTokenSource(250).Token));
+        Assert.True(producer.WaitForCapacity(Chunk, new CancellationTokenSource(250).Token));
+
+        // Two chunks in flight: the router may mix no further ahead until one lands.
+        Assert.False(producer.WaitForCapacity(Chunk, new CancellationTokenSource(150).Token));
+
+        // A submit retires cap credit and wakes the waiter.
+        producer.Submit(chunk);
+        Assert.True(producer.WaitForCapacity(Chunk, new CancellationTokenSource(250).Token));
+
+        producer.Dispose();
+    }
+
+    /// <summary>
+    /// Pre-roll (group-fire alignment): a held producer's ring accepts the clip's first samples but
+    /// the bus skips it — no contribution, no underrun counting, no clock advance — and the release
+    /// joins the mix with the buffered content intact from its first sample.
+    /// </summary>
+    [Fact]
+    public void PreRoll_HoldsAudioOutOfTheMix_AndJoinsOnReleaseFromTheFirstSample()
+    {
+        using var bus = new ProgramBusSource(1, Rate, producerRingFrames: 4800);
+        var producer = bus.AcquireProducer(1, [1f], "voice");
+        var mix = new float[Chunk];
+
+        producer.BeginPreRoll();
+        var marked = new float[Chunk];
+        for (var i = 0; i < marked.Length; i++)
+            marked[i] = 0.5f;
+        producer.Submit(marked);
+
+        bus.ReadInto(mix);
+        Assert.All(mix, sample => Assert.Equal(0f, sample));       // held: not in the mix
+        Assert.Equal(0, producer.UnderrunFloats);                   // and not "underrunning"
+        Assert.Equal(Chunk, producer.BufferedFrames);               // the pre-rolled audio is intact
+
+        var epochWhileHeld = producer.EpochId;
+        producer.EndPreRoll();
+        // The release re-anchors: the clock advanced through the hold (it is time-based), and
+        // without a fresh epoch every pre-rolled voice's position would lead its audible content
+        // by the whole hold duration.
+        Assert.NotEqual(epochWhileHeld, producer.EpochId);
+        bus.ReadInto(mix);
+        Assert.All(mix, sample => Assert.Equal(0.5f, sample));      // released: first sample onward
+
+        producer.Dispose();
+    }
+
+    /// <summary>
+    /// A held producer's pacing wait outlives the starvation timeout: the bus is deliberately not
+    /// consuming it, and the start edge that releases it can sit behind a slow-arming sibling. The
+    /// old behavior — timeout, write-off, then refusal — would have faulted the voice's router
+    /// during a long group prepare.
+    /// </summary>
+    [Fact]
+    public async Task WaitForCapacity_OutlivesTheStarvationTimeout_WhileHeld()
+    {
+        using var bus = new ProgramBusSource(2, Rate, producerRingFrames: 4800,
+            capacityWaitTimeout: TimeSpan.FromMilliseconds(50));
+        var producer = bus.AcquireProducer(2, [1f, 0f, 0f, 1f], "voice");
+        var chunk = new float[Chunk * 2];
+
+        producer.BeginPreRoll();
+        // Fill to the cap so the waiter has to park.
+        while (producer.WaitForCapacity(Chunk, new CancellationTokenSource(30).Token))
+            producer.Submit(chunk);
+
+        // Park a waiter well past several timeout periods - it must neither fault nor give up.
+        using var cts = new CancellationTokenSource();
+        var waiter = Task.Run(() => producer.WaitForCapacity(Chunk, cts.Token));
+        Assert.NotSame(waiter, await Task.WhenAny(waiter, Task.Delay(300)));
+
+        // The release lets the bus drain and the waiter come back with a grant.
+        producer.EndPreRoll();
+        var mix = new float[Chunk * 2];
+        for (var reads = 0; reads < 16 && !waiter.IsCompleted; reads++)
+        {
+            bus.ReadInto(mix);
+            await Task.WhenAny(waiter, Task.Delay(20));
+        }
+        Assert.True(await waiter.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        producer.Dispose();
+    }
+
     private sealed class SilenceSource(AudioFormat fmt) : IAudioSource
     {
         public AudioFormat Format => fmt;

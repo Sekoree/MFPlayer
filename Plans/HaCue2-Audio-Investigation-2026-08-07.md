@@ -357,6 +357,39 @@ starvation timeout would fire if a cold sibling delays the edge); release must w
 the composition's slot-overflow growth seen in some runs (0 → ~150 per 11 s, run-dependent) should
 be re-measured after pre-roll, since it correlates with the video-vs-programme offset.
 
+## Round 5 — grant cap + bus-hold pre-roll (implemented)
+
+Reported after round 4: dropouts every second (diagnostics: 960–27,840 underrun floats per lease,
+zero overflow, terminal clean, 262 ms lease latency) and audio/video offset.
+
+1. **Micro-underruns — outstanding-grant cap.** Granted-but-unsubmitted audio counts against the
+   half-ring pacing target, so every chunk in the voice pump's queue was a chunk the ring was
+   allowed to be short: at full pump depth the ring's share fell below one mix chunk and bus reads
+   substituted a few ms of silence whenever drainer scheduling lagged (≈1/s under app load; never
+   in idle probes). Outstanding grants are now capped at two chunks (`TryTakeGrant`), grants are
+   retired AFTER the ring write and retire wakes the waiter (`Submit`/`ReleaseGrant`) — the ring
+   keeps a floor of target−2 chunks (~65 ms minimum) with unchanged throughput.
+2. **Bus-hold pre-roll** (`IPreRollableOutput` on `ProgramBusProducer`): during PREPARE each group
+   voice's router runs with its producer held — the ring pre-fills with the clip's first samples,
+   `MixInto` skips it (no reads, no underrun counts), and `WaitForCapacity` never concludes
+   starvation while held. The start edge releases every sibling together; they join the same (or
+   adjacent) mix chunk. `EndPreRoll` re-anchors the producer clock (it is time-based and advanced
+   through the hold; without the re-anchor every position would lead its audible content by the
+   hold length). Wired in `AvPlaybackCoordinator.PreparePlay` via the router's pacing primary;
+   single fires take the same path with an immediate release (≤1 chunk of hold, harmless).
+   `MaxStartDeferral` raised to 500 ms (master pacing keeps the device ring full, so a legitimate
+   pipeline depth is ~345 ms).
+
+Measured (windowed, full group, three runs): stems within 2–4 ms of each other, run-stable;
+both videos within ~20 ms of each other at a consistent ~110–175 ms behind the stem clocks; slot
+overflows 0 (previously grew run-dependently); pump overruns startup-only. Note the stem positions
+carry a systematic ~85 ms late-reading bias (full pre-rolled ring in the lead term), so the
+physical A/V offset is likely ~half the clock-readout gap. If video reads late by eye, the next
+knob is the silent-voice deferral (subtracting the deepest-ring component moves video ~85 ms
+earlier); a user-facing A/V offset trim is the standard endgame for projector rigs.
+
+All suites green: Core 789, Session 359, Players 16, HaCue2 381, HaCue2.Core 704.
+
 ## Suggested work order
 
 1. Framework: fix the grant leak + make capacity-wait timeout non-fatal, with a regression test (§1).

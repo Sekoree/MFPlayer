@@ -15,8 +15,11 @@ internal static class AvPlaybackCoordinator
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Playback.AvPlaybackCoordinator");
     private static readonly TimeSpan SyncStartVideoOutputTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AudioRealignTolerance = TimeSpan.FromMilliseconds(1);
-    /// <summary>Upper bound on the silent-voice start deferral (see the videoOnlyMaster branch).</summary>
-    private static readonly TimeSpan MaxStartDeferral = TimeSpan.FromMilliseconds(300);
+    /// <summary>Upper bound on the silent-voice start deferral (see the videoOnlyMaster branch).
+    /// With master pacing the device ring runs full, so a legitimate pipeline depth is
+    /// ring (~85 ms) + pump (~80 ms) + device (~180 ms observed); the cap only exists to stop a
+    /// pathological measurement from parking a picture indefinitely.</summary>
+    private static readonly TimeSpan MaxStartDeferral = TimeSpan.FromMilliseconds(500);
 
     public static void Play(
         VideoPlayer video,
@@ -121,6 +124,26 @@ internal static class AvPlaybackCoordinator
                             deferral.TotalMilliseconds, lead.TotalMilliseconds);
                     }
                     audioRouter.Start();
+                    audioClock.Start();
+                };
+            }
+
+            // PRE-ROLL (group-fire alignment): when the pacing primary can be held out of the mix,
+            // start the router NOW - the producer ring fills with the clip's first samples while the
+            // bus skips it and the voice's clock stays frozen - and make the start edge a release.
+            // Every sibling released in one tight pass joins the same (or the adjacent) mix chunk,
+            // which is what "an all-together group starts together" actually requires: without this
+            // the audio still raced decode → ring → bus after the edge, and that race's length was
+            // scheduler weather (measured 0-180 ms of stem scatter, quantized by the pump depth).
+            if (audioRouter.PrimaryOutputId is { } primaryId
+                && audioRouter.TryGetOutput(primaryId, out var primaryOutput)
+                && primaryOutput is IPreRollableOutput preRollable)
+            {
+                preRollable.BeginPreRoll();
+                audioRouter.Start();
+                return () =>
+                {
+                    preRollable.EndPreRoll();
                     audioClock.Start();
                 };
             }
