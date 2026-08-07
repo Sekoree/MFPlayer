@@ -70,6 +70,33 @@ internal sealed class AudibleClientClock : IPlaybackClock
     public void Stop() => Volatile.Write(ref _stopped, 1);
 
     /// <summary>
+    /// The audio path depth currently between production and the speaker — the RAW measurement, not
+    /// the low-passed value the clock subtracts.
+    /// </summary>
+    /// <remarks>
+    /// A voice that has no audio of its own needs this number once, at start: its clock is anchored
+    /// to this (already-advancing) show clock the moment Play runs, while a SOUNDING voice's clock
+    /// holds at zero until its first sample actually leaves the speaker — one pipeline depth later.
+    /// Deferring the silent voice's start by this much is what makes its picture land on the audible
+    /// programme instead of leading it by the whole audio path (measured ~150–500 ms on the incident
+    /// rig — a fixed, rate-locked video lead for the length of the cue).
+    /// </remarks>
+    public TimeSpan CurrentPipelineLead
+    {
+        get
+        {
+            try
+            {
+                return new TimeSpan(Math.Max(0, _measuredLeadTicks()));
+            }
+            catch
+            {
+                return TimeSpan.Zero; // torn down mid-read — "unknown", same answer latency gives
+            }
+        }
+    }
+
+    /// <summary>
     /// Terminal device time minus this client's epoch, minus the client's DAC lead, clamped at zero
     /// and monotonic. See the origin's <c>ClientInput.ElapsedSinceStart</c> doc for the full contract.
     /// </summary>

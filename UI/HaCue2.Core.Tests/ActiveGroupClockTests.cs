@@ -21,7 +21,7 @@ public class ActiveGroupClockTests
 
     /// <summary>One sounding child, thirty seconds in, out of a three-minute file.</summary>
     private static ActiveCueState Playing(MediaCueNode cue, Guid listId, double elapsedSeconds) =>
-        new(cue.Id, listId, TimeSpan.FromSeconds(elapsedSeconds), TimeSpan.FromMinutes(3), IsFading: false);
+        new(cue.Id, listId, TimeSpan.FromSeconds(elapsedSeconds), TimeSpan.FromMinutes(3), IsFading: false, StartedTicks: 0);
 
     private static (ActiveGroupRow Header, GroupCueNode Group) Panel(
         GroupFireMode mode, IReadOnlyList<MediaCueNode> children, double elapsedSeconds)

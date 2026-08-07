@@ -38,9 +38,13 @@ internal interface ICueRunnerHost
         Func<Task>? waitForStartBarrier,
         (TimeSpan Duration, FadeShape Curve)? crossfade);
 
-    /// <summary>Fires one cue on a caller-owned transport group, waiting at the batch barrier before commit.</summary>
+    /// <summary>Fires one cue on a caller-owned transport group, waiting at the batch barriers: once when
+    /// armed (before commit), and — when <paramref name="waitForStartEdge"/> is given — once more when
+    /// fully prepared, so every sibling's clocks start on one edge instead of staggering behind the
+    /// serialized commits.</summary>
     Task<CueExecutionStatus> FireCueIndependentAtBarrierAsync(
-        string cueId, string independentGroupId, Func<Task>? waitForStartBarrier, CancellationToken cancellationToken);
+        string cueId, string independentGroupId, Func<Task>? waitForStartBarrier, Func<Task>? waitForStartEdge,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// The group's GO cursor (the last fired cue number) and the show generation it was read under.

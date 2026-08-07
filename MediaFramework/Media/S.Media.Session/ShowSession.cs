@@ -178,11 +178,13 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         CancellationToken cancellationToken,
         Func<Task>? waitForStartBarrier,
         (TimeSpan Duration, FadeShape Curve)? crossfade) =>
-        PlayClipAsync(groupId, binding, cancellationToken, waitForStartBarrier, crossfade);
+        PlayClipAsync(groupId, binding, cancellationToken, waitForStartBarrier, crossfade: crossfade);
 
     Task<CueExecutionStatus> ICueRunnerHost.FireCueIndependentAtBarrierAsync(
-        string cueId, string independentGroupId, Func<Task>? waitForStartBarrier, CancellationToken cancellationToken) =>
-        FireCueIndependentAtBarrierAsync(cueId, independentGroupId, waitForStartBarrier, cancellationToken);
+        string cueId, string independentGroupId, Func<Task>? waitForStartBarrier, Func<Task>? waitForStartEdge,
+        CancellationToken cancellationToken) =>
+        FireCueIndependentAtBarrierAsync(
+            cueId, independentGroupId, waitForStartBarrier, waitForStartEdge, cancellationToken);
 
     Task<(int Cursor, int Generation)> ICueRunnerHost.ReadGoCursorAsync(string groupId) =>
         InvokeAsync(() => Task.FromResult((GetGoCursor(groupId), _showGeneration)));
@@ -940,6 +942,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         ShowClipBinding? binding,
         CancellationToken cancellationToken,
         Func<Task>? waitForStartBarrier = null,
+        Func<Task>? waitForStartEdge = null,
         (TimeSpan Duration, FadeShape Curve)? crossfade = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -980,9 +983,39 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         }
 
         // --- COMMIT (on the dispatcher): swap the armed clip in, or discard it if the show was reloaded / the
-        // fire was cancelled (STOP) during the open (NXT-03).
-        await InvokeAsync(() => CommitClipAsync(groupId, binding, cancellationToken, setup, armed, crossfade))
+        // fire was cancelled (STOP) during the open (NXT-03). For a group fire the commit PREPARES the voice
+        // (decode spin-up, buffer wait, sync present) but does not start its clocks - the starter comes back.
+        var startVoice = await InvokeAsync(() => CommitClipAsync(
+                groupId, binding, cancellationToken, setup, armed, crossfade,
+                deferStart: waitForStartEdge is not null))
             .ConfigureAwait(false);
+
+        if (waitForStartEdge is null)
+            return;
+
+        // --- START EDGE (group fires only): every sibling has committed and fully prepared before any
+        // clock starts, so the group starts on one edge instead of staggering behind the serialized
+        // commits (a video sibling's present-sync alone is up to 250 ms). The starters queue on the
+        // dispatcher but each is a few thread-starts - microseconds, not milliseconds.
+        // A discarded commit (reload/STOP/superseded during the open) still waits at the edge so the
+        // barrier's participant count stays truthful; it just has nothing to start.
+        await waitForStartEdge().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (startVoice is not null)
+            await InvokeAsync(() =>
+            {
+                try
+                {
+                    startVoice();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // A STOP tore the committed voice down while it waited at the edge. Starting a
+                    // dead voice is moot, and the stop already owns the teardown.
+                }
+                return Task.CompletedTask;
+            }).ConfigureAwait(false);
     }
 
     /// <summary>Test-only fault seam (§A): raised on the dispatcher immediately AFTER a clip has committed to
@@ -995,13 +1028,17 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// clip's outputs, masters the composition, and swaps it in - unless the show was reloaded (generation moved)
     /// or the fire was cancelled while the clip opened off the dispatcher, in which case it discards the now-stale
     /// clip without touching the live show.</summary>
-    private async Task CommitClipAsync(
+    /// <param name="deferStart">Group fires: prepare the voice fully (decode spin-up, buffer wait,
+    /// sync present) but return the clock start as the result instead of running it, so the caller can
+    /// start every sibling on one edge. False (single fires) starts inline and returns null.</param>
+    private async Task<Action?> CommitClipAsync(
         string groupId,
         ShowClipBinding binding,
         CancellationToken cancellationToken,
         (int generation, TransportGroup group, long ticket) setup,
         IArmedClip armed,
-        (TimeSpan Duration, FadeShape Curve)? crossfade = null)
+        (TimeSpan Duration, FadeShape Curve)? crossfade = null,
+        bool deferStart = false)
     {
         // Superseded by a later open on the same group (see TransportGroup.OpenSequence), cancelled, or
         // straddling a reload - discard without touching the live show.
@@ -1011,7 +1048,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             || _disposed)
         {
             await armed.ReleaseAsync().ConfigureAwait(false);
-            return;
+            return null;
         }
 
         var group = setup.group;
@@ -1227,7 +1264,16 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             // audio device, and the picture would slide away from the sound for as long as the show
             // runs. Only consumed when the player has no pacing primary of its own - a sounding voice
             // is already mastered by its own program lease, which is the same clock one lead further on.
-            armed.Start(videoOnlyMaster: _programAudio?.MasterClock);
+            //
+            // A group fire PREPARES here (the slow half: decode spin-up, buffer wait, sync present)
+            // and hands the clock start back to PlayClipAsync, which runs every sibling's starter
+            // after the batch's start edge - the voice below commits as Active either way, it just
+            // holds at its start position until the edge.
+            Action? deferredStart = null;
+            if (deferStart)
+                deferredStart = armed.PrepareStart(videoOnlyMaster: _programAudio?.MasterClock);
+            else
+                armed.Start(videoOnlyMaster: _programAudio?.MasterClock);
             // Commit: the displaced voice moves to its release (ramp armed inside the handoff) or is
             // butt-spliced away, and this voice becomes the group's Active.
             await CommitVoiceAsync(groupId, group, voice, crossfade).ConfigureAwait(false);
@@ -1269,6 +1315,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 if (endHandling)
                     StartEndMonitor(groupId, voice, end, clipCts.Token);
             }
+
+            return deferredStart;
         }
         catch
         {

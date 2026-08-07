@@ -336,6 +336,19 @@ public sealed class MediaPlayer : IDisposable
         Action? prefillBeforeHardware = null,
         Action? startHardware = null,
         IPlaybackClock? videoOnlyMaster = null,
+        Func<bool>? verifyPrebufferAfterPrefill = null) =>
+        PreparePlay(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill)();
+
+    /// <summary>
+    /// The slow half of <see cref="Play"/> — prefill, hardware, decode spin-up, video buffer wait and
+    /// sync present — without starting the clocks; the returned action is the start edge. Exists so a
+    /// group fire can prepare every sibling first and then start them together (see
+    /// <see cref="AvPlaybackCoordinator.PreparePlay"/> for why the split matters).
+    /// </summary>
+    public Action PreparePlay(
+        Action? prefillBeforeHardware = null,
+        Action? startHardware = null,
+        IPlaybackClock? videoOnlyMaster = null,
         Func<bool>? verifyPrebufferAfterPrefill = null)
     {
         // Live video: re-anchor the source's synthesized PTS to the master so prebuffered + subsequent frames
@@ -343,14 +356,19 @@ public sealed class MediaPlayer : IDisposable
         _liveVideoSource?.RebaseToLatest(_liveClock?.CurrentPosition ?? TimeSpan.Zero);
         // An explicit caller-supplied master always wins; otherwise supply the owned PTS master when the
         // video-only opt-in is on (null for every other open, so the coordinator's else-branch is unchanged).
-        _liveSession!.Play(
+        var startClocks = _liveSession!.PreparePlay(
             prefillBeforeHardware,
             startHardware,
             videoOnlyMaster ?? PrepareVideoPtsMasterForPlay(),
             verifyPrebufferAfterPrefill);
-        // Record the timebase epoch this run plays under - the natural-EOF Duration clamp in Position is
-        // only valid while the epoch is unchanged (i.e. no seek since this Play).
-        Volatile.Write(ref _playPositionEpoch, _liveAudioClock?.PositionEpoch ?? PlaybackEpoch.Single);
+        return () =>
+        {
+            startClocks();
+            // Record the timebase epoch this run plays under - the natural-EOF Duration clamp in Position is
+            // only valid while the epoch is unchanged (i.e. no seek since this Play). Stamped at the START
+            // edge, not at prepare: the epoch belongs to the run, and the run begins when the clocks do.
+            Volatile.Write(ref _playPositionEpoch, _liveAudioClock?.PositionEpoch ?? PlaybackEpoch.Single);
+        };
     }
 
     public void Pause(CancellationToken cancellationToken = default)

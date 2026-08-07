@@ -133,6 +133,7 @@ public static class ProjectStatus
             CheckMedia(project, projectPath, environment),
             CheckPreparedSources(project, environment),
             CheckAudioLines(project, environment),
+            CheckClockMaster(project),
             CheckVideoOutputs(project, environment, documentIssues),
             CheckAudition(project),
             CheckRecordings(project),
@@ -304,6 +305,61 @@ public static class ProjectStatus
 
         return Summarise("Audio devices", issues, unchecked_, project.AudioLines.Count,
             "Relink ›", "line");
+    }
+
+    /// <summary>
+    /// A show with audio has a clock master line.
+    /// </summary>
+    /// <remarks>
+    /// A WARNING, never an error: the show plays without one. But it plays on the wall clock — no
+    /// terminal paces the bay, every voice clock rides the wall-clock fallback, and video drifts
+    /// against the audio device's crystal for as long as a cue runs. That drift was reported as an
+    /// A/V sync bug and diagnosed to exactly this: the project had no master, so the genlock had
+    /// nothing to lock to. The choice of WHICH line is a rig decision (an NDI sender, say, paces on
+    /// the network's terms and must not be it), which is why this warns instead of picking one.
+    /// </remarks>
+    private static StatusCheck CheckClockMaster(HaCueProject project)
+    {
+        // Only device lines count: record/stream lines join at arm time and NDI is ineligible.
+        var eligible = project.AudioLines
+            .Where(line => line.Kind == AudioLineKind.LocalAudio)
+            .ToList();
+
+        if (eligible.Count == 0 || project.AudioPatch.Cells.Count == 0)
+            return new StatusCheck("Audio clock", CheckOutcome.Passed, "no audio lines in use", "", []);
+
+        if (project.AudioPatch.ClockMasterLineId is { } masterId)
+        {
+            if (project.FindLine(masterId) is { Kind: AudioLineKind.LocalAudio } master)
+                return new StatusCheck(
+                    "Audio clock", CheckOutcome.Passed, $"mastered by {master.Name}", "", []);
+
+            return new StatusCheck(
+                "Audio clock",
+                CheckOutcome.Warning,
+                "the clock master line is gone",
+                "pick a device line as clock master on the Audio patch",
+                [
+                    new ShowValidationIssue(
+                        ShowValidationSeverity.Warning,
+                        "the clock master names a line that is no longer a device on this show — the bay free-runs on the wall clock and video can drift against audio",
+                        "audioPatch",
+                        masterId.ToString()),
+                ]);
+        }
+
+        return new StatusCheck(
+            "Audio clock",
+            CheckOutcome.Warning,
+            "no clock master line",
+            "pick a device line as clock master on the Audio patch",
+            [
+                new ShowValidationIssue(
+                    ShowValidationSeverity.Warning,
+                    "no audio line is the clock master — the first device line that opens at the mix rate will pace automatically; set one explicitly so the choice is yours",
+                    "audioPatch",
+                    ""),
+            ]);
     }
 
     /// <summary>

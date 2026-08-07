@@ -110,7 +110,11 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         lock (_slotsGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var slotId = id ?? $"slot_{_slots.Count + 1}";
+            // A monotonic ordinal, NOT `count + 1`: slots are removed as layers end, so a count-based
+            // default reissues an id a surviving slot still holds - remove slot_2 of four and the next
+            // add is another "slot_4". On a live composition that collision aborted a whole batch fire
+            // ("slot id 'slot_3' is already registered"), and the staircase fallback then skipped cues.
+            var slotId = id ?? $"slot_{++_nextSlotOrdinal}";
             foreach (var s in _slots)
             {
                 if (s.Id == slotId)
@@ -121,6 +125,11 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             return slot;
         }
     }
+
+    /// <summary>Ever-increasing default-id ordinals, so a released default id is never reissued.</summary>
+    private long _nextSlotOrdinal;
+
+    private long _nextSurfaceOrdinal;
 
     /// <summary>Whether the compositor behind this mixer can host surface layers (NXT-10).</summary>
     public bool SupportsSurfaceLayers => _compositor is IVideoCompositorSurfaceHost;
@@ -154,7 +163,8 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         lock (_slotsGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var slotId = id ?? $"surface_{_surfaceSlots.Count + 1}";
+            // Monotonic for the same reason as AddSlot: a count-based default collides after removals.
+            var slotId = id ?? $"surface_{++_nextSurfaceOrdinal}";
             foreach (var s in _surfaceSlots)
             {
                 if (s.Id == slotId)

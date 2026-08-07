@@ -22,6 +22,14 @@ internal interface IAvPlaybackSession
         IPlaybackClock? videoOnlyMaster = null,
         Func<bool>? verifyPrebufferAfterPrefill = null);
 
+    /// <summary>The slow half of <see cref="Play"/> without the clock start; the returned action is
+    /// the start edge. See <see cref="AvPlaybackCoordinator.PreparePlay"/>.</summary>
+    Action PreparePlay(
+        Action? prefillBeforeHardware = null,
+        Action? startHardware = null,
+        IPlaybackClock? videoOnlyMaster = null,
+        Func<bool>? verifyPrebufferAfterPrefill = null);
+
     void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null);
     void Seek(TimeSpan position);
     void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,

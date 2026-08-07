@@ -100,9 +100,12 @@ public static class CuePresentation
     /// bar filled to a guess.
     /// </para>
     /// <para>
-    /// Ordered by how long each has been running, newest LAST, so a row does not jump under the
-    /// pointer when an unrelated cue ends. Scope never filters this list: a sounding cue the operator
-    /// cannot see is the one thing the Active panel exists to prevent.
+    /// Ordered by WHEN each was fired, newest LAST, so a row never moves while its cue runs. The
+    /// previous key was the playhead, which rewinds on loop wraps, jumps on seeks and freezes on
+    /// pause — every one of those reshuffled the list under the pointer. Cue id breaks ties so a
+    /// batch fire (a group's stems, all stamped together) keeps one stable order. Scope never
+    /// filters this list: a sounding cue the operator cannot see is the one thing the Active panel
+    /// exists to prevent.
     /// </para>
     /// </remarks>
     public static IReadOnlyList<ActiveCueRow> Active(
@@ -125,7 +128,7 @@ public static class CuePresentation
             .Select(child => child.Id)
             .ToHashSet();
 
-        foreach (var state in states.OrderByDescending(state => state.Elapsed))
+        foreach (var state in states.OrderBy(state => state.StartedTicks).ThenBy(state => state.CueId))
         {
             if (project.FindCue(state.CueId) is not { } cue)
                 continue;

@@ -174,7 +174,10 @@ public sealed class RemoteApiServer : IAsyncDisposable
             Problem?.Invoke($"remote request failed — {failure.Message}");
             try
             {
-                var result = Error(500, "the request could not be completed");
+                // The reason rides along: the API is token-gated, and a controller integrator staring
+                // at a bare "could not be completed" has no way to tell a show fault from their own
+                // request. (The slot-collision incident fired 12 of 13 cues and answered exactly that.)
+                var result = Error(500, $"the request could not be completed — {failure.Message}");
                 var bytes = Encoding.UTF8.GetBytes(result.Body);
                 context.Response.StatusCode = result.Status;
                 context.Response.ContentType = result.ContentType;

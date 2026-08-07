@@ -92,7 +92,7 @@ public sealed partial class ShowSession
         string independentGroupId,
         CancellationToken cancellationToken = default)
         => await FireCueIndependentCoreAsync(
-                cueId, independentGroupId, waitForStartBarrier: null, cancellationToken)
+                cueId, independentGroupId, waitForStartBarrier: null, waitForStartEdge: null, cancellationToken)
             .ConfigureAwait(false);
 
     /// <summary>The coordinated-batch form: identical independent-group semantics, but the armed clip waits at the
@@ -102,16 +102,19 @@ public sealed partial class ShowSession
         string cueId,
         string independentGroupId,
         Func<Task>? waitForStartBarrier,
+        Func<Task>? waitForStartEdge,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(waitForStartBarrier);
-        return FireCueIndependentCoreAsync(cueId, independentGroupId, waitForStartBarrier, cancellationToken);
+        return FireCueIndependentCoreAsync(
+            cueId, independentGroupId, waitForStartBarrier, waitForStartEdge, cancellationToken);
     }
 
     private async Task<CueExecutionStatus> FireCueIndependentCoreAsync(
         string cueId,
         string independentGroupId,
         Func<Task>? waitForStartBarrier,
+        Func<Task>? waitForStartEdge,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cueId);
@@ -131,7 +134,8 @@ public sealed partial class ShowSession
         {
             if (cue.PreWait > TimeSpan.Zero)
                 await Task.Delay(cue.PreWait, cancellationToken).ConfigureAwait(false);
-            await PlayClipAsync(independentGroupId, binding, cancellationToken, waitForStartBarrier).ConfigureAwait(false);
+            await PlayClipAsync(independentGroupId, binding, cancellationToken, waitForStartBarrier, waitForStartEdge)
+                .ConfigureAwait(false);
             if (cue.PostWait > TimeSpan.Zero)
                 await Task.Delay(cue.PostWait, cancellationToken).ConfigureAwait(false);
             return CueExecutionStatus.Fired;

@@ -28,6 +28,11 @@ public sealed partial class AudioRouter
         private readonly AudioRouter _router;
         private readonly string _sinkId;
         private readonly IAudioOutput _sink;
+        /// <summary>Non-null when the sink paces its router through capacity GRANTS (a program-bus
+        /// producer lease). Every chunk this pump discards after the grant was taken - any drop, any
+        /// abandon - must be reported back, or the sink's pacing credit leaks and the voice wedges
+        /// (the HaCue2 silent-voice regression). Over-reporting is safe: releases clamp at zero.</summary>
+        private readonly IGrantPacedOutput? _grantSink;
         private readonly BlockingCollection<float[]> _ready;
         private readonly ConcurrentQueue<float[]> _free = new();
         private readonly Thread _thread;
@@ -85,6 +90,7 @@ public sealed partial class AudioRouter
             _router = router;
             _sinkId = outputId;
             _sink = output;
+            _grantSink = output as IGrantPacedOutput;
             _floatsPerChunk = floatsPerChunk;
             _pumpCapacityChunks = capacityChunks;
             _ready = new BlockingCollection<float[]>(boundedCapacity: capacityChunks);
@@ -123,6 +129,10 @@ public sealed partial class AudioRouter
 
         private long RecordDrop()
         {
+            // The discarded chunk will never reach Submit, so its capacity grant must be returned
+            // here - RecordDrop is the single funnel for every Commit drop path. Without this, each
+            // drop permanently burns pacing credit and ~8 drops silence the voice for good.
+            _grantSink?.OnGrantedChunkDropped(_floatsPerChunk);
             var total = Interlocked.Increment(ref _dropped);
             _router.RaisePumpPressure(_sinkId, total);
             return total;
@@ -226,6 +236,11 @@ public sealed partial class AudioRouter
                 // processed < enqueued forever and blocks for the full timeout after a flush.
                 Interlocked.Increment(ref _processed);
                 Interlocked.Increment(ref _abandoned);
+                // An abandoned chunk carried a grant like any other. FlushOutputBuffers zeroes the
+                // sink's credit right after this anyway, but abandons also happen WITHOUT a
+                // follow-up flush (output removal on a live router) - and a clamped double-release
+                // is harmless while a leak is not.
+                _grantSink?.OnGrantedChunkDropped(_floatsPerChunk);
             }
         }
 

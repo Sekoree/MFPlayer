@@ -107,18 +107,27 @@ public sealed partial class ShowHost
             return true;
         }
 
+        // Sounding from the moment of the GO, not the moment the decoder finished opening: a cold
+        // file's open takes long enough that an Active panel waiting for it reads as a GO that did
+        // not take. A fire that fails takes the entry straight back down.
+        var group = GroupOf(cue.Id);
+        Remember(cue.Id, list?.Id ?? Guid.Empty, group);
+
         var status = await _session.FireCueAsync(
             cue.Id.ToString(), crossfade, crossfadeCurve).ConfigureAwait(false);
 
         if (status != CueExecutionStatus.Fired)
         {
+            Forget(cue.Id.ToString());
             if (status == CueExecutionStatus.Failed)
                 Report($"“{cue.Label}” did not fire");
 
             return false;
         }
 
-        Remember(cue.Id, list?.Id ?? Guid.Empty, GroupOf(cue.Id));
+        // A re-fire's displaced voice tears down DURING the fire and its Forget can race the entry
+        // away; this reasserts it without touching a surviving fire-start stamp.
+        ConfirmSounding(cue.Id, list?.Id ?? Guid.Empty, group);
         if (PlayedLength(cue) is { } duration)
             _outbound.Start(cue, duration);
         return true;
@@ -144,6 +153,11 @@ public sealed partial class ShowHost
         if (targets.Count == 0)
             return [];
 
+        // The whole batch shows up the moment of the GO (see PlayAsync — same reasoning, and a
+        // batch is the case where the opens take longest). Anything that fails comes back down.
+        foreach (var (cue, group) in targets)
+            Remember(cue.Id, list?.Id ?? Guid.Empty, group);
+
         IReadOnlyList<CueExecutionStatus> statuses;
 
         try
@@ -156,6 +170,8 @@ public sealed partial class ShowHost
         {
             // One batch that could not run must not take the GO down. Reported by name, and the caller
             // falls back to firing them one at a time — a staircase start beats a silent group.
+            foreach (var (cue, _) in targets)
+                Forget(cue.Id.ToString());
             Report($"“{list?.Name ?? "a group"}” could not be fired together — {failure.Message}");
             return [];
         }
@@ -168,13 +184,14 @@ public sealed partial class ShowHost
 
             if (statuses[index] != CueExecutionStatus.Fired)
             {
+                Forget(cue.Id.ToString());
                 if (statuses[index] == CueExecutionStatus.Failed)
                     Report($"“{cue.Label}” did not fire");
 
                 continue;
             }
 
-            Remember(cue.Id, list?.Id ?? Guid.Empty, group);
+            ConfirmSounding(cue.Id, list?.Id ?? Guid.Empty, group);
             if (PlayedLength(cue) is { } duration)
                 _outbound.Start(cue, duration);
             started.Add(cue.Id);

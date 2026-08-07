@@ -37,6 +37,14 @@ internal sealed class MediaPlaybackSession : IAvPlaybackSession
         AvPlaybackCoordinator.Play(Video, AudioRouter, AudioClock, prefillBeforeHardware, startHardware, videoOnlyMaster,
             verifyPrebufferAfterPrefill, AudioSourceId);
 
+    public Action PreparePlay(
+        Action? prefillBeforeHardware = null,
+        Action? startHardware = null,
+        IPlaybackClock? videoOnlyMaster = null,
+        Func<bool>? verifyPrebufferAfterPrefill = null) =>
+        AvPlaybackCoordinator.PreparePlay(Video, AudioRouter, AudioClock, prefillBeforeHardware, startHardware,
+            videoOnlyMaster, verifyPrebufferAfterPrefill, AudioSourceId);
+
     public void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null) =>
         AvPlaybackCoordinator.Pause(Video, AudioRouter, AudioClock, cancellationToken, flushSharedMuxAfterPause);
 

@@ -27,8 +27,14 @@ namespace HaCue2.Engine;
 /// the trim, and because it exists on a machine that has not probed the file.
 /// </param>
 /// <param name="IsFading">Whether something has asked it to come down.</param>
+/// <param name="StartedTicks">
+/// <see cref="System.Diagnostics.Stopwatch"/> timestamp of the moment the cue was fired. This is the
+/// ordering key for the Active panel: fire order never changes while a cue runs, unlike
+/// <paramref name="Elapsed"/>, which is a playhead — it rewinds on loop wraps, jumps on seeks and
+/// freezes on pause, and a list sorted by it reshuffles under the operator's pointer.
+/// </param>
 public sealed record ActiveCueState(
-    Guid CueId, Guid ListId, TimeSpan Elapsed, TimeSpan? Length, bool IsFading);
+    Guid CueId, Guid ListId, TimeSpan Elapsed, TimeSpan? Length, bool IsFading, long StartedTicks);
 
 /// <summary>What the show is doing right now, as one snapshot.</summary>
 /// <param name="Sounding">Cue ids currently playing.</param>
@@ -424,7 +430,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
 
         var runtimeProject = ProjectSnapshot.Copy(project);
         var registry = BuildRegistry(backend);
-        var bay = ProjectPatchBay.Open(runtimeProject, backend);
+        var bay = ProjectPatchBay.Open(runtimeProject, backend, registry);
         var screens = ProjectVideoOutputs.OpenAll(runtimeProject, headless);
 
         var target = new PatchBayShowProgramAudioTarget(
@@ -453,6 +459,12 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
 
         foreach (var failure in screens.Failures)
             host.Report(failure);
+
+        // The bay collects these the same way the screens do, and they were the ONLY failure list
+        // nobody reported: a line that failed to open left the show silently silent — the log for
+        // the incident session showed no device activity at all and no reason why.
+        foreach (var failure in bay.Failures)
+            host.Report($"audio line {failure}");
 
         // A rig that records every performance says so in the document; everything else waits for the
         // operator. Arming here rather than in ReloadAsync means an edit mid-show never re-arms a

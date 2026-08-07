@@ -189,6 +189,23 @@ public interface IArmedClip : IAsyncDisposable
         IPlaybackClock? videoOnlyMaster = null,
         Func<bool>? verifyPrebufferAfterPrefill = null);
 
+    /// <summary>
+    /// The slow half of <see cref="Start"/> — decode spin-up, buffer wait, sync present — without
+    /// starting the clocks; the returned action is the start edge. Group fires prepare every sibling
+    /// first and then run the starters together, which is what makes an all-together group actually
+    /// start together (the slow half used to run inside each serialized commit, staggering siblings
+    /// by hundreds of milliseconds). The default implementation defers everything to the edge, which
+    /// is behaviorally safe for hosts that never split.
+    /// </summary>
+    Action PrepareStart(
+        Action? prefillBeforeHardware = null,
+        Action? startHardware = null,
+        IPlaybackClock? videoOnlyMaster = null,
+        Func<bool>? verifyPrebufferAfterPrefill = null)
+    {
+        return () => Start(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
+    }
+
     ValueTask ReleaseAsync();
 }
 
@@ -663,6 +680,25 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
 
             Player.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
             IsStarted = true;
+        }
+
+        public Action PrepareStart(
+            Action? prefillBeforeHardware = null,
+            Action? startHardware = null,
+            IPlaybackClock? videoOnlyMaster = null,
+            Func<bool>? verifyPrebufferAfterPrefill = null)
+        {
+            ObjectDisposedException.ThrowIf(_released, this);
+            if (IsStarted)
+                return static () => { };
+
+            var startClocks = Player.PreparePlay(
+                prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
+            // Started FROM THE PREPARE: decode threads are running and the hardware may be, so this
+            // player is no longer pristine — a release between prepare and the edge must dispose it,
+            // never return it to warm standby as if it had not been touched.
+            IsStarted = true;
+            return startClocks;
         }
 
         public ValueTask ReleaseAsync()

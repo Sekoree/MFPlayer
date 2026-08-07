@@ -15,8 +15,36 @@ internal static class AvPlaybackCoordinator
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Playback.AvPlaybackCoordinator");
     private static readonly TimeSpan SyncStartVideoOutputTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AudioRealignTolerance = TimeSpan.FromMilliseconds(1);
+    /// <summary>Upper bound on the silent-voice start deferral (see the videoOnlyMaster branch).</summary>
+    private static readonly TimeSpan MaxStartDeferral = TimeSpan.FromMilliseconds(300);
 
     public static void Play(
+        VideoPlayer video,
+        AudioRouter? audioRouter = null,
+        MediaClock? audioClock = null,
+        Action? prefillBeforeHardware = null,
+        Action? startHardware = null,
+        IPlaybackClock? videoOnlyMaster = null,
+        Func<bool>? verifyPrebufferAfterPrefill = null,
+        string? audioSourceId = null) =>
+        PreparePlay(
+            video, audioRouter, audioClock, prefillBeforeHardware, startHardware,
+            videoOnlyMaster, verifyPrebufferAfterPrefill, audioSourceId)();
+
+    /// <summary>
+    /// The slow half of <see cref="Play"/> — prefill, hardware start, decode spin-up, the video
+    /// buffer wait and the sync-frame present — WITHOUT starting the clocks. The returned action is
+    /// the start edge: it starts the router and clock (or the free-run clock) and is cheap enough to
+    /// call for a whole group of voices back-to-back.
+    /// </summary>
+    /// <remarks>
+    /// This split exists for group fires. A batch of siblings must start on ONE edge, but their
+    /// commits run serially on the session dispatcher — and when this method's slow half lived in the
+    /// same call as the clock start, every voice queued behind a video sibling started late by that
+    /// sibling's present-sync (up to 250 ms each; measured half-second staggers, in per-run-random
+    /// order). Prepare each voice first, then fire the returned starters together.
+    /// </remarks>
+    public static Action PreparePlay(
         VideoPlayer video,
         AudioRouter? audioRouter = null,
         MediaClock? audioClock = null,
@@ -71,24 +99,52 @@ internal static class AvPlaybackCoordinator
                 Trace.LogDebug(
                     "Play: audio router has no pacing primary - mastering this voice's clock to the show clock ({ClockType}) so its video cannot drift against the audio device",
                     videoOnlyMaster.GetType().Name);
+                var deferAgainstProgramme = videoOnlyMaster as AudibleClientClock;
+                return () =>
+                {
+                    // Rate alone is not enough: the show clock is already ADVANCING, so an anchor
+                    // taken at Start makes this voice's timeline move immediately — while a sounding
+                    // voice's producer clock holds at zero until its first sample actually leaves the
+                    // speaker, one audio-pipeline depth later. Without the deferral the picture led
+                    // the programme by exactly that depth (measured ~150–500 ms), rate-locked, for
+                    // the whole cue. Measured HERE, at the start edge, not at prepare: a group fire
+                    // prepares its siblings first, and the fill transient during those preparations
+                    // reads far above the depth the siblings will actually start with (measuring at
+                    // prepare landed the picture ~170 ms BEHIND the stems). Capped as a safety net —
+                    // the cap sits above any steady-state depth this pipeline produces.
+                    if (deferAgainstProgramme?.CurrentPipelineLead is { Ticks: > 0 } lead)
+                    {
+                        var deferral = lead <= MaxStartDeferral ? lead : MaxStartDeferral;
+                        audioClock.DeferStart(deferral);
+                        Trace.LogDebug(
+                            "Play: deferred this voice's start by the audio pipeline depth ({DeferMs:0}ms of {LeadMs:0}ms measured) so its picture lands on the audible programme",
+                            deferral.TotalMilliseconds, lead.TotalMilliseconds);
+                    }
+                    audioRouter.Start();
+                    audioClock.Start();
+                };
             }
 
-            audioRouter.Start();
-            audioClock.Start();
+            return () =>
+            {
+                audioRouter.Start();
+                audioClock.Start();
+            };
         }
-        else
+
+        video.Play();
+
+        if (verifyPrebufferAfterPrefill is not null && !verifyPrebufferAfterPrefill())
+            throw new InvalidOperationException(
+                "AvPlaybackCoordinator.Play: verifyPrebufferAfterPrefill returned false.");
+
+        if (videoOnlyMaster is not null)
+            video.Clock.SetMaster(videoOnlyMaster);
+        return () =>
         {
-            video.Play();
-
-            if (verifyPrebufferAfterPrefill is not null && !verifyPrebufferAfterPrefill())
-                throw new InvalidOperationException(
-                    "AvPlaybackCoordinator.Play: verifyPrebufferAfterPrefill returned false.");
-
-            if (videoOnlyMaster is not null)
-                video.Clock.SetMaster(videoOnlyMaster);
             if (!video.Clock.IsRunning)
                 video.Clock.Start();
-        }
+        };
     }
 
     /// <summary>

@@ -117,8 +117,15 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     public void Show(IReadOnlyList<Guid> cueIds)
     {
-        if (RememberTabs && SelectedTab is { } previous && Cue is { } old && SelectionCount <= 1)
-            _rememberedTab[KindOf(old)] = previous;
+        // Remembered for EVERY kind in the outgoing selection, not just a single one. A journal
+        // change mid-multi-edit clears and restores the tree selection, and each pass comes through
+        // here — when only single selections wrote the memory, adding a send on the Audio pane of
+        // eleven stems recalled a stale "GENERAL" on the restore and threw the operator out of the
+        // pane once per edit. The open tab is in the intersection of the selected kinds' tab sets
+        // (see Reload), so it is a valid memory for each of them.
+        if (RememberTabs && SelectedTab is { } previous && Cue is not null)
+            foreach (var kind in Selected.Select(KindOf).Distinct())
+                _rememberedTab[kind] = previous;
 
         _selection = cueIds;
 

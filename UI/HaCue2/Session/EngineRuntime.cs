@@ -63,9 +63,21 @@ public sealed class EngineRuntime : IAsyncDisposable
         // than append — a PortMIDI poll that blocks is a poll that drops messages.
         host.Triggers.Observed += OnObserved;
 
-        _timer = new DispatcherTimer(Tick, DispatcherPriority.Background, (_, _) => Poll());
+        // A fire or a stop polls IMMEDIATELY instead of waiting out the tick: the Active panel is
+        // the operator's confirmation that the GO took, and up to a quarter second of nothing —
+        // more when the UI thread is busy, which a GO makes it — reads as a button that failed.
+        // Raised on engine threads, so it marshals itself onto the dispatcher.
+        host.SoundingChanged += OnSoundingChanged;
+
+        // Input rather than Background: Background is the lowest priority there is, and it starves
+        // exactly when the operator is looking — a GO kicks off enough layout and render work that
+        // the poll showing its result could slip far past its 250 ms.
+        _timer = new DispatcherTimer(Tick, DispatcherPriority.Input, (_, _) => Poll());
         _timer.Start();
     }
+
+    private void OnSoundingChanged() =>
+        Dispatcher.UIThread.Post(Poll, DispatcherPriority.Input);
 
     /// <summary>Raised when what is sounding or where standby sits actually changed.</summary>
     public event Action? Changed;
@@ -124,9 +136,14 @@ public sealed class EngineRuntime : IAsyncDisposable
     private async void Poll()
     {
         // One in flight at a time: a snapshot crosses the session dispatcher, and stacking them up
-        // behind a busy session would turn a 250 ms tick into an unbounded queue.
+        // behind a busy session would turn a 250 ms tick into an unbounded queue. A request that
+        // lands mid-poll is REMEMBERED rather than dropped — the in-flight snapshot may predate the
+        // change that prompted it, and losing it would put the fresh fire back on the slow tick.
         if (_polling)
+        {
+            _pollAgain = true;
             return;
+        }
 
         _polling = true;
 
@@ -180,8 +197,15 @@ public sealed class EngineRuntime : IAsyncDisposable
         finally
         {
             _polling = false;
+            if (_pollAgain)
+            {
+                _pollAgain = false;
+                Dispatcher.UIThread.Post(Poll, DispatcherPriority.Input);
+            }
         }
     }
+
+    private bool _pollAgain;
 
     /// <summary>The last poll fault, so a persistent one is logged once rather than four times a second.</summary>
     private string? _lastPollFailure;
@@ -307,6 +331,7 @@ public sealed class EngineRuntime : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _host.Triggers.Observed -= OnObserved;
+        _host.SoundingChanged -= OnSoundingChanged;
         _timer.Stop();
         await _host.DisposeAsync().ConfigureAwait(false);
     }

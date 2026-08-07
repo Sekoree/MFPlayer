@@ -277,10 +277,54 @@ public sealed partial class ShowHost
             return _cueGroups.GetValueOrDefault(cueId, "");
     }
 
+    /// <summary>
+    /// Raised whenever the sounding set changes — a cue fired, ended, or was forgotten. The UI uses
+    /// it to poll a fresh snapshot IMMEDIATELY instead of waiting out its own tick, so the Active
+    /// panel reflects a GO on the next dispatcher pass rather than up to a poll period later.
+    /// Raised from engine threads; subscribers must marshal themselves.
+    /// </summary>
+    public event Action? SoundingChanged;
+
+    /// <summary>
+    /// Marks a cue sounding, stamped NOW.
+    /// </summary>
+    /// <remarks>
+    /// Called at FIRE START, before the media open completes. The open of a cold file takes long
+    /// enough to see, and an Active panel that only shows the cue once it is audible reads as a GO
+    /// that did not take — the cue is committed from the operator's point of view the moment they
+    /// pressed the button. A fire that then fails takes the entry back down via <see cref="Forget"/>.
+    /// </remarks>
     private void Remember(Guid cueId, Guid listId, string groupId)
     {
         lock (_gate)
             _sounding[cueId] = new Sounding(Stopwatch.GetTimestamp(), listId, groupId, IsFading: false);
+        SoundingChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Re-asserts a fire-start <see cref="Remember"/> after the fire committed, without re-stamping.
+    /// </summary>
+    /// <remarks>
+    /// A re-fire of an already-sounding cue displaces its old voice DURING the fire, and that old
+    /// voice's teardown calls <see cref="Forget"/> — which, now that Remember runs before the open,
+    /// can race the fresh entry away. This puts it back (with a fresh stamp, since the original
+    /// moment was lost with the entry) and leaves a surviving entry — and its fire-start stamp —
+    /// untouched, so the Active panel's order still reflects when the operator fired it.
+    /// </remarks>
+    private void ConfirmSounding(Guid cueId, Guid listId, string groupId)
+    {
+        var changed = false;
+        lock (_gate)
+        {
+            if (!_sounding.ContainsKey(cueId))
+            {
+                _sounding[cueId] = new Sounding(Stopwatch.GetTimestamp(), listId, groupId, IsFading: false);
+                changed = true;
+            }
+        }
+
+        if (changed)
+            SoundingChanged?.Invoke();
     }
 
     /// <summary>
@@ -327,8 +371,11 @@ public sealed partial class ShowHost
             return;
 
         _outbound.Interrupt(id);
+        bool removed;
         lock (_gate)
-            _sounding.Remove(id);
+            removed = _sounding.Remove(id);
+        if (removed)
+            SoundingChanged?.Invoke();
     }
 
     private List<Guid> SoundingIds()
@@ -375,7 +422,8 @@ public sealed partial class ShowHost
                         // cue holds no transport at all, and counting up is better than standing still.
                         playhead is { IsActive: true } ? playhead.ClipPosition : wall,
                         playhead is { ClipDuration.Ticks: > 0 } ? playhead.ClipDuration : null,
-                        entry.Value.IsFading);
+                        entry.Value.IsFading,
+                        entry.Value.StartedTicks);
                 }),
             ];
         }

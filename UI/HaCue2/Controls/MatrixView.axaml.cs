@@ -1,7 +1,9 @@
+using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media;
 using Avalonia.VisualTree;
 using HaCue2.ViewModels;
 
@@ -102,8 +104,63 @@ public partial class MatrixView : UserControl
     {
         base.OnPropertyChanged(change);
 
-        if (change.Property == RowHeaderWidthProperty)
-            Resources[RowHeaderWidthKey] = RowHeaderWidth;
+        if (change.Property == RowHeaderWidthProperty || change.Property == RowsProperty)
+            UpdateRowHeaderWidth();
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        // Rows are often assigned before the control can see the theme's font resources; re-measure
+        // once they are reachable so the first layout already has the right width.
+        UpdateRowHeaderWidth();
+    }
+
+    /// <summary>
+    /// Publishes the row-label column's width: at least <see cref="RowHeaderWidth"/>, widened to fit
+    /// the longest header.
+    /// </summary>
+    /// <remarks>
+    /// The styled property is a MINIMUM, not the answer. The patch matrix labels rows
+    /// "&lt;line name&gt; · Out &lt;n&gt;", and a real interface's name does not fit any fixed
+    /// width — at 118 px "Ryzen HD Audio Controller Analog Stereo · Out 1" clipped to its first few
+    /// glyphs, which is exactly the row the operator reads to tell one output from another. The
+    /// corner spacer and every row share this resource, so the whole column widens together and the
+    /// pane's horizontal ScrollViewer absorbs the extra.
+    /// </remarks>
+    private void UpdateRowHeaderWidth() =>
+        Resources[RowHeaderWidthKey] = Math.Max(RowHeaderWidth, MeasuredRowHeaderWidth());
+
+    private double MeasuredRowHeaderWidth()
+    {
+        var rows = Rows;
+        if (rows is not { Count: > 0 })
+            return 0;
+
+        // The same face the `mxhead rowhead` style renders with (Chrome.axaml); the fallbacks only
+        // matter before the control is attached, and attachment re-measures.
+        var family = this.TryFindResource("MonoFont", out var f) && f is FontFamily mono
+            ? mono
+            : FontFamily.Default;
+        var size = this.TryFindResource("FontSizeMono", out var s) && s is double points ? points : 10d;
+        var typeface = new Typeface(family);
+
+        var widest = 0d;
+        foreach (var row in rows)
+        {
+            if (string.IsNullOrEmpty(row.Header))
+                continue;
+
+            var formatted = new FormattedText(
+                row.Header, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                typeface, size, Brushes.Black);
+            // FormattedText does not apply the style's LetterSpacing (0.55/char); add it by hand.
+            widest = Math.Max(widest, formatted.Width + row.Header.Length * 0.55);
+        }
+
+        // The header Border's own chrome around the text: 5+5 padding, the 1 px right rule, and two
+        // spare so the last glyph never touches it.
+        return widest == 0 ? 0 : Math.Ceiling(widest + 5 + 5 + 1 + 2);
     }
 
     /// <summary>Raised for every cell edit; the view-model decides what it means.</summary>

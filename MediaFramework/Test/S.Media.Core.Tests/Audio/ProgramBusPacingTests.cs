@@ -128,6 +128,72 @@ public sealed class ProgramBusPacingTests
             "Flush must release the credit of chunks the pump abandoned");
     }
 
+    /// <summary>
+    /// Regression (HaCue2 silent voices): a chunk the output pump DROPS after its grant was taken
+    /// never reaches Submit, so its credit must be returned through
+    /// <see cref="IGrantPacedOutput.OnGrantedChunkDropped"/>. Before that hook existed, each drop
+    /// leaked its grant permanently; 8 drops exhausted the half-ring pacing target and the voice's
+    /// router could never be granted again - it timed out, faulted "pacing clock failed", and the
+    /// voice stayed silent for the rest of the show.
+    /// </summary>
+    [Fact]
+    public void DroppedChunks_ReturnTheirGrants_SoTheVoiceKeepsFlowing()
+    {
+        using var bus = new ProgramBusSource(2, Rate, producerRingFrames: 4800);
+        var producer = bus.AcquireProducer(2, [1f, 0f, 0f, 1f], "voice");
+        var needFloats = Chunk * 2;
+
+        // The wedge sequence from the incident log: grants taken, chunks dropped by the pump.
+        for (var i = 0; i < 32; i++)
+        {
+            Assert.True(producer.WaitForCapacity(Chunk, new CancellationTokenSource(250).Token),
+                $"grant {i} refused - dropped chunks are not returning their credit");
+            ((IGrantPacedOutput)producer).OnGrantedChunkDropped(needFloats);
+        }
+
+        // And the voice still paces normally afterwards.
+        Assert.True(producer.WaitForCapacity(Chunk, new CancellationTokenSource(250).Token));
+        producer.Dispose();
+    }
+
+    /// <summary>
+    /// Defense in depth for the same regression: even a leak that BYPASSES the drop hook (a future
+    /// unreported discard path) must not silence a voice forever. A timed-out capacity wait writes
+    /// off outstanding credit once and retries; only a second timeout with no credit left to write
+    /// off - the bus genuinely unconsumed - propagates the failure.
+    /// </summary>
+    [Fact]
+    public void StaleGrantCredit_IsWrittenOffAfterOneTimeout_InsteadOfWedgingTheVoice()
+    {
+        // Short timeout so the starvation path runs in test time.
+        using var bus = new ProgramBusSource(2, Rate, producerRingFrames: 4800,
+            capacityWaitTimeout: TimeSpan.FromMilliseconds(100));
+        var producer = bus.AcquireProducer(2, [1f, 0f, 0f, 1f], "voice");
+
+        // Leak grants with no submits and no drop reports until the producer refuses.
+        var leaked = 0;
+        while (producer.WaitForCapacity(Chunk, new CancellationTokenSource(30).Token))
+        {
+            if (++leaked > 64) break;
+        }
+        Assert.InRange(leaked, 1, 64);
+
+        // Old behavior: this refused after the full timeout and the router faulted the voice.
+        // Now: the first timeout reconciles the stale credit and the retry is granted.
+        Assert.True(producer.WaitForCapacity(Chunk, CancellationToken.None),
+            "stale grant credit must be written off after a timed-out wait, not wedge the voice");
+
+        // A dead bus is still a visible failure: saturate the RING itself (credit is real now),
+        // and with nobody consuming, the wait must ultimately refuse.
+        var chunkBuf = new float[Chunk * 2];
+        producer.Submit(chunkBuf); // retire the grant just taken
+        while (producer.WaitForCapacity(Chunk, new CancellationTokenSource(30).Token))
+            producer.Submit(chunkBuf);
+        Assert.False(producer.WaitForCapacity(Chunk, new CancellationTokenSource(500).Token));
+
+        producer.Dispose();
+    }
+
     private sealed class SilenceSource(AudioFormat fmt) : IAudioSource
     {
         public AudioFormat Format => fmt;

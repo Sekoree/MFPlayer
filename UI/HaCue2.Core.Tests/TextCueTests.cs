@@ -249,7 +249,7 @@ public class TextCueTests
         var row = Assert.Single(CuePresentation.Rows(project.CueLists[0], project, runtime));
         var active = Assert.Single(CuePresentation.Active(
             project,
-            [new ActiveCueState(card.Id, project.CueLists[0].Id, TimeSpan.FromSeconds(1), null, false)],
+            [new ActiveCueState(card.Id, project.CueLists[0].Id, TimeSpan.FromSeconds(1), null, false, 0)],
             runtime.MediaDurations));
 
         Assert.Equal(HaCue2.ViewModels.CueKind.Text, row.Kind);

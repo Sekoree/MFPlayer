@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 
 namespace S.Media.Routing;
@@ -24,12 +25,34 @@ public sealed record ProgramBusClockContext(
     IPlaybackClock TerminalClock,
     Func<long> DownstreamLeadTicks);
 
+/// <summary>
+/// An output that pre-GRANTS ring capacity to the router pacing from it (see
+/// <see cref="ProgramBusProducer.WaitForCapacity"/>): the grant is taken before the chunk is mixed
+/// and retired when the chunk arrives in <c>Submit</c>. Anything that discards a chunk between the
+/// two - the output pump's drop paths, a queue abandon - MUST report it here, or the credit for
+/// that chunk leaks and the producer eventually refuses every further grant (the HaCue2
+/// silent-voice regression: 8 leaked chunks wedge the voice, its router times out and faults).
+/// </summary>
+internal interface IGrantPacedOutput
+{
+    /// <summary>One granted chunk was discarded before reaching <c>Submit</c>; return its credit.
+    /// Safe to over-call - an ungranted chunk's release clamps at zero.</summary>
+    void OnGrantedChunkDropped(int floats);
+}
+
 public sealed class ProgramBusSource : IAudioSource, IDisposable
 {
+    /// <summary>How long a producer waits for capacity before concluding nobody is consuming the
+    /// bus. One reconcile-and-retry round is allowed first (see
+    /// <see cref="ProgramBusProducer.WaitForCapacity"/>), so the router only sees a failure after
+    /// TWO of these with no consumption at all.</summary>
+    internal static readonly TimeSpan DefaultCapacityWaitTimeout = TimeSpan.FromSeconds(5);
+
     private readonly int _busChannels;
     private readonly int _sampleRate;
     private readonly int _producerRingFrames;
     private readonly ProgramBusClockContext? _clockContext;
+    private readonly TimeSpan _capacityWaitTimeout;
     private readonly Lock _producersGate = new();
     private ProgramBusProducer[] _producers = [];
     private ProgramBusMeter? _meter;
@@ -42,11 +65,14 @@ public sealed class ProgramBusSource : IAudioSource, IDisposable
     /// <param name="clockContext">The master-terminal clock plus the downstream-lead measurement the
     /// owning bay provides; producer leases rebase their <see cref="IPlaybackClock"/> from it. Null =
     /// producer clocks run in the wall-clock fallback domain (headless hosts still advance).</param>
+    /// <param name="capacityWaitTimeout">Overrides <see cref="DefaultCapacityWaitTimeout"/> -
+    /// a test hook so starvation paths do not need multi-second waits. Null keeps the default.</param>
     public ProgramBusSource(
         int busChannels,
         int sampleRate,
         int producerRingFrames = 4800,
-        ProgramBusClockContext? clockContext = null)
+        ProgramBusClockContext? clockContext = null,
+        TimeSpan? capacityWaitTimeout = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(busChannels, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(sampleRate, 1);
@@ -55,6 +81,7 @@ public sealed class ProgramBusSource : IAudioSource, IDisposable
         _sampleRate = sampleRate;
         _producerRingFrames = producerRingFrames;
         _clockContext = clockContext;
+        _capacityWaitTimeout = capacityWaitTimeout ?? DefaultCapacityWaitTimeout;
     }
 
     public AudioFormat Format => new(_sampleRate, _busChannels);
@@ -105,7 +132,8 @@ public sealed class ProgramBusSource : IAudioSource, IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var producer = new ProgramBusProducer(
-                this, sourceChannels, sends.ToArray(), _producerRingFrames, _clockContext, label);
+                this, sourceChannels, sends.ToArray(), _producerRingFrames, _clockContext, label,
+                _capacityWaitTimeout);
             var next = new ProgramBusProducer[_producers.Length + 1];
             _producers.CopyTo(next, 0);
             next[^1] = producer;
@@ -250,12 +278,16 @@ public sealed class ProgramBusProducer :
     IAudioOutput,
     IClockedOutput,
     IFlushableOutput,
+    IGrantPacedOutput,
     IPlaybackClock,
     IAudioOutputLatency,
     IDisposable
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Audio.ProgramBusProducer");
+
     private readonly ProgramBusSource _owner;
     private readonly int _sourceChannels;
+    private readonly TimeSpan _capacityWaitTimeout;
     private readonly FrameAlignedFloatRing _ring;
     /// <summary>The extracted SharedAudioOutput client clock (HaCue plan, Phase 3): master terminal
     /// time rebased to this producer's epoch minus the low-passed lead still between this producer's
@@ -288,11 +320,13 @@ public sealed class ProgramBusProducer :
         float[] sends,
         int ringFrames,
         ProgramBusClockContext? clockContext,
-        string? label = null)
+        string? label = null,
+        TimeSpan? capacityWaitTimeout = null)
     {
         Label = label;
         _owner = owner;
         _sourceChannels = sourceChannels;
+        _capacityWaitTimeout = capacityWaitTimeout ?? ProgramBusSource.DefaultCapacityWaitTimeout;
         _currentGains = (float[])sends.Clone();
         _targetGains = sends;
         _ring = new FrameAlignedFloatRing(sourceChannels, (long)ringFrames * sourceChannels);
@@ -434,6 +468,10 @@ public sealed class ProgramBusProducer :
         // router waiting on a few frames of slack. Capped at the real capacity so an oversized chunk is
         // still granted against a drained ring rather than stalling the run loop forever.
         var targetFloats = Math.Clamp(_ring.CapacityFloats / 2, Math.Min(needFloats * 2, _ring.CapacityFloats), _ring.CapacityFloats);
+        // One reconcile per starvation episode: a timed-out wait first assumes stale credit (a grant
+        // whose chunk was discarded without being reported) and writes it off; only a SECOND timeout
+        // with nothing left to write off means the bus genuinely is not being consumed.
+        var reconciled = false;
         Interlocked.Increment(ref _activeWaiters);
         try
         {
@@ -449,8 +487,22 @@ public sealed class ProgramBusProducer :
                     return true;
                 try
                 {
-                    if (!_spaceAvailable.Wait(TimeSpan.FromSeconds(5), token))
-                        return false;
+                    if (!_spaceAvailable.Wait(_capacityWaitTimeout, token))
+                    {
+                        // Every drop path is supposed to report through OnGrantedChunkDropped, but
+                        // pacing credit is a liveness invariant: one unreported discard anywhere
+                        // must never become a permanently silent voice (it did - the HaCue2
+                        // regression where 8 leaked grants wedged every voice of a show). If credit
+                        // is outstanding after a full timeout, write it off and retry; a chunk that
+                        // was genuinely in flight re-retires via the zero-clamped ReleaseGrant, at
+                        // worst briefly overfilling into the ring's jitter headroom.
+                        if (reconciled || Interlocked.Exchange(ref _grantedFloats, 0) == 0)
+                            return false;
+                        reconciled = true;
+                        Trace.LogWarning(
+                            "WaitForCapacity ('{Label}'): no capacity after {Timeout} - wrote off stale grant credit and retrying (ring={Buffered}/{Capacity} floats)",
+                            Label, _capacityWaitTimeout, _ring.BufferedFloats, _ring.CapacityFloats);
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -465,6 +517,19 @@ public sealed class ProgramBusProducer :
             Interlocked.Decrement(ref _activeWaiters);
             DisposeEventOnceDrained();
         }
+    }
+
+    /// <summary>
+    /// <see cref="IGrantPacedOutput"/>: the output pump discarded a chunk that was granted but will
+    /// never reach <see cref="Submit"/> - return its credit and wake the pacing waiter, which may be
+    /// blocked with an EMPTY ring (an empty ring is never signalled by reads).
+    /// </summary>
+    void IGrantPacedOutput.OnGrantedChunkDropped(int floats)
+    {
+        if (floats <= 0)
+            return;
+        ReleaseGrant(floats);
+        SignalSpaceAvailable();
     }
 
     /// <summary>Accrues a capacity grant when the ring plus everything already in flight leaves room for

@@ -1,6 +1,10 @@
 using HaCue2.Core.Model;
 using HaCue2.Machine;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
+using S.Media.Core.Registry;
+using S.Media.Decode.FFmpeg.Audio;
 using S.Media.NDI;
 using S.Media.Routing;
 
@@ -24,6 +28,8 @@ namespace HaCue2.Engine;
 /// </remarks>
 public sealed class ProjectPatchBay : IDisposable
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaCue2.ProjectPatchBay");
+
     private readonly List<IAudioOutput> _outputs = [];
 
     /// <summary>NDI senders this bay opened, disposed after the terminals that submit to them.</summary>
@@ -63,7 +69,8 @@ public sealed class ProjectPatchBay : IDisposable
     /// be edited and whose video runs; refusing to build would take the whole session down over a
     /// missing interface.
     /// </remarks>
-    public static ProjectPatchBay Open(HaCueProject project, IAudioBackend? backend)
+    public static ProjectPatchBay Open(
+        HaCueProject project, IAudioBackend? backend, IMediaRegistry? registry = null)
     {
         ArgumentNullException.ThrowIfNull(project);
 
@@ -73,7 +80,20 @@ public sealed class ProjectPatchBay : IDisposable
 
         var bay = new AudioPatchBay(
             logicalChannels: Math.Max(1, channels.Count),
-            mixSampleRate: patch.MixSampleRate);
+            mixSampleRate: patch.MixSampleRate,
+            // A line whose device opens at a foreign rate joins through a resampler instead of being
+            // refused; a NON-master line additionally gets adaptive-rate drift correction. Both are
+            // capabilities the registry carries (FFmpeg), and the bay without them can only serve a
+            // rig whose every line happens to match the mix rate exactly.
+            resamplerFactory: ResamplingAudioOutput.Wrap,
+            adaptiveRateWrapper: registry is { SupportsAdaptiveRateOutput: true }
+                ? (router, inner, outputId, maxRateDeltaHz) =>
+                {
+                    var monitor = new PumpPressurePlaybackHintMonitor(router, outputId);
+                    return registry.CreateAdaptiveRateOutput(
+                        inner, () => monitor.HintPpmBias, maxRateDeltaHz, monitor) ?? inner;
+                }
+                : null);
 
         var failures = new List<string>();
 
@@ -85,6 +105,7 @@ public sealed class ProjectPatchBay : IDisposable
         var senders = new List<NDIOutput>();
         var openLines = new List<(Guid, int)>();
         string? monitor = null;
+        string? automaticMaster = null;
 
         foreach (var line in project.AudioLines)
         {
@@ -112,9 +133,23 @@ public sealed class ProjectPatchBay : IDisposable
                     : backend.CreateOutput(AudioDevices.DeviceIdFor(catalog, line.DeviceHint), format);
 
                 // The clock master paces the whole bay, so it must be a line that natively runs at the
-                // project rate — the document says which, and it is a real decision, not a default.
-                // An NDI sender is never it: it paces on the network's terms, not the rig's.
-                var isMaster = patch.ClockMasterLineId == line.Id && line.Kind != AudioLineKind.Ndi;
+                // project rate — the document says which, and choosing it is a real decision. An NDI
+                // sender is never it: it paces on the network's terms, not the rig's.
+                //
+                // But a document that names NONE is not a decision to run without one: a masterless
+                // bay free-runs on the wall clock, and no two crystals agree — the device terminal's
+                // ring then drops a burst every couple of seconds, which is an audible pop, for the
+                // whole show ("ring full" every ~2 s in the incident log). When the document is
+                // silent, the FIRST local line whose device actually opened at the mix rate takes the
+                // role — the same line the operator would be told to pick — and the log says so.
+                var isMaster = patch.ClockMasterLineId is { } chosen
+                    ? chosen == line.Id && line.Kind != AudioLineKind.Ndi
+                    : automaticMaster is null
+                      && line.Kind == AudioLineKind.LocalAudio
+                      && output.Format.SampleRate == patch.MixSampleRate;
+
+                if (isMaster && patch.ClockMasterLineId is null)
+                    automaticMaster = line.Name;
 
                 bay.AddTerminal(
                     line.Id.ToString(),
@@ -129,9 +164,30 @@ public sealed class ProjectPatchBay : IDisposable
             catch (Exception failure) when (failure is not OutOfMemoryException)
             {
                 // Reported, not thrown: one absent interface must not stop the rest of the rig.
+                // ALSO logged: the status bar is gone when someone reads the log of a silent show,
+                // and this was the one failure list that left no trace in it.
                 failures.Add($"{line.Name}: {failure.Message}");
+                Trace.LogWarning(failure,
+                    "audio line '{Line}' (hint '{Hint}') failed to open - the show runs without it",
+                    line.Name, line.DeviceHint);
             }
         }
+
+        // One line each way, so the log always answers "did this show have audio at all, and
+        // through what": the incident log had NO device activity and no way to tell why.
+        if (opened.Count == 0)
+            Trace.LogWarning(
+                "no audio line opened ({LineCount} defined, {FailureCount} failed) - the program bus will not be consumed and every audio cue is silent",
+                project.AudioLines.Count, failures.Count);
+        else
+            Trace.LogInformation(
+                "audio bay open: {OpenedCount} line(s) at {MixRate} Hz, clock master {Master}",
+                opened.Count, patch.MixSampleRate,
+                patch.ClockMasterLineId is { } masterId
+                    ? $"'{project.FindLine(masterId)?.Name ?? masterId.ToString()}'"
+                    : automaticMaster is not null
+                        ? $"'{automaticMaster}' (automatic — the project names none; set one on the Audio patch to choose)"
+                        : "NOT SET and no line is eligible (bay free-runs on the wall clock; A/V genlock is off)");
 
         if (opened.Count > 0)
         {

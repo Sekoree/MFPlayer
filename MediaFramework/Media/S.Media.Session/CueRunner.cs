@@ -222,12 +222,18 @@ internal sealed class CueRunner
         try
         {
             var startBarrier = new CoordinatedFireBarrier(targets.Count);
+            // The second edge: voices commit and fully prepare (decode spin-up, buffer wait, sync
+            // present) behind the first barrier, then start their clocks together behind this one.
+            // Without it the serialized commits staggered sibling starts by each other's slow half -
+            // a video sibling's present-sync alone is up to 250 ms, and an all-together group came up
+            // hundreds of milliseconds apart in per-run-random order.
+            var startEdge = new CoordinatedFireBarrier(targets.Count);
             var fires = new Task<CueExecutionStatus>[targets.Count];
             for (var i = 0; i < targets.Count; i++)
             {
                 var target = targets[i];
                 fires[i] = FireIndependentForGroupAsync(
-                    target.CueId, target.RuntimeGroupId, startBarrier, cts.Token);
+                    target.CueId, target.RuntimeGroupId, startBarrier, startEdge, cts.Token);
             }
 
             return await Task.WhenAll(fires).ConfigureAwait(false);
@@ -252,9 +258,11 @@ internal sealed class CueRunner
         string cueId,
         string runtimeGroupId,
         CoordinatedFireBarrier startBarrier,
+        CoordinatedFireBarrier startEdge,
         CancellationToken token)
     {
         var reachedBarrier = false;
+        var reachedEdge = false;
         try
         {
             return await _host.FireCueIndependentAtBarrierAsync(
@@ -265,6 +273,11 @@ internal sealed class CueRunner
                         reachedBarrier = true;
                         await startBarrier.SignalAndWaitAsync(token).ConfigureAwait(false);
                     },
+                    async () =>
+                    {
+                        reachedEdge = true;
+                        await startEdge.SignalAndWaitAsync(token).ConfigureAwait(false);
+                    },
                     token)
                 .ConfigureAwait(false);
         }
@@ -274,10 +287,13 @@ internal sealed class CueRunner
         }
         finally
         {
-            // Invalid/unbound/failed-to-open cues never reach the arm barrier. Count them as arrived so one bad
-            // sibling cannot strand every successfully armed clip waiting forever.
+            // Invalid/unbound/failed-to-open cues never reach the arm barrier, and a commit that threw
+            // never reaches the start edge. Count them as arrived at BOTH so one bad sibling cannot
+            // strand every successfully prepared clip waiting forever.
             if (!reachedBarrier)
                 startBarrier.Signal();
+            if (!reachedEdge)
+                startEdge.Signal();
         }
     }
 

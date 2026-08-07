@@ -35,6 +35,29 @@ public class EditorRegressionTests
     });
 
     [Fact]
+    public Task AMultiEditKeepsTheInspectorOnTheTabTheOperatorIsWorkingIn()
+        => ShellFixture.WithShell(shell =>
+        {
+            var list = shell.Project.CueLists[0];
+            var left = new MediaCueNode { Number = "826", Label = "L", MediaPath = "/library/a.wav" };
+            var right = new MediaCueNode { Number = "827", Label = "R", MediaPath = "/library/b.wav" };
+            list.Cues.AddRange([left, right]);
+
+            // Eleven stems selected, operator on the Audio pane adding sends. Applying an edit runs
+            // the journal-changed refresh, which clears and then restores the tree selection — the
+            // inspector sees exactly this Show sequence. With the tab memory only written for
+            // SINGLE selections, the clear forgot "AUDIO" and the restore landed on GENERAL, once
+            // per edit, with the operator mid-workflow.
+            shell.Cues.Inspector.Show([left.Id, right.Id]);
+            shell.Cues.Inspector.SelectedTab = "AUDIO";
+
+            shell.Cues.Inspector.Show([]);
+            shell.Cues.Inspector.Show([left.Id, right.Id]);
+
+            Assert.Equal("AUDIO", shell.Cues.Inspector.SelectedTab);
+        });
+
+    [Fact]
     public Task ChangingTheSelectionStillChoosesATabRatherThanKeepingTheOldOne()
         => ShellFixture.WithShell(shell =>
         {
