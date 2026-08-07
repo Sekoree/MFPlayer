@@ -542,6 +542,29 @@ rig's panel runs 165 Hz while the canvas is authored at 60.000, and any rate mis
 
 Suites green (HaCue2 383, HaCue2.Core 704).
 
+## Round 12 — quality-of-life batch (user request, implemented)
+
+1. **Pre-roll baseline normalization**: `EndPreRoll` baselines the clock's lead at
+   `max(observed fill, pacing target)` — a voice released mid-fill no longer carries the shortfall
+   as a permanent readout offset (the −95 ms stem). Regression:
+   `ProgramBusClockTests.PreRollReleasedMidFill_ReadsNoPermanentOffset_OnceTheRingTopsUp`.
+2. **Per-project A/V offset trim**: `ProjectSettings.AvOffsetMs` (positive = picture EARLIER,
+   compensating display-chain latency; set by eye at the venue). Surfaced in Settings → Show
+   behaviour ("A/V offset", signed ms, journaled/undoable). Plumbed as
+   `ShowSession.VideoPlayheadOffset` (maps to `VideoPlayer.PlayheadOffset`, sign inverted):
+   applied to voices at commit AND pushed live to sounding voices via the lock-free group views,
+   and re-applied on every reload — so editing the field takes effect against running content.
+3. **MiniAudio realtime hardening**: assessment first — miniaudio's usual backends (ALSA,
+   Pulse/PipeWire shim, WASAPI) run the data callback on miniaudio's OWN worker thread, so a GC
+   pause delays only this device's feed and can never stall the server graph (unlike
+   PortAudio-on-JACK pre-round-6); only miniaudio's JACK backend reproduces that hazard, and a
+   fully native path would need a shipped shim (no blocking-write API exists). Implemented the
+   honest mitigation: `MaDeviceConfig.Periods` surfaced through `MALib.DeviceCreate`, playback
+   opens with 6 periods (~60 ms cushion) instead of the default 3, and the whole story is
+   documented on `MiniAudioOutput.PlaybackPeriods`. Desktop head already runs Server+Background GC.
+
+Suites green (ProgramBus 38, Backends 45, Session 359, HaCue2 383, HaCue2.Core 704).
+
 ## Suggested work order
 
 1. Framework: fix the grant leak + make capacity-wait timeout non-fatal, with a regression test (§1).

@@ -727,6 +727,12 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             foreach (var failure in _bay.Apply(next))
                 Report(failure);
 
+            // The venue A/V trim: positive AvOffsetMs shows the picture EARLIER, which is a NEGATIVE
+            // video playhead offset (the offset is subtracted from the clock before frames are
+            // picked). Applied on every reload so the settings field takes effect live, against
+            // running content — that is how the number gets found in the first place.
+            _session.VideoPlayheadOffset = TimeSpan.FromMilliseconds(-next.Settings.AvOffsetMs);
+
             // Outputs the operator has just ADDED open here, and ones they removed close. Opening only
             // at start-up meant a screen added mid-session stayed dark with nothing saying why.
             foreach (var failure in _screens.Sync(next))

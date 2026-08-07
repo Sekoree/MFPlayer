@@ -191,6 +191,35 @@ public class ProgramBusClockTests
         }
     }
 
+    /// <summary>
+    /// A pre-roll released before the ring reached its pacing target must not carry the shortfall
+    /// as a readout offset: the ring keeps topping up to the target after release, and a baseline
+    /// taken from the instantaneous fill would count that top-up as lead forever (one stem of a
+    /// batch read −95 ms beside its siblings). The baseline is normalized to the pacing target, so
+    /// once the ring gets there the clock reads exactly the master's advance.
+    /// </summary>
+    [Fact]
+    public void PreRollReleasedMidFill_ReadsNoPermanentOffset_OnceTheRingTopsUp()
+    {
+        var master = new FakeTerminalClock();
+        var bus = new ProgramBusSource(
+            1, Rate,
+            clockContext: new ProgramBusClockContext(master, static () => 0),
+            pacingTargetFrames: 4800);
+        using var producer = bus.AcquireProducer(1, [1f]);
+
+        producer.BeginPreRoll();
+        producer.Submit(new float[480]); // the edge arrives with only a tenth of the target filled
+        producer.EndPreRoll();
+
+        producer.Submit(new float[4320]); // production tops the ring up to the target post-release
+
+        master.Advance(TimeSpan.FromSeconds(1));
+        // Old baseline (the 480-frame fill at release) turned the 4320-frame top-up into 90 ms of
+        // permanent lead: this read 0.91 s.
+        Assert.Equal(1.0, producer.ElapsedSinceStart.TotalSeconds, 2);
+    }
+
     private sealed class FakeTerminalClock : IPlaybackClock
     {
         private long _elapsedTicks;

@@ -672,8 +672,18 @@ public sealed class ProgramBusProducer :
         if (Interlocked.Exchange(ref _held, 0) == 0)
             return;
         // The pre-rolled fill becomes the clock's lead baseline: the sample at the ring's head is
-        // the playhead, and the fill behind it is elapsed-to-be, not delay.
-        Volatile.Write(ref _preRollBaselineFloats, _ring.BufferedFloats);
+        // the playhead, and the fill behind it is elapsed-to-be, not delay. Normalized to the
+        // PACING TARGET rather than the instantaneous fill: a voice released while its ring was
+        // still filling (a slow-arming sibling forced the edge before this one topped up) would
+        // otherwise carry the shortfall as a permanent readout offset, because the ring keeps
+        // filling to the target after release and the lead counts ring-over-baseline (observed as
+        // one stem reading −95 ms beside its siblings). Against the target the readout is exact
+        // once the ring gets there and merely clamped-at-zero while it still fills; the max with
+        // the observed fill keeps an over-full release (the pacing cap allows a chunk or two past
+        // target) from reading ahead of the audible programme.
+        Volatile.Write(
+            ref _preRollBaselineFloats,
+            Math.Max(_ring.BufferedFloats, _pacingTargetFloats ?? _ring.CapacityFloats / 2));
         // The clock is TIME-based (terminal time minus lead), so it kept advancing through the hold
         // - a release without a re-anchor would report positions that lead the audible content by
         // the whole hold duration. Re-anchoring puts it back at zero, clamped there until the

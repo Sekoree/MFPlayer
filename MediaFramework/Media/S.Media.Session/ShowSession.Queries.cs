@@ -100,6 +100,46 @@ public sealed partial class ShowSession
     public Task<IReadOnlyList<CueExecutionLogEntry>> GetCueExecutionLogAsync() =>
         InvokeAsync(() => Task.FromResult(_fires.ExecutionLog));
 
+    private long _videoPlayheadOffsetTicks;
+
+    /// <summary>
+    /// A/V trim applied to every voice's video scheduling: the amount SUBTRACTED from the clock
+    /// before frames are picked (see <see cref="Players.VideoPlayer.PlayheadOffset"/>), so a
+    /// positive value shows every picture LATER and a negative one earlier. Applied to voices as
+    /// they commit AND pushed to everything currently sounding — the knob is set by eye at the
+    /// venue, against running content.
+    /// </summary>
+    /// <remarks>
+    /// This is the session-level surface for a venue's display-chain latency: the pipeline aligns
+    /// picture and sound at the machine's edge, but a projector adds frames of processing after
+    /// that, and only an operator's eye can measure glass. One number for the whole show — it is a
+    /// property of the venue, not of any cue.
+    /// </remarks>
+    public TimeSpan VideoPlayheadOffset
+    {
+        get => new(Interlocked.Read(ref _videoPlayheadOffsetTicks));
+        set
+        {
+            Interlocked.Exchange(ref _videoPlayheadOffsetTicks, value.Ticks);
+            // Live voices pick the change up immediately; PlayheadOffset is documented live-settable
+            // and read on the clock's video-tick thread. The lock-free group views are the same
+            // no-dispatcher path the 4 Hz UI poll reads, so a settings keystroke cannot queue
+            // behind a long-running command.
+            foreach (var view in _groupViews)
+            {
+                try
+                {
+                    if (view.Player is { HasVideo: true } player)
+                        player.Video.PlayheadOffset = value;
+                }
+                catch
+                {
+                    // A voice mid-teardown misses the push; its successor gets the value at commit.
+                }
+            }
+        }
+    }
+
     /// <summary>A composition's pump stats (frames submitted to its layers + composited), or null when no
     /// composition with that id is loaded - proves the cue→clip→layer→composite path ran (headless).</summary>
     public Task<ClipCompositionRuntimeStats?> GetCompositionStatsAsync(string compositionId) =>

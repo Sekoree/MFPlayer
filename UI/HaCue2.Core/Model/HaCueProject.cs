@@ -196,6 +196,20 @@ public sealed record ProjectSettings
     public int AutosaveSeconds { get; set; } = 30;
     public int RecoveryCopies { get; set; } = 5;
 
+    /// <summary>
+    /// Venue A/V trim in milliseconds: positive shows every picture EARLIER (compensating a
+    /// projector/TV chain that displays frames late), negative delays it. Zero for a rig whose
+    /// display adds no meaningful latency.
+    /// </summary>
+    /// <remarks>
+    /// A property of the VENUE's display chain, not of any cue — the pipeline keeps picture and
+    /// sound aligned at the moment frames leave the machine, but a projector adds one to three
+    /// frames of scaling/processing after that, and no software can measure glass from here. One
+    /// number, set once at the venue by eye (a clap test), carried in the project because the
+    /// project travels to the venue.
+    /// </remarks>
+    public int AvOffsetMs { get; set; }
+
     /// <summary>Off by default: a GO is a performance action and a disk write on it is a stall.</summary>
     public bool SaveOnGo { get; set; }
 

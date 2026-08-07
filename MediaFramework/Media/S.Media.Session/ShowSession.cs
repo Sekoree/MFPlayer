@@ -1059,6 +1059,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         if (crossfade is not { Duration.Ticks: > 0 } || group.ActiveVoice is null)
             crossfade = null;
         var player = armed.Player;
+        // The venue's A/V trim rides every committed voice; live changes are pushed separately by
+        // the property setter, so this is only the "voices born after the knob moved" half.
+        if (player.HasVideo)
+            player.Video.PlayheadOffset = VideoPlayheadOffset;
         // The incoming VOICE exists from here on and owns everything wired below, so the failure path is
         // one teardown (its own) whether the fault lands before or after the commit - instead of a catch
         // block that re-released resources the group had already taken over.

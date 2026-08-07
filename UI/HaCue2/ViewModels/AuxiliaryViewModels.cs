@@ -549,6 +549,7 @@ public partial class SettingsViewModel : ObservableObject
         _clickMovesStandby = _settings.ClickMovesStandby;
         _triggerMode = _settings.NewCueTrigger.ToString().ToLowerInvariant();
         _autoRenumber = _settings.AutoRenumberOnInsert;
+        _avOffset = $"{_settings.AvOffsetMs} ms";
         _autosaveCadence = $"{_settings.AutosaveSeconds} s";
         _recoveryCopies = _settings.RecoveryCopies.ToString();
         _saveOnGo = _settings.SaveOnGo;
@@ -734,6 +735,10 @@ public partial class SettingsViewModel : ObservableObject
             },
             $"media outside the root: {value}");
 
+    partial void OnAvOffsetChanged(string value) =>
+        Write("avOffset", () => _settings.AvOffsetMs, ms => _settings.AvOffsetMs = ms,
+            SignedDigits(value, _settings.AvOffsetMs), "A/V offset");
+
     partial void OnAutosaveCadenceChanged(string value) =>
         Write("autosave", () => _settings.AutosaveSeconds, seconds => _settings.AutosaveSeconds = seconds,
             Digits(value, _settings.AutosaveSeconds), "autosave cadence");
@@ -747,6 +752,15 @@ public partial class SettingsViewModel : ObservableObject
     {
         var digits = new string([.. text.TakeWhile(char.IsAsciiDigit)]);
         return int.TryParse(digits, out var value) ? value : fallback;
+    }
+
+    /// <summary>The signed variant, for a field like "-33 ms" — an A/V trim goes both ways.</summary>
+    private static int SignedDigits(string text, int fallback)
+    {
+        var trimmed = text.TrimStart();
+        var negative = trimmed.StartsWith('-');
+        var value = Digits(negative ? trimmed[1..] : trimmed, int.MinValue);
+        return value == int.MinValue ? fallback : negative ? -value : value;
     }
 
     /// <summary>
@@ -1411,6 +1425,9 @@ public partial class SettingsViewModel : ObservableObject
 
     // ── save, autosave & recovery ─────────────────────────────────────────────────────────────
     [ObservableProperty] private string _autosaveCadence = "30 s";
+
+    /// <summary>Venue A/V trim, e.g. "20 ms" or "-15 ms" — positive shows the picture earlier.</summary>
+    [ObservableProperty] private string _avOffset = "0 ms";
     [ObservableProperty] private string _recoveryCopies = "5";
     [ObservableProperty] private string _recoveryLocation = "beside the project file";
 

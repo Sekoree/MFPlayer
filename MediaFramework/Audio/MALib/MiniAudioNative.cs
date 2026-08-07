@@ -231,13 +231,20 @@ public static unsafe partial class MiniAudioNative
     public static int DeviceCreate(
         int deviceType, byte* deviceIdHex, uint sampleRate, uint channels, uint periodSizeFrames,
         delegate* unmanaged[Cdecl]<nint, float*, float*, uint, void> callback, nint userData, out nint device,
-        delegate* unmanaged[Cdecl]<nint, void> stopCallback = null)
+        delegate* unmanaged[Cdecl]<nint, void> stopCallback = null,
+        uint periods = 0)
     {
         device = nint.Zero;
 
         var config = ma_device_config_init(deviceType);
         config.SampleRate = sampleRate;
         config.PeriodSizeInFrames = periodSizeFrames;
+        // 0 keeps miniaudio's default (MA_DEFAULT_PERIODS = 3). A playback host whose data callback
+        // is MANAGED code can ask for more: device-side periods are the only buffer between a GC
+        // pause landing on the callback thread and an audible underrun, and three ~10 ms periods is
+        // a thinner cushion than a managed runtime deserves.
+        if (periods > 0)
+            config.Periods = periods;
         config.DataCallback = (nint)(delegate* unmanaged[Cdecl]<nint, void*, void*, uint, void>)&DataProc;
         if (stopCallback != null)
             config.StopCallback = (nint)(delegate* unmanaged[Cdecl]<nint, void>)&StopProc;
