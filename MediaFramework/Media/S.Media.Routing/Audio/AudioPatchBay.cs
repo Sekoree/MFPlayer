@@ -63,9 +63,15 @@ public sealed class AudioPatchBay : IDisposable
         int logicalChannels,
         int mixSampleRate,
         Func<IAudioOutput, AudioFormat, IAudioOutput>? resamplerFactory = null,
-        int producerRingFrames = 4800,
+        // 400 ms of capacity steering to a 200 ms fill (defaults below): the fill is the program
+        // path's dropout armour AND its latency. 200 ms rides out a desktop audio server's xrun
+        // catch-up bursts (quantum renegotiations, other clients stalling the graph) that the old
+        // 85 ms fill audibly could not - at the price of a fifth of a second between a fader move
+        // and the speaker, which a cue rig accepts and a talkback rig would not.
+        int producerRingFrames = 19200,
         AdaptiveRateOutputWrapper? adaptiveRateWrapper = null,
-        int adaptiveRateMaxDeltaHz = 3)
+        int adaptiveRateMaxDeltaHz = 3,
+        int? producerPacingTargetFrames = 9600)
     {
         if (adaptiveRateMaxDeltaHz < 0)
             throw new ArgumentOutOfRangeException(nameof(adaptiveRateMaxDeltaHz));
@@ -84,7 +90,8 @@ public sealed class AudioPatchBay : IDisposable
             logicalChannels,
             mixSampleRate,
             producerRingFrames,
-            new ProgramBusClockContext(rawMaster, DownstreamLeadTicks));
+            new ProgramBusClockContext(rawMaster, DownstreamLeadTicks),
+            pacingTargetFrames: producerPacingTargetFrames);
         // The show clock handed to voices with no producer subtracts the same lead a sounding voice
         // does, so a silent video cue lands on the audible programme instead of running ahead of it by
         // the whole audio path. Same low-passing as any client clock - the lead is a live measurement.

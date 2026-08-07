@@ -75,6 +75,7 @@ public sealed class ProgramBusSource : IAudioSource, IDisposable
     private readonly int _producerRingFrames;
     private readonly ProgramBusClockContext? _clockContext;
     private readonly TimeSpan _capacityWaitTimeout;
+    private readonly int? _pacingTargetFrames;
     private readonly Lock _producersGate = new();
     private ProgramBusProducer[] _producers = [];
     private ProgramBusMeter? _meter;
@@ -89,21 +90,30 @@ public sealed class ProgramBusSource : IAudioSource, IDisposable
     /// producer clocks run in the wall-clock fallback domain (headless hosts still advance).</param>
     /// <param name="capacityWaitTimeout">Overrides <see cref="DefaultCapacityWaitTimeout"/> -
     /// a test hook so starvation paths do not need multi-second waits. Null keeps the default.</param>
+    /// <param name="pacingTargetFrames">The producer fill level pacing steers to, decoupled from the
+    /// ring capacity (null = half the ring, the historical rule). The fill is the bus's dropout
+    /// armour: a downstream stall longer than it - an audio-server xrun's catch-up burst, say -
+    /// drains a producer to silence. It is also the program path's latency, so hosts choose the
+    /// trade; capacity above the fill is free headroom, not latency.</param>
     public ProgramBusSource(
         int busChannels,
         int sampleRate,
         int producerRingFrames = 4800,
         ProgramBusClockContext? clockContext = null,
-        TimeSpan? capacityWaitTimeout = null)
+        TimeSpan? capacityWaitTimeout = null,
+        int? pacingTargetFrames = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(busChannels, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(sampleRate, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(producerRingFrames, 1);
+        if (pacingTargetFrames is < 1)
+            throw new ArgumentOutOfRangeException(nameof(pacingTargetFrames));
         _busChannels = busChannels;
         _sampleRate = sampleRate;
         _producerRingFrames = producerRingFrames;
         _clockContext = clockContext;
         _capacityWaitTimeout = capacityWaitTimeout ?? DefaultCapacityWaitTimeout;
+        _pacingTargetFrames = pacingTargetFrames;
     }
 
     public AudioFormat Format => new(_sampleRate, _busChannels);
@@ -155,7 +165,7 @@ public sealed class ProgramBusSource : IAudioSource, IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             var producer = new ProgramBusProducer(
                 this, sourceChannels, sends.ToArray(), _producerRingFrames, _clockContext, label,
-                _capacityWaitTimeout);
+                _capacityWaitTimeout, _pacingTargetFrames);
             var next = new ProgramBusProducer[_producers.Length + 1];
             _producers.CopyTo(next, 0);
             next[^1] = producer;
@@ -311,6 +321,9 @@ public sealed class ProgramBusProducer :
     private readonly ProgramBusSource _owner;
     private readonly int _sourceChannels;
     private readonly TimeSpan _capacityWaitTimeout;
+    /// <summary>Explicit pacing fill in floats, or null for the half-ring rule. See the source's
+    /// <c>pacingTargetFrames</c> parameter.</summary>
+    private readonly int? _pacingTargetFloats;
     private readonly FrameAlignedFloatRing _ring;
     /// <summary>The extracted SharedAudioOutput client clock (HaCue plan, Phase 3): master terminal
     /// time rebased to this producer's epoch minus the low-passed lead still between this producer's
@@ -347,12 +360,14 @@ public sealed class ProgramBusProducer :
         int ringFrames,
         ProgramBusClockContext? clockContext,
         string? label = null,
-        TimeSpan? capacityWaitTimeout = null)
+        TimeSpan? capacityWaitTimeout = null,
+        int? pacingTargetFrames = null)
     {
         Label = label;
         _owner = owner;
         _sourceChannels = sourceChannels;
         _capacityWaitTimeout = capacityWaitTimeout ?? ProgramBusSource.DefaultCapacityWaitTimeout;
+        _pacingTargetFloats = pacingTargetFrames * sourceChannels;
         _currentGains = (float[])sends.Clone();
         _targetGains = sends;
         _ring = new FrameAlignedFloatRing(sourceChannels, (long)ringFrames * sourceChannels);
@@ -500,7 +515,10 @@ public sealed class ProgramBusProducer :
         // second is in flight - on a ring only a couple of chunks deep, half of it would leave the
         // router waiting on a few frames of slack. Capped at the real capacity so an oversized chunk is
         // still granted against a drained ring rather than stalling the run loop forever.
-        var targetFloats = Math.Clamp(_ring.CapacityFloats / 2, Math.Min(needFloats * 2, _ring.CapacityFloats), _ring.CapacityFloats);
+        var targetFloats = Math.Clamp(
+            _pacingTargetFloats ?? _ring.CapacityFloats / 2,
+            Math.Min(needFloats * 2, _ring.CapacityFloats),
+            _ring.CapacityFloats);
         // One reconcile per starvation episode: a timed-out wait first assumes stale credit (a grant
         // whose chunk was discarded without being reported) and writes it off; only a SECOND timeout
         // with nothing left to write off means the bus genuinely is not being consumed.

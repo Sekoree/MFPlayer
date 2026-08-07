@@ -330,6 +330,31 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// </summary>
     public int TargetQueueSamples { get; set; }
 
+    /// <summary>
+    /// True (default) = blocking-write mode: the stream is opened with NO callback and a managed
+    /// feeder thread pushes audio with <c>Pa_WriteStream</c>. The host API's realtime cycle then runs
+    /// pure native code end to end.
+    /// </summary>
+    /// <remarks>
+    /// This exists because a managed stream callback is a realtime hazard the process cannot control:
+    /// the audio server's graph thread (JACK/PipeWire runs every client's process callback on ONE
+    /// cycle) enters the .NET runtime, and any GC suspension in progress at that moment blocks the
+    /// WHOLE graph cycle — a DSP-load spike and a server xrun. In the full HaCue2 app (UI allocation
+    /// churn, ~200 threads) the collision odds work out to roughly once a second, which was exactly
+    /// the reported stutter cadence; the headless probes allocated too little to ever hit it. In
+    /// blocking mode a GC pause merely delays the feeder, and PortAudio's native FIFO (sized by the
+    /// suggested latency) absorbs it. Set <c>MFP_PORTAUDIO_CALLBACK=1</c> to restore callback mode.
+    /// </remarks>
+    private static readonly bool UseBlockingWrites =
+        Environment.GetEnvironmentVariable("MFP_PORTAUDIO_CALLBACK") != "1";
+
+    /// <summary>Feeder write granularity in frames (blocking mode): small enough that pacing and the
+    /// clock stay smooth, large enough that the write-call overhead is noise.</summary>
+    private const int FeederChunkFrames = 256;
+
+    private Thread? _feeder;
+    private CancellationTokenSource? _feederCts;
+
     public PortAudioOutput(
         AudioFormat format,
         int? deviceIndex = null,
@@ -403,7 +428,10 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 hostApiSpecificStreamInfo = nint.Zero,
             };
 
-            delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int> cbPtr = &Callback;
+            // Blocking mode opens with NO callback: the host API's realtime thread runs pure native
+            // code and our feeder below pushes into PortAudio's native FIFO. See UseBlockingWrites.
+            delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int> cbPtr =
+                UseBlockingWrites ? null : &Callback;
 
             var err = Native.Pa_OpenStream(
                 out _stream,
@@ -413,7 +441,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 framesPerBuffer: _framesPerBuffer,
                 streamFlags: PaStreamFlags.paNoFlag,
                 streamCallback: cbPtr,
-                userData: GCHandle.ToIntPtr(_selfHandle));
+                userData: UseBlockingWrites ? nint.Zero : GCHandle.ToIntPtr(_selfHandle));
 
             if (err != PaError.paNoError)
             {
@@ -428,6 +456,19 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 _stream = nint.Zero;
                 _selfHandle.Free();
                 PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
+            }
+
+            if (UseBlockingWrites)
+            {
+                _feederCts = new CancellationTokenSource();
+                var token = _feederCts.Token;
+                _feeder = new Thread(() => FeederLoop(token))
+                {
+                    IsBackground = true,
+                    Priority = ThreadPriority.Highest,
+                    Name = $"PortAudioFeeder:{_deviceIndex}",
+                };
+                _feeder.Start();
             }
 
             // Capture the negotiated DAC latency so the master clock can report the audible position (A/V sync).
@@ -461,6 +502,19 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 Volatile.Read(ref _droppedSamples), Volatile.Read(ref _callbackCount));
             try
             {
+                // The feeder goes down BEFORE the stream: a Pa_WriteStream racing Pa_CloseStream on
+                // the same handle is native use-after-free. Cancel unblocks it within one chunk
+                // (~5 ms) — its write either completes or returns an error it treats as shutdown.
+                if (_feeder is { } feeder)
+                {
+                    _feederCts?.Cancel();
+                    if (!feeder.Join(TimeSpan.FromSeconds(2)))
+                        Trace.LogWarning("Stop: feeder thread did not exit within 2s (device={Device})", _deviceIndex);
+                    _feeder = null;
+                    _feederCts?.Dispose();
+                    _feederCts = null;
+                }
+
                 if (_stream != nint.Zero)
                 {
                     Native.Pa_StopStream(_stream);
@@ -722,6 +776,90 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
             Volatile.Write(ref _streamStoppedAfterFlush, 0);
             timing?.SetOutcome($"device={_deviceIndex} active={StreamActive}");
+        }
+    }
+
+    /// <summary>
+    /// Blocking-mode pump: drains the managed ring into PortAudio's native FIFO with
+    /// <see cref="Native.Pa_WriteStream"/>, which blocks until the device has room — the pacing is
+    /// the device's own. An empty ring feeds SILENCE (counted as underrun, exactly like the callback
+    /// path) so the native side never starves at our node and the stream clock stays smooth.
+    /// </summary>
+    /// <remarks>
+    /// The whole point of this thread is that it may be late: a GC pause lands HERE instead of on
+    /// the audio server's graph cycle, and PortAudio's FIFO (sized by the suggested latency) rides
+    /// it out. Reuses the callback path's counters — <c>_callbackCount</c> becomes "feed cycles" and
+    /// the calibration block mirrors the one the callback ran, with <c>Pa_GetStreamTime</c> (legal
+    /// outside a stream callback).
+    /// </remarks>
+    private void FeederLoop(CancellationToken token)
+    {
+        var floats = FeederChunkFrames * _format.Channels;
+        var buffer = new float[floats];
+        try
+        {
+            fixed (float* p = buffer)
+            {
+                while (!token.IsCancellationRequested && !_disposed)
+                {
+                    // A flush stopped the stream; Submit/WaitForCapacity restart it. Writing into a
+                    // stopped stream would just error - idle politely until it is back.
+                    if (Volatile.Read(ref _streamStoppedAfterFlush) != 0)
+                    {
+                        Thread.Sleep(1);
+                        continue;
+                    }
+
+                    var read = _ring.Read(buffer);
+                    if (read < floats)
+                        Array.Clear(buffer, read, floats - read);
+
+                    var err = Native.Pa_WriteStream(_stream, (nint)p, FeederChunkFrames);
+                    if (err != PaError.paNoError && err != PaError.paOutputUnderflowed)
+                    {
+                        // A stopped stream mid-flush or mid-teardown is normal traffic; anything else
+                        // latches the same fault surface the callback used, so Submit/WaitForCapacity
+                        // route it into the router's OutputErrored path.
+                        if (token.IsCancellationRequested
+                            || Volatile.Read(ref _streamStoppedAfterFlush) != 0
+                            || err == PaError.paStreamIsStopped)
+                            continue;
+
+                        Interlocked.CompareExchange(
+                            ref _callbackFaultException,
+                            new PortAudioException(err, nameof(Native.Pa_WriteStream)),
+                            null);
+                        Volatile.Write(ref _callbackFaulted, 1);
+                        return;
+                    }
+
+                    Interlocked.Increment(ref _callbackCount);
+                    if (read > 0)
+                        Interlocked.Add(ref _playedSamples, read / _format.Channels);
+                    var silence = (floats - read) / _format.Channels;
+                    if (silence > 0 && Volatile.Read(ref _isRunning))
+                        Interlocked.Add(ref _underrunSamples, silence);
+
+                    if (Volatile.Read(ref _streamSmoothCalibrated) == 0)
+                    {
+                        var st = Native.Pa_GetStreamTime(_stream);
+                        if (double.IsFinite(st) && st > 0)
+                        {
+                            var playedNow = Volatile.Read(ref _playedSamples);
+                            _segmentPlayed0Samples = playedNow - Volatile.Read(ref _playbackEpochSamples);
+                            if (_segmentPlayed0Samples < 0) _segmentPlayed0Samples = 0;
+                            _segmentStreamT0 = st;
+                            Thread.MemoryBarrier();
+                            Volatile.Write(ref _streamSmoothCalibrated, 1);
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Interlocked.CompareExchange(ref _callbackFaultException, ex, null);
+            Volatile.Write(ref _callbackFaulted, 1);
         }
     }
 

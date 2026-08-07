@@ -390,6 +390,45 @@ earlier); a user-facing A/V offset trim is the standard endgame for projector ri
 
 All suites green: Core 789, Session 359, Players 16, HaCue2 381, HaCue2.Core 704.
 
+## Round 6 — DSP-spike stutter: managed callback out of the realtime graph (implemented)
+
+Reported after round 5: still dropouts ~every second, user observes each stutter coincides with a
+DSP-load spike. New diagnostics: underruns still accumulating per lease (wildly unequal, 2,880 →
+39,360 floats), terminal clean, 259 ms lease latency.
+
+Diagnosis chain:
+- GC-storm probe (32 forced blocking gen2s / 15 s) produced ZERO producer underruns → plain GC
+  pauses (~3 ms) cannot drain an 80 ms ring; the direct-GC theory is out.
+- The refined mechanism that fits everything: `PortAudioOutput` ran a **managed stream callback on
+  the audio server's realtime graph thread** (PipeWire/JACK runs every client's process callback on
+  ONE cycle). A callback that lands while a GC suspension is in progress blocks the whole graph
+  cycle → DSP-load spike → server xrun → catch-up burst; a burst longer than the 85 ms producer
+  fill writes producer underruns. App GC rate × callback rate ≈ one collision/second — the observed
+  cadence; headless probes allocate too little to collide.
+
+Fixes:
+1. **Blocking-write PortAudio output** (default): stream opens with NO callback; a feeder thread
+   pushes `Pa_WriteStream` into PortAudio's native FIFO. The realtime cycle runs pure native code;
+   GC only delays the feeder, absorbed by the FIFO. Empty ring feeds silence with the same underrun
+   accounting as before; fault/flush/calibration surfaces preserved. `MFP_PORTAUDIO_CALLBACK=1`
+   restores callback mode.
+2. **Producer fill deepened 85 ms → 200 ms** (`AudioPatchBay` defaults: ring 19200 frames, explicit
+   `producerPacingTargetFrames` 9600, decoupled from ring capacity via the new
+   `pacingTargetFrames` on `ProgramBusSource`): absorbs xrun catch-up bursts from OTHER graph
+   clients (Discord, quantum renegotiation) that no fix of ours can prevent. Cost: program-path
+   latency ~200 ms + device — acceptable for a cue rig; make it a setting if live inputs need less.
+
+Validation: bay probe clean in blocking mode (fill 9600, zero underruns); full windowed show under
+a 63-collection GC storm: 11 stems within 4 ms, zero underruns, terminal clean. All suites green
+(Core 789, Session 359, Players 16, PortAudio 21, Backends 45, HaCue2 381, HaCue2.Core 704).
+
+Known follow-ups:
+- Trimmed-cue position readout race: under heavy load a trimmed cue (DAY1, trimIn 36:00) can report
+  ClipPosition INCLUDING the trim (36:09 instead of 0:09) — playback itself stays aligned; the
+  Active panel clock is what lies. Find the window-rebase race in the playhead snapshot path.
+- MiniAudio backend still uses a managed device callback (same hazard class if anyone selects it).
+- A/V offset fine-trim (video vs programme) once the user judges direction by eye.
+
 ## Suggested work order
 
 1. Framework: fix the grant leak + make capacity-wait timeout non-fatal, with a regression test (§1).
