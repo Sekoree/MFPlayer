@@ -63,4 +63,67 @@ public class CompositionOutputStatsTests
         // A null list would make every consumer null-check; empty is the same information without the trap.
         Assert.All(all, s => Assert.NotNull(s.OutputStats));
     }
+
+    [Fact]
+    public async Task SurfacesDropsFromTheDeviceItself_WhichNoUpstreamCounterCanSee()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        session.LoadDocument(OneComposition());
+
+        // A vsynced window drops at the vblank, and its Submit returns without blocking - so the pump in
+        // front of it never backs up and never counts anything. Before this row existed, a composition
+        // feeding a stuttering display reported perfect health.
+        var device = new DroppingDiagnosticOutput { DroppedFrames = 7, RepeatedFrames = 3 };
+        Assert.True(await session.AttachCompositionOutputAsync("screen", device));
+
+        var stats = await session.GetCompositionStatsAsync("screen");
+
+        Assert.NotNull(stats);
+        var row = Assert.Single(stats!.Value.OutputStats, r => r.PresentDropped == 7);
+        Assert.Equal(3, row.PresentRepeated);
+    }
+
+    [Fact]
+    public async Task LeavesPresentCountersAtZero_ForASinkThatDoesNotReportThem()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        session.LoadDocument(OneComposition());
+
+        Assert.True(await session.AttachCompositionOutputAsync("screen", new DiscardingVideoOutput()));
+
+        var stats = await session.GetCompositionStatsAsync("screen");
+
+        Assert.NotNull(stats);
+        // A sink with no device cadence has nothing to report - it must read 0, not a stale or invented
+        // number that would make an innocent output look like it was dropping.
+        Assert.All(stats!.Value.OutputStats, r =>
+        {
+            Assert.Equal(0, r.PresentDropped);
+            Assert.Equal(0, r.PresentRepeated);
+        });
+    }
+
+    private sealed class DroppingDiagnosticOutput : IVideoOutput, IVideoOutputPresentDiagnostics
+    {
+        private VideoFormat _format;
+
+        public long PresentedFrames { get; set; }
+        public long DroppedFrames { get; set; }
+        public long RepeatedFrames { get; set; }
+        public int QueuedFrames => 0;
+        public int PresentQueueDepth => 2;
+
+        public VideoFormat Format => _format;
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = [PixelFormat.Bgra32];
+
+        public void Configure(VideoFormat format) => _format = format;
+
+        public void Submit(VideoFrame frame)
+        {
+            PresentedFrames++;
+            frame.Dispose();
+        }
+    }
 }

@@ -162,8 +162,7 @@ public static class OutputPresentation
                 Late = item.FramesBehindMaster == 0
                     ? new Status("0")
                     : new Status(item.FramesBehindMaster.ToString(CultureInfo.InvariantCulture), Gel.Amber),
-                Dropped = (item.SlotOverflowFrames + item.PumpOverruns)
-                    .ToString(CultureInfo.InvariantCulture),
+                Dropped = Dropped(item),
                 Gpu = item.CompositorBackend,
             }),
         ];
@@ -233,6 +232,25 @@ public static class OutputPresentation
         return target > 0 && achieved < target * 0.95
             ? new Status(text, Gel.Amber)
             : new Status(text, Gel.Green);
+    }
+
+    /// <summary>
+    /// Every stage that can lose a frame, including the last one.
+    /// </summary>
+    /// <remarks>
+    /// The composition-level counters only see as far as the pump. A window output presents on its own
+    /// vblank and drops there, and because its Submit hands off without blocking, the pump's queue never
+    /// backs up and its drop count never moves — so this column read a confident 0 through a visibly
+    /// stuttering output. Summing the per-output present drops is what makes the number honest.
+    /// Repeats are deliberately NOT added: a canvas slower than the panel repeats a frame rather than
+    /// losing one, which is not a fault and would otherwise read as a fault here.
+    /// </remarks>
+    private static string Dropped(ClipCompositionRuntimeStats stats)
+    {
+        var total = stats.SlotOverflowFrames + stats.PumpOverruns;
+        foreach (var output in stats.OutputStats)
+            total += output.PresentDropped;
+        return total.ToString(CultureInfo.InvariantCulture);
     }
 }
 

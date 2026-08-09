@@ -3,6 +3,7 @@ using S.Media.Core.Threading;
 using S.Media.Core.Video;
 using S.Media.Gpu;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading;
 using SilkGL = Silk.NET.OpenGL.GL;
 
@@ -44,7 +45,8 @@ namespace S.Media.Present.SDL3;
 /// NV12 dmabuf / Win32 D3D11 paths cannot be mirrored yet (CPU-plane and other non-interop formats can).
 /// </para>
 /// </remarks>
-public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl, IDisposable
+public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl,
+    IVideoOutputPresentDiagnostics, IDisposable
 {
     private static readonly PixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
 
@@ -70,13 +72,34 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     private readonly ManualResetEventSlim _ready = new(false);
     private Exception? _renderError;
 
-    private VideoFrame? _pendingFrame;
+    /// <summary>
+    /// Frames waiting for a vblank. This is the seam where the producer's cadence meets the panel's; see
+    /// <see cref="PresentFrameQueue"/> for why it needs depth rather than a single slot.
+    /// </summary>
+    private readonly PresentFrameQueue _presentQueue;
+
     private long _displayed;
     private long _droppedNew;
+    private long _repeated;
     private long _lastPresentedPtsTicks;
     private int _activePresentations;
     private int _hasLastPresentedPts;
     private int _firstPresentLogged;
+
+    /// <summary>A vsynced swap that returns faster than this did not block on a vblank.</summary>
+    private static readonly TimeSpan NonBlockingSwapThreshold = TimeSpan.FromMilliseconds(1);
+
+    /// <summary>Consecutive non-blocking swaps before the loop stops trusting the swap to pace it.</summary>
+    private const int NonBlockingSwapStreakLimit = 8;
+
+    /// <summary>
+    /// Consecutive empty pulls before the loop stops free-running. Long enough to ride through the
+    /// normal repeats of a producer that is slightly slower than the display, short enough that a truly
+    /// idle window settles back to cheap timed repaints instead of burning a swap every vblank.
+    /// </summary>
+    private const int EmptyPullsBeforeIdle = 4;
+
+    private int _nonBlockingSwapStreak;
 
     private readonly ConcurrentQueue<Action> _renderThreadActions = new();
     private volatile bool _canIdleRepaint;
@@ -120,7 +143,32 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     /// comparing against the source frame size to reason about scaling quality.</summary>
     public (int Width, int Height) ViewportPixelSize => (_viewportWidth, _viewportHeight);
     public long DisplayedCount => Volatile.Read(ref _displayed);
-    public long DroppedNewer => Volatile.Read(ref _droppedNew);
+
+    /// <summary>
+    /// Frames discarded because the present queue was full when a newer one arrived - i.e. the producer
+    /// is running faster than this display refreshes. Expect a slow, steady count (roughly one per beat
+    /// period between the two rates); a fast or bursty count means something upstream is overproducing.
+    /// </summary>
+    public long DroppedNewer => _presentQueue.DroppedOldest + Volatile.Read(ref _droppedNew);
+
+    /// <summary>
+    /// Vblanks that re-presented the previous frame because no new one was queued - the mirror image of
+    /// <see cref="DroppedNewer"/>, and what a producer slightly slower than the display looks like.
+    /// Counted only while content is flowing, not while the window sits idle.
+    /// </summary>
+    public long RepeatedFrames => Volatile.Read(ref _repeated);
+
+    /// <summary>Frames currently queued for a vblank (0..<see cref="PresentQueueCapacity"/>).</summary>
+    public int QueuedFrameCount => _presentQueue.Count;
+
+    /// <summary>Present-queue depth. Each slot is up to one refresh period of added display latency.</summary>
+    public int PresentQueueCapacity => _presentQueue.Capacity;
+
+    long IVideoOutputPresentDiagnostics.PresentedFrames => DisplayedCount;
+    long IVideoOutputPresentDiagnostics.DroppedFrames => DroppedNewer;
+    long IVideoOutputPresentDiagnostics.RepeatedFrames => RepeatedFrames;
+    int IVideoOutputPresentDiagnostics.QueuedFrames => QueuedFrameCount;
+    int IVideoOutputPresentDiagnostics.PresentQueueDepth => PresentQueueCapacity;
     public TimeSpan? LastPresentedPresentationTime =>
         Volatile.Read(ref _hasLastPresentedPts) != 0
             ? TimeSpan.FromTicks(Volatile.Read(ref _lastPresentedPtsTicks))
@@ -164,11 +212,13 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                           GlOutputBitDepth swapchainBitDepth = GlOutputBitDepth.Auto,
                           nint borrowD3D11DeviceComPtrForNv12Gl = 0,
                           bool createFallbackD3D11InteropDeviceForWin32Nv12 = true,
-                          SDL3GLVideoOutput? textureMirrorAnchor = null)
+                          SDL3GLVideoOutput? textureMirrorAnchor = null,
+                          int presentQueueCapacity = DefaultPresentQueueCapacity)
     {
         ArgumentException.ThrowIfNullOrEmpty(title);
         if (initialWidth <= 0) throw new ArgumentOutOfRangeException(nameof(initialWidth));
         if (initialHeight <= 0) throw new ArgumentOutOfRangeException(nameof(initialHeight));
+        if (presentQueueCapacity < 1) throw new ArgumentOutOfRangeException(nameof(presentQueueCapacity));
         if (textureMirrorAnchor is not null && ownsThread)
         {
             throw new ArgumentException(
@@ -189,7 +239,11 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             createFallbackD3D11InteropDeviceForWin32Nv12,
             "SDL3GLVideoOutput");
         _textureMirrorAnchor = textureMirrorAnchor;
+        _presentQueue = new PresentFrameQueue(presentQueueCapacity);
     }
+
+    /// <summary>Default <see cref="PresentQueueCapacity"/>. See <see cref="PresentFrameQueue.DefaultCapacity"/>.</summary>
+    public const int DefaultPresentQueueCapacity = PresentFrameQueue.DefaultCapacity;
 
     /// <summary>
     /// Creates a secondary window that draws the same GL plane textures as <paramref name="anchor"/> (one upload on the anchor).
@@ -340,8 +394,8 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             }
 
             // Drop frames queued for the old format so Submit's format guard doesn't reject them after switch.
-            var stale = Interlocked.Exchange(ref _pendingFrame, null);
-            stale?.Dispose();
+            foreach (var stale in _presentQueue.DrainAll())
+                stale.Dispose();
 
             _format = format;
             _canIdleRepaint = false;
@@ -438,21 +492,17 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                 $"frame format {frame.Format} does not match output format {_format}", nameof(frame));
         }
 
-        var prev = Interlocked.Exchange(ref _pendingFrame, frame);
-        if (prev is not null)
-        {
-            prev.Dispose();
-            Interlocked.Increment(ref _droppedNew);
-        }
+        _presentQueue.Enqueue(frame, out var evicted);
+        evicted?.Dispose();
+
         if (_ownsThread) _wakeup.Set();
     }
 
     public void AbandonQueuedFrames()
     {
-        var pending = Interlocked.Exchange(ref _pendingFrame, null);
-        if (pending is not null)
+        foreach (var frame in _presentQueue.DrainAll())
         {
-            pending.Dispose();
+            frame.Dispose();
             Interlocked.Increment(ref _droppedNew);
         }
     }
@@ -466,7 +516,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (Volatile.Read(ref _pendingFrame) is null && Volatile.Read(ref _activePresentations) == 0)
+            if (QueuedFrameCount == 0 && Volatile.Read(ref _activePresentations) == 0)
                 return true;
             if (Environment.TickCount64 >= deadline)
                 return false;
@@ -489,7 +539,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         Interlocked.Increment(ref _activePresentations);
         try
         {
-            var frame = Interlocked.Exchange(ref _pendingFrame, null);
+            var frame = _presentQueue.TryDequeue();
             if (frame is not null)
             {
                 try { PresentFrame(frame); }
@@ -535,8 +585,8 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             finally { SDL3Runtime.Release(); }
         }
 
-        var leftover = Interlocked.Exchange(ref _pendingFrame, null);
-        leftover?.Dispose();
+        foreach (var leftover in _presentQueue.DrainAll())
+            leftover.Dispose();
 
         if (threadStillRunning)
         {
@@ -590,19 +640,35 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                 _ready.Set();
 
                 var handles = new WaitHandle[] { _wakeup, token.WaitHandle };
+                // Pull, don't wait to be pushed. A vsynced swap blocks until the next vblank, so once
+                // frames are flowing the swap IS the loop's clock: each iteration takes exactly one
+                // refresh period and pulls whatever the queue has for it. That makes the queue - not the
+                // arrival phase of a submit - decide what gets shown, which is the whole point.
+                //
+                // Two cases must still wait on a submit instead, or the loop spins a core:
+                //   * nothing has been presented yet, or the queue has been dry for a while (idle window)
+                //   * the swap isn't actually blocking (vsync off, or occluded/minimised window)
+                var swapPacedUs = false;
+                var emptyPulls = 0;
                 while (!token.IsCancellationRequested)
                 {
-                    var idx = WaitHandle.WaitAny(handles, 50);
-                    if (idx == 1) break;
+                    if (!swapPacedUs)
+                    {
+                        var idx = WaitHandle.WaitAny(handles, 50);
+                        if (idx == 1) break;
+                    }
+
                     DrainEvents();
 
+                    var swapped = false;
                     Interlocked.Increment(ref _activePresentations);
                     try
                     {
-                        var frame = Interlocked.Exchange(ref _pendingFrame, null);
+                        var frame = _presentQueue.TryDequeue();
                         if (frame is not null)
                         {
-                            try { PresentFrame(frame); }
+                            emptyPulls = 0;
+                            try { swapped = PresentFrame(frame); }
                             catch (Exception ex)
                             {
                                 MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentFrame");
@@ -611,17 +677,34 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                         }
                         else if (_canIdleRepaint)
                         {
-                            try { PresentWithoutNewUpload(); }
+                            // The producer had nothing for this vblank.
+                            var contentWasFlowing = emptyPulls < EmptyPullsBeforeIdle;
+                            if (contentWasFlowing)
+                                emptyPulls++;
+
+                            try { swapped = PresentWithoutNewUpload(); }
                             catch (Exception ex)
                             {
                                 MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentWithoutNewUpload");
                             }
+
+                            // Only a repaint that actually reached the panel, and only while content was
+                            // still flowing, is a repeat. Once the queue has been dry for a while the
+                            // window is simply idle and the repaint is just keeping it alive - counting
+                            // those would bury the real signal under a steady idle drip.
+                            if (swapped && contentWasFlowing)
+                                Interlocked.Increment(ref _repeated);
                         }
                     }
                     finally
                     {
                         Interlocked.Decrement(ref _activePresentations);
                     }
+
+                    swapPacedUs = swapped
+                                  && _vsync
+                                  && emptyPulls < EmptyPullsBeforeIdle
+                                  && _nonBlockingSwapStreak < NonBlockingSwapStreakLimit;
                 }
             }
             finally
@@ -862,11 +945,12 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         _graphicsInitialized = false;
     }
 
-    private void PresentFrame(VideoFrame frame)
+    /// <returns><c>true</c> when a swap was actually issued (so the caller may treat it as its pacer).</returns>
+    private bool PresentFrame(VideoFrame frame)
     {
-        if (_renderer is null || _gl is null) return;
+        if (_renderer is null || _gl is null) return false;
         if (_disposed)
-            return;
+            return false;
 
         GlVideoOutputHdr.ApplyTransferHint(_renderer, frame, _hdrPreference);
         _renderer.Upload(frame);
@@ -876,7 +960,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             && !SDL.GLMakeCurrent(_window, _glContext))
         {
             MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_GL_MakeCurrent (anchor) before render failed: {0}", SDL.GetError());
-            return;
+            return false;
         }
 
         ClearForLetterboxIfNeeded();
@@ -884,12 +968,34 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         if (_disposed)
             SDL.GLSetSwapInterval(0);
 
-        SDL.GLSwapWindow(_window);
+        SwapWindowTimed();
         Volatile.Write(ref _lastPresentedPtsTicks, frame.PresentationTime.Ticks);
         Volatile.Write(ref _hasLastPresentedPts, 1);
         Interlocked.Increment(ref _displayed);
         _canIdleRepaint = true;
         LogFirstPresentDiagnostics(frame);
+        return true;
+    }
+
+    /// <summary>
+    /// Swaps and records whether the swap blocked. With vsync on, a swap that returns essentially
+    /// instantly did NOT wait for a vblank - the window is occluded/minimised, or the platform queues
+    /// rather than blocks - so the render loop must not treat it as a pacer or it spins a core. A streak
+    /// is required before believing it, because a single fast swap is normal right after a missed vblank.
+    /// </summary>
+    private void SwapWindowTimed()
+    {
+        var started = Stopwatch.GetTimestamp();
+        SDL.GLSwapWindow(_window);
+        if (Stopwatch.GetElapsedTime(started) < NonBlockingSwapThreshold)
+        {
+            if (_nonBlockingSwapStreak < NonBlockingSwapStreakLimit)
+                _nonBlockingSwapStreak++;
+        }
+        else
+        {
+            _nonBlockingSwapStreak = 0;
+        }
     }
 
     private void LogFirstPresentDiagnostics(VideoFrame frame)
@@ -964,18 +1070,19 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         _gl.Clear(Silk.NET.OpenGL.ClearBufferMask.ColorBufferBit);
     }
 
-    private void PresentWithoutNewUpload()
+    /// <returns><c>true</c> when a swap was actually issued (so the caller may treat it as its pacer).</returns>
+    private bool PresentWithoutNewUpload()
     {
         if (_textureMirrorAnchor is not null)
-            return;
+            return false;
         if (_renderer is null || _gl is null || !_canIdleRepaint || _disposed)
-            return;
+            return false;
 
         if (_window != nint.Zero && _glContext != nint.Zero
             && !SDL.GLMakeCurrent(_window, _glContext))
         {
             MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_GL_MakeCurrent (idle) failed: {0}", SDL.GetError());
-            return;
+            return false;
         }
 
         ClearForLetterboxIfNeeded();
@@ -983,7 +1090,8 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         if (_disposed)
             SDL.GLSetSwapInterval(0);
 
-        SDL.GLSwapWindow(_window);
+        SwapWindowTimed();
+        return true;
     }
 
     private void PresentTextureMirrors(VideoFrame frame)

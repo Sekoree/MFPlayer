@@ -2009,6 +2009,19 @@ public sealed class ClipCompositionRuntime : IDisposable
                 capacity = pump.MaxQueueDepth;
             }
 
+            // Read through the pump to the real sink. A device that presents on its own cadence (a
+            // vsynced window) decides there - not here - whether a frame is shown, and the pump's own
+            // counters cannot see it: its Submit hands off without blocking, so its queue stays empty
+            // and its drop count stays at zero while the device discards frames. Without this the
+            // composition reports perfect health through a visibly stuttering output.
+            long presentDropped = 0;
+            long presentRepeated = 0;
+            if (_lease.Output is IVideoOutputPresentDiagnostics present)
+            {
+                presentDropped = present.DroppedFrames;
+                presentRepeated = present.RepeatedFrames;
+            }
+
             var format = _configuredFormat;
             return new ClipCompositionOutputStats(
                 OutputId,
@@ -2020,7 +2033,9 @@ public sealed class ClipCompositionRuntime : IDisposable
                 format?.Width ?? 0,
                 format?.Height ?? 0,
                 queued,
-                capacity);
+                capacity,
+                presentDropped,
+                presentRepeated);
         }
 
         public void SubscribePumpPressure(ClipCompositionRuntime owner)
@@ -2650,6 +2665,11 @@ public readonly record struct ClipCompositionRuntimeStats(
 /// <param name="Height">Configured output height, 0 before the first frame.</param>
 /// <param name="QueuedFrames">Current pump queue depth, when the sink is a pump.</param>
 /// <param name="QueueCapacity">Pump queue capacity, when the sink is a pump.</param>
+/// <param name="PresentDropped">Frames the DEVICE discarded because the canvas outran its refresh, when
+/// the sink reports <see cref="IVideoOutputPresentDiagnostics"/>. This is the only counter that can see
+/// the last stage; every other number here can read healthy while this one climbs.</param>
+/// <param name="PresentRepeated">Device refreshes that re-showed the previous frame because the canvas
+/// was slower than the device - the mirror image of <paramref name="PresentDropped"/>.</param>
 public readonly record struct ClipCompositionOutputStats(
     string OutputId,
     string DisplayName,
@@ -2660,7 +2680,9 @@ public readonly record struct ClipCompositionOutputStats(
     int Width,
     int Height,
     int QueuedFrames,
-    int QueueCapacity);
+    int QueueCapacity,
+    long PresentDropped = 0,
+    long PresentRepeated = 0);
 
 public readonly record struct ClipCompositionDriftWarning(
     string CompositionId,

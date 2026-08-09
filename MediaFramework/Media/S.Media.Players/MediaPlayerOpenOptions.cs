@@ -79,6 +79,29 @@ public readonly record struct MediaPlayerOpenOptions(
     /// </remarks>
     public bool MasterVideoOnlyClockFromPts { get; init; }
 
+    /// <summary>
+    /// Multiple of the source's frame rate at which the video presentation tick runs.
+    /// <c>0</c> (default) uses <see cref="VideoFormatPacing.DefaultPresentationOversample"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The tick decides when a decoded frame is handed to the output, and it keeps only the NEWEST
+    /// frame that has come due. So the tick must run faster than the source, or two frames periodically
+    /// come due together and the older one is discarded before anything downstream - a composition
+    /// layer included - can see it. That is a real frame loss, not a display artefact, and it happens
+    /// upstream of every other pacing stage.
+    /// </para>
+    /// <para>
+    /// Lower this toward 1 to trade frame retention for driver-thread wakeups; the derived rate is
+    /// clamped to [<see cref="VideoFormatPacing.MinPresentationTickHz"/>,
+    /// <see cref="VideoFormatPacing.MaxPresentationTickHz"/>] either way. Applies to sources that
+    /// declare a frame rate up front (file/decoder opens); live sources publish their format only after
+    /// their first frame, which arrives after the clock is built, so they keep
+    /// <see cref="MediaClock.DefaultVideoTickInterval"/>.
+    /// </para>
+    /// </remarks>
+    public double VideoTickOversample { get; init; }
+
     public MediaPlayerOpenOptions()
         : this(
             TryHardwareAcceleration: true,

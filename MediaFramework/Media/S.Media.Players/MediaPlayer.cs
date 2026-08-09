@@ -909,6 +909,17 @@ public sealed class MediaPlayer : IDisposable
         string? audioSourceId = null;
         MediaClock? freerun = null;
         IMediaClock playClock;
+        // The presentation tick must run FASTER than the source's frame rate. On the old fixed ~60 Hz
+        // tick a 59.94 fps clip periodically had two frames come due together, and OnVideoTick keeps
+        // only the newest - so a decoded frame was dropped as "late" before any consumer (a composition
+        // layer included) could ever see it, on a cadence nobody chose. Deriving the tick from the
+        // source rate removes that stage. Live sources publish their format only after the first frame
+        // (waited for further down, after this clock exists), so they keep the fixed fallback.
+        var videoTickInterval = videoSource is not null and not ILiveVideoSource
+            ? VideoFormatPacing.PresentationTickInterval(videoSource.Format.FrameRate, options.VideoTickOversample)
+            : TimeSpan.Zero;
+        if (videoTickInterval <= TimeSpan.Zero)
+            videoTickInterval = MediaClock.DefaultVideoTickInterval;
         VideoRouter? router = null;
         VideoPlayer? videoPlayer = null;
         var ownedDisposables = new List<IDisposable>();
@@ -918,7 +929,7 @@ public sealed class MediaPlayer : IDisposable
         {
             if (options.IncludeAudioRouter && audioSource is not null)
             {
-                audioClock = new MediaClock();
+                audioClock = new MediaClock(MediaClock.DefaultAudioTickInterval, videoTickInterval);
                 var targetAudioRate = options.TargetAudioSampleRate is > 0
                     ? options.TargetAudioSampleRate.Value
                     : audioSource.Format.SampleRate;
@@ -956,7 +967,7 @@ public sealed class MediaPlayer : IDisposable
             }
             else
             {
-                freerun = new MediaClock();
+                freerun = new MediaClock(MediaClock.DefaultAudioTickInterval, videoTickInterval);
                 playClock = freerun;
                 if (disposeSourcesOnDispose && audioSource is IDisposable audioDisposable)
                     ownedDisposables.Add(audioDisposable);
@@ -1007,7 +1018,14 @@ public sealed class MediaPlayer : IDisposable
                 vin.Output,
                 playClock,
                 queueCapacity: decodeQueueCap,
-                presentationMode: options.LiveVideoPresentation);
+                presentationMode: options.LiveVideoPresentation)
+            {
+                // Half a tick, which is what the 8 ms default always meant (half of a ~60 Hz tick).
+                // It has to track the tick: left at a fixed 8 ms against a 120 Hz tick it would span
+                // almost a whole period, pulling frames forward by nearly a full tick and undoing the
+                // placement precision the faster tick was for.
+                EarlyTolerance = videoTickInterval / 2,
+            };
 
             player = new MediaPlayer(
                 router,

@@ -42,8 +42,17 @@ namespace S.Media.Time;
 /// </remarks>
 public sealed class MediaClock : IMediaClock, IDisposable
 {
-    private static readonly TimeSpan DefaultAudioTickInterval = TimeSpan.FromMilliseconds(10);
-    private static readonly TimeSpan DefaultVideoTickInterval = TimeSpan.FromTicks(166_667); // ~60 Hz
+    /// <summary>Audio-tick cadence used by the parameterless constructors (100 Hz).</summary>
+    public static readonly TimeSpan DefaultAudioTickInterval = TimeSpan.FromMilliseconds(10);
+
+    /// <summary>
+    /// Video-tick cadence used by the parameterless constructors (~60 Hz). This is a FALLBACK for
+    /// callers that do not know their source's frame rate - a host that does should derive the
+    /// interval from it (see <c>VideoFormatPacing.PresentationTickInterval</c>) rather than take this,
+    /// because a fixed 60 Hz tick beats against any source that is not exactly 60 fps.
+    /// </summary>
+    public static readonly TimeSpan DefaultVideoTickInterval = TimeSpan.FromTicks(166_667); // ~60 Hz
+
     private static readonly TimeSpan PositionChangedInterval  = TimeSpan.FromMilliseconds(33); // ~30 Hz
 
     private readonly Stopwatch _stopwatch = new();
