@@ -363,6 +363,47 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     public event EventHandler<ClipCompositionPumpPressureWarning>? PumpPressureWarning;
 
+    /// <summary>
+    /// Ceiling on <see cref="MeasuredPresentLatency"/>. A wedged or mis-measuring output must not be able
+    /// to throw the whole canvas out of sync; a quarter second is far past any real display pipeline.
+    /// </summary>
+    private static readonly TimeSpan MaxPresentLatencyCompensation = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Whether the pump composites ahead by <see cref="MeasuredPresentLatency"/> so video lands in step
+    /// with the (already latency-compensated) audio. Default on; set false to pin the old behaviour.
+    /// </summary>
+    public bool CompensatePresentLatency { get; set; } = true;
+
+    /// <summary>
+    /// Worst measured submit-to-glass latency across the outputs that report one, clamped to
+    /// <see cref="MaxPresentLatencyCompensation"/>. Zero when no output reports one yet.
+    /// </summary>
+    /// <remarks>
+    /// The WORST rather than an average, because the number exists to align video with sound for someone
+    /// watching a screen, and the slowest screen is the one that would visibly lag. Sinks with no device
+    /// cadence of their own - NDI senders, encoders - do not implement the diagnostics interface at all,
+    /// so they are excluded by construction: their consumers reclock from timestamps at the far end and
+    /// pulling the canvas early for them would only hurt the screens in the room.
+    /// </remarks>
+    public TimeSpan MeasuredPresentLatency
+    {
+        get
+        {
+            var worst = TimeSpan.Zero;
+            foreach (var acquired in _acquiredSnapshot)
+            {
+                if (acquired.PresentDiagnostics is not { } diagnostics)
+                    continue;
+                var latency = diagnostics.PresentLatency;
+                if (latency > worst)
+                    worst = latency;
+            }
+
+            return worst > MaxPresentLatencyCompensation ? MaxPresentLatencyCompensation : worst;
+        }
+    }
+
     public ClipCompositionRuntimeStats GetStats()
     {
         long slotOverflow = 0;
@@ -389,7 +430,8 @@ public sealed class ClipCompositionRuntime : IDisposable
             _compositeTiming.Snapshot(),
             _canvasPeriod,
             SnapshotOutputStats(),
-            CompositorBackendName);
+            CompositorBackendName,
+            MeasuredPresentLatency);
     }
 
     /// <summary>One throughput row per attached output. Reads the same lock-free output snapshot the pump
@@ -1179,11 +1221,22 @@ public sealed class ClipCompositionRuntime : IDisposable
             catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: master read"); }
         }
 
+        var snapshot = _acquiredSnapshot; // lock-free, allocation-free per-frame read (NXT-11)
+
+        // Select for where the master will be when this frame is actually SEEN, not where it is now.
+        // Audio output already subtracts its device latency, so the audible position is "now"; a frame
+        // composited for "now" then spends the present latency in a queue and a swap, and lands that far
+        // behind the sound. Compositing that far ahead cancels it. Only meaningful when the layer sources
+        // are running ahead too (ShowSession's video playhead offset does that) - otherwise the nearest-PTS
+        // pick simply finds nothing newer and behaves exactly as before, which is why this is safe to
+        // apply unconditionally.
+        var presentLatency = CompensatePresentLatency ? MeasuredPresentLatency : TimeSpan.Zero;
+        if (masterPts is { } pts && presentLatency > TimeSpan.Zero)
+            masterPts = pts + presentLatency;
+
         // Subtitle layers render at their owning clips' positions before either pump path
         // reads the mixer, so it composites uniformly with the video layers (z-order/opacity/blend).
         DriveSubtitleLayers();
-
-        var snapshot = _acquiredSnapshot; // lock-free, allocation-free per-frame read (NXT-11)
 
         if (snapshot.Count == 0)
             return;
@@ -1879,6 +1932,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                 : new VideoOutputPump(
                     lease.Output, maxQueuedFrames: 2, name: $"CompositionOut:{lease.DisplayName}");
             _ownsPump = !ReferenceEquals(_output, lease.Output);
+            PresentDiagnostics = lease.Output as IVideoOutputPresentDiagnostics;
         }
 
         private readonly IVideoOutput? _output;
@@ -1999,6 +2053,13 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         /// <summary>This output's own throughput row, including the pump queue depth when the sink is a
         /// <see cref="VideoOutputPump"/> (the cue-line health probe used to hardcode those to zero).</summary>
+        /// <summary>
+        /// The real sink's present counters, when it has a device cadence of its own. Resolved once at
+        /// construction: the pump tick reads this every frame, and a type test per output per frame is
+        /// wasted work on a hot path.
+        /// </summary>
+        public IVideoOutputPresentDiagnostics? PresentDiagnostics { get; }
+
         public ClipCompositionOutputStats SnapshotStats()
         {
             var queued = 0;
@@ -2016,7 +2077,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             // composition reports perfect health through a visibly stuttering output.
             long presentDropped = 0;
             long presentRepeated = 0;
-            if (_lease.Output is IVideoOutputPresentDiagnostics present)
+            if (PresentDiagnostics is { } present)
             {
                 presentDropped = present.DroppedFrames;
                 presentRepeated = present.RepeatedFrames;
@@ -2635,7 +2696,8 @@ public readonly record struct ClipCompositionRuntimeStats(
     TimingSnapshot CompositeTiming = default,
     TimeSpan CanvasPeriod = default,
     IReadOnlyList<ClipCompositionOutputStats>? Outputs = null,
-    string CompositorBackend = "Unknown")
+    string CompositorBackend = "Unknown",
+    TimeSpan MeasuredPresentLatency = default)
 {
     /// <summary>
     /// The composition's target frame rate, derived from <see cref="CanvasPeriod"/>.

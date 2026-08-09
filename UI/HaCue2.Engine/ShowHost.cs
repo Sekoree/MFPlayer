@@ -101,6 +101,57 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     private readonly ProjectVideoOutputs _screens;
     private readonly HashSet<Guid> _calibrationOutputs = [];
     private readonly ShowSession _session;
+
+    /// <summary>The operator's own A/V trim, kept apart from the measured compensation so a reload of the
+    /// settings field cannot be mistaken for a change in the measurement.</summary>
+    private TimeSpan _manualVideoTrim;
+
+    /// <summary>Last offset actually pushed, or null to force the next sweep to push regardless.</summary>
+    private TimeSpan? _appliedVideoOffset;
+
+    /// <summary>Below this, a change in the measurement is not worth re-pointing every video player at.</summary>
+    private static readonly TimeSpan VideoOffsetDeadband = TimeSpan.FromMilliseconds(2);
+
+    /// <summary>
+    /// Runs the video pipeline ahead by however long frames actually take to reach the screen, so the
+    /// picture lands in step with the sound instead of a frame or two behind it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Audio outputs already subtract their device latency, so the audible position is "now". Video had
+    /// no equivalent: a frame composited for "now" still had to cross the present queue and wait on a
+    /// vblank, and arrived that much late. <c>AvOffsetMs</c> exists because that lag was real and had to
+    /// be dialled out by ear; this measures it instead. The operator's trim stays on top as a genuine
+    /// venue offset (throw distance, a projector's own processing delay) rather than a correction for
+    /// something the framework can now see for itself.
+    /// </para>
+    /// <para>
+    /// Called on the status sweep because the measurement is a smoothed average that needs frames to
+    /// flow before it means anything, and it moves if a window is dragged to a panel with a different
+    /// refresh rate. The deadband keeps a jittering measurement from re-pointing every player each tick.
+    /// </para>
+    /// </remarks>
+    public void ApplyVideoLatencyCompensation(IReadOnlyList<ClipCompositionRuntimeStats> compositions)
+    {
+        ArgumentNullException.ThrowIfNull(compositions);
+
+        var measured = TimeSpan.Zero;
+        foreach (var composition in compositions)
+        {
+            if (composition.MeasuredPresentLatency > measured)
+                measured = composition.MeasuredPresentLatency;
+        }
+
+        var target = -(_manualVideoTrim + measured);
+        if (_appliedVideoOffset is { } applied
+            && (target - applied).Duration() < VideoOffsetDeadband)
+        {
+            return;
+        }
+
+        _appliedVideoOffset = target;
+        _session.VideoPlayheadOffset = target;
+    }
     private readonly HashSet<string> _attached = [];
     private readonly ActionSender _actions = new();
     private readonly OutboundEffects _outbound;
@@ -731,7 +782,9 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             // video playhead offset (the offset is subtracted from the clock before frames are
             // picked). Applied on every reload so the settings field takes effect live, against
             // running content — that is how the number gets found in the first place.
-            _session.VideoPlayheadOffset = TimeSpan.FromMilliseconds(-next.Settings.AvOffsetMs);
+            _manualVideoTrim = TimeSpan.FromMilliseconds(next.Settings.AvOffsetMs);
+            _appliedVideoOffset = null;
+            _session.VideoPlayheadOffset = -_manualVideoTrim;
 
             // Outputs the operator has just ADDED open here, and ones they removed close. Opening only
             // at start-up meant a screen added mid-session stayed dark with nothing saying why.

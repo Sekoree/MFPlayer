@@ -101,6 +101,16 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
 
     private int _nonBlockingSwapStreak;
 
+    /// <summary>
+    /// Smoothed submit-to-glass latency, in <see cref="Stopwatch"/> ticks. Written only by the presenting
+    /// thread, read by anyone. An exponential average rather than a lifetime one so it follows a window
+    /// moved to a different panel instead of averaging the two forever.
+    /// </summary>
+    private long _presentLatencyTicks;
+
+    /// <summary>EMA weight: the new sample counts for 1/N. ~50 frames to converge, so under a second at 60 Hz.</summary>
+    private const int PresentLatencySmoothing = 16;
+
     private readonly ConcurrentQueue<Action> _renderThreadActions = new();
     private volatile bool _canIdleRepaint;
 
@@ -164,11 +174,43 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     /// <summary>Present-queue depth. Each slot is up to one refresh period of added display latency.</summary>
     public int PresentQueueCapacity => _presentQueue.Capacity;
 
+    /// <summary>
+    /// Smoothed time from <see cref="Submit"/> to the frame being on the panel (queue wait + upload +
+    /// the vsync-blocked swap). Zero until frames have flowed.
+    /// </summary>
+    public TimeSpan PresentLatency
+    {
+        get
+        {
+            var ticks = Volatile.Read(ref _presentLatencyTicks);
+            return ticks <= 0
+                ? TimeSpan.Zero
+                : TimeSpan.FromTicks((long)(ticks * (double)TimeSpan.TicksPerSecond / Stopwatch.Frequency));
+        }
+    }
+
+    /// <summary>Folds one submit-to-glass sample into the smoothed estimate. Presenting thread only.</summary>
+    private void RecordPresentLatency(long enqueuedTimestamp)
+    {
+        if (enqueuedTimestamp <= 0)
+            return;
+
+        var sample = Stopwatch.GetTimestamp() - enqueuedTimestamp;
+        if (sample < 0)
+            return;
+
+        var previous = Volatile.Read(ref _presentLatencyTicks);
+        Volatile.Write(
+            ref _presentLatencyTicks,
+            previous <= 0 ? sample : previous + ((sample - previous) / PresentLatencySmoothing));
+    }
+
     long IVideoOutputPresentDiagnostics.PresentedFrames => DisplayedCount;
     long IVideoOutputPresentDiagnostics.DroppedFrames => DroppedNewer;
     long IVideoOutputPresentDiagnostics.RepeatedFrames => RepeatedFrames;
     int IVideoOutputPresentDiagnostics.QueuedFrames => QueuedFrameCount;
     int IVideoOutputPresentDiagnostics.PresentQueueDepth => PresentQueueCapacity;
+    TimeSpan IVideoOutputPresentDiagnostics.PresentLatency => PresentLatency;
     public TimeSpan? LastPresentedPresentationTime =>
         Volatile.Read(ref _hasLastPresentedPts) != 0
             ? TimeSpan.FromTicks(Volatile.Read(ref _lastPresentedPtsTicks))
@@ -539,15 +581,19 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         Interlocked.Increment(ref _activePresentations);
         try
         {
-            var frame = _presentQueue.TryDequeue();
+            var frame = _presentQueue.TryDequeue(out var queuedAt);
             if (frame is not null)
             {
-                try { PresentFrame(frame); }
+                var presented = false;
+                try { presented = PresentFrame(frame); }
                 catch (Exception ex)
                 {
                     MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.Pump PresentFrame");
                 }
                 finally { frame.Dispose(); }
+
+                if (presented)
+                    RecordPresentLatency(queuedAt);
             }
             else if (_canIdleRepaint)
             {
@@ -664,7 +710,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                     Interlocked.Increment(ref _activePresentations);
                     try
                     {
-                        var frame = _presentQueue.TryDequeue();
+                        var frame = _presentQueue.TryDequeue(out var queuedAt);
                         if (frame is not null)
                         {
                             emptyPulls = 0;
@@ -674,6 +720,11 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                                 MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentFrame");
                             }
                             finally { frame.Dispose(); }
+
+                            // AFTER the swap returns, so the sample includes the vsync block - that wait
+                            // is most of the latency and measuring before it would report a fraction of it.
+                            if (swapped)
+                                RecordPresentLatency(queuedAt);
                         }
                         else if (_canIdleRepaint)
                         {

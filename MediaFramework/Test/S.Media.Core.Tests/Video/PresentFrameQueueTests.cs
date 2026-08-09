@@ -172,6 +172,32 @@ public sealed class PresentFrameQueueTests
     }
 
     [Fact]
+    public void Dequeue_reports_when_the_frame_was_queued_so_the_presenter_can_measure_its_own_latency()
+    {
+        var queue = new PresentFrameQueue(capacity: 2);
+        var before = System.Diagnostics.Stopwatch.GetTimestamp();
+        queue.Enqueue(Frame(1), out _);
+        var after = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        var frame = queue.TryDequeue(out var queuedAt);
+
+        Assert.NotNull(frame);
+        // The stamp has to be taken at ENQUEUE, or the measured latency would exclude the queue wait -
+        // which is the part that actually makes video late.
+        Assert.InRange(queuedAt, before, after);
+        frame.Dispose();
+    }
+
+    [Fact]
+    public void An_empty_dequeue_reports_no_timestamp_rather_than_a_stale_one()
+    {
+        var queue = new PresentFrameQueue(capacity: 2);
+
+        Assert.Null(queue.TryDequeue(out var queuedAt));
+        Assert.Equal(0, queuedAt);
+    }
+
+    [Fact]
     public void Enqueue_rejects_null()
     {
         var queue = new PresentFrameQueue();

@@ -61,6 +61,18 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
     private readonly PresentFrameQueue _presentQueue;
     private long _repeated;
 
+    /// <summary>
+    /// Smoothed submit-to-render latency in <see cref="System.Diagnostics.Stopwatch"/> ticks.
+    /// </summary>
+    /// <remarks>
+    /// UNDER-reports compared with the SDL presenter: it ends when this control finishes drawing into
+    /// Avalonia's framebuffer, and Avalonia composites and swaps some time after that. It is the best
+    /// number available from inside the control, and it still captures the dominant term (queue wait).
+    /// </remarks>
+    private long _presentLatencyTicks;
+
+    private const int PresentLatencySmoothing = 16;
+
     public VideoOpenGlControl(
         GlVideoOutputHdrPreference hdrPreference = GlVideoOutputHdrPreference.FollowFrameHints,
         GlOutputBitDepth swapchainBitDepth = GlOutputBitDepth.Eight,
@@ -136,11 +148,40 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
     /// <summary>Diagnostic: frames currently waiting for a render tick.</summary>
     public int QueuedFrameCount => _presentQueue.Count;
 
+    /// <summary>Smoothed time from <see cref="Submit"/> to this control finishing its draw.</summary>
+    public TimeSpan PresentLatency
+    {
+        get
+        {
+            var ticks = Volatile.Read(ref _presentLatencyTicks);
+            return ticks <= 0
+                ? TimeSpan.Zero
+                : TimeSpan.FromTicks(
+                    (long)(ticks * (double)TimeSpan.TicksPerSecond / System.Diagnostics.Stopwatch.Frequency));
+        }
+    }
+
+    private void RecordPresentLatency(long enqueuedTimestamp)
+    {
+        if (enqueuedTimestamp <= 0)
+            return;
+
+        var sample = System.Diagnostics.Stopwatch.GetTimestamp() - enqueuedTimestamp;
+        if (sample < 0)
+            return;
+
+        var previous = Volatile.Read(ref _presentLatencyTicks);
+        Volatile.Write(
+            ref _presentLatencyTicks,
+            previous <= 0 ? sample : previous + ((sample - previous) / PresentLatencySmoothing));
+    }
+
     long IVideoOutputPresentDiagnostics.PresentedFrames => RenderedFrameCount;
     long IVideoOutputPresentDiagnostics.DroppedFrames => DroppedFrameCount;
     long IVideoOutputPresentDiagnostics.RepeatedFrames => RepeatedFrameCount;
     int IVideoOutputPresentDiagnostics.QueuedFrames => QueuedFrameCount;
     int IVideoOutputPresentDiagnostics.PresentQueueDepth => _presentQueue.Capacity;
+    TimeSpan IVideoOutputPresentDiagnostics.PresentLatency => PresentLatency;
 
     public void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource) =>
         _win32Nv12Device.SetBorrowVideoSourceForWin32Nv12Gl(videoSource);
@@ -277,7 +318,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
         _gl.ClearColor(0f, 0f, 0f, 1f);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
 
-        var frame = _presentQueue.TryDequeue();
+        var frame = _presentQueue.TryDequeue(out var queuedAt);
 
         if (frame is not null)
         {
@@ -289,6 +330,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
                 _gl.Flush();
                 _hasUploadedOnce = true;
                 Interlocked.Increment(ref _renderedFrames);
+                RecordPresentLatency(queuedAt);
                 if (frame.HardwareBacking is not null)
                     Interlocked.Increment(ref _hardwareFrames);
             }

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace S.Media.Core.Video;
 
 /// <summary>
@@ -31,7 +33,7 @@ public sealed class PresentFrameQueue
     /// </summary>
     public const int DefaultCapacity = 2;
 
-    private readonly Queue<VideoFrame> _queue;
+    private readonly Queue<(VideoFrame Frame, long EnqueuedTimestamp)> _queue;
     private readonly object _gate = new();
     private long _droppedOldest;
 
@@ -39,7 +41,7 @@ public sealed class PresentFrameQueue
     {
         if (capacity < 1) throw new ArgumentOutOfRangeException(nameof(capacity));
         Capacity = capacity;
-        _queue = new Queue<VideoFrame>(capacity);
+        _queue = new Queue<(VideoFrame, long)>(capacity);
     }
 
     /// <summary>Maximum frames held before an enqueue evicts the head.</summary>
@@ -67,11 +69,12 @@ public sealed class PresentFrameQueue
     {
         ArgumentNullException.ThrowIfNull(frame);
         evicted = null;
+        var now = Stopwatch.GetTimestamp();
         lock (_gate)
         {
             if (_queue.Count >= Capacity)
-                evicted = _queue.Dequeue();
-            _queue.Enqueue(frame);
+                evicted = _queue.Dequeue().Frame;
+            _queue.Enqueue((frame, now));
         }
 
         if (evicted is null)
@@ -82,10 +85,27 @@ public sealed class PresentFrameQueue
     }
 
     /// <summary>Takes the oldest queued frame, or null when nothing is due. The caller disposes it.</summary>
-    public VideoFrame? TryDequeue()
+    public VideoFrame? TryDequeue() => TryDequeue(out _);
+
+    /// <summary>
+    /// Takes the oldest queued frame along with the <see cref="Stopwatch.GetTimestamp"/> reading from when
+    /// it was queued, so the presenter can measure how long the frame actually took to reach the device.
+    /// </summary>
+    /// <param name="enqueuedTimestamp">When the returned frame was queued; 0 when none was due.</param>
+    public VideoFrame? TryDequeue(out long enqueuedTimestamp)
     {
         lock (_gate)
-            return _queue.Count > 0 ? _queue.Dequeue() : null;
+        {
+            if (_queue.Count == 0)
+            {
+                enqueuedTimestamp = 0;
+                return null;
+            }
+
+            var (frame, queuedAt) = _queue.Dequeue();
+            enqueuedTimestamp = queuedAt;
+            return frame;
+        }
     }
 
     /// <summary>
@@ -98,7 +118,10 @@ public sealed class PresentFrameQueue
         {
             if (_queue.Count == 0)
                 return [];
-            var drained = _queue.ToArray();
+            var drained = new VideoFrame[_queue.Count];
+            var i = 0;
+            foreach (var (frame, _) in _queue)
+                drained[i++] = frame;
             _queue.Clear();
             return drained;
         }

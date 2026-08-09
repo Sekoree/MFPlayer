@@ -40,4 +40,18 @@ public interface IVideoOutputPresentDiagnostics
 
     /// <summary>Present-queue depth. Each slot is up to one device period of added latency.</summary>
     int PresentQueueDepth { get; }
+
+    /// <summary>
+    /// Smoothed wall-clock time from a frame being submitted to it actually reaching the device, or
+    /// <see cref="TimeSpan.Zero"/> before enough frames have gone through to measure one.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes video late against audio. Audio output already subtracts its device latency,
+    /// so the audible position IS "now"; video composited for "now" then spends this long in the queue
+    /// and the swap before anyone sees it, and lands that far behind. A host that wants them aligned has
+    /// to run the video pipeline this far AHEAD - which it cannot do without a number, and this is the
+    /// number. Measured rather than assumed: it depends on queue depth, refresh rate and how the platform
+    /// buffers, none of which are knowable up front.
+    /// </remarks>
+    TimeSpan PresentLatency { get; }
 }

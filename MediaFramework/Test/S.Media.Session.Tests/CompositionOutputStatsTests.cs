@@ -105,6 +105,58 @@ public class CompositionOutputStatsTests
         });
     }
 
+    [Fact]
+    public async Task ReportsTheWorstPresentLatencyAcrossOutputs_BecauseTheSlowestScreenIsTheOneThatLags()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        session.LoadDocument(OneComposition());
+
+        Assert.True(await session.AttachCompositionOutputAsync(
+            "screen", new DroppingDiagnosticOutput { PresentLatency = TimeSpan.FromMilliseconds(16) }));
+        Assert.True(await session.AttachCompositionOutputAsync(
+            "screen", new DroppingDiagnosticOutput { PresentLatency = TimeSpan.FromMilliseconds(40) }));
+
+        var stats = await session.GetCompositionStatsAsync("screen");
+
+        Assert.NotNull(stats);
+        Assert.Equal(TimeSpan.FromMilliseconds(40), stats!.Value.MeasuredPresentLatency);
+    }
+
+    [Fact]
+    public async Task ClampsAnAbsurdPresentLatency_SoOneBadOutputCannotDesyncTheCanvas()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        session.LoadDocument(OneComposition());
+
+        Assert.True(await session.AttachCompositionOutputAsync(
+            "screen", new DroppingDiagnosticOutput { PresentLatency = TimeSpan.FromSeconds(5) }));
+
+        var stats = await session.GetCompositionStatsAsync("screen");
+
+        Assert.NotNull(stats);
+        Assert.Equal(TimeSpan.FromMilliseconds(250), stats!.Value.MeasuredPresentLatency);
+    }
+
+    [Fact]
+    public async Task ASinkWithNoDeviceCadenceContributesNoLatency_SoNdiAndRecordersCannotPullTheCanvasEarly()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        session.LoadDocument(OneComposition());
+
+        // A discarding sink consumes as fast as it is fed; it has no vblank to wait for and does not
+        // implement the diagnostics interface at all. Compositing ahead for its benefit would put the
+        // actual screens out of step with the sound.
+        Assert.True(await session.AttachCompositionOutputAsync("screen", new DiscardingVideoOutput()));
+
+        var stats = await session.GetCompositionStatsAsync("screen");
+
+        Assert.NotNull(stats);
+        Assert.Equal(TimeSpan.Zero, stats!.Value.MeasuredPresentLatency);
+    }
+
     private sealed class DroppingDiagnosticOutput : IVideoOutput, IVideoOutputPresentDiagnostics
     {
         private VideoFormat _format;
@@ -114,6 +166,7 @@ public class CompositionOutputStatsTests
         public long RepeatedFrames { get; set; }
         public int QueuedFrames => 0;
         public int PresentQueueDepth => 2;
+        public TimeSpan PresentLatency { get; set; }
 
         public VideoFormat Format => _format;
         public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = [PixelFormat.Bgra32];
