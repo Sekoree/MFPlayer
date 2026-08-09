@@ -1,5 +1,6 @@
 using HaCue2.Core.Model;
 using HaCue2.Core.Media;
+using S.Media.Core.Video;
 using S.Media.Session;
 using S.Media.Source.Text;
 
@@ -665,14 +666,29 @@ public static class ShowCompiler
             .. (inherited ?? []).Where(parent => nearest.All(lane => lane.Kind != parent.Kind)),
         ];
 
-    private static ShowComposition Composition(CompositionDefinition composition) =>
-        new(
+    /// <summary>
+    /// The canvas rate as an exact ratio.
+    /// </summary>
+    /// <remarks>
+    /// The document can only store a <see cref="double"/>, and the naive <c>fps * 1000 / 1000</c> turned
+    /// 59.94 into 59940/1000 - about a part per million off 60000/1001, which is a frame an hour but also
+    /// the difference between exactly matching an NTSC-rate panel and slowly beating against it.
+    /// <see cref="Rational.FromFramesPerSecond"/> recovers the intended ratio.
+    /// </remarks>
+    private static ShowComposition Composition(CompositionDefinition composition)
+    {
+        var rate = Rational.FromFramesPerSecond(composition.FramesPerSecond);
+        if (rate.Numerator <= 0 || rate.Denominator <= 0)
+            rate = new Rational(60, 1);
+
+        return new ShowComposition(
             Id: composition.Id.ToString(),
             Name: composition.Name,
             Width: composition.Width,
             Height: composition.Height,
-            FrameRateNum: (int)Math.Round(composition.FramesPerSecond * 1000),
-            FrameRateDen: 1000);
+            FrameRateNum: rate.Numerator,
+            FrameRateDen: rate.Denominator);
+    }
 
     /// <summary>
     /// One audio endpoint per PATCHED line.

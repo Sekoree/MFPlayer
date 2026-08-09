@@ -380,4 +380,54 @@ public sealed class ShowCompilerTests
         Assert.Equal(children.Count, groups.Distinct(StringComparer.Ordinal).Count());
         Assert.All(groups, id => Assert.Contains(group.Id.ToString("N"), id!, StringComparison.Ordinal));
     }
+
+    [Theory]
+    [InlineData(59.94, 60000, 1001)]
+    [InlineData(29.97, 30000, 1001)]
+    [InlineData(23.976, 24000, 1001)]
+    public void AnNtscCanvasRateCompilesToItsExactRatio_NotTheRoundedDecimal(double fps, int num, int den)
+    {
+        // The document can only hold a double, and the old fps*1000/1000 conversion carried the rounding
+        // straight through: 59.94 became 59940/1000, which is not 60000/1001 and so never exactly matches
+        // an NTSC-rate panel — it beats against it instead.
+        var project = new HaCueProject
+        {
+            Compositions = [new CompositionDefinition { Name = "Screen", FramesPerSecond = fps }],
+        };
+
+        var composition = Assert.Single(ShowCompiler.Compile(project).Compositions);
+
+        Assert.Equal(num, composition.FrameRateNum);
+        Assert.Equal(den, composition.FrameRateDen);
+    }
+
+    [Fact]
+    public void AWholeCanvasRateStaysWhole()
+    {
+        var project = new HaCueProject
+        {
+            Compositions = [new CompositionDefinition { Name = "Screen", FramesPerSecond = 60 }],
+        };
+
+        var composition = Assert.Single(ShowCompiler.Compile(project).Compositions);
+
+        Assert.Equal(60, composition.FrameRateNum);
+        Assert.Equal(1, composition.FrameRateDen);
+    }
+
+    [Fact]
+    public void AnUnusableCanvasRateFallsBackRatherThanCompilingAZeroRate()
+    {
+        // Validation reports this separately; the compiler's job is to not emit a document whose canvas
+        // period would divide by zero.
+        var project = new HaCueProject
+        {
+            Compositions = [new CompositionDefinition { Name = "Screen", FramesPerSecond = 0 }],
+        };
+
+        var composition = Assert.Single(ShowCompiler.Compile(project).Compositions);
+
+        Assert.True(composition.FrameRateNum > 0);
+        Assert.True(composition.FrameRateDen > 0);
+    }
 }

@@ -28,7 +28,8 @@ namespace S.Media.Present.Avalonia;
 /// <c>eglGetProcAddress</c> from libEGL (same pattern as SDL's EGL resolve). GLX-only contexts leave dma-buf import disabled.
 /// </para>
 /// </remarks>
-public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideoOutputD3D11GlBorrowSetup
+public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideoOutputD3D11GlBorrowSetup,
+    IVideoOutputPresentDiagnostics
 {
     private static readonly VideoPixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
 
@@ -51,15 +52,23 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
     /// </summary>
     private volatile bool _rendererNeedsRebuild;
 
-    private VideoFrame? _pendingFrame;
-    private readonly object _frameLock = new();
+    /// <summary>
+    /// Frames waiting for a render tick. Depth rather than a single slot for the same reason the SDL
+    /// presenter needs it (see <see cref="PresentFrameQueue"/>): the producer's cadence and the
+    /// compositor's are independent, so a single slot lets their phase decide which frames survive and
+    /// discards the rest in bursts. Here the old slot did not even count what it threw away.
+    /// </summary>
+    private readonly PresentFrameQueue _presentQueue;
+    private long _repeated;
 
     public VideoOpenGlControl(
         GlVideoOutputHdrPreference hdrPreference = GlVideoOutputHdrPreference.FollowFrameHints,
         GlOutputBitDepth swapchainBitDepth = GlOutputBitDepth.Eight,
         nint borrowD3D11DeviceComPtrForNv12Gl = 0,
-        bool createFallbackD3D11InteropDeviceForWin32Nv12 = true)
+        bool createFallbackD3D11InteropDeviceForWin32Nv12 = true,
+        int presentQueueCapacity = PresentFrameQueue.DefaultCapacity)
     {
+        _presentQueue = new PresentFrameQueue(presentQueueCapacity);
         _hdrPreference = hdrPreference;
         _swapchainBitDepth = swapchainBitDepth;
         _win32Nv12Device = new Win32Nv12GlUploadDeviceResolver(borrowD3D11DeviceComPtrForNv12Gl,
@@ -115,13 +124,31 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
     /// frames are then imported zero-copy. (Windows uses the separate D3D11 shared-handle path.)</summary>
     public bool DmabufImportAvailable => _dmabufImportAvailable;
 
+    /// <summary>
+    /// Diagnostic: frames discarded because the queue was full when a newer one arrived - the producer is
+    /// outrunning the compositor. Previously these vanished without a trace.
+    /// </summary>
+    public long DroppedFrameCount => _presentQueue.DroppedOldest;
+
+    /// <summary>Diagnostic: render ticks that re-drew the previous frame because nothing new was queued.</summary>
+    public long RepeatedFrameCount => Volatile.Read(ref _repeated);
+
+    /// <summary>Diagnostic: frames currently waiting for a render tick.</summary>
+    public int QueuedFrameCount => _presentQueue.Count;
+
+    long IVideoOutputPresentDiagnostics.PresentedFrames => RenderedFrameCount;
+    long IVideoOutputPresentDiagnostics.DroppedFrames => DroppedFrameCount;
+    long IVideoOutputPresentDiagnostics.RepeatedFrames => RepeatedFrameCount;
+    int IVideoOutputPresentDiagnostics.QueuedFrames => QueuedFrameCount;
+    int IVideoOutputPresentDiagnostics.PresentQueueDepth => _presentQueue.Capacity;
+
     public void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource) =>
         _win32Nv12Device.SetBorrowVideoSourceForWin32Nv12Gl(videoSource);
 
     public void Configure(VideoFormat format)
     {
         ObjectDisposedException.ThrowIf(_sinkDisposed, this);
-        VideoFrame? droppedPending = null;
+        VideoFrame[] droppedPending = [];
         lock (_configureLock)
         {
             if (Array.IndexOf(AcceptedFormats, format.PixelFormat) < 0)
@@ -141,18 +168,15 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
                 // old format is dropped here to avoid the Submit format-mismatch guard rejecting it.
                 _rendererNeedsRebuild = true;
                 _hasUploadedOnce = false;
-                lock (_frameLock)
-                {
-                    droppedPending = _pendingFrame;
-                    _pendingFrame = null;
-                }
+                droppedPending = _presentQueue.DrainAll();
             }
 
             _format = format;
             _configured = true;
         }
 
-        droppedPending?.Dispose();
+        foreach (var stale in droppedPending)
+            stale.Dispose();
         if (_rendererNeedsRebuild)
             PostRequestNextFrame();
 
@@ -176,23 +200,20 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
             throw new ArgumentException($"frame format {frame.Format} does not match output format {_format}", nameof(frame));
         }
 
-        VideoFrame? prev;
-        lock (_frameLock)
+        _presentQueue.Enqueue(frame, out var evicted);
+        evicted?.Dispose();
+
+        // OnDetachedFromVisualTree sets _sinkDisposed and then drains. A Submit that passed the guard
+        // above can race that drain and park a frame with no future OnOpenGlRender to collect it, so
+        // re-check afterwards and clean up ourselves. DrainAll is atomic, so if detach already took the
+        // frames this returns empty rather than double-freeing them.
+        if (_sinkDisposed)
         {
-            // Re-check inside the lock: OnDetachedFromVisualTree sets _sinkDisposed
-            // and then drains _pendingFrame. Without this re-check a Submit that passed
-            // the line-above guard can race detach and end up parking the new frame in
-            // _pendingFrame with no future OnOpenGlRender callback to drain it (leak).
-            if (_sinkDisposed)
-            {
-                frame.Dispose();
-                throw new ObjectDisposedException(nameof(VideoOpenGlControl));
-            }
-            prev = _pendingFrame;
-            _pendingFrame = frame;
+            foreach (var stranded in _presentQueue.DrainAll())
+                stranded.Dispose();
+            throw new ObjectDisposedException(nameof(VideoOpenGlControl));
         }
 
-        prev?.Dispose();
         PostRequestNextFrame();
     }
 
@@ -256,12 +277,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
         _gl.ClearColor(0f, 0f, 0f, 1f);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
 
-        VideoFrame? frame;
-        lock (_frameLock)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-        }
+        var frame = _presentQueue.TryDequeue();
 
         if (frame is not null)
         {
@@ -284,6 +300,12 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
             {
                 frame.Dispose();
             }
+
+            // Avalonia renders on demand, so a queue with more in it needs another tick asked for or it
+            // would sit there until the next Submit happens to request one - which is how a burst of
+            // arrivals turns into a stall followed by a jump.
+            if (_presentQueue.Count > 0)
+                PostRequestNextFrame();
         }
         else if (_hasUploadedOnce)
         {
@@ -291,6 +313,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
             {
                 renderer.Render(w, h, ViewportFit);
                 _gl.Flush();
+                Interlocked.Increment(ref _repeated);
             }
             catch (Exception ex)
             {
@@ -302,14 +325,8 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         _sinkDisposed = true;
-        VideoFrame? leftover;
-        lock (_frameLock)
-        {
-            leftover = _pendingFrame;
-            _pendingFrame = null;
-        }
-
-        leftover?.Dispose();
+        foreach (var leftover in _presentQueue.DrainAll())
+            leftover.Dispose();
         _win32Nv12Device.SetBorrowVideoSourceForWin32Nv12Gl(null);
         _win32Nv12Device.Dispose();
         base.OnDetachedFromVisualTree(e);
