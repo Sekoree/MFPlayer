@@ -213,12 +213,14 @@ public sealed class ProjectVisualizers : IAsyncDisposable
     {
         var width = composition.Width > 0 ? composition.Width : 1920;
         var height = composition.Height > 0 ? composition.Height : 1080;
-        var fps = composition.FramesPerSecond > 0 ? composition.FramesPerSecond : 60;
+        var frameRate = composition.ExactFrameRate;
+        if (frameRate.Numerator <= 0 || frameRate.Denominator <= 0)
+            frameRate = new Rational(60, 1);
 
         return new ProjectMVisualSource(
             width,
             height,
-            new Rational((int)Math.Round(fps * 1000), 1000),
+            frameRate,
             new ProjectMOptions
             {
                 // A blank pack means the repository's deployed, pinned Milkdrop bundle — not the
@@ -228,7 +230,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                     : DefaultPresetPack.Value,
                 RenderWidth = width,
                 RenderHeight = height,
-                Fps = (int)Math.Round(fps),
+                Fps = Math.Max(1, (int)Math.Round(frameRate.ToDouble())),
                 // A locked preset is one that never advances. projectM has no lock of its own, so it is
                 // expressed as a hold longer than any show — which is also honest about what it is.
                 PresetDurationSeconds = cue.LockPreset

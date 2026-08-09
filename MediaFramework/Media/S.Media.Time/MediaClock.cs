@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
+using S.Media.Core.Video;
 
 namespace S.Media.Time;
 
@@ -18,8 +19,9 @@ namespace S.Media.Time;
 /// <see cref="PositionChanged"/>) are driven by an internal wall-clock thread
 /// regardless of master attachment - they're "render at this cadence" signals,
 /// not "media time advanced by X." When a tick handler runs long or the thread
-/// wakes late, the driver <strong>bursts</strong> missed deadlines (capped) and
-/// then fast-forwards the schedule so a long stall does not freeze the process.
+/// wakes late, the default driver <strong>bursts</strong> missed deadlines (capped) and then fast-forwards
+/// the schedule so a long stall does not freeze the process. The rational-rate constructor can instead
+/// coalesce missed video deadlines, which is the appropriate policy for a rendered composition.
 /// </para>
 /// <para>
 /// <see cref="PositionChanged"/> is usually raised from the driver thread at
@@ -59,7 +61,11 @@ public sealed class MediaClock : IMediaClock, IDisposable
     private readonly Lock _gate = new();
     private readonly TimeSpan _audioTickInterval;
     private readonly TimeSpan _videoTickInterval;
+    private readonly RationalFrameGrid? _videoFrameGrid;
+    private readonly VideoTickCatchUpPolicy _videoTickCatchUpPolicy;
     private readonly ILogger? _log;
+    private long _lastVideoTickIndex;
+    private long _skippedVideoTicks;
 
     private TimeSpan _basePosition;
     private IPlaybackClock? _master;
@@ -116,12 +122,41 @@ public sealed class MediaClock : IMediaClock, IDisposable
             throw new ArgumentOutOfRangeException(nameof(videoTickInterval));
         _audioTickInterval = audioTickInterval;
         _videoTickInterval = videoTickInterval;
+        _videoTickCatchUpPolicy = VideoTickCatchUpPolicy.Burst;
+        _log = logger;
+    }
+
+    /// <summary>
+    /// Creates a clock whose video deadlines lie on an exact rational frame grid. Unlike a rounded
+    /// <see cref="TimeSpan"/> interval, absolute-index deadlines do not accumulate timing error.
+    /// </summary>
+    public MediaClock(
+        TimeSpan audioTickInterval,
+        Rational videoFrameRate,
+        VideoTickCatchUpPolicy videoTickCatchUpPolicy = VideoTickCatchUpPolicy.Coalesce,
+        ILogger? logger = null)
+    {
+        if (audioTickInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(audioTickInterval));
+        if (videoFrameRate.Numerator <= 0 || videoFrameRate.Denominator <= 0)
+            throw new ArgumentOutOfRangeException(nameof(videoFrameRate));
+
+        _audioTickInterval = audioTickInterval;
+        _videoFrameGrid = new RationalFrameGrid(videoFrameRate);
+        _videoTickInterval = _videoFrameGrid.Value.ApproximatePeriod;
+        _videoTickCatchUpPolicy = videoTickCatchUpPolicy;
         _log = logger;
     }
 
     public event EventHandler<TimeSpan>? PositionChanged;
     public event EventHandler? AudioTick;
     public event EventHandler? VideoTick;
+
+    /// <summary>Absolute frame-grid index associated with the most recently raised video tick.</summary>
+    public long LastVideoTickIndex => Interlocked.Read(ref _lastVideoTickIndex);
+
+    /// <summary>Video deadlines coalesced because the driver woke or completed a handler late.</summary>
+    public long SkippedVideoTicks => Interlocked.Read(ref _skippedVideoTicks);
 
     public TimeSpan CurrentPosition
     {
@@ -438,7 +473,8 @@ public sealed class MediaClock : IMediaClock, IDisposable
     {
         var sessionStart  = Stopwatch.GetTimestamp();
         var nextAudio     = _audioTickInterval;
-        var nextVideo     = _videoTickInterval;
+        var nextVideoIndex = 1L;
+        var nextVideo     = VideoDeadlineAt(nextVideoIndex);
         var nextPosition  = PositionChangedInterval;
 
         var waitHandle = token.WaitHandle;
@@ -483,16 +519,36 @@ public sealed class MediaClock : IMediaClock, IDisposable
 
             if (elapsed >= nextVideo)
             {
-                var videoBurst = 0;
-                while (elapsed >= nextVideo && videoBurst++ < 64)
+                if (_videoTickCatchUpPolicy == VideoTickCatchUpPolicy.Coalesce
+                    && _videoFrameGrid is { } grid)
                 {
+                    var dueIndex = Math.Max(nextVideoIndex, grid.FrameAtOrBefore(elapsed));
+                    var skipped = dueIndex - nextVideoIndex;
+                    if (skipped > 0)
+                        Interlocked.Add(ref _skippedVideoTicks, skipped);
+                    Interlocked.Exchange(ref _lastVideoTickIndex, dueIndex);
                     SafeInvoke(VideoTick);
-                    nextVideo += _videoTickInterval;
+                    nextVideoIndex = dueIndex + 1;
+                    nextVideo = grid.DeadlineAt(nextVideoIndex);
                     elapsed = Stopwatch.GetElapsedTime(sessionStart);
                 }
+                else
+                {
+                    var videoBurst = 0;
+                    while (elapsed >= nextVideo && videoBurst++ < 64)
+                    {
+                        Interlocked.Exchange(ref _lastVideoTickIndex, nextVideoIndex++);
+                        SafeInvoke(VideoTick);
+                        nextVideo = VideoDeadlineAt(nextVideoIndex);
+                        elapsed = Stopwatch.GetElapsedTime(sessionStart);
+                    }
 
-                while (nextVideo <= elapsed)
-                    nextVideo += _videoTickInterval;
+                    while (nextVideo <= elapsed)
+                    {
+                        nextVideoIndex++;
+                        nextVideo = VideoDeadlineAt(nextVideoIndex);
+                    }
+                }
             }
 
             if (elapsed >= nextPosition)
@@ -510,6 +566,10 @@ public sealed class MediaClock : IMediaClock, IDisposable
             }
         }
     }
+
+    private TimeSpan VideoDeadlineAt(long frameIndex) => _videoFrameGrid is { } grid
+        ? grid.DeadlineAt(frameIndex)
+        : TimeSpan.FromTicks(checked(_videoTickInterval.Ticks * frameIndex));
 
     private void SafeInvoke(EventHandler? handler)
     {

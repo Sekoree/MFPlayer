@@ -5,7 +5,7 @@ namespace S.Media.Core.Video;
 /// and drops every frame in <see cref="Submit"/> by disposing it. Used as a hidden primary on <see cref="S.Media.Core.Video.VideoRouter"/>
 /// so playback can run before any real video output is attached.
 /// </summary>
-public sealed class DiscardingVideoOutput : IVideoOutput
+public sealed class DiscardingVideoOutput : INonBlockingVideoOutput
 {
     private VideoFormat _format;
 

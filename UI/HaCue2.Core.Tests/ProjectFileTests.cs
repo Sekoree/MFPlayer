@@ -1,12 +1,40 @@
 using System.Text.Json;
 using HaCue2.Core.Model;
 using HaCue2.Core.Serialization;
+using S.Media.Core.Video;
 using Xunit;
 
 namespace HaCue2.Core.Tests;
 
 public sealed class ProjectFileTests
 {
+    [Fact]
+    public void ExactCompositionRateRoundTripsAlongsideItsDisplayDecimal()
+    {
+        var composition = new CompositionDefinition { Name = "Broadcast" };
+        composition.SetFrameRate(new Rational(60_000, 1_001));
+        var project = new HaCueProject { Compositions = [composition] };
+
+        var json = HaCueProjectFile.Serialize(project);
+        var restored = Assert.Single(HaCueProjectFile.Deserialize(json).Compositions);
+
+        Assert.DoesNotContain("exactFrameRate", json);
+        Assert.Equal(60_000, restored.ExactFrameRate.Numerator);
+        Assert.Equal(1_001, restored.ExactFrameRate.Denominator);
+        Assert.Equal(60_000d / 1_001d, restored.FramesPerSecond, 9);
+    }
+
+    [Fact]
+    public void ExplicitUncommonRatioIsNotReapproximatedThroughTheDisplayDecimal()
+    {
+        var composition = new CompositionDefinition();
+
+        composition.SetFrameRate(new Rational(12_345, 678));
+
+        Assert.Equal(new Rational(4_115, 226), composition.ExactFrameRate);
+        Assert.Equal(4_115d / 226d, composition.FramesPerSecond, 12);
+    }
+
     [Fact]
     public void RepairsTheKnownFirstPanelDestinationWritebackFromSplitProjects()
     {

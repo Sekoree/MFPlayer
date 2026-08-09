@@ -28,7 +28,7 @@ namespace S.Media.Present.Avalonia;
 /// <c>eglGetProcAddress</c> from libEGL (same pattern as SDL's EGL resolve). GLX-only contexts leave dma-buf import disabled.
 /// </para>
 /// </remarks>
-public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideoOutputD3D11GlBorrowSetup,
+public sealed class VideoOpenGlControl : OpenGlControlBase, INonBlockingVideoOutput, IVideoOutputD3D11GlBorrowSetup,
     IVideoOutputPresentDiagnostics
 {
     private static readonly VideoPixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
@@ -125,7 +125,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
     private long _hardwareFrames;
     private volatile bool _dmabufImportAvailable;
 
-    /// <summary>Diagnostic: frames uploaded + rendered on the GL thread - i.e. actually presented on screen.</summary>
+    /// <summary>Diagnostic: frames uploaded and rendered into Avalonia's GL framebuffer.</summary>
     public long RenderedFrameCount => Volatile.Read(ref _renderedFrames);
 
     /// <summary>Diagnostic: of <see cref="RenderedFrameCount"/>, how many carried a hardware (dma-buf / Win32
@@ -137,8 +137,8 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
     public bool DmabufImportAvailable => _dmabufImportAvailable;
 
     /// <summary>
-    /// Diagnostic: frames discarded because the queue was full when a newer one arrived - the producer is
-    /// outrunning the compositor. Previously these vanished without a trace.
+    /// Diagnostic: frames superseded by a newer frame at a render opportunity or evicted because the
+    /// queue was full. Previously these vanished without a trace.
     /// </summary>
     public long DroppedFrameCount => _presentQueue.DroppedOldest;
 
@@ -318,7 +318,9 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
         _gl.ClearColor(0f, 0f, 0f, 1f);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
 
-        var frame = _presentQueue.TryDequeue(out var queuedAt);
+        var frame = _presentQueue.TryDequeueLatest(out var queuedAt, out var superseded);
+        foreach (var stale in superseded)
+            stale.Dispose();
 
         if (frame is not null)
         {

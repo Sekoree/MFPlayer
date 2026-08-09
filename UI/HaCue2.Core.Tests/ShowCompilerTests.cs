@@ -1,5 +1,6 @@
 using HaCue2.Core.Compile;
 using HaCue2.Core.Model;
+using S.Media.Core.Video;
 using S.Media.Session;
 using Xunit;
 
@@ -413,6 +414,19 @@ public sealed class ShowCompilerTests
 
         Assert.Equal(60, composition.FrameRateNum);
         Assert.Equal(1, composition.FrameRateDen);
+    }
+
+    [Fact]
+    public void AnExplicitProjectRatioWinsOverItsDisplayDecimal()
+    {
+        var authored = new CompositionDefinition { Name = "Screen" };
+        authored.SetFrameRate(new Rational(48_000, 1_001));
+        var project = new HaCueProject { Compositions = [authored] };
+
+        var composition = Assert.Single(ShowCompiler.Compile(project).Compositions);
+
+        Assert.Equal(48_000, composition.FrameRateNum);
+        Assert.Equal(1_001, composition.FrameRateDen);
     }
 
     [Fact]

@@ -22,7 +22,9 @@ public sealed class ContinuousEncodeCarrier : IDisposable
     private readonly VideoFormat _format;
     private readonly bool _hasVideo;
     private readonly int _audioSampleRate;
-    private readonly int _rate;
+    private readonly int _rateNumerator;
+    private readonly int _rateDenominator;
+    private readonly double _framesPerSecond;
     private readonly long _videoIdleGraceTicks;
     private readonly long _audioIdleGraceTicks;
     private readonly Lock _handoffGate = new();
@@ -47,25 +49,37 @@ public sealed class ContinuousEncodeCarrier : IDisposable
     /// <param name="height">Locked output height; required when the session contains video.</param>
     /// <param name="fps">Locked output cadence; required when the session contains video.</param>
     public ContinuousEncodeCarrier(FFmpegEncodeSession session, int width, int height, int fps)
+        : this(session, width, height, new Rational(fps, 1))
+    {
+    }
+
+    /// <param name="frameRate">Exact locked output cadence; required when the session contains video.</param>
+    public ContinuousEncodeCarrier(FFmpegEncodeSession session, int width, int height, Rational frameRate)
     {
         ArgumentNullException.ThrowIfNull(session);
         _encodeVideoSink = session.VideoSink;
         _encodeAudioSinks = session.AudioSinks;
         _hasVideo = _encodeVideoSink is not null;
-        if (_hasVideo && (width <= 0 || height <= 0 || fps <= 0))
+        var exactRate = frameRate.Numerator > 0 && frameRate.Denominator > 0
+            ? Rational.Reduce(frameRate.Numerator, frameRate.Denominator)
+            : new Rational(30, 1);
+        if (_hasVideo && (width <= 0 || height <= 0
+                          || frameRate.Numerator <= 0 || frameRate.Denominator <= 0))
             throw new ArgumentException(
                 "A continuous video carrier requires an explicit output width, height, and frame rate.");
 
         var w = Math.Max(2, width & ~1);
         var h = Math.Max(2, height & ~1);
         // The carrier clock also paces audio-only silence, so retain a modest cadence without video.
-        _rate = fps > 0 ? fps : 30;
-        _format = new VideoFormat(w, h, PixelFormat.Bgra32, new Rational(_rate, 1));
+        _rateNumerator = exactRate.Numerator;
+        _rateDenominator = exactRate.Denominator;
+        _framesPerSecond = exactRate.ToDouble();
+        _format = new VideoFormat(w, h, PixelFormat.Bgra32, exactRate);
         _audioSampleRate = _encodeAudioSinks.Count > 0 ? _encodeAudioSinks[0].Format.SampleRate : 0;
         _videoIdleGraceTicks = (long)Math.Ceiling(
-            Stopwatch.Frequency * Math.Max(0.25, 3.0 / _rate));
+            Stopwatch.Frequency * Math.Max(0.25, 3.0 / _framesPerSecond));
         _audioIdleGraceTicks = (long)Math.Ceiling(
-            Stopwatch.Frequency * Math.Max(0.1, 3.0 / _rate));
+            Stopwatch.Frequency * Math.Max(0.1, 3.0 / _framesPerSecond));
 
         // Opaque black BGRA (B=G=R=0, A=255), shared read-only by all generated frames.
         _blackPlane = _hasVideo ? new byte[w * 4 * h] : [];
@@ -85,7 +99,7 @@ public sealed class ContinuousEncodeCarrier : IDisposable
         {
             var leg = _encodeAudioSinks[i];
             _silenceByLeg[i] = new float[
-                Math.Max(1, (int)Math.Ceiling(_audioSampleRate / (double)_rate)) * leg.Format.Channels];
+                Math.Max(1, (int)Math.Ceiling(_audioSampleRate / _framesPerSecond)) * leg.Format.Channels];
             playbackAudio[i] = new ActivityAudioOutput(this, leg, i, combined: false);
         }
 
@@ -150,8 +164,8 @@ public sealed class ContinuousEncodeCarrier : IDisposable
     private void Run()
     {
         var token = _cts.Token;
-        var intervalStopwatchTicks = Stopwatch.Frequency / (double)_rate;
         var nextDeadline = Stopwatch.GetTimestamp();
+        long deadlineRemainder = 0;
         long audioRemainder = 0;
         while (!token.IsCancellationRequested)
         {
@@ -174,9 +188,9 @@ public sealed class ContinuousEncodeCarrier : IDisposable
                             new VideoFrame(TimeSpan.Zero, _format, [_blackPlane], [_format.Width * 4]));
                     }
 
-                    audioRemainder += _audioSampleRate;
-                    var audioFrames = _rate > 0 ? (int)(audioRemainder / _rate) : 0;
-                    audioRemainder -= (long)audioFrames * _rate;
+                    audioRemainder += (long)_audioSampleRate * _rateDenominator;
+                    var audioFrames = (int)(audioRemainder / _rateNumerator);
+                    audioRemainder -= (long)audioFrames * _rateNumerator;
                     for (var leg = 0; leg < _encodeAudioSinks.Count; leg++)
                     {
                         if (audioFrames > 0)
@@ -208,10 +222,13 @@ public sealed class ContinuousEncodeCarrier : IDisposable
 
             // Absolute pacing without catch-up bursts: preserve phase while on time, but after a stall
             // rebase one interval ahead rather than emitting an unbounded tight burst.
-            nextDeadline += (long)Math.Round(intervalStopwatchTicks);
+            var deadlineNumerator = (Int128)Stopwatch.Frequency * _rateDenominator + deadlineRemainder;
+            var deadlineStep = (long)(deadlineNumerator / _rateNumerator);
+            deadlineRemainder = (long)(deadlineNumerator % _rateNumerator);
+            nextDeadline += Math.Max(1, deadlineStep);
             var now = Stopwatch.GetTimestamp();
             if (nextDeadline <= now)
-                nextDeadline = now + (long)Math.Round(intervalStopwatchTicks);
+                nextDeadline = now + Math.Max(1, deadlineStep);
             var delay = TimeSpan.FromSeconds((nextDeadline - now) / (double)Stopwatch.Frequency);
             if (token.WaitHandle.WaitOne(delay))
                 break;

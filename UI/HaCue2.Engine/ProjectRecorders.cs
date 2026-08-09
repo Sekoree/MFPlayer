@@ -1,4 +1,5 @@
 using HaCue2.Core.Model;
+using S.Media.Core.Video;
 using S.Media.Encode.FFmpeg;
 
 namespace HaCue2.Engine;
@@ -245,12 +246,14 @@ public sealed class ProjectRecorders : IAsyncDisposable
         // is the fallback for arming before the first frame. Getting this wrong scales every frame.
         var width = negotiated?.Width ?? composition?.Width ?? 0;
         var height = negotiated?.Height ?? composition?.Height ?? 0;
-        var fps = (int)Math.Round(composition?.FramesPerSecond ?? 0);
+        var frameRate = composition?.ExactFrameRate ?? Rational.Zero;
 
         var channels = line?.Channels ?? 0;
         var rate = _project.AudioPatch.MixSampleRate;
 
-        if (continuous && video is not null && (width <= 0 || height <= 0 || fps <= 0))
+        if (continuous && video is not null
+            && (width <= 0 || height <= 0
+                || frameRate.Numerator <= 0 || frameRate.Denominator <= 0))
             return "a continuous recording needs the composition's size and frame rate";
 
         FFmpegEncodeSession session;
@@ -258,7 +261,9 @@ public sealed class ProjectRecorders : IAsyncDisposable
         try
         {
             session = FFmpegEncodeSession.Create(
-                RecordFormats.Options(format, channels, rate, width, height, fps), encodeTarget, rate);
+                // Follow RecordVideoOutput's negotiated VideoFormat so fractional/exact canvas rates
+                // reach the encoder unchanged; the integer Fps override would retune 60000/1001 to 60.
+                RecordFormats.Options(format, channels, rate, width, height, fps: 0), encodeTarget, rate);
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
@@ -273,8 +278,11 @@ public sealed class ProjectRecorders : IAsyncDisposable
         {
             try
             {
-                carrier = new ContinuousEncodeCarrier(session, video is null ? 0 : width, video is null ? 0 : height,
-                    video is null ? 0 : fps);
+                carrier = new ContinuousEncodeCarrier(
+                    session,
+                    video is null ? 0 : width,
+                    video is null ? 0 : height,
+                    video is null ? Rational.Zero : frameRate);
                 carrier.Start();
             }
             catch (Exception failure) when (failure is not OutOfMemoryException)

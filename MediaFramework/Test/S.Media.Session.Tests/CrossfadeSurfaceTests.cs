@@ -25,7 +25,8 @@ namespace S.Media.Session.Tests;
 public sealed class CrossfadeSurfaceTests
 {
     /// <summary>One surface render observation: which surface, the instant it renders at, and the
-    /// composite's own master time (they differ only for a detached tail).</summary>
+    /// composite's own output/master time. These are separate coordinates: an ordinary trimmed surface
+    /// renders in source time, and a detached tail additionally uses its own clip's source clock.</summary>
     private readonly record struct SurfaceSample(
         IVideoCompositorLayerSurface Surface, TimeSpan RenderTime, TimeSpan MasterTime);
 
@@ -168,8 +169,8 @@ public sealed class CrossfadeSurfaceTests
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
         var tail = await provider.WaitForSurfaceAsync("surf://c1", TimeSpan.FromSeconds(20));
 
-        // While c1 IS the active clip its surface renders at the composition's master time, which is its
-        // own trimmed-in position (~40 s). This also proves the clock reflects StartOffset at all.
+        // While c1 is active its content renders in source time at its trimmed-in position (~40 s),
+        // independently from the composition's canonical output/master timestamp.
         await WaitForSampleAsync(
             samples,
             s => ReferenceEquals(s.Surface, tail) && s.RenderTime >= TimeSpan.FromSeconds(40),
@@ -181,16 +182,17 @@ public sealed class CrossfadeSurfaceTests
             await session.FireCueAsync("c2", TimeSpan.FromSeconds(30), FadeCurve.EqualPower));
         var incoming = await provider.WaitForSurfaceAsync("surf://c2", TimeSpan.FromSeconds(20));
 
-        // The composition's master time has moved to the INCOMING clip (near 0) - the whole reason the
-        // tail cannot keep using it.
+        // The incoming surface renders in its own source coordinate near zero. Its composite timestamp
+        // is an independent grid-aligned output coordinate and need not be tick-identical.
         var incomingSample = await WaitForSampleAsync(
             samples,
             s => ReferenceEquals(s.Surface, incoming),
             TimeSpan.FromSeconds(20),
             "the incoming clip's surface to composite");
-        Assert.Equal(incomingSample.MasterTime, incomingSample.RenderTime); // a normal surface: master time
+        Assert.True(incomingSample.RenderTime < TimeSpan.FromSeconds(10),
+            $"the incoming surface should render near its source start, was at {incomingSample.RenderTime}");
         Assert.True(incomingSample.MasterTime < TimeSpan.FromSeconds(10),
-            $"the incoming clip should be near its start, was at {incomingSample.MasterTime}");
+            $"the output master should be near the cue start, was at {incomingSample.MasterTime}");
 
         // The tail: still on ITS clip's coordinate, ~40 s away from the master time it is composited with,
         // and still ADVANCING (a per-surface clock that is merely frozen would be no better than the bug).
@@ -215,10 +217,10 @@ public sealed class CrossfadeSurfaceTests
     }
 
     [Fact]
-    public async Task WithoutACrossfade_TheSurfaceAlwaysRendersAtTheCompositionMasterTime()
+    public async Task WithoutACrossfade_TheSurfaceFollowsTheNewClipsSourceCoordinate()
     {
-        // The non-crossfade path must be untouched: no clip ever detaches, so every surface renders at
-        // exactly the instant the composite is stamped with, as before this seam existed.
+        // No clip detaches in this path, but source-render time and output timestamp are still distinct.
+        // A butt splice must move the surface from c1's 40-second trim to c2's source origin.
         var samples = new ConcurrentQueue<SurfaceSample>();
         var provider = new SurfaceCapableProvider(frameCount: 90_000);
         await using var session = new ShowSession(
@@ -229,27 +231,21 @@ public sealed class CrossfadeSurfaceTests
         Assert.True(await session.AttachCompositionOutputAsync("screen", new DiscardingVideoOutput()));
 
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
-        await provider.WaitForSurfaceAsync("surf://c1", TimeSpan.FromSeconds(20));
+        var firstSurface = await provider.WaitForSurfaceAsync("surf://c1", TimeSpan.FromSeconds(20));
         await WaitForSampleAsync(
             samples, s => s.RenderTime > TimeSpan.Zero, TimeSpan.FromSeconds(20), "the first surface composite");
 
-        // Butt splice (no crossfade window): c1 is released before c2 commits, and c2's surface composites
-        // on the master time like any ordinary clip.
+        // Butt splice (no crossfade window): c1 is released before c2 commits.
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c2", crossfade: null));
-        await provider.WaitForSurfaceAsync("surf://c2", TimeSpan.FromSeconds(20));
+        var secondSurface = await provider.WaitForSurfaceAsync("surf://c2", TimeSpan.FromSeconds(20));
+        Assert.NotSame(firstSurface, secondSurface);
 
-        var seen = 0;
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-        while (seen < 20)
-        {
-            while (samples.TryDequeue(out var sample))
-            {
-                Assert.Equal(sample.MasterTime, sample.RenderTime);
-                seen++;
-            }
-
-            Assert.True(DateTime.UtcNow < deadline, $"only observed {seen} surface composites");
-            await Task.Delay(25);
-        }
+        var second = await WaitForSampleAsync(
+            samples,
+            s => ReferenceEquals(s.Surface, secondSurface),
+            TimeSpan.FromSeconds(20),
+            "the replacement surface to composite");
+        Assert.InRange(second.RenderTime, TimeSpan.Zero, TimeSpan.FromSeconds(10));
+        Assert.InRange(second.MasterTime, TimeSpan.Zero, TimeSpan.FromSeconds(10));
     }
 }

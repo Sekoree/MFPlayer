@@ -146,7 +146,8 @@ public class OutputPresentationTests
             ClockMastered: true,
             LayerCount: layers,
             CanvasPeriod: TimeSpan.FromSeconds(1d / 30),
-            CompositorBackend: backend);
+            CompositorBackend: backend,
+            MissedCompositionDeadlines: behind);
 
     [Fact]
     public void ACompositionNobodyHasTimedYetShowsADashRatherThanZero()

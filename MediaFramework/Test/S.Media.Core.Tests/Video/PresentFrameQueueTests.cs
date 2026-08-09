@@ -198,6 +198,28 @@ public sealed class PresentFrameQueueTests
     }
 
     [Fact]
+    public void Latest_dequeue_discards_stale_heads_instead_of_presenting_queue_latency()
+    {
+        var queue = new PresentFrameQueue(capacity: 3);
+        queue.Enqueue(Frame(1), out _);
+        queue.Enqueue(Frame(2), out _);
+        queue.Enqueue(Frame(3), out _);
+
+        var newest = queue.TryDequeueLatest(out var queuedAt, out var superseded);
+
+        Assert.NotNull(newest);
+        Assert.Equal(TimeSpan.FromSeconds(3), newest.PresentationTime);
+        Assert.True(queuedAt > 0);
+        Assert.Equal([TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)],
+            superseded.Select(frame => frame.PresentationTime));
+        Assert.Equal(2, queue.DroppedOldest);
+        Assert.Equal(0, queue.Count);
+        newest.Dispose();
+        foreach (var stale in superseded)
+            stale.Dispose();
+    }
+
+    [Fact]
     public void Enqueue_rejects_null()
     {
         var queue = new PresentFrameQueue();

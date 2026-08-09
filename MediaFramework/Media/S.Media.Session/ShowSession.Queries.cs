@@ -131,6 +131,9 @@ public sealed partial class ShowSession
                 {
                     if (view.Player is { HasVideo: true } player)
                         player.Video.PlayheadOffset = value;
+                    foreach (var voice in view.Group.Voices)
+                        foreach (var placed in voice.Layers)
+                            placed.Slot.TimeSelectionOffset = -value;
                 }
                 catch
                 {

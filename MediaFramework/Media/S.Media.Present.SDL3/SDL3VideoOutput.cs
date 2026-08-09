@@ -32,7 +32,7 @@ namespace S.Media.Present.SDL3;
 /// fires and the host decides when to <see cref="Dispose"/>.
 /// </para>
 /// </remarks>
-public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
+public sealed unsafe class SDL3VideoOutput : INonBlockingVideoOutput, IDisposable
 {
     private static readonly PixelFormat[] AcceptedFormats =
     [

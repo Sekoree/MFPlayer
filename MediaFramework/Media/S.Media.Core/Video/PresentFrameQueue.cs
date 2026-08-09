@@ -4,20 +4,20 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// The small bounded hand-off between a producer running on a media/wall cadence and a display output
-/// presenting on its panel's vblank. Oldest-first, drop-oldest when full.
+/// presenting on its panel's vblank. It supports FIFO reads for compatibility and newest-frame reads
+/// for minimum-latency presenters; capacity pressure always evicts the oldest frame.
 /// </summary>
 /// <remarks>
 /// <para>
 /// A producer's rate and a panel's refresh are never exactly equal - 60.000 authored against a 59.94 Hz
 /// panel, say - so over any long run one side must lose or repeat a frame. That part is unavoidable.
-/// What a queue changes is <em>when</em>: with a single slot the arrival phase decides whether a frame
-/// survives, and since that phase drifts through the beat period the losses arrive in clusters. With a
-/// couple of slots of headroom the phase is absorbed and only the genuine rate difference is left, which
-/// surfaces as one evenly-spaced drop (producer faster) or repeat (producer slower) per beat period.
+/// The low-latency presentation path takes the newest queued frame at each device opportunity. This
+/// prevents a short stall or cadence crossing from becoming a FIFO backlog; any superseded older frame
+/// is reported as a cadence drop at this output only.
 /// </para>
 /// <para>
-/// Drop-oldest rather than drop-newest: the queue is drained oldest-first, so a full queue means the head
-/// is the staleest thing in it and the newest arrival is the one worth keeping.
+/// Drop-oldest rather than drop-newest: a full queue means the head is the stalest thing in it and the
+/// newest arrival is the one worth keeping. The newest-frame dequeue makes the same choice explicitly.
 /// </para>
 /// <para>
 /// Thread-safe for one producer and one consumer (the usual submit-thread / render-thread pair); the
@@ -27,9 +27,8 @@ namespace S.Media.Core.Video;
 public sealed class PresentFrameQueue
 {
     /// <summary>
-    /// Two slots absorb the producer/panel phase drift while adding at most one refresh period of
-    /// latency (~17 ms at 60 Hz). One slot is the degenerate case: no headroom, so drops cluster
-    /// wherever the two cadences cross.
+    /// Two slots provide a small hand-off margin across producer/presenter scheduling without allowing
+    /// a deep display backlog. The low-latency consumer still takes the newest frame.
     /// </summary>
     public const int DefaultCapacity = 2;
 
@@ -54,8 +53,8 @@ public sealed class PresentFrameQueue
     }
 
     /// <summary>
-    /// Frames evicted because the queue was full - i.e. the producer is outrunning the display. Expect a
-    /// slow, steady count; a fast or bursty one means something upstream is overproducing.
+    /// Frames evicted because the queue was full or superseded by a newer frame at a presentation
+    /// opportunity. A slow, steady count is normal cadence conversion; a burst indicates a stall.
     /// </summary>
     public long DroppedOldest => Interlocked.Read(ref _droppedOldest);
 
@@ -104,6 +103,37 @@ public sealed class PresentFrameQueue
 
             var (frame, queuedAt) = _queue.Dequeue();
             enqueuedTimestamp = queuedAt;
+            return frame;
+        }
+    }
+
+    /// <summary>
+    /// Takes the newest queued frame and returns every older queued frame for disposal. A presenter can
+    /// display only one frame at a device opportunity; showing an older FIFO head first would turn a normal
+    /// cadence crossing or short stall into avoidable queue latency.
+    /// </summary>
+    /// <param name="enqueuedTimestamp">Enqueue timestamp of the returned newest frame.</param>
+    /// <param name="superseded">Older frames that can no longer be useful, oldest first.</param>
+    public VideoFrame? TryDequeueLatest(out long enqueuedTimestamp, out VideoFrame[] superseded)
+    {
+        lock (_gate)
+        {
+            if (_queue.Count == 0)
+            {
+                enqueuedTimestamp = 0;
+                superseded = [];
+                return null;
+            }
+
+            var staleCount = _queue.Count - 1;
+            superseded = staleCount == 0 ? [] : new VideoFrame[staleCount];
+            for (var i = 0; i < staleCount; i++)
+                superseded[i] = _queue.Dequeue().Frame;
+
+            var (frame, queuedAt) = _queue.Dequeue();
+            enqueuedTimestamp = queuedAt;
+            if (staleCount > 0)
+                Interlocked.Add(ref _droppedOldest, staleCount);
             return frame;
         }
     }

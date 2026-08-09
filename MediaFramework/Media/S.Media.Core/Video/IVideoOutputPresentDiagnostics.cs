@@ -22,9 +22,9 @@ public interface IVideoOutputPresentDiagnostics
     long PresentedFrames { get; }
 
     /// <summary>
-    /// Frames discarded because a newer one arrived while the present queue was full - the producer is
-    /// outrunning the device. A slow, steady count is the expected cost of two unequal rates; a fast or
-    /// bursty one means something upstream is overproducing.
+    /// Frames discarded because a newer one was available at the same presentation opportunity or the
+    /// present queue was full. A slow, steady count is the expected cost of two unequal rates; a fast or
+    /// bursty one indicates a stall or upstream overproduction.
     /// </summary>
     long DroppedFrames { get; }
 
@@ -38,20 +38,18 @@ public interface IVideoOutputPresentDiagnostics
     /// <summary>Frames currently waiting for a device cadence.</summary>
     int QueuedFrames { get; }
 
-    /// <summary>Present-queue depth. Each slot is up to one device period of added latency.</summary>
+    /// <summary>Maximum present hand-off capacity. Low-latency presenters may take only the newest slot.</summary>
     int PresentQueueDepth { get; }
 
     /// <summary>
-    /// Smoothed wall-clock time from a frame being submitted to it actually reaching the device, or
+    /// Smoothed wall-clock time from a frame being submitted to the presenter's last observable software
+    /// boundary, or
     /// <see cref="TimeSpan.Zero"/> before enough frames have gone through to measure one.
     /// </summary>
     /// <remarks>
-    /// This is what makes video late against audio. Audio output already subtracts its device latency,
-    /// so the audible position IS "now"; video composited for "now" then spends this long in the queue
-    /// and the swap before anyone sees it, and lands that far behind. A host that wants them aligned has
-    /// to run the video pipeline this far AHEAD - which it cannot do without a number, and this is the
-    /// number. Measured rather than assumed: it depends on queue depth, refresh rate and how the platform
-    /// buffers, none of which are knowable up front.
+    /// This is a diagnostic, not guaranteed physical scanout feedback: a backend may only know when a draw
+    /// or swap call returned. It must not be fed back into a shared source/composition timeline. A presenter
+    /// with trustworthy scheduled-present feedback may use it locally without changing frame PTS.
     /// </remarks>
     TimeSpan PresentLatency { get; }
 }

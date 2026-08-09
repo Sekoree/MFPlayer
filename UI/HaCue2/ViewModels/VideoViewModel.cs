@@ -680,7 +680,7 @@ public partial class VideoViewModel : ObservableObject
 
         _journal.Do(new SetValueCommand<double>(
             composition.Id, "fps", "video",
-            () => composition.FramesPerSecond, number => composition.FramesPerSecond = number, rate,
+            () => composition.FramesPerSecond, composition.SetFrameRate, rate,
             $"“{composition.Name}” {rate:0.##} fps"));
         _journal.CloseGroup();
 

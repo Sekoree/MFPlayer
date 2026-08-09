@@ -45,7 +45,7 @@ namespace S.Media.Present.SDL3;
 /// NV12 dmabuf / Win32 D3D11 paths cannot be mirrored yet (CPU-plane and other non-interop formats can).
 /// </para>
 /// </remarks>
-public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl,
+public sealed unsafe class SDL3GLVideoOutput : INonBlockingVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl,
     IVideoOutputPresentDiagnostics, IDisposable
 {
     private static readonly PixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
@@ -102,7 +102,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     private int _nonBlockingSwapStreak;
 
     /// <summary>
-    /// Smoothed submit-to-glass latency, in <see cref="Stopwatch"/> ticks. Written only by the presenting
+    /// Smoothed submit-to-swap-return latency, in <see cref="Stopwatch"/> ticks. Written only by the presenting
     /// thread, read by anyone. An exponential average rather than a lifetime one so it follows a window
     /// moved to a different panel instead of averaging the two forever.
     /// </summary>
@@ -155,9 +155,8 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     public long DisplayedCount => Volatile.Read(ref _displayed);
 
     /// <summary>
-    /// Frames discarded because the present queue was full when a newer one arrived - i.e. the producer
-    /// is running faster than this display refreshes. Expect a slow, steady count (roughly one per beat
-    /// period between the two rates); a fast or bursty count means something upstream is overproducing.
+    /// Frames superseded by a newer queued frame at a vblank, or evicted when the queue was full. Expect
+    /// a slow, steady count between unequal rates; a burst indicates a presenter/upstream stall.
     /// </summary>
     public long DroppedNewer => _presentQueue.DroppedOldest + Volatile.Read(ref _droppedNew);
 
@@ -171,12 +170,12 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     /// <summary>Frames currently queued for a vblank (0..<see cref="PresentQueueCapacity"/>).</summary>
     public int QueuedFrameCount => _presentQueue.Count;
 
-    /// <summary>Present-queue depth. Each slot is up to one refresh period of added display latency.</summary>
+    /// <summary>Maximum present hand-off capacity; the presenter takes the newest queued frame.</summary>
     public int PresentQueueCapacity => _presentQueue.Capacity;
 
     /// <summary>
-    /// Smoothed time from <see cref="Submit"/> to the frame being on the panel (queue wait + upload +
-    /// the vsync-blocked swap). Zero until frames have flowed.
+    /// Smoothed time from <see cref="Submit"/> until the swap call returns (queue wait + upload + any
+    /// vsync block). This is a software-boundary diagnostic, not physical scanout feedback.
     /// </summary>
     public TimeSpan PresentLatency
     {
@@ -189,7 +188,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         }
     }
 
-    /// <summary>Folds one submit-to-glass sample into the smoothed estimate. Presenting thread only.</summary>
+    /// <summary>Folds one submit-to-swap-return sample into the smoothed estimate. Presenting thread only.</summary>
     private void RecordPresentLatency(long enqueuedTimestamp)
     {
         if (enqueuedTimestamp <= 0)
@@ -581,7 +580,9 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         Interlocked.Increment(ref _activePresentations);
         try
         {
-            var frame = _presentQueue.TryDequeue(out var queuedAt);
+            var frame = _presentQueue.TryDequeueLatest(out var queuedAt, out var superseded);
+            foreach (var stale in superseded)
+                stale.Dispose();
             if (frame is not null)
             {
                 var presented = false;
@@ -710,7 +711,9 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                     Interlocked.Increment(ref _activePresentations);
                     try
                     {
-                        var frame = _presentQueue.TryDequeue(out var queuedAt);
+                        var frame = _presentQueue.TryDequeueLatest(out var queuedAt, out var superseded);
+                        foreach (var stale in superseded)
+                            stale.Dispose();
                         if (frame is not null)
                         {
                             emptyPulls = 0;

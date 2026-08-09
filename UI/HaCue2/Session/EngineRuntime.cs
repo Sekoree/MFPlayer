@@ -224,11 +224,6 @@ public sealed class EngineRuntime : IAsyncDisposable
         var bay = _host.Diagnostics();
         var compositions = _host.CompositionStats();
 
-        // Same sweep, because the measurement it acts on is one of these stats: how long a frame really
-        // takes to get from the compositor to the glass. Video runs that far ahead so it lands with the
-        // sound rather than behind it.
-        _host.ApplyVideoLatencyCompensation(compositions);
-
         // Re-read every tick, not once: a reload opens outputs the operator has just added and closes
         // ones they removed, and the Video screen's STATE column is the only place that says whether a
         // window actually appeared.

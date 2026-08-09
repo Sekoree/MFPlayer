@@ -17,10 +17,10 @@ namespace S.Media.Compositor;
 /// <see cref="IVideoCompositor.Composite"/>, and returns the composed frame.
 /// </para>
 /// <para>
-/// <strong>Latest-wins</strong> semantics: if a slot receives multiple new frames before the next
-/// composite, only the newest pending frame is promoted; superseded pending frames are disposed and
-/// <see cref="Slot.OverflowFrames"/> increments. This matches <see cref="VideoOutputPump"/>'s
-/// drop-oldest behavior under pressure but at the slot level rather than a queue.
+/// <strong>Timestamp sampling</strong>: master-aligned slots retain a small PTS-ordered lookahead and
+/// expose the newest frame not after the canvas target. Latest-wins slots promote the newest pending
+/// frame. This lets a fixed-rate canvas sample irregular/VFR input without first collapsing it to one
+/// nominal-rate pending slot.
 /// </para>
 /// <para>
 /// <strong>Per-slot mutable state</strong>: <see cref="Slot.Opacity"/>, <see cref="Slot.Transform"/>,
@@ -63,7 +63,11 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     /// <param name="output">Output format. Pixel format must be one the compositor accepts on its **output** - both shipping compositors output BGRA32.</param>
     /// <param name="compositor">The compositor that does the actual blending. Lifecycle: owned by the output when <paramref name="disposeCompositorOnDispose"/> is <c>true</c>.</param>
     /// <param name="disposeCompositorOnDispose">When <c>true</c> (default), <see cref="Dispose"/> also disposes the compositor.</param>
-    public VideoCompositorSource(VideoFormat output, IVideoCompositor compositor, bool disposeCompositorOnDispose = true)
+    public VideoCompositorSource(
+        VideoFormat output,
+        IVideoCompositor compositor,
+        bool disposeCompositorOnDispose = true,
+        bool pipelinedSingleOutputReadback = true)
     {
         ArgumentNullException.ThrowIfNull(compositor);
         if (compositor.OutputFormat != output)
@@ -71,10 +75,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
 
         _compositor = compositor;
         _disposeCompositorOnDispose = disposeCompositorOnDispose;
-        // This source streams composites continuously, so trade one frame of output latency for
-        // an async (non-stalling) GPU readback when the backend supports it.
+        // Callers choose whether throughput or latency wins: async GPU readback avoids a stall but
+        // returns frame N-1, while the synchronous path avoids that full-frame pipeline delay.
         if (compositor is IPipelinedReadbackVideoCompositor pipelined)
-            pipelined.PipelinedSingleOutputReadback = true;
+            pipelined.PipelinedSingleOutputReadback = pipelinedSingleOutputReadback;
         _output = output;
         _native = [output.PixelFormat];
         _ptsStep = DerivePeriod(output.FrameRate);
@@ -91,17 +95,33 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     /// against: the slot's own clock when it has one (layers from independent transports live in
     /// different PTS domains - see <see cref="Slot.AlignmentClock"/>), the canvas master otherwise.
     /// A clock that throws mid-teardown falls back to the canvas master for this composite.</summary>
-    private static TimeSpan? SlotAlignmentTime(Slot slot, TimeSpan? masterAlignmentTime)
+    private static TimeSpan? SlotAlignmentTime(
+        Slot slot,
+        TimeSpan? canvasAlignmentTime,
+        TimeSpan? outputPresentationTime)
     {
+        if (slot.AlignmentTimeMapper is { } mapper && outputPresentationTime is { } outputTime)
+        {
+            try
+            {
+                return mapper(outputTime) + slot.AlignmentTimeOffset;
+            }
+            catch
+            {
+                return canvasAlignmentTime + slot.AlignmentTimeOffset;
+            }
+        }
         if (slot.AlignmentClock is not { } own)
-            return masterAlignmentTime;
+            return canvasAlignmentTime + slot.AlignmentTimeOffset;
         try
         {
-            return own() ?? masterAlignmentTime;
+            return own() is { } ownTime
+                ? ownTime + slot.AlignmentTimeOffset
+                : canvasAlignmentTime + slot.AlignmentTimeOffset;
         }
         catch
         {
-            return masterAlignmentTime;
+            return canvasAlignmentTime + slot.AlignmentTimeOffset;
         }
     }
 
@@ -271,6 +291,14 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     public bool TryReadNextFrames(
         TimeSpan? masterAlignmentTime,
         IReadOnlyList<WarpOutputRequest> outputs,
+        out IReadOnlyList<VideoFrame> frames) =>
+        TryReadNextFrames(masterAlignmentTime, masterAlignmentTime, outputs, out frames);
+
+    /// <summary>Multi-output form with independent selection and output timestamp coordinates.</summary>
+    public bool TryReadNextFrames(
+        TimeSpan? canvasAlignmentTime,
+        TimeSpan? outputPresentationTime,
+        IReadOnlyList<WarpOutputRequest> outputs,
         out IReadOnlyList<VideoFrame> frames)
     {
         ArgumentNullException.ThrowIfNull(outputs);
@@ -314,7 +342,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                     // Acquire holds a read-ref on the slot's frame (the slot won't dispose it until we
                     // ReleaseFrame below). Track the slot, not a per-call lease object, to release it.
                     var f = slot.KeepPolicy == SlotKeepPolicy.MasterAligned
-                            && SlotAlignmentTime(slot, masterAlignmentTime) is { } masterPts
+                            && SlotAlignmentTime(slot, canvasAlignmentTime, outputPresentationTime) is { } masterPts
                         ? slot.AcquireMasterAlignedFrame(masterPts, _ptsStep)
                         : slot.AcquireLatestFrame();
                     if (f is null) continue;
@@ -328,9 +356,9 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 // scaler/preset paths (OutputPresetVideoSource), propagate the background layer's
                 // source PTS so shared-demux seeks stay aligned with audio.
                 TimeSpan pts;
-                if (masterAlignmentTime is { } master)
+                if (outputPresentationTime is { } outputPts)
                 {
-                    pts = master;
+                    pts = outputPts;
                 }
                 else if (_layerScratch.Count > 0)
                 {
@@ -360,8 +388,23 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
 
     /// <param name="masterAlignmentTime">When set, slots with
     /// <see cref="Slot.KeepPolicy"/> = <see cref="SlotKeepPolicy.MasterAligned"/> pick the
-    /// frame whose PTS is closest to this position.</param>
-    public bool TryReadNextFrame(TimeSpan? masterAlignmentTime, out VideoFrame frame)
+    /// newest frame whose PTS is not after this position.</param>
+    public bool TryReadNextFrame(TimeSpan? masterAlignmentTime, out VideoFrame frame) =>
+        TryReadNextFrame(
+            masterAlignmentTime,
+            outputPresentationTime: masterAlignmentTime,
+            defaultSurfaceRenderTime: null,
+            out frame);
+
+    /// <summary>
+    /// Composites one frame while keeping the canvas selection coordinate, canonical output timestamp,
+    /// and GPU-surface render coordinate independent.
+    /// </summary>
+    public bool TryReadNextFrame(
+        TimeSpan? canvasAlignmentTime,
+        TimeSpan? outputPresentationTime,
+        TimeSpan? defaultSurfaceRenderTime,
+        out VideoFrame frame)
     {
         // Single-consumer read (class contract): serialize so the reused scratch below is exclusive.
         lock (_readGate)
@@ -388,7 +431,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                     // Acquire holds a read-ref on the slot's frame (the slot won't dispose it until we
                     // ReleaseFrame below). Track the slot, not a per-call lease object, to release it.
                     var f = slot.KeepPolicy == SlotKeepPolicy.MasterAligned
-                            && SlotAlignmentTime(slot, masterAlignmentTime) is { } masterPts
+                            && SlotAlignmentTime(slot, canvasAlignmentTime, outputPresentationTime) is { } masterPts
                         ? slot.AcquireMasterAlignedFrame(masterPts, _ptsStep)
                         : slot.AcquireLatestFrame();
                     if (f is null) continue;
@@ -402,9 +445,9 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 // scaler/preset paths (OutputPresetVideoSource), propagate the background layer's
                 // source PTS so shared-demux seeks stay aligned with audio.
                 TimeSpan pts;
-                if (masterAlignmentTime is { } master)
+                if (outputPresentationTime is { } outputPts)
                 {
-                    pts = master;
+                    pts = outputPts;
                 }
                 else if (_layerScratch.Count > 0)
                 {
@@ -440,8 +483,12 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                         // torn down under us) falls back to the master time rather than faulting the pump.
                         if (s.RenderTimeSource is { } renderTimeSource)
                         {
-                            try { placed = placed with { RenderTime = renderTimeSource() }; }
+                            try { placed = placed with { RenderTime = renderTimeSource() + s.RenderTimeOffset }; }
                             catch { /* fall back to the composite's master time */ }
+                        }
+                        else if (defaultSurfaceRenderTime is { } surfaceTime)
+                        {
+                            placed = placed with { RenderTime = surfaceTime + s.RenderTimeOffset };
                         }
                         _surfaceScratch.Add(placed);
                     }
@@ -602,6 +649,9 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         /// </summary>
         public Func<TimeSpan>? RenderTimeSource { get; set; }
 
+        /// <summary>Manual content-time adjustment applied after the default or per-surface clock is read.</summary>
+        public TimeSpan RenderTimeOffset { get; set; }
+
         /// <summary>
         /// How many frame layers render underneath this surface; null = on top of all of them.
         /// </summary>
@@ -634,9 +684,13 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private readonly Lock _gate = new();
         private readonly SlotOutput _sink;
         private VideoFrame? _current;
-        private VideoFrame? _pending;
+        // Timestamp-ordered lookahead. A fixed-rate canvas samples this buffer at its exact target time;
+        // it must not collapse an irregular/VFR source to one pending frame before that sample occurs.
+        private readonly List<VideoFrame> _pending = new(16);
+        private const int PendingCapacity = 32;
         private VideoFrame? _abandonedCurrent;
         private long _overflowFrames;
+        private long _samplingSkippedFrames;
         private int _activeReaders;
         private float _opacity = 1f;
         private LayerTransform2D _transform = LayerTransform2D.Identity;
@@ -723,15 +777,28 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         /// </remarks>
         public Func<TimeSpan?>? AlignmentClock { get; set; }
 
+        /// <summary>
+        /// Preferred per-slot mapping from canonical output/master time to this source's PTS domain.
+        /// Unlike <see cref="AlignmentClock"/>, this samples the exact composition-grid target rather than
+        /// a slightly later wall-clock snapshot.
+        /// </summary>
+        public Func<TimeSpan, TimeSpan>? AlignmentTimeMapper { get; set; }
+
+        /// <summary>Manual content-time adjustment applied after the slot's alignment mapping.</summary>
+        public TimeSpan AlignmentTimeOffset { get; set; }
+
         /// <summary>Frames replaced before the compositor could read them.</summary>
         public long OverflowFrames => Volatile.Read(ref _overflowFrames);
+
+        /// <summary>Valid source samples intentionally passed over while resampling onto the canvas grid.</summary>
+        public long SamplingSkippedFrames => Volatile.Read(ref _samplingSkippedFrames);
 
         internal void SubmitFromOutput(VideoFrame frame)
         {
             // A closed slot drops silently (frame disposed, ownership honored): a player tick is
             // routinely in flight while a cue's slots are torn down, and throwing here only
             // produced per-tick error spam upstream - no submitter can react to it anyway.
-            VideoFrame? toDispose;
+            VideoFrame? toDispose = null;
             var closed = false;
             lock (_gate)
             {
@@ -742,8 +809,27 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 }
                 else
                 {
-                    toDispose = _pending;
-                    _pending = frame;
+                    var index = _pending.BinarySearch(frame, PresentationTimeComparer.Instance);
+                    if (index < 0)
+                        index = ~index;
+                    else
+                    {
+                        // Equal PTS: the most recently submitted frame wins.
+                        while (index < _pending.Count
+                               && _pending[index].PresentationTime == frame.PresentationTime)
+                            index++;
+                    }
+                    _pending.Insert(index, frame);
+
+                    if (_pending.Count > PendingCapacity)
+                    {
+                        // Keep the freshest bounded window. During a delayed tick the player can hand off
+                        // a burst of due VFR timestamps; retaining the oldest 32 would force visible
+                        // catch-up instead of allowing the canvas to sample the newest eligible frame.
+                        const int dropIndex = 0;
+                        toDispose = _pending[dropIndex];
+                        _pending.RemoveAt(dropIndex);
+                    }
                 }
             }
             if (toDispose is not null)
@@ -759,18 +845,29 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         /// slot is closed or empty.</summary>
         internal VideoFrame? AcquireLatestFrame()
         {
-            VideoFrame? toDispose = null;
+            VideoFrame? currentToDispose = null;
+            List<VideoFrame>? supersededToDispose = null;
             VideoFrame? frame;
             lock (_gate)
             {
                 if (_closed)
                     return null;
 
-                if (_pending is not null && _activeReaders == 0)
+                if (_pending.Count > 0 && _activeReaders == 0)
                 {
-                    toDispose = _current;
-                    _current = _pending;
-                    _pending = null;
+                    var newest = _pending[^1];
+                    var unsampled = _pending.Count - 1;
+                    currentToDispose = _current;
+                    if (unsampled > 0)
+                    {
+                        supersededToDispose = new List<VideoFrame>(unsampled);
+                        for (var i = 0; i < _pending.Count - 1; i++)
+                            supersededToDispose.Add(_pending[i]);
+                    }
+                    _current = newest;
+                    _pending.Clear();
+                    if (unsampled > 0)
+                        Interlocked.Add(ref _overflowFrames, unsampled);
                 }
 
                 frame = _current;
@@ -779,40 +876,44 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 _activeReaders++;
             }
 
-            toDispose?.Dispose();
+            currentToDispose?.Dispose();
+            DisposeFrames(supersededToDispose);
             return frame;
         }
 
-        /// <summary>Picks the held frame whose PTS is closest to <paramref name="masterPts"/> without
-        /// selecting a frame that is more than one canvas period in the future. Registers an active
+        /// <summary>Picks the newest held frame whose PTS is not after <paramref name="masterPts"/>. The
+        /// first frame may be accepted up to one canvas period early to avoid a blank start. Registers an active
         /// read-ref (release via <see cref="ReleaseFrame"/>) when it returns non-null.</summary>
         internal VideoFrame? AcquireMasterAlignedFrame(TimeSpan masterPts, TimeSpan canvasPeriod)
         {
-            VideoFrame? toDispose = null;
+            VideoFrame? currentToDispose = null;
+            List<VideoFrame>? skippedToDispose = null;
             VideoFrame? frame;
             lock (_gate)
             {
                 if (_closed)
                     return null;
 
-                frame = ChooseMasterAlignedFrame(masterPts, canvasPeriod, ref toDispose);
+                frame = ChooseMasterAlignedFrame(
+                    masterPts, canvasPeriod, ref currentToDispose, ref skippedToDispose);
                 if (frame is null)
                     return null;
                 _activeReaders++;
             }
 
-            toDispose?.Dispose();
+            currentToDispose?.Dispose();
+            DisposeFrames(skippedToDispose);
             return frame;
         }
 
         internal void AbandonQueuedFrames()
         {
-            VideoFrame? pendingToDispose;
+            List<VideoFrame> pendingToDispose;
             VideoFrame? currentToDispose = null;
             lock (_gate)
             {
-                pendingToDispose = _pending;
-                _pending = null;
+                pendingToDispose = [.. _pending];
+                _pending.Clear();
                 if (_activeReaders == 0)
                 {
                     currentToDispose = _current;
@@ -825,7 +926,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 }
             }
 
-            pendingToDispose?.Dispose();
+            DisposeFrames(pendingToDispose);
             currentToDispose?.Dispose();
         }
 
@@ -837,7 +938,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
                 lock (_gate)
                 {
-                    if (_pending is null && _activeReaders == 0)
+                    if (_pending.Count == 0 && _activeReaders == 0)
                         return true;
                 }
 
@@ -848,53 +949,52 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             }
         }
 
-        private VideoFrame? ChooseMasterAlignedFrame(TimeSpan masterPts, TimeSpan canvasPeriod, ref VideoFrame? toDispose)
+        private VideoFrame? ChooseMasterAlignedFrame(
+            TimeSpan masterPts,
+            TimeSpan canvasPeriod,
+            ref VideoFrame? currentToDispose,
+            ref List<VideoFrame>? skippedToDispose)
         {
-            var maxFuture = masterPts + canvasPeriod;
-            VideoFrame? best = null;
-            var bestDistance = long.MaxValue;
-
-            void Consider(VideoFrame? candidate)
+            // The canvas is a sampler: hold the newest source frame whose PTS is not after the exact
+            // target. A small future allowance is used only to avoid a blank first frame at start-up.
+            VideoFrame? best = _current is { PresentationTime: var currentPts } && currentPts <= masterPts
+                ? _current
+                : null;
+            var selectedPending = -1;
+            for (var i = 0; i < _pending.Count; i++)
             {
-                if (candidate is null) return;
-                if (candidate.PresentationTime > maxFuture) return;
-                var distance = Math.Abs((candidate.PresentationTime - masterPts).Ticks);
-                if (distance >= bestDistance) return;
-                bestDistance = distance;
-                best = candidate;
+                if (_pending[i].PresentationTime > masterPts)
+                    break;
+                best = _pending[i];
+                selectedPending = i;
             }
 
-            Consider(_current);
-            Consider(_pending);
-
-            if (best is null)
+            if (best is null && _current is not null)
                 best = _current;
-
-            if (best is null)
-                return null;
-
-            if (!ReferenceEquals(best, _current) && ReferenceEquals(best, _pending))
+            if (best is null && _pending.Count > 0
+                && _pending[0].PresentationTime <= masterPts + canvasPeriod)
             {
-                if (_activeReaders == 0)
-                {
-                    // Safe to promote: no other lease holds _current, so we can dispose it and
-                    // hand the lease a reference that is no longer reachable from SubmitFromOutput.
-                    toDispose = _current;
-                    _current = _pending;
-                    _pending = null;
-                }
-                else
-                {
-                    // A concurrent reader still holds _current. Returning _pending would be
-                    // unsafe - a subsequent SubmitFromOutput would dispose _pending while the
-                    // new lease is still using it. Fall back to _current (PTS-wise <= _pending,
-                    // so older but never too-future). If _current is null we skip this tick.
-                    best = _current;
-                    if (best is null)
-                        return null;
-                }
+                best = _pending[0];
+                selectedPending = 0;
             }
 
+            if (selectedPending < 0)
+                return best;
+            if (_activeReaders != 0)
+                return _current;
+
+            currentToDispose = _current;
+            if (selectedPending > 0)
+            {
+                skippedToDispose = new List<VideoFrame>(selectedPending);
+                for (var i = 0; i < selectedPending; i++)
+                    skippedToDispose.Add(_pending[i]);
+            }
+            _current = _pending[selectedPending];
+            _pending.RemoveRange(0, selectedPending + 1);
+            if (selectedPending > 0)
+                Interlocked.Add(ref _samplingSkippedFrames, selectedPending);
+            best = _current;
             return best;
         }
 
@@ -902,13 +1002,13 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         {
             VideoFrame? currentToDispose = null;
             VideoFrame? abandonedToDispose = null;
-            VideoFrame? pendingToDispose;
+            List<VideoFrame> pendingToDispose;
             lock (_gate)
             {
                 if (_closed) return;
                 _closed = true;
-                pendingToDispose = _pending;
-                _pending = null;
+                pendingToDispose = [.. _pending];
+                _pending.Clear();
                 if (_activeReaders == 0)
                 {
                     currentToDispose = _current;
@@ -917,9 +1017,24 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                     _abandonedCurrent = null;
                 }
             }
-            pendingToDispose?.Dispose();
+            DisposeFrames(pendingToDispose);
             currentToDispose?.Dispose();
             abandonedToDispose?.Dispose();
+        }
+
+        private static void DisposeFrames(IEnumerable<VideoFrame>? frames)
+        {
+            if (frames is null)
+                return;
+            foreach (var frame in frames)
+                frame.Dispose();
+        }
+
+        private sealed class PresentationTimeComparer : IComparer<VideoFrame>
+        {
+            public static PresentationTimeComparer Instance { get; } = new();
+            public int Compare(VideoFrame? x, VideoFrame? y) =>
+                Nullable.Compare(x?.PresentationTime, y?.PresentationTime);
         }
 
         /// <summary>Releases one read-ref taken by <see cref="AcquireLatestFrame"/> /
@@ -947,7 +1062,8 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             abandonedToDispose?.Dispose();
         }
 
-        private sealed class SlotOutput(Slot owner, IReadOnlyList<PixelFormat> accepted) : IVideoOutput, IVideoOutputQueueControl
+        private sealed class SlotOutput(Slot owner, IReadOnlyList<PixelFormat> accepted) :
+            INonBlockingVideoOutput, IVideoOutputQueueControl
         {
             private VideoFormat _format;
             public VideoFormat Format => _format;

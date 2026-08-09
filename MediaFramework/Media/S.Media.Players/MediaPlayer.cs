@@ -909,12 +909,10 @@ public sealed class MediaPlayer : IDisposable
         string? audioSourceId = null;
         MediaClock? freerun = null;
         IMediaClock playClock;
-        // The presentation tick must run FASTER than the source's frame rate. On the old fixed ~60 Hz
-        // tick a 59.94 fps clip periodically had two frames come due together, and OnVideoTick keeps
-        // only the newest - so a decoded frame was dropped as "late" before any consumer (a composition
-        // layer included) could ever see it, on a cadence nobody chose. Deriving the tick from the
-        // source rate removes that stage. Live sources publish their format only after the first frame
-        // (waited for further down, after this clock exists), so they keep the fixed fallback.
+        // Derive the presentation polling cadence from the declared source rate to bound handoff
+        // latency. VideoPlayer forwards every due timestamp, so correctness no longer depends on this
+        // estimate being accurate (important for VFR/mis-tagged media). Live sources publish their
+        // format only after this clock exists and therefore keep the fixed fallback.
         var videoTickInterval = videoSource is not null and not ILiveVideoSource
             ? VideoFormatPacing.PresentationTickInterval(videoSource.Format.FrameRate, options.VideoTickOversample)
             : TimeSpan.Zero;

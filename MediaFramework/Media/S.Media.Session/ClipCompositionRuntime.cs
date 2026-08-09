@@ -79,6 +79,8 @@ public sealed class ClipCompositionRuntime : IDisposable
     private volatile VideoFrame? _idleFrame;
     private readonly List<LayerSlot> _slots = [];
     private readonly List<SurfaceLayerSlot> _surfaceLayers = [];
+    private readonly Rational _canvasRate;
+    private readonly RationalFrameGrid _canvasGrid;
     private readonly TimeSpan _canvasPeriod;
     private long _nextLayerSequence;
     private long _framesComposited;
@@ -144,13 +146,14 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         var den = Math.Max(1, definition.FrameRateDen);
         var num = Math.Max(1, definition.FrameRateNum);
-        var rate = new Rational(num, den);
+        _canvasRate = Rational.Reduce(num, den);
+        _canvasGrid = new RationalFrameGrid(_canvasRate);
         _canvasFormat = new VideoFormat(
             Math.Max(16, definition.Width),
             Math.Max(16, definition.Height),
             PixelFormat.Bgra32,
-            rate);
-        _canvasPeriod = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond * (long)den / Math.Max(1L, (long)num)));
+            _canvasRate);
+        _canvasPeriod = _canvasGrid.ApproximatePeriod;
 
         _compositorFactory = compositorFactory ?? CreateDefaultCompositor;
         var compositor = _compositorFactory(_canvasFormat);
@@ -158,7 +161,13 @@ public sealed class ClipCompositionRuntime : IDisposable
         RequiresBgraLayerConversion = compositor.RequiresBgraLayerConversion;
         CompositorBackendName = string.IsNullOrWhiteSpace(compositor.BackendName) ? "Unknown" : compositor.BackendName;
         _disposeCompositorOnDriverThread = compositor.DisposeOnDriverThread;
-        _mixer = new VideoCompositorSource(_canvasFormat, _compositor, disposeCompositorOnDispose: false);
+        _mixer = new VideoCompositorSource(
+            _canvasFormat,
+            _compositor,
+            disposeCompositorOnDispose: false,
+            // Cue compositions favour minimum glass latency. The GL compositor's pipelined readback is
+            // useful for throughput, but deliberately returns frame N-1 and costs one canvas frame.
+            pipelinedSingleOutputReadback: false);
 
         Trace.LogInformation(
             "ClipCompositionRuntime: composition {Composition} initialized ({Width}x{Height} {Rate}, compositor={Backend})",
@@ -364,27 +373,12 @@ public sealed class ClipCompositionRuntime : IDisposable
     public event EventHandler<ClipCompositionPumpPressureWarning>? PumpPressureWarning;
 
     /// <summary>
-    /// Ceiling on <see cref="MeasuredPresentLatency"/>. A wedged or mis-measuring output must not be able
-    /// to throw the whole canvas out of sync; a quarter second is far past any real display pipeline.
-    /// </summary>
-    private static readonly TimeSpan MaxPresentLatencyCompensation = TimeSpan.FromMilliseconds(250);
-
-    /// <summary>
-    /// Whether the pump composites ahead by <see cref="MeasuredPresentLatency"/> so video lands in step
-    /// with the (already latency-compensated) audio. Default on; set false to pin the old behaviour.
-    /// </summary>
-    public bool CompensatePresentLatency { get; set; } = true;
-
-    /// <summary>
-    /// Worst measured submit-to-glass latency across the outputs that report one, clamped to
-    /// <see cref="MaxPresentLatencyCompensation"/>. Zero when no output reports one yet.
+    /// Worst measured software submit-to-present latency across outputs that report one. This is
+    /// diagnostic only: output latency must never advance the composition timeline or another output.
     /// </summary>
     /// <remarks>
-    /// The WORST rather than an average, because the number exists to align video with sound for someone
-    /// watching a screen, and the slowest screen is the one that would visibly lag. Sinks with no device
-    /// cadence of their own - NDI senders, encoders - do not implement the diagnostics interface at all,
-    /// so they are excluded by construction: their consumers reclock from timestamps at the far end and
-    /// pulling the canvas early for them would only hurt the screens in the room.
+    /// Sinks with no device cadence of their own do not implement the diagnostics interface and therefore
+    /// contribute nothing. Hosts may display this value, but must not feed it back into source selection.
     /// </remarks>
     public TimeSpan MeasuredPresentLatency
     {
@@ -400,19 +394,23 @@ public sealed class ClipCompositionRuntime : IDisposable
                     worst = latency;
             }
 
-            return worst > MaxPresentLatencyCompensation ? MaxPresentLatencyCompensation : worst;
+            return worst;
         }
     }
 
     public ClipCompositionRuntimeStats GetStats()
     {
         long slotOverflow = 0;
+        long sourceSamplesSkipped = 0;
         int layerCount;
         lock (_gate)
         {
             layerCount = _slots.Count;
             foreach (var slot in _slots)
+            {
                 slotOverflow += slot.RawSlot.OverflowFrames;
+                sourceSamplesSkipped += slot.RawSlot.SamplingSkippedFrames;
+            }
         }
 
         return new ClipCompositionRuntimeStats(
@@ -431,7 +429,11 @@ public sealed class ClipCompositionRuntime : IDisposable
             _canvasPeriod,
             SnapshotOutputStats(),
             CompositorBackendName,
-            MeasuredPresentLatency);
+            MeasuredPresentLatency,
+            _canvasRate.Numerator,
+            _canvasRate.Denominator,
+            _slaveClock?.SkippedVideoTicks ?? 0,
+            sourceSamplesSkipped);
     }
 
     /// <summary>One throughput row per attached output. Reads the same lock-free output snapshot the pump
@@ -836,17 +838,10 @@ public sealed class ClipCompositionRuntime : IDisposable
             // MasterAligned would freeze on the first frame, since every frame is equidistant from the clock.
             if (alignmentTimeline is not null && keepPolicy == SlotKeepPolicy.MasterAligned)
             {
-                rawSlot.AlignmentClock = () =>
-                {
-                    try
-                    {
-                        return alignmentTimeline.GetSnapshot().SourceTime;
-                    }
-                    catch
-                    {
-                        return null; // torn down mid-composite - the canvas master covers this tick
-                    }
-                };
+                // Map the exact output-grid target into this source's PTS domain. Sampling GetSnapshot()
+                // here instead would select for "now", a little after the grid deadline, and reintroduce
+                // phase-dependent choices at every layer.
+                rawSlot.AlignmentTimeMapper = alignmentTimeline.SourceTimeAt;
                 // Own-clock alignment needs no canvas master; it engages immediately.
                 rawSlot.KeepPolicy = keepPolicy;
             }
@@ -957,7 +952,9 @@ public sealed class ClipCompositionRuntime : IDisposable
     public IDisposable AttachSubtitleOverlay(
         IVideoOverlaySource source,
         Func<TimeSpan> positionProvider,
-        int layerIndex = int.MaxValue)
+        int layerIndex = int.MaxValue,
+        Func<TimeSpan, TimeSpan>? positionAtOutputTime = null,
+        Func<TimeSpan>? positionOffsetProvider = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(positionProvider);
@@ -969,7 +966,8 @@ public sealed class ClipCompositionRuntime : IDisposable
         // MasterAligned slot would freeze on the first frame (every frame equidistant from the clock). Latest
         // takes the newest submitted frame, which is exactly the one rendered for this position.
         var layer = AddLayer(_canvasFormat, placement, SlotKeepPolicy.Latest);
-        var feed = new SubtitleLayerFeed(this, source, layer, positionProvider);
+        var feed = new SubtitleLayerFeed(
+            this, source, layer, positionProvider, positionAtOutputTime, positionOffsetProvider);
         lock (_gate)
         {
             _subtitleFeeds.Add(feed);
@@ -986,10 +984,16 @@ public sealed class ClipCompositionRuntime : IDisposable
     public IDisposable AttachSubtitleOverlay(
         IVideoOverlaySource source,
         ITransportTimeline timeline,
-        int layerIndex = int.MaxValue)
+        int layerIndex = int.MaxValue,
+        Func<TimeSpan>? positionOffsetProvider = null)
     {
         ArgumentNullException.ThrowIfNull(timeline);
-        return AttachSubtitleOverlay(source, () => timeline.GetSnapshot().SourceTime, layerIndex);
+        return AttachSubtitleOverlay(
+            source,
+            () => timeline.GetSnapshot().SourceTime,
+            layerIndex,
+            timeline.SourceTimeAt,
+            positionOffsetProvider);
     }
 
     private void RemoveSubtitleFeed(SubtitleLayerFeed feed)
@@ -1003,20 +1007,20 @@ public sealed class ClipCompositionRuntime : IDisposable
     }
 
     /// <summary>Renders every subtitle source at its owning clip position. Pump-thread only.</summary>
-    private void DriveSubtitleLayers()
+    private void DriveSubtitleLayers(TimeSpan? outputPresentationTime)
     {
         var feeds = _subtitleFeedsSnapshot; // lock-free, allocation-free per-frame read (NXT-11)
 
         foreach (var feed in feeds)
-            DriveSubtitleLayer(feed);
+            DriveSubtitleLayer(feed, outputPresentationTime);
     }
 
-    private void DriveSubtitleLayer(SubtitleLayerFeed feed)
+    private void DriveSubtitleLayer(SubtitleLayerFeed feed, TimeSpan? outputPresentationTime)
     {
         VideoFrame? overlay;
         try
         {
-            overlay = feed.RenderAtCurrentPosition();
+            overlay = feed.RenderAt(outputPresentationTime);
         }
         catch (Exception ex)
         {
@@ -1078,6 +1082,8 @@ public sealed class ClipCompositionRuntime : IDisposable
         private readonly ClipCompositionRuntime _owner;
         private readonly IVideoOverlaySource _source;
         private readonly Func<TimeSpan> _positionProvider;
+        private readonly Func<TimeSpan, TimeSpan>? _positionAtOutputTime;
+        private readonly Func<TimeSpan>? _positionOffsetProvider;
         private readonly object _gate = new();
         private bool _disposed;
 
@@ -1085,20 +1091,34 @@ public sealed class ClipCompositionRuntime : IDisposable
             ClipCompositionRuntime owner,
             IVideoOverlaySource source,
             LayerSlot layer,
-            Func<TimeSpan> positionProvider)
+            Func<TimeSpan> positionProvider,
+            Func<TimeSpan, TimeSpan>? positionAtOutputTime,
+            Func<TimeSpan>? positionOffsetProvider)
         {
             _owner = owner;
             _source = source;
             Layer = layer;
             _positionProvider = positionProvider;
+            _positionAtOutputTime = positionAtOutputTime;
+            _positionOffsetProvider = positionOffsetProvider;
         }
 
         public LayerSlot Layer { get; }
 
-        public VideoFrame? RenderAtCurrentPosition()
+        public VideoFrame? RenderAt(TimeSpan? outputPresentationTime)
         {
             lock (_gate)
-                return _disposed ? null : _source.RenderAt(_positionProvider());
+            {
+                if (_disposed)
+                    return null;
+                var position = outputPresentationTime is { } outputTime
+                               && _positionAtOutputTime is { } mapper
+                    ? mapper(outputTime)
+                    : _positionProvider();
+                if (_positionOffsetProvider is { } offsetProvider)
+                    position += offsetProvider();
+                return _source.RenderAt(position);
+            }
         }
 
         public void Dispose()
@@ -1123,7 +1143,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (_slaveClock is not null) return;
 
         var audioInterval = TimeSpan.FromMilliseconds(50);
-        _slaveClock = new MediaClock(audioInterval, _canvasPeriod);
+        _slaveClock = new MediaClock(
+            audioInterval,
+            _canvasRate,
+            VideoTickCatchUpPolicy.Coalesce);
         if (_master is not null)
             _slaveClock.SetMaster(_master);
         _slaveClock.VideoTick += OnSlaveVideoTick;
@@ -1204,39 +1227,57 @@ public sealed class ClipCompositionRuntime : IDisposable
     private void PumpOneFrame()
     {
         var sw = Stopwatch.StartNew();
-        TimeSpan? masterPts = null;
+        TimeSpan? outputPts = null;
+        TimeSpan? canvasAlignmentTime = null;
+        TimeSpan? surfaceRenderTime = null;
         if (_transportTimeline is { } transportTimeline)
         {
-            try { masterPts = transportTimeline.GetSnapshot().SourceTime; }
+            try
+            {
+                var timelineSnapshot = transportTimeline.GetSnapshot();
+                outputPts = _canvasGrid.SnapAtOrBefore(timelineSnapshot.OutputPresentationTime);
+                // Per-slot AlignmentTimeMapper maps outputPts into that slot's own source domain. This
+                // value is the canvas fallback for a master-aligned slot that has no mapper.
+                canvasAlignmentTime = outputPts;
+                // Surface content renders in source time just like a decoded frame is selected in source
+                // time. The composite itself remains stamped in the independent output/master domain.
+                // A detached crossfade tail supplies its own RenderTimeSource in VideoCompositorSource.
+                surfaceRenderTime = transportTimeline.SourceTimeAt(outputPts.Value);
+            }
             catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: transport timeline read"); }
         }
-        else if (_timeline is not null)
+        else
         {
-            try { masterPts = _timeline.CurrentPosition; }
-            catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: timeline read"); }
-        }
-        else if (_master is not null)
-        {
-            try { masterPts = _master.ElapsedSinceStart; }
-            catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: master read"); }
+            TimeSpan? masterTime = null;
+            if (_master is not null)
+            {
+                try { masterTime = _master.ElapsedSinceStart; }
+                catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: master read"); }
+            }
+
+            TimeSpan? sourceTime = null;
+            if (_timeline is not null)
+            {
+                try { sourceTime = _timeline.CurrentPosition; }
+                catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: timeline read"); }
+            }
+
+            if (masterTime is { } master)
+                outputPts = _canvasGrid.SnapAtOrBefore(master);
+            else if (sourceTime is { } source)
+                outputPts = _canvasGrid.SnapAtOrBefore(source);
+            else if (_slaveClock is { } driver)
+                outputPts = _canvasGrid.TimestampAt(Math.Max(0, driver.LastVideoTickIndex - 1));
+
+            canvasAlignmentTime = sourceTime ?? outputPts;
+            surfaceRenderTime = sourceTime ?? outputPts;
         }
 
         var snapshot = _acquiredSnapshot; // lock-free, allocation-free per-frame read (NXT-11)
 
-        // Select for where the master will be when this frame is actually SEEN, not where it is now.
-        // Audio output already subtracts its device latency, so the audible position is "now"; a frame
-        // composited for "now" then spends the present latency in a queue and a swap, and lands that far
-        // behind the sound. Compositing that far ahead cancels it. Only meaningful when the layer sources
-        // are running ahead too (ShowSession's video playhead offset does that) - otherwise the nearest-PTS
-        // pick simply finds nothing newer and behaves exactly as before, which is why this is safe to
-        // apply unconditionally.
-        var presentLatency = CompensatePresentLatency ? MeasuredPresentLatency : TimeSpan.Zero;
-        if (masterPts is { } pts && presentLatency > TimeSpan.Zero)
-            masterPts = pts + presentLatency;
-
         // Subtitle layers render at their owning clips' positions before either pump path
         // reads the mixer, so it composites uniformly with the video layers (z-order/opacity/blend).
-        DriveSubtitleLayers();
+        DriveSubtitleLayers(outputPts);
 
         if (snapshot.Count == 0)
             return;
@@ -1255,11 +1296,11 @@ public sealed class ClipCompositionRuntime : IDisposable
             return;
         }
 
-        if (TryPumpIntegratedMultiWarp(masterPts, snapshot, sw))
+        if (TryPumpIntegratedMultiWarp(canvasAlignmentTime, outputPts, snapshot, sw))
             return;
 
         var compositeStarted = Stopwatch.GetTimestamp();
-        if (!_mixer.TryReadNextFrame(masterPts, out var frame))
+        if (!_mixer.TryReadNextFrame(canvasAlignmentTime, outputPts, surfaceRenderTime, out var frame))
             return;
         _compositeTiming.RecordSince(compositeStarted);
         Interlocked.Increment(ref _framesComposited);
@@ -1393,7 +1434,11 @@ public sealed class ClipCompositionRuntime : IDisposable
         RecordPumpTiming(sw.Elapsed, _canvasPeriod);
     }
 
-    private bool TryPumpIntegratedMultiWarp(TimeSpan? masterPts, IReadOnlyList<AcquiredOutput> snapshot, Stopwatch sw)
+    private bool TryPumpIntegratedMultiWarp(
+        TimeSpan? canvasAlignmentTime,
+        TimeSpan? outputPts,
+        IReadOnlyList<AcquiredOutput> snapshot,
+        Stopwatch sw)
     {
         if (_compositionMappingStage is not null
             || _integratedWarpActive
@@ -1424,7 +1469,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         var compositeStarted = Stopwatch.GetTimestamp();
         try
         {
-            if (!_mixer.TryReadNextFrames(masterPts, requests, out frames))
+            if (!_mixer.TryReadNextFrames(canvasAlignmentTime, outputPts, requests, out frames))
                 return true;
         }
         catch (Exception ex)
@@ -1919,18 +1964,13 @@ public sealed class ClipCompositionRuntime : IDisposable
         public AcquiredOutput(ClipCompositionOutputLease lease)
         {
             _lease = lease;
-            // Every sink is decoupled from the composite tick through a pump. A raw window output's
-            // Submit ends in a vsynced GL present, and presenting INSIDE the tick made the canvas
-            // hostage to display timing: the tick's 60.000 Hz beats against the display's actual
-            // refresh, and at every beat crossing a present blocked an extra vblank - one dropped
-            // frame every few seconds on an idle machine, per window. Two frames of queue keep
-            // worst-case added display latency at ~33 ms while the pump's own thread absorbs the
-            // blocking; a stalled line drops ITS OWN frames (visible as pump pressure) without
-            // touching the canvas cadence or its sibling outputs.
-            _output = lease.Output is null or VideoOutputPump
+            // A presenter that already owns a prompt in-memory hand-off must not receive a second queue:
+            // that only hides its real latency and can retain a stale frame. Potentially blocking sinks
+            // (network/encode/third-party) remain isolated, with one waiting frame for lowest latency.
+            _output = lease.Output is null or INonBlockingVideoOutput
                 ? lease.Output
                 : new VideoOutputPump(
-                    lease.Output, maxQueuedFrames: 2, name: $"CompositionOut:{lease.DisplayName}");
+                    lease.Output, maxQueuedFrames: 1, name: $"CompositionOut:{lease.DisplayName}");
             _ownsPump = !ReferenceEquals(_output, lease.Output);
             PresentDiagnostics = lease.Output as IVideoOutputPresentDiagnostics;
         }
@@ -2096,7 +2136,8 @@ public sealed class ClipCompositionRuntime : IDisposable
                 queued,
                 capacity,
                 presentDropped,
-                presentRepeated);
+                presentRepeated,
+                Output is VideoOutputPump outputPump ? outputPump.DroppedFrames : 0);
         }
 
         public void SubscribePumpPressure(ClipCompositionRuntime owner)
@@ -2222,6 +2263,9 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// <summary>The composed opacity actually handed to the compositor.</summary>
         float EffectiveOpacity { get; }
 
+        /// <summary>Content-time adjustment applied consistently at the compositor selection/render step.</summary>
+        TimeSpan TimeSelectionOffset { get; set; }
+
         void UpdatePlacement(VideoPlacementSpec placement);
 
         /// <summary>
@@ -2309,6 +2353,12 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         public float EffectiveOpacity => _level.Effective;
+
+        public TimeSpan TimeSelectionOffset
+        {
+            get => RawSlot.RenderTimeOffset;
+            set => RawSlot.RenderTimeOffset = value;
+        }
 
         public void UpdatePlacement(VideoPlacementSpec placement)
         {
@@ -2494,6 +2544,12 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         public float EffectiveOpacity => _level.Effective;
+
+        public TimeSpan TimeSelectionOffset
+        {
+            get => RawSlot.AlignmentTimeOffset;
+            set => RawSlot.AlignmentTimeOffset = value;
+        }
 
         public long Sequence { get; }
 
@@ -2697,7 +2753,11 @@ public readonly record struct ClipCompositionRuntimeStats(
     TimeSpan CanvasPeriod = default,
     IReadOnlyList<ClipCompositionOutputStats>? Outputs = null,
     string CompositorBackend = "Unknown",
-    TimeSpan MeasuredPresentLatency = default)
+    TimeSpan MeasuredPresentLatency = default,
+    int CanvasFrameRateNum = 0,
+    int CanvasFrameRateDen = 1,
+    long MissedCompositionDeadlines = 0,
+    long SourceSamplesSkipped = 0)
 {
     /// <summary>
     /// The composition's target frame rate, derived from <see cref="CanvasPeriod"/>.
@@ -2708,8 +2768,9 @@ public readonly record struct ClipCompositionRuntimeStats(
     /// been since it last looked - can compute. Exposing the target here means a view can show
     /// "29.4 / 29.97" without hardcoding the denominator, and stops each caller re-deriving it.
     /// </remarks>
-    public double TargetFramesPerSecond =>
-        CanvasPeriod > TimeSpan.Zero ? 1d / CanvasPeriod.TotalSeconds : 0d;
+    public double TargetFramesPerSecond => CanvasFrameRateNum > 0 && CanvasFrameRateDen > 0
+        ? CanvasFrameRateNum / (double)CanvasFrameRateDen
+        : CanvasPeriod > TimeSpan.Zero ? 1d / CanvasPeriod.TotalSeconds : 0d;
 
     /// <summary>Per-output rows, empty when the runtime was not asked for them.</summary>
     public IReadOnlyList<ClipCompositionOutputStats> OutputStats => Outputs ?? [];
@@ -2732,6 +2793,8 @@ public readonly record struct ClipCompositionRuntimeStats(
 /// the last stage; every other number here can read healthy while this one climbs.</param>
 /// <param name="PresentRepeated">Device refreshes that re-showed the previous frame because the canvas
 /// was slower than the device - the mirror image of <paramref name="PresentDropped"/>.</param>
+/// <param name="BackpressureDropped">Frames evicted by this output's isolation worker because its sink
+/// could not keep up. Unlike cadence conversion, this indicates actionable output pressure.</param>
 public readonly record struct ClipCompositionOutputStats(
     string OutputId,
     string DisplayName,
@@ -2744,7 +2807,8 @@ public readonly record struct ClipCompositionOutputStats(
     int QueuedFrames,
     int QueueCapacity,
     long PresentDropped = 0,
-    long PresentRepeated = 0);
+    long PresentRepeated = 0,
+    long BackpressureDropped = 0);
 
 public readonly record struct ClipCompositionDriftWarning(
     string CompositionId,

@@ -86,7 +86,10 @@ internal sealed class RecordVideoOutput : IVideoOutput
         lock (_gate)
             sink = _sink;
 
-        sink?.Submit(frame);
+        if (sink is not null)
+            sink.Submit(frame);
+        else
+            frame.Dispose();
     }
 
     /// <summary>

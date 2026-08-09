@@ -718,25 +718,29 @@ public static class Dialogs
             "Add composition",
             "a canvas · size, rate and idle image, and nothing else (register item 21)",
             fields,
-            prompt => journal.Do(new AddItemCommand<CompositionDefinition>(
-                project.Compositions,
-                new CompositionDefinition
+            prompt =>
+            {
+                var composition = new CompositionDefinition
                 {
                     Name = prompt["Name"].Value.Trim(),
                     Width = Math.Clamp(prompt["Width"].Number(1920), 16, 16384),
                     Height = Math.Clamp(prompt["Height"].Number(1080), 16, 16384),
-                    // Comma or point, because a keyboard set to German types one and the invariant
-                    // parse wants the other — and a rate silently falling back to 30 is a canvas that
-                    // does not match the screen it was authored for.
-                    FramesPerSecond = double.TryParse(
-                        prompt["Rate"].Value.Trim().Replace(',', '.'),
-                        System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture,
-                        out var rate) && rate is > 0 and <= 480 ? rate : 60,
-                },
-                project.Compositions.Count,
-                "video",
-                $"add composition “{prompt["Name"].Value.Trim()}”")));
+                };
+                // Comma or point, because a keyboard set to German types one and the invariant parse
+                // wants the other. SetFrameRate persists the recovered exact numerator/denominator too.
+                var parsedRate = double.TryParse(
+                    prompt["Rate"].Value.Trim().Replace(',', '.'),
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var rate) && rate is > 0 and <= 480 ? rate : 60;
+                composition.SetFrameRate(parsedRate);
+                journal.Do(new AddItemCommand<CompositionDefinition>(
+                    project.Compositions,
+                    composition,
+                    project.Compositions.Count,
+                    "video",
+                    $"add composition “{prompt["Name"].Value.Trim()}”"));
+            });
     }
 
     /// <summary>

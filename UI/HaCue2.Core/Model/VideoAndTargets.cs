@@ -1,3 +1,5 @@
+using S.Media.Core.Video;
+
 namespace HaCue2.Core.Model;
 
 /// <summary>
@@ -24,7 +26,55 @@ public sealed record CompositionDefinition
     /// projector fed 30 into a 60 Hz panel judders visibly on horizontal movement. A show that wants 30
     /// can still say so.
     /// </remarks>
-    public double FramesPerSecond { get; set; } = 60;
+    private double _framesPerSecond = 60;
+
+    public double FramesPerSecond
+    {
+        get => _framesPerSecond;
+        set
+        {
+            _framesPerSecond = value;
+            var exact = Rational.FromFramesPerSecond(value);
+            FrameRateNumerator = exact.Numerator;
+            FrameRateDenominator = exact.Denominator;
+        }
+    }
+
+    /// <summary>
+    /// Exact persisted canvas rate. Zero means a legacy document that only has
+    /// <see cref="FramesPerSecond"/>; the compiler recovers the best rational in that case.
+    /// </summary>
+    public int FrameRateNumerator { get; set; }
+
+    public int FrameRateDenominator { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Rational ExactFrameRate
+    {
+        get
+        {
+            if (FrameRateNumerator > 0 && FrameRateDenominator > 0)
+                return Rational.Reduce(FrameRateNumerator, FrameRateDenominator);
+            return Rational.FromFramesPerSecond(FramesPerSecond);
+        }
+    }
+
+    public void SetFrameRate(double framesPerSecond)
+    {
+        FramesPerSecond = framesPerSecond;
+    }
+
+    public void SetFrameRate(Rational frameRate)
+    {
+        var exact = Rational.Reduce(frameRate.Numerator, frameRate.Denominator);
+        if (exact.Numerator <= 0 || exact.Denominator <= 0)
+            throw new ArgumentOutOfRangeException(nameof(frameRate));
+        FrameRateNumerator = exact.Numerator;
+        FrameRateDenominator = exact.Denominator;
+        // Do not route this through the decimal setter: its legacy recovery intentionally snaps and
+        // approximates, which would destroy an explicitly authored uncommon ratio.
+        _framesPerSecond = exact.ToDouble();
+    }
 
     /// <summary>Shown when the canvas is empty. Takes precedence over an output's own fallback.</summary>
     public string IdleImagePath { get; set; } = "";

@@ -670,14 +670,12 @@ public static class ShowCompiler
     /// The canvas rate as an exact ratio.
     /// </summary>
     /// <remarks>
-    /// The document can only store a <see cref="double"/>, and the naive <c>fps * 1000 / 1000</c> turned
-    /// 59.94 into 59940/1000 - about a part per million off 60000/1001, which is a frame an hour but also
-    /// the difference between exactly matching an NTSC-rate panel and slowly beating against it.
-    /// <see cref="Rational.FromFramesPerSecond"/> recovers the intended ratio.
+    /// New documents persist numerator/denominator. Legacy documents carry only a <see cref="double"/>;
+    /// <see cref="CompositionDefinition.ExactFrameRate"/> recovers the intended common ratio for those.
     /// </remarks>
     private static ShowComposition Composition(CompositionDefinition composition)
     {
-        var rate = Rational.FromFramesPerSecond(composition.FramesPerSecond);
+        var rate = composition.ExactFrameRate;
         if (rate.Numerator <= 0 || rate.Denominator <= 0)
             rate = new Rational(60, 1);
 

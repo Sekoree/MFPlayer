@@ -181,6 +181,33 @@ public class MediaClockTests
         Assert.InRange(observed, expected * 0.4, expected * 1.75 + 3);
     }
 
+    [TimingFact]
+    public void Rational_coalescing_clock_skips_missed_video_deadlines_instead_of_bursting_them()
+    {
+        using var clock = new MediaClock(
+            audioTickInterval: TimeSpan.FromSeconds(1),
+            videoFrameRate: new Rational(100, 1),
+            videoTickCatchUpPolicy: VideoTickCatchUpPolicy.Coalesce);
+        var ticks = 0;
+        using var gotSecond = new ManualResetEventSlim(false);
+        clock.VideoTick += (_, _) =>
+        {
+            if (Interlocked.Increment(ref ticks) == 1)
+                Thread.Sleep(80);
+            else
+                gotSecond.Set();
+        };
+
+        clock.Start();
+        Assert.True(gotSecond.Wait(TimeSpan.FromSeconds(2)));
+        clock.Pause();
+
+        Assert.True(clock.SkippedVideoTicks >= 5,
+            $"expected the 80 ms handler to coalesce several 10 ms deadlines, got {clock.SkippedVideoTicks}");
+        Assert.True(clock.LastVideoTickIndex > ticks,
+            "the grid index should advance across skipped deadlines instead of replaying every one");
+    }
+
     [Fact]
     public void Pause_StopsTickingPromptly()
     {

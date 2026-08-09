@@ -124,7 +124,7 @@ public class CompositionOutputStatsTests
     }
 
     [Fact]
-    public async Task ClampsAnAbsurdPresentLatency_SoOneBadOutputCannotDesyncTheCanvas()
+    public async Task ReportsPresentLatencyWithoutFeedingOrClampingTheCompositionTimeline()
     {
         var registry = MediaRegistry.Build(_ => { });
         await using var session = new ShowSession(registry);
@@ -136,7 +136,7 @@ public class CompositionOutputStatsTests
         var stats = await session.GetCompositionStatsAsync("screen");
 
         Assert.NotNull(stats);
-        Assert.Equal(TimeSpan.FromMilliseconds(250), stats!.Value.MeasuredPresentLatency);
+        Assert.Equal(TimeSpan.FromSeconds(5), stats!.Value.MeasuredPresentLatency);
     }
 
     [Fact]
@@ -155,6 +155,36 @@ public class CompositionOutputStatsTests
 
         Assert.NotNull(stats);
         Assert.Equal(TimeSpan.Zero, stats!.Value.MeasuredPresentLatency);
+    }
+
+    [Fact]
+    public async Task Non_blocking_outputs_are_not_hidden_behind_a_second_queue()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        session.LoadDocument(OneComposition());
+
+        Assert.True(await session.AttachCompositionOutputAsync(
+            "screen", new DiscardingVideoOutput(), outputId: "prompt"));
+
+        var stats = await session.GetCompositionStatsAsync("screen");
+        var row = Assert.Single(stats!.Value.OutputStats, item => item.OutputId == "prompt");
+        Assert.Equal(0, row.QueueCapacity);
+    }
+
+    [Fact]
+    public async Task Potentially_blocking_outputs_get_one_latest_frame_of_isolation()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        session.LoadDocument(OneComposition());
+
+        Assert.True(await session.AttachCompositionOutputAsync(
+            "screen", new DroppingDiagnosticOutput(), outputId: "blocking"));
+
+        var stats = await session.GetCompositionStatsAsync("screen");
+        var row = Assert.Single(stats!.Value.OutputStats, item => item.OutputId == "blocking");
+        Assert.Equal(1, row.QueueCapacity);
     }
 
     private sealed class DroppingDiagnosticOutput : IVideoOutput, IVideoOutputPresentDiagnostics

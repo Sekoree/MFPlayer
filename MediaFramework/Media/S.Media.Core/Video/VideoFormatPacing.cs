@@ -15,12 +15,9 @@ public static class VideoFormatPacing
     /// How much faster than the source's frame rate a scheduled presentation tick runs by default.
     /// </summary>
     /// <remarks>
-    /// Must be greater than 1. A tick running AT the source rate beats against it: the two have
-    /// independent phase, so periodically two frames come due in one tick and periodically none does.
-    /// A scheduler that keeps only the newest due frame therefore discards a decoded frame outright on
-    /// every beat crossing - before any downstream consumer can see it. Oversampling guarantees at most
-    /// one frame comes due per tick, and halves the worst-case wait between a frame becoming due and
-    /// being handed on.
+    /// A tick running at the source rate beats against it because the two have independent phase.
+    /// The player preserves multiple due timestamps, so oversampling is a latency choice rather than a
+    /// frame-retention requirement: 2x halves the worst-case wait between due time and handoff.
     /// </remarks>
     public const double DefaultPresentationOversample = 2d;
 

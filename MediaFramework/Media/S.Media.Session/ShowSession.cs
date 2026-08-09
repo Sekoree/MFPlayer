@@ -1144,6 +1144,12 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 }
             }
 
+            // PlayheadOffset is subtracted by VideoPlayer. Apply the inverse at the composition's own
+            // PTS selection/render boundary as well, otherwise the player queues look-ahead frames that
+            // a per-layer alignment clock deliberately refuses to select.
+            foreach (var placed in layers)
+                placed.Slot.TimeSelectionOffset = -VideoPlayheadOffset;
+
             // Video half of a fade-in (and of a crossfade's incoming voice): like the audio routes attach
             // silent (gain 0) below, the layers attach BLACK (fade 0) so no full-opacity frame can composite
             // before the ramp's first step - StartFadeIn lifts them back to full, which is preserved as the
@@ -1253,7 +1259,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                     if (overlay is not null)
                     {
                         subtitleAttachments.Add(subtitleComposition.AttachSubtitleOverlay(
-                            overlay, group.Timeline, nextLayerIndex++));
+                            overlay,
+                            group.Timeline,
+                            nextLayerIndex++,
+                            positionOffsetProvider: () => -VideoPlayheadOffset));
                     }
                 }
             }

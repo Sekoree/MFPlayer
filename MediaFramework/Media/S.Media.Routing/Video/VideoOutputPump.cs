@@ -43,7 +43,7 @@ public readonly record struct VideoOutputPumpAttachOptions(
 /// Subscribe to <see cref="VideoOutputPump.PumpPressure"/> (or <see cref="VideoRouter.PumpPressure"/> when registered via the router)
 /// for per-drop callbacks on the <see cref="Submit"/> thread (same idea as <c>AudioRouter.PumpPressure</c>).
 /// </remarks>
-public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl, IVideoOutputCooperativeAbort, IDisposable
+public sealed class VideoOutputPump : INonBlockingVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl, IVideoOutputCooperativeAbort, IDisposable
 {
     private readonly IVideoOutput _inner;
     private readonly bool _disposeInner;

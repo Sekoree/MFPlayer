@@ -125,8 +125,8 @@ public static class OutputPresentation
                 Name = output.Name,
                 Detail = string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{stats.TargetFramesPerSecond:0.##} · {stats.FramesBehindMaster} late"),
-                Gel = stats.FramesBehindMaster > 0 ? Gel.Amber : Gel.Green,
+                    $"{stats.TargetFramesPerSecond:0.##} · {stats.MissedCompositionDeadlines} missed"),
+                Gel = stats.MissedCompositionDeadlines > 0 ? Gel.Amber : Gel.Green,
             });
         }
 
@@ -157,11 +157,11 @@ public static class OutputPresentation
                 Name = Name(project, item),
                 Fps = Rate(item, achieved.GetValueOrDefault(item.CompositionId, -1)),
                 Layers = item.LayerCount.ToString(CultureInfo.InvariantCulture),
-                // Behind the clock master is the number that means "somebody saw a stutter". Amber at
-                // one, for the same reason a dropped audio chunk is.
-                Late = item.FramesBehindMaster == 0
+                // A coalesced canvas deadline is an actual frame the renderer did not produce. The old
+                // master-drift counter was a sampled duration estimate, not an observed frame loss.
+                Late = item.MissedCompositionDeadlines == 0
                     ? new Status("0")
-                    : new Status(item.FramesBehindMaster.ToString(CultureInfo.InvariantCulture), Gel.Amber),
+                    : new Status(item.MissedCompositionDeadlines.ToString(CultureInfo.InvariantCulture), Gel.Amber),
                 Dropped = Dropped(item),
                 Gpu = item.CompositorBackend,
             }),
@@ -235,22 +235,26 @@ public static class OutputPresentation
     }
 
     /// <summary>
-    /// Every stage that can lose a frame, including the last one.
+    /// Keeps source sampling, missed canvas work, output pressure and normal cadence conversion distinct.
     /// </summary>
     /// <remarks>
-    /// The composition-level counters only see as far as the pump. A window output presents on its own
-    /// vblank and drops there, and because its Submit hands off without blocking, the pump's queue never
-    /// backs up and its drop count never moves — so this column read a confident 0 through a visibly
-    /// stuttering output. Summing the per-output present drops is what makes the number honest.
-    /// Repeats are deliberately NOT added: a canvas slower than the panel repeats a frame rather than
-    /// losing one, which is not a fault and would otherwise read as a fault here.
+    /// Device skip/repeat is expected when canvas and panel rates differ, so it must not be added to
+    /// pressure or source-unsampled counts and coloured as one generic failure.
     /// </remarks>
     private static string Dropped(ClipCompositionRuntimeStats stats)
     {
-        var total = stats.SlotOverflowFrames + stats.PumpOverruns;
+        long pressure = 0;
+        long cadenceDrops = 0;
+        long cadenceRepeats = 0;
         foreach (var output in stats.OutputStats)
-            total += output.PresentDropped;
-        return total.ToString(CultureInfo.InvariantCulture);
+        {
+            pressure += output.BackpressureDropped;
+            cadenceDrops += output.PresentDropped;
+            cadenceRepeats += output.PresentRepeated;
+        }
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"overflow {stats.SlotOverflowFrames} · sample {stats.SourceSamplesSkipped} · canvas {stats.MissedCompositionDeadlines} · pressure {pressure} · cadence {cadenceDrops}/{cadenceRepeats}");
     }
 }
 

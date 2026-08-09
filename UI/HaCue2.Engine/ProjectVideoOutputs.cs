@@ -1,6 +1,7 @@
 using HaCue2.Core.Model;
 using S.Media.Core.Video;
 using S.Media.NDI;
+using S.Media.NDI.Video;
 using S.Media.Present.SDL3;
 using S.Media.Session;
 
@@ -227,7 +228,11 @@ public sealed class ProjectVideoOutputs : IDisposable
                 try
                 {
                     var sender = new NDIOutput(
-                        output.TargetHint.Length > 0 ? output.TargetHint : output.Name);
+                        output.TargetHint.Length > 0 ? output.TargetHint : output.Name,
+                        // The composition is already the cadence owner. SDK pacing here would add a
+                        // second clock and make its worker queue absorb their beat difference.
+                        clockVideo: false,
+                        videoTimecodeMode: NDIVideoTimecodeMode.PresentationRelativeTicks);
 
                     senders.Add(sender);
                     opened.Add(new OpenVideoOutput(output.Id, compositionId, sender.Video));

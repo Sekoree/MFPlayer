@@ -127,7 +127,7 @@ public sealed class VideoRouter : IDisposable
         // Default ergonomics (Phase 2): pump-by-default so new outputs don't silently stall the clock
         // thread on a slow Submit. Callers that know their output is prompt opt out with synchronous: true;
         // callers that want a tuned pump pass asyncPump explicitly.
-        if (!synchronous && asyncPump is null)
+        if (!synchronous && asyncPump is null && output is not INonBlockingVideoOutput)
         {
             asyncPump = new VideoOutputPumpAttachOptions(
                 DisposeInnerOutputWhenPumpDisposes: disposeOutputOnRouterDispose);

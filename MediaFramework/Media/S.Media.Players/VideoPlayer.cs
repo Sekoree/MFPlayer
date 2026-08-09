@@ -14,8 +14,9 @@ namespace S.Media.Players;
 /// Glues an <see cref="IVideoSource"/>, an <see cref="IVideoOutput"/>, and an
 /// <see cref="IMediaClock"/> together. A background decode thread keeps a
 /// small presentation queue full; on each <see cref="IMediaClock.VideoTick"/>
-/// the player picks the most recent frame whose PTS is at or before the
-/// playhead, drops anything stale, and submits to the output.
+/// the player forwards every frame whose PTS is at or before the playhead in timestamp order. Truly
+/// late frames are collapsed to the newest recovery sample; downstream timestamp-aware consumers can
+/// retain irregular/VFR samples while low-latency display queues may independently choose latest-wins.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -52,6 +53,9 @@ public sealed class VideoPlayer : IDisposable
     private readonly IVideoOutput _sink;
     private readonly IMediaClock _clock;
     private readonly ConcurrentQueue<VideoFrame> _queue = new();
+    // Clock-driver-thread scratch. Forwarding all due samples is important for VFR: collapsing them here
+    // prevents a downstream composition from ever sampling the timestamp that was discarded.
+    private readonly List<VideoFrame> _dueFrames = [];
     private readonly object _queueGate = new();
     // Never dispose/recreate mid-flight: a clock tick may already be inside a dequeue loop
     // after its IsRunning check (see DrainQueue).
@@ -616,7 +620,7 @@ public sealed class VideoPlayer : IDisposable
         var early = playhead + EarlyTolerance;
         var lateCutoff = playhead - LateThreshold;
 
-        VideoFrame? toShow = null;
+        _dueFrames.Clear();
         // Anti-freeze / catch-up fallback. When the playhead has run past EVERY queued frame - decode
         // fell behind after a seek or a high-variance scene and the shallow queue drained - we used to
         // drop them all and present nothing, which froze the picture permanently (the freerun clock never
@@ -625,11 +629,10 @@ public sealed class VideoPlayer : IDisposable
         // each tick lets video visually catch up as the decode bursts land.
         VideoFrame? newestLate = null;
 
-        // Walk the queue forward as long as the next frame's PTS is in the
-        // past (or within early tolerance). We always prefer the latest such
-        // frame - older candidates are dropped as "skipped" when we find a
-        // newer one. Frames more than LateThreshold behind are held as the
-        // newest-late fallback (newest wins) rather than discarded outright.
+        // Walk the queue forward as long as the next frame's PTS is in the past (or within early
+        // tolerance). Preserve every on-time timestamp: a compositor can sample that VFR sequence at
+        // its own fixed canvas cadence, while each physical/network output remains free to drop stale
+        // submissions locally. Frames beyond LateThreshold are collapsed to the newest recovery sample.
         lock (_queueGate)
         {
             while (_queue.TryPeek(out var head))
@@ -651,46 +654,44 @@ public sealed class VideoPlayer : IDisposable
                     continue;
                 }
 
-                if (toShow is not null)
-                {
-                    toShow.Dispose();
-                    Interlocked.Increment(ref _droppedLate);
-                }
-                toShow = frame;
+                _dueFrames.Add(frame);
             }
         }
 
-        if (toShow is not null)
+        if (_dueFrames.Count > 0)
         {
-            // An on-time frame won this tick; the older late fallback is superseded.
+            // At least one on-time frame won this tick; the older late fallback is superseded.
             if (newestLate is not null)
             {
                 newestLate.Dispose();
                 Interlocked.Increment(ref _droppedLate);
             }
         }
-        else
+        else if (newestLate is not null)
         {
             // Nothing on time - present the newest late frame (if any) so the picture keeps moving.
-            toShow = newestLate;
+            _dueFrames.Add(newestLate);
         }
 
-        if (toShow is not null)
+        if (_dueFrames.Count > 0)
         {
-            // Capture a managed snapshot of the last-frame plane data the moment we know this
-            // is the final frame the source will produce - must happen before _sink.Submit takes
-            // ownership (the output may free the underlying buffers via the frame's release).
-            // Skipped for hardware-backed frames: their lifetime is tied to the source's release
-            // and there's no portable way to fork an additional refcounted view here.
-            if (HoldLastFrameAtEnd && _heldPlanes is null
-                && _source.IsExhausted && _queue.IsEmpty
-                && toShow.DmabufNv12 is null && toShow.DmabufP010 is null
-                && toShow.DmabufP016 is null && toShow.Win32Nv12 is null)
+            for (var i = 0; i < _dueFrames.Count; i++)
             {
-                CaptureHeldFrame(toShow);
-            }
+                var toShow = _dueFrames[i];
+                // Capture a managed snapshot of the final submitted frame before ownership moves.
+                // Skipped for hardware-backed frames whose lifetime cannot be portably forked.
+                if (i == _dueFrames.Count - 1
+                    && HoldLastFrameAtEnd && _heldPlanes is null
+                    && _source.IsExhausted && _queue.IsEmpty
+                    && toShow.DmabufNv12 is null && toShow.DmabufP010 is null
+                    && toShow.DmabufP016 is null && toShow.Win32Nv12 is null)
+                {
+                    CaptureHeldFrame(toShow);
+                }
 
-            TrySubmitFrameToSink(toShow, "OnVideoTick", logFirstSubmission: true);
+                TrySubmitFrameToSink(toShow, "OnVideoTick", logFirstSubmission: true);
+            }
+            _dueFrames.Clear();
         }
         else if (_source.IsExhausted && _queue.IsEmpty)
         {
