@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace S.Media.FFmpeg.Common;
 
 /// <summary>
@@ -165,20 +167,101 @@ public static class FFmpegRuntime
         }
     }
 
+    /// <summary>Directory holding a complete FFmpeg native set, overriding every other probe.</summary>
+    public const string EnvironmentOverride = "MFP_FFMPEG_LIB";
+
+    /// <summary>
+    /// Picks the directory the bindings load from: explicit override, then a matching SYSTEM FFmpeg, then
+    /// an app-local/dev bundle.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// AutoGen loads VERSIONED names (<c>libavcodec.so.62</c> / <c>avcodec-62.dll</c>), so the ABI major
+    /// has to match exactly - a system FFmpeg one major newer is not a near miss, it simply does not load.
+    /// This used to return <c>""</c> on every non-Windows platform, i.e. "whatever the system loader finds
+    /// and nothing else", so a distro that moved to the next FFmpeg left no way to run at all short of
+    /// downgrading the whole machine. The app-local bundle is that way.
+    /// </para>
+    /// <para>
+    /// System first, bundle second, matching the native-dependency policy: a distro FFmpeg is patched and
+    /// updated by someone, and is preferred whenever its ABI major is the one this build binds.
+    /// </para>
+    /// </remarks>
     internal static string ResolveDefaultRootPath()
     {
-        // dlopen/dyld resolve AutoGen's versioned bare library names through the configured
-        // system loader paths. The shipped FFmpeg.GPL fallback is Windows-only.
-        if (!OperatingSystem.IsWindows())
-            return "";
+        var required = RequiredNativeFileNames();
 
-        var requiredFiles = ffmpeg.LibraryVersionMap
-            .Select(entry => $"{entry.Key}-{entry.Value}.dll")
-            .ToArray();
+        var configured = Environment.GetEnvironmentVariable(EnvironmentOverride);
+        if (!string.IsNullOrWhiteSpace(configured)
+            && FindCompleteNativeDirectory([configured], required) is { } overridden)
+        {
+            return overridden;
+        }
 
-        return FindCompleteNativeDirectory(
-                   WindowsSystemDirectories(), requiredFiles, AppContext.BaseDirectory)
-               ?? AppContext.BaseDirectory;
+        // On unix an empty root means "ask the loader", which knows ldconfig's cache and every path this
+        // code cannot enumerate - so when the scan finds a match, hand the job back to it rather than
+        // pinning one directory.
+        if (FindCompleteNativeDirectory(SystemLibraryDirectories(), required, AppContext.BaseDirectory) is { } system)
+            return OperatingSystem.IsWindows() ? system : "";
+
+        if (FindCompleteNativeDirectory(AppLocalDirectories(), required) is { } local)
+            return local;
+
+        return OperatingSystem.IsWindows() ? AppContext.BaseDirectory : "";
+    }
+
+    /// <summary>The exact file names this build's bindings will ask the loader for.</summary>
+    private static string[] RequiredNativeFileNames() =>
+        [.. ffmpeg.LibraryVersionMap.Select(entry =>
+            OperatingSystem.IsWindows() ? $"{entry.Key}-{entry.Value}.dll"
+            : OperatingSystem.IsMacOS() ? $"lib{entry.Key}.{entry.Value}.dylib"
+            : $"lib{entry.Key}.so.{entry.Value}")];
+
+    private static IEnumerable<string> SystemLibraryDirectories()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            foreach (var directory in WindowsSystemDirectories())
+                yield return directory;
+            yield break;
+        }
+
+        yield return "/usr/lib";
+        yield return "/usr/lib64";
+        yield return "/usr/lib/x86_64-linux-gnu";
+        yield return "/usr/lib/aarch64-linux-gnu";
+        yield return "/usr/local/lib";
+        yield return "/opt/homebrew/lib";
+
+        var libraryPath = Environment.GetEnvironmentVariable(
+            OperatingSystem.IsMacOS() ? "DYLD_LIBRARY_PATH" : "LD_LIBRARY_PATH");
+        if (string.IsNullOrWhiteSpace(libraryPath))
+            yield break;
+        foreach (var directory in libraryPath.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            yield return directory;
+    }
+
+    /// <summary>
+    /// Where a bundled build lives: next to the app when deployed, and under
+    /// <c>External/ffmpeg/&lt;rid&gt;</c> when running from a checkout (what <c>scripts/fetch-ffmpeg.sh</c>
+    /// populates), so a dev run needs no environment variable.
+    /// </summary>
+    private static IEnumerable<string> AppLocalDirectories()
+    {
+        var baseDirectory = AppContext.BaseDirectory;
+        yield return baseDirectory;
+        yield return Path.Combine(baseDirectory, "ffmpeg");
+
+        var rid = $"{(OperatingSystem.IsWindows() ? "win" : OperatingSystem.IsMacOS() ? "osx" : "linux")}-"
+                  + RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
+
+        var directory = baseDirectory;
+        for (var depth = 0; depth < 8 && !string.IsNullOrEmpty(directory); depth++)
+        {
+            yield return Path.Combine(directory, "External", "ffmpeg", rid);
+            directory = Path.GetDirectoryName(directory.TrimEnd(
+                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        }
     }
 
     /// <summary>Returns the first directory containing one coherent native-library set.</summary>

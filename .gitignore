@@ -471,3 +471,5 @@ $RECYCLE.BIN/
 
 # projectM dev builds (scripts/build-projectm.sh output; host-supplied, never committed)
 /External/projectm/
+# Staged FFmpeg shared build (scripts/fetch-ffmpeg.sh) - 60 MB of GPL binaries, refetchable.
+/External/ffmpeg/
