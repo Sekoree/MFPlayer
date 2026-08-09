@@ -224,6 +224,41 @@ public sealed class StatusTests
         }
     }
 
+    [Fact]
+    public void AMachineThatCannotDecodeAnythingIsReportedAsAnError_NotAsAHealthyProject()
+    {
+        // The failure this row exists for: the decoder's natives do not load, so every probe comes back
+        // empty and every cue row badges "offline" — while the files are all present, so the media check
+        // passes and the status bar says "no issues" over a show that cannot play a note.
+        var fixture = new TestProject().WithFoldbackFed();
+        var environment = new FakeEnvironment
+        {
+            MediaDecodingUnavailableReason = "FFmpeg native libraries are not loadable.",
+        };
+        environment.Files.Add(fixture.Track.MediaPath);
+
+        var report = ProjectStatus.Run(fixture.Project, environment: environment);
+
+        var check = report.Checks.Single(c => c.Name == "Media decoding");
+        Assert.Equal(CheckOutcome.Failed, check.Outcome);
+        Assert.Contains("not loadable", check.Issues.Single().Message, StringComparison.Ordinal);
+        Assert.NotEqual(0, report.ExitCode);
+    }
+
+    [Fact]
+    public void AMachineThatCanDecodeSaysSoWithoutRaisingAnIssue()
+    {
+        var fixture = new TestProject().WithFoldbackFed();
+        var environment = new FakeEnvironment();
+        environment.Files.Add(fixture.Track.MediaPath);
+
+        var check = ProjectStatus.Run(fixture.Project, environment: environment)
+            .Checks.Single(c => c.Name == "Media decoding");
+
+        Assert.Equal(CheckOutcome.Passed, check.Outcome);
+        Assert.Empty(check.Issues);
+    }
+
     private sealed class FakeEnvironment : IProjectEnvironment
     {
         public HashSet<string> Files { get; } = new(StringComparer.Ordinal);
@@ -242,5 +277,7 @@ public sealed class StatusTests
 
         public PreparedSourceAvailability PreparedSource(string sourceUri) =>
             PreparedSources.GetValueOrDefault(sourceUri, PreparedSourceAvailability.Unknown);
+
+        public string? MediaDecodingUnavailableReason { get; set; }
     }
 }

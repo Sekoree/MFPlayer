@@ -16,7 +16,10 @@ public sealed class FFmpegModule : IMediaModule
     public void Register(IMediaRegistryBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        FFmpegRuntime.EnsureInitialized();
+        // Non-throwing: a machine with no usable FFmpeg must still start, so the operator can see the
+        // reason on the status screen rather than a splash-less crash. The capabilities are registered
+        // either way; each one throws the diagnosable message when it is actually used.
+        FFmpegRuntime.TryEnsureInitialized();
 
         builder
             .AddDecoder(new FFmpegDecoderProvider())

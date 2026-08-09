@@ -58,6 +58,19 @@ public interface IProjectEnvironment
     /// headless environments honest: they did not inspect a source cache and therefore say unknown.
     /// </summary>
     PreparedSourceAvailability PreparedSource(string sourceUri) => PreparedSourceAvailability.Unknown;
+
+    /// <summary>
+    /// Null when this machine can decode media at all; otherwise why it cannot.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="MediaExists"/> because the two failures look identical to an operator and
+    /// need opposite responses. A file that is genuinely gone wants relinking. A machine whose decoder
+    /// cannot load makes EVERY file unreadable while every one of them is still sitting there — so the
+    /// media check passes, the cue rows all go red, and the status bar says "no issues" over a show that
+    /// cannot play a note. Reported as its own row so the one real fault is stated once, at the top,
+    /// instead of being inferred from a project that looks simultaneously fine and broken.
+    /// </remarks>
+    string? MediaDecodingUnavailableReason => null;
 }
 
 /// <summary>

@@ -20,9 +20,41 @@ public static class FFmpegRuntime
     private static readonly Lock Gate = new();
     private static volatile bool _initialized;
     private static int _ignoredRootPathLogged;
+    private static volatile string? _unavailableReason;
 
-    /// <summary>Initializes the dynamic bindings, optionally overriding the native lookup path.</summary>
+    /// <summary>
+    /// Null when the native bindings are usable; otherwise an operator-facing explanation of why not.
+    /// </summary>
+    public static string? UnavailableReason
+    {
+        get
+        {
+            TryEnsureInitialized();
+            return _unavailableReason;
+        }
+    }
+
+    /// <summary>Whether FFmpeg calls will actually work. Initializes on first use.</summary>
+    public static bool IsAvailable => UnavailableReason is null;
+
+    /// <summary>
+    /// Initializes the dynamic bindings, optionally overriding the native lookup path, and throws with a
+    /// diagnosable message when the natives are missing or the wrong ABI major.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The bindings loaded no usable native FFmpeg. The message names the required and the found sonames.
+    /// </exception>
     public static void EnsureInitialized(string? rootPath = null)
+    {
+        TryEnsureInitialized(rootPath);
+        ThrowIfUnavailable();
+    }
+
+    /// <summary>
+    /// Initializes without throwing, for callers that must survive a machine with no usable FFmpeg
+    /// (module registration, capability probes). Check <see cref="IsAvailable"/> afterwards.
+    /// </summary>
+    public static void TryEnsureInitialized(string? rootPath = null)
     {
         if (_initialized)
         {
@@ -42,6 +74,94 @@ public static class FFmpegRuntime
 
             DynamicallyLoadedBindings.Initialize();
             _initialized = true;
+            _unavailableReason = ProbeBindings();
+
+            if (_unavailableReason is not null)
+                MediaDiagnostics.LogWarning("FFmpegRuntime: {0}", _unavailableReason);
+        }
+    }
+
+    /// <summary>Throws when the natives are unusable; no-op otherwise.</summary>
+    public static void ThrowIfUnavailable()
+    {
+        if (_unavailableReason is { } reason)
+            throw new InvalidOperationException(reason);
+    }
+
+    /// <summary>
+    /// Calls one trivial FFmpeg function to find out whether the bindings actually resolved.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="DynamicallyLoadedBindings.Initialize"/> does NOT fail when the natives are absent or the
+    /// wrong ABI major - it populates a function-pointer table lazily and leaves the entries throwing
+    /// <see cref="NotSupportedException"/>. Every call site then dies with "Specified method is not
+    /// supported", which names nothing: no library, no version, no path. That message is how a machine
+    /// with the wrong FFmpeg ends up looking like a project full of missing media, because a probe that
+    /// throws is indistinguishable from a file that will not open. One cheap call here converts that into
+    /// a statement of what is wrong.
+    /// </remarks>
+    private static string? ProbeBindings()
+    {
+        try
+        {
+            _ = ffmpeg.av_version_info();
+            return null;
+        }
+        catch (Exception ex) when (ex is NotSupportedException or DllNotFoundException or EntryPointNotFoundException)
+        {
+            return DescribeMissingNatives(ex);
+        }
+    }
+
+    private static string DescribeMissingNatives(Exception cause)
+    {
+        var required = string.Join(
+            ", ",
+            ffmpeg.LibraryVersionMap
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                .Select(entry => $"{entry.Key}-{entry.Value}"));
+
+        var searched = string.IsNullOrEmpty(ffmpeg.RootPath)
+            ? "the system library path"
+            : $"'{ffmpeg.RootPath}'";
+
+        var found = DescribeFoundVersions();
+
+        return $"FFmpeg native libraries are not loadable, so no media can be opened or probed. "
+               + $"This build binds FFmpeg {required} and looked in {searched}. "
+               + $"Found: {found}. "
+               + "Install a matching FFmpeg (the ABI major must match exactly - a newer or older FFmpeg "
+               + "will not load), or point the app at one. "
+               + $"Underlying failure: {cause.GetType().Name}.";
+    }
+
+    /// <summary>
+    /// What FFmpeg majors ARE present, so the message says "found 63, need 62" rather than only "missing".
+    /// Best-effort: an empty answer is reported as such rather than guessed at.
+    /// </summary>
+    private static string DescribeFoundVersions()
+    {
+        try
+        {
+            var pattern = OperatingSystem.IsWindows() ? "avcodec-*.dll" : "libavcodec.so.*";
+            var directories = OperatingSystem.IsWindows()
+                ? WindowsSystemDirectories()
+                : ["/usr/lib", "/usr/lib64", "/usr/local/lib", "/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu"];
+
+            var hits = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var directory in directories)
+            {
+                if (!Directory.Exists(directory))
+                    continue;
+                foreach (var file in Directory.EnumerateFiles(directory, pattern))
+                    hits.Add(Path.GetFileName(file));
+            }
+
+            return hits.Count == 0 ? "no libavcodec at all" : string.Join(", ", hits);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return "could not enumerate installed versions";
         }
     }
 

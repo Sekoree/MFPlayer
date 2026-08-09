@@ -1,5 +1,6 @@
 using HaCue2.Core.Model;
 using HaCue2.Core.Validation;
+using S.Media.FFmpeg.Common;
 
 namespace HaCue2.Machine;
 
@@ -22,6 +23,12 @@ public sealed class MachineEnvironment(AudioDevices devices) : IProjectEnvironme
 
     public bool MediaExists(string resolvedPath) =>
         FileSystemEnvironment.Instance.MediaExists(resolvedPath);
+
+    /// <summary>
+    /// Whether this machine's FFmpeg natives actually load. The probe that fills the cue rows goes
+    /// through them, so when they do not, every cue reads "offline" with nothing anywhere saying why.
+    /// </summary>
+    public string? MediaDecodingUnavailableReason => FFmpegRuntime.UnavailableReason;
 
     public DeviceAvailability AudioLine(AudioLineDefinition line) => line.Kind switch
     {

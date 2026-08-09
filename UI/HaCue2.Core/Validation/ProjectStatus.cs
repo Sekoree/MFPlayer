@@ -130,6 +130,7 @@ public static class ProjectStatus
 
         var checks = new List<StatusCheck>
         {
+            CheckMediaDecoding(environment),
             CheckMedia(project, projectPath, environment),
             CheckPreparedSources(project, environment),
             CheckAudioLines(project, environment),
@@ -249,6 +250,29 @@ public static class ProjectStatus
                     "audition",
                     id.ToString()),
             ]);
+    }
+
+    /// <summary>
+    /// Can this machine decode anything at all? Asked BEFORE the per-file check, because when the answer
+    /// is no every other media answer is meaningless.
+    /// </summary>
+    /// <remarks>
+    /// The failure this exists for: the decoder's native libraries do not load, so every probe returns
+    /// nothing and every cue is badged offline — while the files are all present, so the media check
+    /// passes and the status bar reads "no issues". The operator is then sent looking for files that were
+    /// never missing. One row, stated plainly, replaces that whole wrong trail.
+    /// </remarks>
+    private static StatusCheck CheckMediaDecoding(IProjectEnvironment environment)
+    {
+        if (environment.MediaDecodingUnavailableReason is not { } reason || string.IsNullOrWhiteSpace(reason))
+            return new StatusCheck("Media decoding", CheckOutcome.Passed, "available", "", []);
+
+        return new StatusCheck(
+            "Media decoding",
+            CheckOutcome.Failed,
+            "unavailable — nothing can play",
+            "",
+            [new ShowValidationIssue(ShowValidationSeverity.Error, reason, "project", null)]);
     }
 
     private static StatusCheck CheckMedia(
