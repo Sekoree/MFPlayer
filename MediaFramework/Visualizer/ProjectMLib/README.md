@@ -16,6 +16,16 @@ auditable changes in [`scripts/patches/`](../../../scripts/patches/):
 
 The build script also installs pinned Milkdrop preset and texture packs under
 `External/projectm/<rid>/`. The managed visualizer supplies the companion texture directory to
-projectM before loading a preset. HaCue2, HaPlay and HaViz import one shared deployment target which
-places this complete tree under the application output; the runtime resolver prefers it over a system
-installation because the patches are part of the compositor contract.
+projectM before loading a preset. HaCue2, HaPlay and HaViz import one shared deployment target
+([`ProjectMDesktopDeployment.targets`](ProjectMDesktopDeployment.targets)) which places this complete
+tree under the application output; the runtime resolver prefers it over a system installation because
+the patches are part of the compositor contract.
+
+That target also *builds* the tree on demand: publishing a desktop head for the host RID with nothing
+staged runs `scripts/build-projectm.sh` itself, so a fresh clone can `dotnet publish` without a
+separate setup step (a few minutes, once — it needs cmake, a C++17 compiler, OpenGL headers and glm).
+A plain `dotnet build` never triggers it and keeps degrading to "no visualizer". Escape hatches:
+`-p:SkipProjectMNativeBuild=true` skips the build *and* the publish gate, `-p:MfpProjectMAutoBuild=false`
+keeps the gate but leaves the build to you. A cross-RID publish cannot auto-build (the script is bash
+and builds for the host), so `External/projectm/<target-rid>/` has to be produced on a machine of that
+RID and copied in.

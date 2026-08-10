@@ -98,6 +98,20 @@ public sealed class ClipCompositionRuntime : IDisposable
     // TimeSpan.Zero sentinel a 0-position master re-primed every tick and drift was never measured.
     private TimeSpan? _lastMasterPosition;
     private IPlaybackClock? _master;
+
+    /// <summary>
+    /// Opt-in per-second cadence trace (<c>MFP_VIDEO_CADENCE_TRACE=1</c>): one Information line per
+    /// composition per second with the DELTAS of every counter that can eat a frame, per stage -
+    /// pump ticks, composites, per-output submits, and the device's own present drop/repeat numbers.
+    /// Judder that every aggregate reads as healthy shows up here as which specific stage repeated
+    /// or skipped, and in which second. Diagnostic only; off, it costs one static bool check per tick.
+    /// </summary>
+    private static readonly bool CadenceTraceEnabled =
+        Environment.GetEnvironmentVariable("MFP_VIDEO_CADENCE_TRACE") == "1";
+
+    private long _traceLastStamp;
+    private ClipCompositionRuntimeStats _tracePrev;
+    private readonly Dictionary<string, ClipCompositionOutputStats> _tracePrevOutputs = new();
     private IPlayhead? _timeline;
     private ITransportTimeline? _transportTimeline;
     // Active transport-bound clips claim the composition clock for the lifetime of their placed layers.
@@ -425,6 +439,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     {
         long slotOverflow = 0;
         long sourceSamplesSkipped = 0;
+        long sourceSamplesRepeated = 0;
         int layerCount;
         lock (_gate)
         {
@@ -433,6 +448,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             {
                 slotOverflow += slot.RawSlot.OverflowFrames;
                 sourceSamplesSkipped += slot.RawSlot.SamplingSkippedFrames;
+                sourceSamplesRepeated += slot.RawSlot.SamplingRepeatedFrames;
             }
         }
 
@@ -456,7 +472,8 @@ public sealed class ClipCompositionRuntime : IDisposable
             _canvasRate.Numerator,
             _canvasRate.Denominator,
             _slaveClock?.SkippedVideoTicks ?? 0,
-            sourceSamplesSkipped);
+            sourceSamplesSkipped,
+            sourceSamplesRepeated);
     }
 
     /// <summary>One throughput row per attached output. Reads the same lock-free output snapshot the pump
@@ -1213,6 +1230,64 @@ public sealed class ClipCompositionRuntime : IDisposable
         DrainRetiredStaticFrames();
         PumpOneFrame();
         CheckMasterDrift();
+        if (CadenceTraceEnabled)
+            TraceCadenceIfDue();
+    }
+
+    /// <summary>Runs on the pump thread; see <see cref="CadenceTraceEnabled"/>.</summary>
+    private void TraceCadenceIfDue()
+    {
+        var now = Stopwatch.GetTimestamp();
+        var last = _traceLastStamp;
+        if (last == 0)
+        {
+            _traceLastStamp = now;
+            _tracePrev = GetStats();
+            return;
+        }
+
+        var elapsed = Stopwatch.GetElapsedTime(last, now);
+        if (elapsed < TimeSpan.FromSeconds(1))
+            return;
+
+        var stats = GetStats();
+        var prev = _tracePrev;
+        _traceLastStamp = now;
+        _tracePrev = stats;
+
+        Trace.LogInformation(
+            "cadence {Composition}: {Sec:0.00}s composited +{Composited} submitted +{Submitted} overruns +{Overruns} skippedTicks +{Skipped} slotOverflow +{Overflow} srcSampleSkip +{SrcSkip} srcSampleRep +{SrcRep} behindMaster +{Behind} pump avg {PumpAvg:0.00}ms max {PumpMax:0.0}ms composite avg {CompAvg:0.00}ms",
+            CompositionName,
+            elapsed.TotalSeconds,
+            stats.FramesComposited - prev.FramesComposited,
+            stats.FramesSubmitted - prev.FramesSubmitted,
+            stats.PumpOverruns - prev.PumpOverruns,
+            stats.MissedCompositionDeadlines - prev.MissedCompositionDeadlines,
+            stats.SlotOverflowFrames - prev.SlotOverflowFrames,
+            stats.SourceSamplesSkipped - prev.SourceSamplesSkipped,
+            stats.SourceSamplesRepeated - prev.SourceSamplesRepeated,
+            stats.FramesBehindMaster - prev.FramesBehindMaster,
+            stats.PumpTiming.WindowAvgMs(prev.PumpTiming),
+            stats.PumpTiming.MaxMs,
+            stats.CompositeTiming.WindowAvgMs(prev.CompositeTiming));
+
+        foreach (var output in stats.OutputStats)
+        {
+            _tracePrevOutputs.TryGetValue(output.OutputId, out var prevOut);
+            _tracePrevOutputs[output.OutputId] = output;
+            Trace.LogInformation(
+                "cadence {Composition} out '{Output}': submitted +{Submitted} refused +{Refused} presDrop +{Dropped} presRep +{Repeated} backpressure +{Bp} queued {Queued}/{Capacity} lat {Latency:0.0}ms",
+                CompositionName,
+                output.DisplayName,
+                output.FramesSubmitted - prevOut.FramesSubmitted,
+                output.FramesRefused - prevOut.FramesRefused,
+                output.PresentDropped - prevOut.PresentDropped,
+                output.PresentRepeated - prevOut.PresentRepeated,
+                output.BackpressureDropped - prevOut.BackpressureDropped,
+                output.QueuedFrames,
+                output.QueueCapacity,
+                stats.MeasuredPresentLatency.TotalMilliseconds);
+        }
     }
 
     private void CheckMasterDrift()
@@ -3027,7 +3102,8 @@ public readonly record struct ClipCompositionRuntimeStats(
     int CanvasFrameRateNum = 0,
     int CanvasFrameRateDen = 1,
     long MissedCompositionDeadlines = 0,
-    long SourceSamplesSkipped = 0)
+    long SourceSamplesSkipped = 0,
+    long SourceSamplesRepeated = 0)
 {
     /// <summary>
     /// The composition's target frame rate, derived from <see cref="CanvasPeriod"/>.

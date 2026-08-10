@@ -91,6 +91,47 @@ public sealed class TimestampSamplingTests
         composite.Dispose();
     }
 
+    [Fact]
+    public void Re_sampling_the_same_frame_counts_as_repeated_and_advancing_does_not()
+    {
+        using var compositor = new CpuVideoCompositor(Canvas);
+        using var mixer = new VideoCompositorSource(Canvas, compositor);
+        var slot = mixer.AddSlot();
+        slot.KeepPolicy = SlotKeepPolicy.MasterAligned;
+        slot.Output.Configure(Canvas);
+
+        slot.Output.Submit(Frame(0, 10));
+        slot.Output.Submit(Frame(50, 20));
+
+        // First sample selects frame 0: an advance, not a repeat.
+        Assert.True(mixer.TryReadNextFrame(
+            canvasAlignmentTime: TimeSpan.FromMilliseconds(10),
+            outputPresentationTime: TimeSpan.FromSeconds(1),
+            defaultSurfaceRenderTime: null,
+            out var first));
+        first.Dispose();
+        Assert.Equal(0, slot.SamplingRepeatedFrames);
+
+        // Second sample at 30 ms: frame 50 is not due yet, so frame 0 is re-shown - one repeat.
+        Assert.True(mixer.TryReadNextFrame(
+            canvasAlignmentTime: TimeSpan.FromMilliseconds(30),
+            outputPresentationTime: TimeSpan.FromSeconds(2),
+            defaultSurfaceRenderTime: null,
+            out var second));
+        second.Dispose();
+        Assert.Equal(1, slot.SamplingRepeatedFrames);
+
+        // Third sample at 60 ms advances to frame 50: repeats stay at one.
+        Assert.True(mixer.TryReadNextFrame(
+            canvasAlignmentTime: TimeSpan.FromMilliseconds(60),
+            outputPresentationTime: TimeSpan.FromSeconds(3),
+            defaultSurfaceRenderTime: null,
+            out var third));
+        third.Dispose();
+        Assert.Equal(1, slot.SamplingRepeatedFrames);
+        Assert.Equal(0, slot.SamplingSkippedFrames);
+    }
+
     private static VideoFrame Frame(int ptsMs, byte blue) => new(
         TimeSpan.FromMilliseconds(ptsMs),
         Canvas,

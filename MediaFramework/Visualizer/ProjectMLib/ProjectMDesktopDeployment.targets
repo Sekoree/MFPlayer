@@ -7,6 +7,12 @@
     (LGPL-2.1); this target only stages the build produced by scripts/build-projectm.sh plus its pinned
     preset/texture packs. Keeping the layout identical to release CI means ProjectMLibraryResolver and
     ProjectMAssetPaths exercise the same paths in IDE builds, direct publishes, and uploaded bundles.
+
+    A publish that finds no staged projectM RUNS scripts/build-projectm.sh itself (same-platform targets
+    only - the script is bash and builds for the host). Publishing is the one place the missing native is
+    fatal, so it is also the one place worth spending the multi-minute C++ build automatically; a plain
+    `dotnet build` keeps its fast, degrade-to-no-visualizer behaviour. Set SkipProjectMNativeBuild=true to
+    opt out entirely (CI's compile-gate job does).
   -->
   <PropertyGroup>
     <MfpProjectMRepositoryRoot Condition="'$(MfpProjectMRepositoryRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../..'))</MfpProjectMRepositoryRoot>
@@ -23,23 +29,132 @@
     <MfpProjectMOutputRoot>External/projectm/$(MfpProjectMDeploymentRid)</MfpProjectMOutputRoot>
   </PropertyGroup>
 
+  <!-- ── Build-on-demand ────────────────────────────────────────────────────────────────────────────
+       scripts/build-projectm.sh only builds for the machine running it (bash + the host toolchain), so
+       auto-building is offered exactly when the publish target IS the host. A cross-RID publish (Linux
+       host, win-x64 target) keeps the diagnostic below, which is the only honest answer there. -->
+  <PropertyGroup>
+    <MfpProjectMBuildScript Condition="'$(MfpProjectMBuildScript)' == ''">$(MfpProjectMRepositoryRoot)/scripts/build-projectm.sh</MfpProjectMBuildScript>
+    <_MfpProjectMHostArch Condition="'$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString())' == 'Arm64'">arm64</_MfpProjectMHostArch>
+    <_MfpProjectMHostArch Condition="'$(_MfpProjectMHostArch)' == ''">x64</_MfpProjectMHostArch>
+    <!-- Windows is deliberately absent: the build script is bash, so a Windows host takes projectM from
+         a prebuilt bundle or MFP_PROJECTM_LIB, exactly as it did before. -->
+    <_MfpProjectMHostOs Condition="$([MSBuild]::IsOSPlatform('Linux'))">linux</_MfpProjectMHostOs>
+    <_MfpProjectMHostOs Condition="$([MSBuild]::IsOSPlatform('OSX'))">osx</_MfpProjectMHostOs>
+    <MfpProjectMHostRid Condition="'$(_MfpProjectMHostOs)' != ''">$(_MfpProjectMHostOs)-$(_MfpProjectMHostArch)</MfpProjectMHostRid>
+
+    <MfpProjectMAutoBuild Condition="'$(MfpProjectMAutoBuild)' == '' And '$(SkipProjectMNativeBuild)' != 'true' And '$(MfpProjectMHostRid)' != '' And '$(MfpProjectMDeploymentRid)' == '$(MfpProjectMHostRid)' And Exists('$(MfpProjectMBuildScript)')">true</MfpProjectMAutoBuild>
+    <MfpProjectMAutoBuild Condition="'$(MfpProjectMAutoBuild)' == ''">false</MfpProjectMAutoBuild>
+
+    <!-- Why the publish could not build it for you, appended to the error below. -->
+    <_MfpProjectMNoAutoBuildReason Condition="'$(MfpProjectMAutoBuild)' != 'true' And '$(MfpProjectMHostRid)' == ''">This host cannot build it automatically (scripts/build-projectm.sh is bash; Windows takes projectM from a prebuilt bundle or MFP_PROJECTM_LIB).</_MfpProjectMNoAutoBuildReason>
+    <_MfpProjectMNoAutoBuildReason Condition="'$(MfpProjectMAutoBuild)' != 'true' And '$(_MfpProjectMNoAutoBuildReason)' == '' And '$(MfpProjectMDeploymentRid)' != '$(MfpProjectMHostRid)'">This publish cross-targets $(MfpProjectMDeploymentRid) from a $(MfpProjectMHostRid) host, and the build script only builds for the host - run it on a $(MfpProjectMDeploymentRid) machine and copy its External/projectm/$(MfpProjectMDeploymentRid) tree here.</_MfpProjectMNoAutoBuildReason>
+    <_MfpProjectMNoAutoBuildReason Condition="'$(_MfpProjectMNoAutoBuildReason)' == ''">Run scripts/build-projectm.sh, or drop MfpProjectMAutoBuild=false to let the publish build it for you.</_MfpProjectMNoAutoBuildReason>
+  </PropertyGroup>
+
+  <!-- Evaluation-time probes of what the static ItemGroups at the bottom of this file will stage. A
+       publish that has to BUILD projectM produces those files AFTER evaluation, so those globs stay
+       empty and MfpStageProjectMBundleForPublish has to add the files itself; these flags are what keeps
+       the two paths from staging the same file twice (NETSDK1152). The Include patterns must stay in
+       lockstep with the corresponding <None> items. -->
+  <ItemGroup>
+    <_MfpProjectMStagedNative Include="$(MfpProjectMTargetRoot)/lib/*projectM*;$(MfpProjectMTargetRoot)/lib64/*projectM*;$(MfpProjectMTargetRoot)/bin/*projectM*" />
+    <_MfpProjectMStagedPreset Condition="'$(MfpProjectMPackRoot)' != ''" Include="$(MfpProjectMPackRoot)/presets/**" />
+    <_MfpProjectMStagedTexture Condition="'$(MfpProjectMPackRoot)' != ''" Include="$(MfpProjectMPackRoot)/textures/**" />
+  </ItemGroup>
+
+  <Target Name="MfpEnsureProjectMNativeBuild" Condition="'$(MfpProjectMAutoBuild)' == 'true'">
+    <!-- Probed inside the target: on a repeat publish the tree already exists and this is a no-op, and
+         after the Exec below the same patterns are what MfpStageProjectMBundleForPublish picks up. -->
+    <ItemGroup>
+      <_MfpProjectMPresentNative Include="$(MfpProjectMTargetRoot)/lib/*projectM*;$(MfpProjectMTargetRoot)/lib64/*projectM*;$(MfpProjectMTargetRoot)/bin/*projectM*" />
+      <_MfpProjectMPresentPreset Include="$(MfpProjectMTargetRoot)/presets/**/*.milk;$(MfpProjectMAssetsRoot)/linux-x64/presets/**/*.milk" />
+      <_MfpProjectMPresentTexture Include="$(MfpProjectMTargetRoot)/textures/**/*;$(MfpProjectMAssetsRoot)/linux-x64/textures/**/*" />
+    </ItemGroup>
+    <PropertyGroup>
+      <!-- Any missing piece re-runs the script: it is idempotent (disposable source tree, stamped preset
+           and texture packs) and a half-populated install tree fails the publish gate either way. -->
+      <_MfpProjectMBuildNeeded Condition="'@(_MfpProjectMPresentNative)' == '' Or '@(_MfpProjectMPresentPreset)' == '' Or '@(_MfpProjectMPresentTexture)' == ''">true</_MfpProjectMBuildNeeded>
+    </PropertyGroup>
+
+    <Message Importance="high" Condition="'$(_MfpProjectMBuildNeeded)' == 'true'"
+             Text="projectM ($(MfpProjectMDeploymentRid)) is not staged under $(MfpProjectMTargetRoot) - building it with scripts/build-projectm.sh. First publish only; this takes a few minutes and needs cmake, a C++17 compiler, OpenGL headers and glm. Pass -p:SkipProjectMNativeBuild=true to publish without the visualizer runtime." />
+    <!-- IgnoreStandardErrorWarningFormat: the projectM C++ build emits its own compiler warnings (e.g.
+         vendored SOIL2 stb_image); don't let MSBuild reattribute them to the app project - with this
+         repo's TreatWarningsAsErrors that would fail the publish on upstream's warnings. -->
+    <Exec Condition="'$(_MfpProjectMBuildNeeded)' == 'true'"
+          Command="bash &quot;$(MfpProjectMBuildScript)&quot;"
+          WorkingDirectory="$(MfpProjectMRepositoryRoot)"
+          IgnoreStandardErrorWarningFormat="true" />
+  </Target>
+
+  <!-- Stages what the build above produced. Only ever adds the asset classes whose evaluation-time glob
+       came up empty - anything already carried by a <None> below is left to it (incremental copy, IDE
+       build output, and publish all in one item). -->
+  <Target Name="MfpStageProjectMBundleForPublish"
+          BeforeTargets="ComputeFilesToPublish"
+          DependsOnTargets="MfpEnsureProjectMNativeBuild">
+    <PropertyGroup>
+      <_MfpProjectMLatePackRoot Condition="Exists('$(MfpProjectMTargetRoot)/presets')">$(MfpProjectMTargetRoot)</_MfpProjectMLatePackRoot>
+      <_MfpProjectMLatePackRoot Condition="'$(_MfpProjectMLatePackRoot)' == '' And Exists('$(MfpProjectMAssetsRoot)/linux-x64/presets')">$(MfpProjectMAssetsRoot)/linux-x64</_MfpProjectMLatePackRoot>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'@(_MfpProjectMStagedNative)' == ''">
+      <_MfpProjectMLateLib Include="$(MfpProjectMTargetRoot)/lib/*projectM*" />
+      <_MfpProjectMLateLib64 Include="$(MfpProjectMTargetRoot)/lib64/*projectM*" />
+      <_MfpProjectMLateBin Include="$(MfpProjectMTargetRoot)/bin/*projectM*" />
+      <ResolvedFileToPublish Include="@(_MfpProjectMLateLib)">
+        <RelativePath>$(MfpProjectMOutputRoot)/lib/%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="@(_MfpProjectMLateLib64)">
+        <RelativePath>$(MfpProjectMOutputRoot)/lib64/%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+      <ResolvedFileToPublish Include="@(_MfpProjectMLateBin)">
+        <RelativePath>$(MfpProjectMOutputRoot)/bin/%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+
+    <ItemGroup Condition="'@(_MfpProjectMStagedPreset)' == '' And '$(_MfpProjectMLatePackRoot)' != ''">
+      <_MfpProjectMLatePreset Include="$(_MfpProjectMLatePackRoot)/presets/**/*" />
+      <ResolvedFileToPublish Include="@(_MfpProjectMLatePreset)">
+        <RelativePath>$(MfpProjectMOutputRoot)/presets/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+
+    <ItemGroup Condition="'@(_MfpProjectMStagedTexture)' == '' And '$(_MfpProjectMLatePackRoot)' != ''">
+      <_MfpProjectMLateTexture Include="$(_MfpProjectMLatePackRoot)/textures/**/*" />
+      <ResolvedFileToPublish Include="@(_MfpProjectMLateTexture)">
+        <RelativePath>$(MfpProjectMOutputRoot)/textures/%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
   <!-- A Linux publish is a distributable application, so silently degrading it to a distro projectM
        defeats the patched-runtime contract. The lightweight CI compile gate opts out because its
-       SkipProjectMNativeBuild job deliberately does not produce an artifact; release jobs do not. -->
+       SkipProjectMNativeBuild job deliberately does not produce an artifact; release jobs do not.
+       Gated on the TARGET rid, not the host OS: cross-publishing win-x64 from Linux used to fail here
+       demanding a scripts/build-projectm.sh run that cannot produce a Windows native. Windows publishes
+       from a Windows host are ungated exactly as before. -->
   <Target Name="MfpValidateProjectMBundleForPublish"
           BeforeTargets="ComputeFilesToPublish"
-          Condition="$([MSBuild]::IsOSPlatform('Linux')) And '$(SkipProjectMNativeBuild)' != 'true'">
+          DependsOnTargets="MfpEnsureProjectMNativeBuild"
+          Condition="$(MfpProjectMDeploymentRid.StartsWith('linux')) And '$(SkipProjectMNativeBuild)' != 'true'">
     <ItemGroup>
-      <_MfpProjectMNative Include="$(MfpProjectMTargetRoot)/lib/*projectM*;$(MfpProjectMTargetRoot)/bin/*projectM*" />
-      <_MfpProjectMPreset Include="$(MfpProjectMPackRoot)/presets/**/*.milk" />
-      <_MfpProjectMTexture Include="$(MfpProjectMPackRoot)/textures/**/*" />
+      <_MfpProjectMNative Include="$(MfpProjectMTargetRoot)/lib/*projectM*;$(MfpProjectMTargetRoot)/lib64/*projectM*;$(MfpProjectMTargetRoot)/bin/*projectM*" />
+      <_MfpProjectMPreset Include="$(MfpProjectMTargetRoot)/presets/**/*.milk;$(MfpProjectMAssetsRoot)/linux-x64/presets/**/*.milk" />
+      <_MfpProjectMTexture Include="$(MfpProjectMTargetRoot)/textures/**/*;$(MfpProjectMAssetsRoot)/linux-x64/textures/**/*" />
     </ItemGroup>
     <Error Condition="'@(_MfpProjectMNative)' == ''"
-           Text="Patched projectM is required in published desktop apps. Run scripts/build-projectm.sh for $(MfpProjectMDeploymentRid) before publishing (or set SkipProjectMNativeBuild=true only for a non-distributable compile gate)." />
+           Text="Patched projectM is required in published desktop apps, and none is staged under $(MfpProjectMTargetRoot). $(_MfpProjectMNoAutoBuildReason) (Or set SkipProjectMNativeBuild=true, for a non-distributable compile gate only.)" />
     <Error Condition="'@(_MfpProjectMPreset)' == ''"
-           Text="The pinned projectM preset pack is missing. Run scripts/build-projectm.sh before publishing." />
+           Text="The pinned projectM preset pack is missing. $(_MfpProjectMNoAutoBuildReason)" />
     <Error Condition="'@(_MfpProjectMTexture)' == ''"
-           Text="The pinned projectM texture pack is missing. Run scripts/build-projectm.sh before publishing." />
+           Text="The pinned projectM texture pack is missing. $(_MfpProjectMNoAutoBuildReason)" />
   </Target>
 
   <ItemGroup Condition="Exists('$(MfpProjectMPackRoot)/presets')">
@@ -57,6 +172,14 @@
   <ItemGroup Condition="Exists('$(MfpProjectMTargetRoot)/lib')">
     <None Include="$(MfpProjectMTargetRoot)/lib/*projectM*" Visible="false"
           Link="$(MfpProjectMOutputRoot)/lib/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Some distributions' CMake installs shared objects to lib64/; the runtime resolver already probes
+       lib64 next to lib, so stage it the same way rather than silently shipping no native. -->
+  <ItemGroup Condition="Exists('$(MfpProjectMTargetRoot)/lib64')">
+    <None Include="$(MfpProjectMTargetRoot)/lib64/*projectM*" Visible="false"
+          Link="$(MfpProjectMOutputRoot)/lib64/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 

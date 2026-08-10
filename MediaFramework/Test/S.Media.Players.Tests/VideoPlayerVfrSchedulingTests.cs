@@ -32,6 +32,33 @@ public sealed class VideoPlayerVfrSchedulingTests
         Assert.Equal(1, player.QueuedFrameCount);
     }
 
+    [Fact]
+    public void Delivery_lead_emits_a_frame_before_its_due_time_without_changing_its_pts()
+    {
+        var source = new TimestampSource(
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.FromMilliseconds(200));
+        var output = new CollectingVideoOutput();
+        // Playhead 92 ms + default 8 ms EarlyTolerance reaches exactly 100 ms: without a lead the
+        // 100 ms frame sits on the decision boundary this feature exists to move away from.
+        var clock = new ManualMediaClock { CurrentPosition = TimeSpan.FromMilliseconds(84) };
+        using var player = new VideoPlayer(source, output, clock, queueCapacity: 4)
+        {
+            DeliveryLead = TimeSpan.FromMilliseconds(10),
+        };
+
+        player.Play();
+        Assert.True(SpinWait.SpinUntil(() => player.QueuedFrameCount == 2, TimeSpan.FromSeconds(2)));
+
+        clock.FireVideoTick();
+
+        // 84 + 8 (tolerance) + 10 (lead) = 102 ms window: the 100 ms frame is emitted a full 16 ms
+        // before its PTS-due instant, keeping its authored timestamp; 200 ms stays queued.
+        Assert.Equal([TimeSpan.FromMilliseconds(100)], output.PresentationTimes.ToArray());
+        Assert.Equal(1, player.QueuedFrameCount);
+        Assert.Equal(0, player.DroppedLate);
+    }
+
     private sealed class TimestampSource(params TimeSpan[] timestamps) : IVideoSource
     {
         private static readonly VideoFormat SourceFormat =

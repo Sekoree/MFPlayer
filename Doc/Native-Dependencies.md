@@ -32,5 +32,10 @@ app-local RID assets) **except**:
 - FFmpeg 8.x, PortAudio and libass usually come from your distro (libass must be 0.17.5+).
 - miniaudio: compile the pinned header once — see the artifact workflow for the two-line build.
 - projectM: run `scripts/build-projectm.sh` (uses `Reference/projectm-4.1.6` when present, else
-  downloads the pinned archive) and export the `MFP_PROJECTM_LIB` line it prints.
+  downloads the pinned archive) and export the `MFP_PROJECTM_LIB` line it prints. Publishing a
+  desktop head (HaPlay/HaCue2/HaViz) for the host RID runs that script for you when nothing is
+  staged under `External/projectm/<rid>/` — `dotnet publish` then takes the extra few minutes once,
+  and needs cmake, a C++17 compiler, OpenGL headers and glm. `-p:SkipProjectMNativeBuild=true`
+  publishes without it (compile gates only — a published app is expected to carry the patched
+  runtime), and a cross-RID publish still needs the tree built on a machine of that RID.
 - MMD physics: `MediaFramework/Native/mmd_bullet/build.sh`.

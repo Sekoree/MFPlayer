@@ -195,6 +195,25 @@ public sealed class VideoPlayer : IDisposable
     public TimeSpan EarlyTolerance { get; set; } = TimeSpan.FromMilliseconds(8);
 
     /// <summary>
+    /// Extra scheduling lead for sinks that SELECT by timestamp rather than show on arrival - a
+    /// compositor layer slot sampling its pending frames at the canvas master time. Frames are
+    /// emitted this much before they are due while keeping their PTS, so the frame for master time
+    /// <c>t</c> is already sitting in the slot when the composition pump samples at <c>t</c>.
+    /// </summary>
+    /// <remarks>
+    /// Without it, delivery and selection race on the SAME grid line: <see cref="EarlyTolerance"/> is
+    /// about half a tick, so a frame lands within ±half a tick of its PTS - exactly where the slot's
+    /// selection boundary sits - and millisecond jitter (a GC pause, a late tick, a busy decode)
+    /// decides which side it falls on. Each loss is a repeat immediately followed by a skip: a visible
+    /// stutter in content that is decoding perfectly on time (measured every few seconds on a
+    /// rate-matched 60 fps layer, HaCue2 2026-08-10). Keep it at zero for show-on-arrival sinks
+    /// (windows, NDI): they present what arrives, and early emission would only grow their queues.
+    /// The one-frame-period ceiling any caller should respect: a slot buffers plenty (32 pending),
+    /// but leading by more than a period adds nothing the timestamp selection can use.
+    /// </remarks>
+    public TimeSpan DeliveryLead { get; set; }
+
+    /// <summary>
     /// A/V-sync compensation subtracted from the clock before scheduling video (Scheduled mode only).
     /// The audio output buffers some samples ahead of the speakers (e.g. a PortAudio ring), so audio is
     /// HEARD a fixed latency after the clock says "now". Video, presented immediately at clock time, would
@@ -617,7 +636,7 @@ public sealed class VideoPlayer : IDisposable
             _syncDebugTicksRemaining--;
         }
 
-        var early = playhead + EarlyTolerance;
+        var early = playhead + EarlyTolerance + DeliveryLead;
         var lateCutoff = playhead - LateThreshold;
 
         _dueFrames.Clear();

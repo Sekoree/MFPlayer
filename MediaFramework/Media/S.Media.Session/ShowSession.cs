@@ -256,6 +256,20 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             (o.Output as IDisposable)?.Dispose();
     }
 
+    /// <summary>
+    /// The scheduling lead a session voice's video player gets so its frame delivery never races the
+    /// compositor slot's timestamp selection: half the source frame period, capped at 20 ms (a
+    /// low-rate source needs only a few ms of margin, not half its period). An unknown rate still
+    /// gets a small margin - the race exists regardless.
+    /// </summary>
+    internal static TimeSpan VideoDeliveryLead(Rational frameRate)
+    {
+        if (frameRate.Numerator <= 0 || frameRate.Denominator <= 0)
+            return TimeSpan.FromMilliseconds(8);
+        var halfPeriodTicks = TimeSpan.TicksPerSecond * frameRate.Denominator / (frameRate.Numerator * 2L);
+        return TimeSpan.FromTicks(Math.Min(halfPeriodTicks, TimeSpan.FromMilliseconds(20).Ticks));
+    }
+
     /// <summary>Resolves + attaches ONE audio route's output with per-route error isolation: a device that
     /// cannot be opened (fixed-rate JACK graph rejecting the clip's mix rate, unplugged hardware) or attached is
     /// logged and skipped so the clip still plays on its remaining routes - instead of one bad device faulting
@@ -1165,7 +1179,17 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         // The venue's A/V trim rides every committed voice; live changes are pushed separately by
         // the property setter, so this is only the "voices born after the knob moved" half.
         if (player.HasVideo)
+        {
             player.Video.PlayheadOffset = VideoPlayheadOffset;
+            // Session video is consumed exclusively by compositor layer slots (voice.Outputs is
+            // audio-only), which SELECT frames by timestamp at the canvas master time. Emit each
+            // frame half a source period early so delivery and selection stop racing on the same
+            // grid line - see VideoPlayer.DeliveryLead for the stutter this removes. Half a period
+            // clears the ±EarlyTolerance arrival band completely; capped so a low-rate source
+            // (a slideshow's 1 fps) does not lead by half a second for a race that any few-ms
+            // margin already wins.
+            player.Video.DeliveryLead = VideoDeliveryLead(player.Video.Format.FrameRate);
+        }
         // The incoming VOICE exists from here on and owns everything wired below, so the failure path is
         // one teardown (its own) whether the fault lands before or after the commit - instead of a catch
         // block that re-released resources the group had already taken over.

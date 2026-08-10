@@ -691,6 +691,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private VideoFrame? _abandonedCurrent;
         private long _overflowFrames;
         private long _samplingSkippedFrames;
+        private long _samplingRepeatedFrames;
         private int _activeReaders;
         private float _opacity = 1f;
         private LayerTransform2D _transform = LayerTransform2D.Identity;
@@ -792,6 +793,12 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
 
         /// <summary>Valid source samples intentionally passed over while resampling onto the canvas grid.</summary>
         public long SamplingSkippedFrames => Volatile.Read(ref _samplingSkippedFrames);
+
+        /// <summary>Canvas samples that re-used the previous source frame because no newer frame was due
+        /// yet. Expected and steady when the source rate is below the canvas rate; for a rate-matched
+        /// source a nonzero rate here is a cadence slip (each one pairs with a later
+        /// <see cref="SamplingSkippedFrames"/> increment and is seen as a stutter).</summary>
+        public long SamplingRepeatedFrames => Volatile.Read(ref _samplingRepeatedFrames);
 
         internal void SubmitFromOutput(VideoFrame frame)
         {
@@ -979,9 +986,18 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             }
 
             if (selectedPending < 0)
+            {
+                // Nothing newer was due: the canvas re-samples the frame it already showed. Counted so
+                // a rate-matched layer's cadence slips are visible (see SamplingRepeatedFrames).
+                if (best is not null && ReferenceEquals(best, _current))
+                    Interlocked.Increment(ref _samplingRepeatedFrames);
                 return best;
+            }
             if (_activeReaders != 0)
+            {
+                Interlocked.Increment(ref _samplingRepeatedFrames);
                 return _current;
+            }
 
             currentToDispose = _current;
             if (selectedPending > 0)
