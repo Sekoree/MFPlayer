@@ -2016,6 +2016,87 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task FireCuesIndependentScheduledAsync_PreparesAndSeeksBeforeExternalEdge()
+    {
+        var provider = new StaggeredOpenProvider(TimeSpan.FromMilliseconds(100));
+        var registry = MediaRegistry.Build(builder => builder.AddDecoder(provider));
+        var document = new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("fast", 1, "Fast", GroupId: "authored"),
+                new CueDefinition("slow", 2, "Slow", GroupId: "authored"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("fast", "staggered://clip/fast"),
+                new ShowClipBinding("slow", "staggered://clip/slow"),
+            ],
+            Compositions: [], Routes: []);
+        await using var session = new ShowSession(registry);
+        await session.LoadDocumentAsync(document);
+
+        var edgeEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fire = session.FireCuesIndependentScheduledAsync(
+        [
+            new ScheduledCueStart("fast", "scheduled:fast", TimeSpan.FromSeconds(4)),
+            new ScheduledCueStart("slow", "scheduled:slow"),
+        ],
+        async cancellationToken =>
+        {
+            edgeEntered.TrySetResult();
+            await release.Task.WaitAsync(cancellationToken);
+        });
+
+        await edgeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(TimeSpan.FromSeconds(4), provider.PositionOf("staggered://clip/fast"));
+        Assert.False(provider.FastReadBeforeSlowOpen);
+        Assert.All(session.Snapshot().Where(group => group.GroupId.StartsWith("scheduled:")), group =>
+        {
+            Assert.True(group.IsActive);
+            Assert.False(group.IsRunning);
+        });
+
+        release.TrySetResult();
+        var statuses = await fire.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.All(statuses, status => Assert.Equal(CueExecutionStatus.Fired, status));
+        Assert.All(session.Snapshot().Where(group => group.GroupId.StartsWith("scheduled:")), group =>
+            Assert.True(group.IsRunning));
+    }
+
+    [Fact]
+    public async Task FireCuesIndependentScheduledAsync_CancellationRollsCommittedVoicesBack()
+    {
+        var document = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue", 1, "Cue", GroupId: "authored")],
+            Clips: [new ShowClipBinding("cue", "fake://cue")],
+            Compositions: [], Routes: []);
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(document);
+        using var cts = new CancellationTokenSource();
+        var edgeEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var fire = session.FireCuesIndependentScheduledAsync(
+            [new ScheduledCueStart("cue", "scheduled:cue")],
+            async cancellationToken =>
+            {
+                edgeEntered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            },
+            cts.Token);
+
+        await edgeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Contains(session.Snapshot(), group => group.GroupId == "scheduled:cue" && group.IsActive);
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => fire.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.DoesNotContain(session.Snapshot(), group => group.IsActive);
+    }
+
+    [Fact]
     public async Task FireCuesAsync_SingleCue_DelegatesToFireCue()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());

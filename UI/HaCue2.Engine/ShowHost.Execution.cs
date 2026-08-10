@@ -3,6 +3,7 @@ using HaCue2.Core.Model;
 using HaCue2.Core.Patch;
 using S.Media.Core.Audio;
 using S.Media.Session;
+using S.Media.Time;
 
 namespace HaCue2.Engine;
 
@@ -133,68 +134,110 @@ public sealed partial class ShowHost
         return true;
     }
 
-    /// <summary>
-    /// Opens a batch of clip cues concurrently and commits them on one edge.
-    /// </summary>
-    /// <remarks>
-    /// Each cue keeps the transport group the COMPILER gave it — an all-together group's children
-    /// already get one each, which is what lets them sound at once — so this changes when they open and
-    /// when they start, and nothing about where they land. A cue with no compiled group is not a member
-    /// of a batch at all and is left to the caller.
-    /// </remarks>
-    async Task<IReadOnlyList<Guid>> ICueExecutionHost.PlayTogetherAsync(
-        IReadOnlyList<CueNode> cues, CueList? list)
+    /// <summary>Prepares timeline media without exposing it, then releases it on the scheduler's edge.</summary>
+    async Task<IReadOnlyList<Guid>> ICueExecutionHost.PlayTimelineMediaAsync(
+        IReadOnlyList<TimelineMediaStart> cues,
+        CueList? list,
+        Func<CancellationToken, Task> waitForStartEdge,
+        CancellationToken cancellationToken)
     {
         var targets = cues
-            .Select(cue => (Cue: cue, Group: GroupOf(cue.Id)))
+            .Select(start => (Start: start, Group: GroupOf(start.Cue.Id)))
             .Where(item => item.Group.Length > 0)
             .ToList();
 
         if (targets.Count == 0)
+        {
+            await waitForStartEdge(cancellationToken).ConfigureAwait(false);
             return [];
-
-        // The whole batch shows up the moment of the GO (see PlayAsync — same reasoning, and a
-        // batch is the case where the opens take longest). Anything that fails comes back down.
-        foreach (var (cue, group) in targets)
-            Remember(cue.Id, list?.Id ?? Guid.Empty, group);
+        }
 
         IReadOnlyList<CueExecutionStatus> statuses;
-
         try
         {
-            statuses = await _session.FireCuesIndependentAsync(
-                [.. targets.Select(item => (item.Cue.Id.ToString(), item.Group))],
-                CancellationToken.None).ConfigureAwait(false);
+            statuses = await _session.FireCuesIndependentScheduledAsync(
+                    [.. targets.Select(item => new ScheduledCueStart(
+                        item.Start.Cue.Id.ToString(), item.Group, item.Start.StartPosition))],
+                    waitForStartEdge,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            // One batch that could not run must not take the GO down. Reported by name, and the caller
-            // falls back to firing them one at a time — a staircase start beats a silent group.
-            foreach (var (cue, _) in targets)
-                Forget(cue.Id.ToString());
-            Report($"“{list?.Name ?? "a group"}” could not be fired together — {failure.Message}");
+            Report($"“{list?.Name ?? "a timeline"}” could not prepare its scheduled media — {failure.Message}");
             return [];
         }
 
         var started = new List<Guid>();
-
         for (var index = 0; index < targets.Count; index++)
         {
-            var (cue, group) = targets[index];
-
+            var (start, group) = targets[index];
+            var cue = start.Cue;
             if (statuses[index] != CueExecutionStatus.Fired)
             {
-                Forget(cue.Id.ToString());
                 if (statuses[index] == CueExecutionStatus.Failed)
-                    Report($"“{cue.Label}” did not fire");
-
+                    Report($"“{cue.Label}” did not fire at its timeline position");
                 continue;
             }
 
+            // Unlike an operator GO, timeline preparation is not a visible/sounding state. Stamp the Active
+            // entry only after the master edge has released the clock and the hidden/silent hold is gone.
             ConfirmSounding(cue.Id, list?.Id ?? Guid.Empty, group);
-            if (PlayedLength(cue) is { } duration)
-                _outbound.Start(cue, duration);
+            if (PlayedLength(cue) is { } fullDuration)
+            {
+                var elapsed = start.StartPosition is { } position
+                    ? position - TimeSpan.FromMilliseconds(cue is MediaCueNode media ? media.TrimInMs : 0)
+                    : TimeSpan.Zero;
+                var remaining = fullDuration - (elapsed > TimeSpan.Zero ? elapsed : TimeSpan.Zero);
+                if (remaining > TimeSpan.Zero)
+                    _outbound.Start(cue, remaining);
+            }
             started.Add(cue.Id);
+        }
+
+        return started;
+    }
+
+    async Task<IReadOnlyList<Guid>> ICueExecutionHost.PlayTimelineVisualizersAsync(
+        IReadOnlyList<VisualizerCueNode> cues,
+        CueList? list,
+        Func<CancellationToken, Task> waitForStartEdge,
+        CancellationToken cancellationToken)
+    {
+        if (cues.Count == 0)
+        {
+            await waitForStartEdge(cancellationToken).ConfigureAwait(false);
+            return [];
+        }
+
+        IReadOnlyList<Guid> started;
+        IReadOnlyList<string> problems;
+        try
+        {
+            (started, problems) = await _visualizers.FireScheduledAsync(
+                    _project, cues, waitForStartEdge, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            Report($"scheduled visualizers could not prepare — {failure.Message}");
+            return [];
+        }
+        foreach (var problem in problems)
+            Report(problem);
+
+        foreach (var cue in cues.Where(cue => started.Contains(cue.Id)))
+        {
+            Remember(cue.Id, list?.Id ?? Guid.Empty, groupId: "");
+            _outbound.Start(cue, TimeSpan.FromMilliseconds(Math.Max(1, cue.HoldMs)));
         }
 
         return started;
@@ -310,41 +353,15 @@ public sealed partial class ShowHost
     TimeSpan? ICueExecutionHost.MediaLength(Guid cueId) =>
         _durations is { } durations && durations.TryGetValue(cueId, out var length) ? length : null;
 
-    /// <summary>Moves a sounding cue to a position inside its own media.</summary>
-    /// <remarks>
-    /// Addressed by the cue's OWN transport group. A timeline's children each have one — which is what
-    /// makes them layer, and also what makes it possible to move one of them without moving the rest.
-    /// </remarks>
-    Task ICueExecutionHost.SeekCueAsync(Guid cueId, TimeSpan position)
+    IPlaybackClock ICueExecutionHost.TimelineClock => _bay.Bay.MasterClock;
+
+    bool ICueExecutionHost.TimelinePaused => IsPaused;
+
+    async Task ICueExecutionHost.DelayTimelineAsync(
+        TimeSpan duration, CancellationToken cancellationToken)
     {
-        // The transport map is the only question worth asking: it is built from the compiled document,
-        // so a cue that has one is by definition in a list. Checking the list separately was a leftover
-        // from deriving the group here, and left an unused binding behind.
-        var groupId = GroupOf(cueId);
-
-        return groupId.Length == 0 ? Task.CompletedTask : _session.SeekAsync(position, groupId);
-    }
-
-    /// <summary>Runs a cue later, on the show's own clock. Cancelled with the show.</summary>
-    void ICueExecutionHost.Schedule(Guid cueId, TimeSpan when, int depth)
-    {
-        if (when <= TimeSpan.Zero)
-        {
-            _ = Executor.FireAsync(cueId, depth + 1);
-            return;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(when, _life.Token).ConfigureAwait(false);
-                await Executor.FireAsync(cueId, depth + 1).ConfigureAwait(false);
-            }
-            catch (Exception failure) when (failure is OperationCanceledException or ObjectDisposedException)
-            {
-                // The show stopped before this cue's moment arrived. Nothing to report.
-            }
-        });
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, _life.Token);
+        await Task.Delay(duration, linked.Token).ConfigureAwait(false);
     }
 }

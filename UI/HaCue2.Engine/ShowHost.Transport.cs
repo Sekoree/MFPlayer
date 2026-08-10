@@ -225,6 +225,11 @@ public sealed partial class ShowHost
 
     private async Task StopEverythingAsync(TimeSpan fade, FadeShape curve)
     {
+        // Cancel future edges and roll prepared voices back BEFORE the stop snapshot/fade. Otherwise a voice
+        // hidden behind a timeline gate could cross that gate while the already-active set was fading out.
+        if (_executor is { } executor)
+            await executor.CancelTimelineRunsAsync().ConfigureAwait(false);
+
         List<Guid> active;
         lock (_gate)
         {

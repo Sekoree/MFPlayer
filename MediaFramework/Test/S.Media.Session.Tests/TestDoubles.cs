@@ -108,9 +108,13 @@ internal sealed class StaggeredOpenProvider(TimeSpan slowOpenDelay) : IMediaDeco
 {
     private int _slowOpenCompleted;
     private int _fastReadBeforeSlowOpen;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TimeSpan> _seekPositions =
+        new(StringComparer.Ordinal);
 
     public string Name => "staggered";
     public bool FastReadBeforeSlowOpen => Volatile.Read(ref _fastReadBeforeSlowOpen) != 0;
+    public TimeSpan? PositionOf(string uri) =>
+        _seekPositions.TryGetValue(uri, out var position) ? position : null;
     public double Probe(string uri, MediaKind kind) =>
         uri.StartsWith("staggered://", StringComparison.Ordinal) && kind == MediaKind.Audio ? 1.0 : 0.0;
     public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) => throw new NotSupportedException();
@@ -128,16 +132,19 @@ internal sealed class StaggeredOpenProvider(TimeSpan slowOpenDelay) : IMediaDeco
             Volatile.Write(ref _slowOpenCompleted, 1);
         }
 
-        var source = new StartObservedAudioSource(() =>
-        {
-            if (!slow && Volatile.Read(ref _slowOpenCompleted) == 0)
-                Volatile.Write(ref _fastReadBeforeSlowOpen, 1);
-        });
+        var source = new StartObservedAudioSource(
+            () =>
+            {
+                if (!slow && Volatile.Read(ref _slowOpenCompleted) == 0)
+                    Volatile.Write(ref _fastReadBeforeSlowOpen, 1);
+            },
+            position => _seekPositions[request.Uri] = position);
         return new MediaOpenResult(
             Name, video: null, audio: source, duration: source.Duration, isLive: false, canSeek: true);
     }
 
-    private sealed class StartObservedAudioSource(Action onFirstRead) : IAudioSource, ISeekableSource
+    private sealed class StartObservedAudioSource(Action onFirstRead, Action<TimeSpan> onSeek)
+        : IAudioSource, ISeekableSource
     {
         private readonly SyntheticSilentSource _inner = new(chunks: 100_000);
         private int _observed;
@@ -154,7 +161,11 @@ internal sealed class StaggeredOpenProvider(TimeSpan slowOpenDelay) : IMediaDeco
             return _inner.ReadInto(destination);
         }
 
-        public void Seek(TimeSpan position) => _inner.Seek(position);
+        public void Seek(TimeSpan position)
+        {
+            _inner.Seek(position);
+            onSeek(position);
+        }
     }
 }
 

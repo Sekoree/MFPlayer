@@ -52,14 +52,13 @@ public class TimelinePlayheadTests
         var (executor, host, group, bed, stab, late) = Scene();
 
         await executor.FireTimelineAsync(group, TimeSpan.Zero);
+        await executor.WaitForTimelineCompletionAsync(group.Id);
 
-        // Every child scheduled at its own offset, nothing fired early, nothing seeked.
+        // The virtual master advances instantly, but each child crosses its edge at the authored time.
         Assert.Equal(
             [(bed.Id, TimeSpan.Zero), (stab.Id, TimeSpan.FromSeconds(30)), (late.Id, TimeSpan.FromMinutes(2))],
-            host.Scheduled.Select(entry => (entry.Cue, entry.When)));
+            host.TimelineStarts.Select(entry => (entry.Cue, entry.MasterTime)));
 
-        Assert.Empty(host.Played);
-        Assert.Empty(host.Seeks);
     }
 
     [Fact]
@@ -68,11 +67,12 @@ public class TimelinePlayheadTests
         var (executor, host, group, _, _, late) = Scene();
 
         await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(60));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
 
         // 2:00 in the scene is one minute after a playhead at 1:00. Scheduling it at its raw offset
         // would put it a minute late.
-        var scheduled = Assert.Single(host.Scheduled, entry => entry.Cue == late.Id);
-        Assert.Equal(TimeSpan.FromSeconds(60), scheduled.When);
+        var scheduled = Assert.Single(host.TimelineStarts, entry => entry.Cue == late.Id);
+        Assert.Equal(TimeSpan.FromSeconds(60), scheduled.MasterTime);
     }
 
     [Fact]
@@ -83,9 +83,10 @@ public class TimelinePlayheadTests
         // The stab runs 0:30–0:32. At 1:00 it is over, and firing it would put a sound in the room
         // that the show does not contain at that moment.
         await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(60));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
 
         Assert.DoesNotContain(stab.Id, host.Played);
-        Assert.DoesNotContain(host.Scheduled, entry => entry.Cue == stab.Id);
+        Assert.DoesNotContain(host.TimelineStarts, entry => entry.Cue == stab.Id);
     }
 
     [Fact]
@@ -94,13 +95,12 @@ public class TimelinePlayheadTests
         var (executor, host, group, bed, _, _) = Scene();
 
         await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(60));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
 
-        // Fired NOW, not scheduled: it is already running at this moment in the show.
-        Assert.Contains(bed.Id, host.Played);
-        Assert.DoesNotContain(host.Scheduled, entry => entry.Cue == bed.Id);
-
-        var seek = Assert.Single(host.Seeks, entry => entry.Cue == bed.Id);
-        Assert.Equal(TimeSpan.FromSeconds(60), seek.Position);
+        // It is armed directly at the in-progress FILE position before the edge; no start-at-zero flash/seek.
+        var start = Assert.Single(host.TimelineStarts, entry => entry.Cue == bed.Id);
+        Assert.Equal(TimeSpan.FromSeconds(60), start.StartPosition);
+        Assert.Equal(TimeSpan.Zero, start.MasterTime);
     }
 
     [Fact]
@@ -110,10 +110,13 @@ public class TimelinePlayheadTests
         bed.TrimInMs = 10_000;
 
         await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(60));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
 
         // A cue trimmed to start ten seconds in, rehearsed from a minute into the timeline, plays from
         // 1:10 of the FILE. Seeking to 1:00 would play ten seconds the show never contains.
-        Assert.Equal(TimeSpan.FromSeconds(70), Assert.Single(host.Seeks, s => s.Cue == bed.Id).Position);
+        Assert.Equal(
+            TimeSpan.FromSeconds(70),
+            Assert.Single(host.TimelineStarts, start => start.Cue == bed.Id).StartPosition);
     }
 
     [Fact]
@@ -125,8 +128,39 @@ public class TimelinePlayheadTests
         bed.TrimOutMs = 40_000;
 
         await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(60));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
 
         Assert.DoesNotContain(bed.Id, host.Played);
+    }
+
+    [Fact]
+    public async Task ALoopingCueRehearsesAtTheMatchingLoopPosition()
+    {
+        var (executor, host, group, bed, _, _) = Scene();
+        host.Lengths[bed.Id] = TimeSpan.FromSeconds(20);
+        bed.Loop = true;
+
+        await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(65));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
+
+        Assert.Equal(
+            TimeSpan.FromSeconds(5),
+            Assert.Single(host.TimelineStarts, start => start.Cue == bed.Id).StartPosition);
+    }
+
+    [Fact]
+    public async Task AFrozenCueStillExistsAtALaterRehearsalPlayhead()
+    {
+        var (executor, host, group, bed, _, _) = Scene();
+        host.Lengths[bed.Id] = TimeSpan.FromSeconds(20);
+        bed.EndBehavior = CueEndBehavior.FreezeLastFrame;
+
+        await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(65));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
+
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(19_999),
+            Assert.Single(host.TimelineStarts, start => start.Cue == bed.Id).StartPosition);
     }
 
     [Fact]
@@ -136,6 +170,7 @@ public class TimelinePlayheadTests
         host.Lengths.Remove(bed.Id);
 
         await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(60));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
 
         // No probe means no length means no way to tell whether it is still running. Playing it is the
         // answer that leaves a rehearsal with something to listen to.
@@ -150,20 +185,166 @@ public class TimelinePlayheadTests
         late.Enabled = false;
 
         await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(60));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
 
         Assert.Empty(host.Played);
-        Assert.Empty(host.Scheduled);
+        Assert.Empty(host.TimelineStarts);
     }
 
     [Fact]
-    public async Task AClipThatWillNotOpenIsNotThenSeeked()
+    public async Task AClipThatWillNotOpenNeverCrossesTheTimelineEdge()
     {
         var (executor, host, group, _, _, _) = Scene();
         host.PlayFails = true;
 
         await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(60));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
 
-        // Seeking a voice that never started is asking the session to move something that is not there.
-        Assert.Empty(host.Seeks);
+        Assert.Empty(host.TimelineStarts);
+    }
+
+    [Fact]
+    public async Task PreWaitIsPartOfTheMasterTimelineCoordinate()
+    {
+        var cue = new MediaCueNode
+        {
+            Number = "1.1", MediaPath = "cue.wav", TimelineOffsetMs = 1_000, PreWaitMs = 500,
+        };
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.Timeline, Children = [cue],
+        };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [group] }] };
+        var host = new FakeCueHost(project);
+        var executor = new CueExecutor(host);
+
+        await executor.FireTimelineAsync(group, TimeSpan.Zero);
+        await executor.WaitForTimelineCompletionAsync(group.Id);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(1_500), Assert.Single(host.TimelineStarts).MasterTime);
+        Assert.Empty(host.Waits); // no second wall-clock pre-wait after the master edge
+    }
+
+    [Fact]
+    public async Task PauseFreezesTimelineEvenWhileTheDeviceClockKeepsAdvancing()
+    {
+        var cue = new MediaCueNode
+        {
+            Number = "1.1", MediaPath = "cue.wav", TimelineOffsetMs = 1_000,
+        };
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.Timeline, Children = [cue],
+        };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [group] }] };
+        var host = new FakeCueHost(project);
+        var polls = 0;
+        host.TimelineDelayOverride = async (duration, cancellationToken) =>
+        {
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+            host.TimelinePaused = Interlocked.Increment(ref polls) <= 10;
+            host.AdvanceTimeline(duration);
+        };
+        var executor = new CueExecutor(host);
+
+        await executor.FireTimelineAsync(group, TimeSpan.Zero);
+        await executor.WaitForTimelineCompletionAsync(group.Id);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(1_050), Assert.Single(host.TimelineStarts).MasterTime);
+    }
+
+    [Fact]
+    public async Task DeviceClockReanchorDoesNotMoveAuthoredTimelinePositions()
+    {
+        var cue = new MediaCueNode
+        {
+            Number = "1.1", MediaPath = "cue.wav", TimelineOffsetMs = 1_000,
+        };
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.Timeline, Children = [cue],
+        };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [group] }] };
+        var host = new FakeCueHost(project);
+        var reanchored = false;
+        host.TimelineDelayOverride = async (duration, cancellationToken) =>
+        {
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+            host.AdvanceTimeline(duration);
+            if (!reanchored && host.TotalTimelineAdvanced >= TimeSpan.FromMilliseconds(500))
+            {
+                reanchored = true;
+                host.ReanchorTimeline(TimeSpan.Zero);
+            }
+        };
+        var executor = new CueExecutor(host);
+
+        await executor.FireTimelineAsync(group, TimeSpan.Zero);
+        await executor.WaitForTimelineCompletionAsync(group.Id);
+
+        Assert.InRange(
+            host.TotalTimelineAdvanced,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromMilliseconds(1_050));
+    }
+
+    [Fact]
+    public async Task MediaVisualizerAndActionDispatchOnTheSameTimelineEdge()
+    {
+        var media = new MediaCueNode
+        {
+            Number = "1.1", MediaPath = "cue.wav", TimelineOffsetMs = 1_000,
+        };
+        var visualizer = new VisualizerCueNode
+        {
+            Number = "1.2", TimelineOffsetMs = 1_000, HoldMs = 10_000,
+        };
+        var action = new ActionCueNode { Number = "1.3", TimelineOffsetMs = 1_000 };
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.Timeline, Children = [media, visualizer, action],
+        };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [group] }] };
+        var host = new FakeCueHost(project);
+        var executor = new CueExecutor(host);
+
+        await executor.FireTimelineAsync(group, TimeSpan.Zero);
+        await executor.WaitForTimelineCompletionAsync(group.Id);
+
+        var mediaTime = Assert.Single(host.TimelineStarts, item => item.Cue == media.Id).MasterTime;
+        Assert.Equal(mediaTime, Assert.Single(host.ControlStarts, item => item.Cue == visualizer.Id).MasterTime);
+        Assert.Equal(mediaTime, Assert.Single(host.ControlStarts, item => item.Cue == action.Id).MasterTime);
+    }
+
+    [Fact]
+    public async Task CancellingTimelineRemovesFutureEdges()
+    {
+        var cue = new MediaCueNode
+        {
+            Number = "1.1", MediaPath = "cue.wav", TimelineOffsetMs = 1_000,
+        };
+        var group = new GroupCueNode
+        {
+            Number = "1", FireMode = GroupFireMode.Timeline, Children = [cue],
+        };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [group] }] };
+        var host = new FakeCueHost(project);
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.TimelineDelayOverride = async (_, cancellationToken) =>
+        {
+            waiting.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        };
+        var executor = new CueExecutor(host);
+
+        await executor.FireTimelineAsync(group, TimeSpan.Zero);
+        var completion = executor.WaitForTimelineCompletionAsync(group.Id);
+        await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await executor.CancelTimelineRunsAsync();
+        await completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Empty(host.TimelineStarts);
     }
 }

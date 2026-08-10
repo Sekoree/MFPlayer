@@ -35,8 +35,20 @@ public sealed class ProjectVisualizers : IAsyncDisposable
     // than scanning 552 presets every time an unqualified visualizer cue fires.
     private static readonly Lazy<string?> DefaultPresetPack = new(ProjectMAssetPaths.DefaultPresetDirectory);
 
+    private sealed record RunningAttachment(
+        string CompositionId, string VisualizerId, ProjectMVisualSource Source);
+
+    private sealed record PreparedAttachment(
+        string CompositionId,
+        string VisualizerId,
+        ProjectMVisualSource Source,
+        IReadOnlyList<VideoPlacementSpec> VisiblePlacements);
+
+    private sealed record PreparedCue(
+        VisualizerCueNode Cue, List<PreparedAttachment> Attachments, string? Problem);
+
     /// <summary>One cue's renderers: a source per composition it is placed on.</summary>
-    private readonly Dictionary<Guid, List<(string CompositionId, ProjectMVisualSource Source)>> _running = [];
+    private readonly Dictionary<Guid, List<RunningAttachment>> _running = [];
 
     private readonly ShowSession _session;
     private readonly Lock _gate = new();
@@ -85,7 +97,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
 
         await StopAsync(cue.Id).ConfigureAwait(false);
 
-        var attached = new List<(string, ProjectMVisualSource)>();
+        var attached = new List<RunningAttachment>();
         string? firstFailure = null;
         Func<string, bool>? feedFilter = null;
         if (!cue.FeedAll)
@@ -147,7 +159,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 continue;
             }
 
-            attached.Add((compositionId, source));
+            attached.Add(new RunningAttachment(compositionId, cue.Id.ToString(), source));
         }
 
         if (attached.Count == 0)
@@ -161,10 +173,200 @@ public sealed class ProjectVisualizers : IAsyncDisposable
         return firstFailure;
     }
 
+    /// <summary>
+    /// Attaches renderers behind opacity-zero placements, then reveals them after one caller-owned edge.
+    /// Renderer/GL startup is therefore paid during timeline pre-roll rather than after the authored frame.
+    /// </summary>
+    public async Task<(IReadOnlyList<Guid> Started, IReadOnlyList<string> Problems)> FireScheduledAsync(
+        HaCueProject project,
+        IReadOnlyList<VisualizerCueNode> cues,
+        Func<CancellationToken, Task> waitForStartEdge,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(cues);
+        ArgumentNullException.ThrowIfNull(waitForStartEdge);
+
+        var prepared = new List<PreparedCue>();
+        var adopted = new HashSet<Guid>();
+        try
+        {
+            foreach (var cue in cues)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                prepared.Add(await PrepareHiddenAsync(project, cue, cancellationToken).ConfigureAwait(false));
+            }
+
+            await waitForStartEdge(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var started = new List<Guid>();
+            var problems = new List<string>();
+            foreach (var item in prepared)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (item.Problem is { } preparationProblem)
+                    problems.Add(preparationProblem);
+                if (item.Attachments.Count == 0)
+                    continue;
+
+                // A re-fire keeps the old visible renderer alive during preparation. Reveal the warm slot
+                // first, then retire the old one, so there is no black composition frame between them.
+                var revealed = false;
+                foreach (var attachment in item.Attachments)
+                {
+                    for (var index = 0; index < attachment.VisiblePlacements.Count; index++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (await _session.UpdateCompositionVisualizerPlacementAsync(
+                                attachment.CompositionId,
+                                attachment.VisiblePlacements[index],
+                                index,
+                                attachment.VisualizerId).ConfigureAwait(false))
+                        {
+                            revealed = true;
+                        }
+                        else
+                        {
+                            problems.Add(
+                                $"“{item.Cue.Label}” could not reveal a prepared placement on " +
+                                $"“{attachment.CompositionId}”");
+                        }
+                    }
+                }
+
+                if (!revealed)
+                    continue;
+
+                cancellationToken.ThrowIfCancellationRequested();
+                await StopAsync(item.Cue.Id).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                lock (_gate)
+                    _running[item.Cue.Id] = [.. item.Attachments.Select(attachment =>
+                        new RunningAttachment(
+                            attachment.CompositionId, attachment.VisualizerId, attachment.Source))];
+                adopted.Add(item.Cue.Id);
+                started.Add(item.Cue.Id);
+            }
+
+            return (started, problems);
+        }
+        finally
+        {
+            foreach (var item in prepared.Where(item => !adopted.Contains(item.Cue.Id)))
+                await ReleasePreparedAsync(item.Attachments).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<PreparedCue> PrepareHiddenAsync(
+        HaCueProject project,
+        VisualizerCueNode cue,
+        CancellationToken cancellationToken)
+    {
+        if (!IsAvailable)
+            return new PreparedCue(cue, [],
+                $"“{cue.Label}” needs projectM — {UnavailableReason ?? "its native bundle is unavailable"}");
+        if (cue.Placements.Count == 0)
+            return new PreparedCue(cue, [], $"“{cue.Label}” is not placed on any composition");
+
+        var attached = new List<PreparedAttachment>();
+        string? firstFailure = null;
+        Func<string, bool>? feedFilter = null;
+        if (!cue.FeedAll)
+        {
+            var allowed = cue.FeedCueIds
+                .Concat(project.AllCues().OfType<MediaCueNode>()
+                    .Where(media => media.SendToVisualizer)
+                    .Select(media => media.Id))
+                .Select(id => id.ToString())
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            feedFilter = allowed.Contains;
+        }
+        var preparedId = $"{cue.Id}:scheduled:{Guid.NewGuid():N}";
+
+        try
+        {
+            foreach (var group in cue.Placements.GroupBy(placement => placement.CompositionId))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (project.Compositions.FirstOrDefault(item => item.Id == group.Key) is not { } composition)
+                {
+                    firstFailure ??= $"“{cue.Label}” is placed on a composition that is no longer in this show";
+                    continue;
+                }
+
+                var compositionId = composition.Id.ToString();
+                var source = Renderer(cue, composition);
+                var visible = group
+                    .OrderBy(placement => placement.LayerIndex)
+                    .Select(placement => Spec(compositionId, placement))
+                    .ToList();
+                var hidden = visible.Select(placement => placement with { Opacity = 0f }).ToList();
+
+                bool ok;
+                try
+                {
+                    ok = await _session.SetCompositionVisualizerAsync(
+                        compositionId,
+                        source,
+                        placements: hidden,
+                        audioFeedFilter: feedFilter,
+                        preserveAcrossDocumentReload: true,
+                        visualizerId: preparedId).ConfigureAwait(false);
+                }
+                catch (Exception failure) when (failure is not OutOfMemoryException)
+                {
+                    source.Dispose();
+                    firstFailure ??= $"“{cue.Label}” could not prepare — {failure.Message}";
+                    continue;
+                }
+
+                if (!ok)
+                {
+                    source.Dispose();
+                    firstFailure ??= $"“{cue.Label}” was refused by “{composition.Name}” — it has no GL surface";
+                    continue;
+                }
+
+                attached.Add(new PreparedAttachment(compositionId, preparedId, source, visible));
+            }
+        }
+        catch
+        {
+            await ReleasePreparedAsync(attached).ConfigureAwait(false);
+            throw;
+        }
+
+        return new PreparedCue(
+            cue,
+            attached,
+            attached.Count == 0 ? firstFailure ?? $"“{cue.Label}” prepared nothing" : firstFailure);
+    }
+
+    private async Task ReleasePreparedAsync(IReadOnlyList<PreparedAttachment> attachments)
+    {
+        foreach (var attachment in attachments)
+        {
+            var removed = false;
+            try
+            {
+                removed = await _session.SetCompositionVisualizerAsync(
+                    attachment.CompositionId, null, visualizerId: attachment.VisualizerId).ConfigureAwait(false);
+            }
+            catch (Exception failure) when (failure is not OutOfMemoryException)
+            {
+                // Cancellation/teardown may already own the dead session slot.
+            }
+
+            if (!removed)
+                attachment.Source.Dispose();
+        }
+    }
+
     /// <summary>Takes one visualizer cue down. Silent when it was not running.</summary>
     public async Task StopAsync(Guid cueId)
     {
-        List<(string CompositionId, ProjectMVisualSource Source)>? attached;
+        List<RunningAttachment>? attached;
 
         lock (_gate)
         {
@@ -172,12 +374,12 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 return;
         }
 
-        foreach (var (compositionId, source) in attached)
+        foreach (var attachment in attached)
         {
             try
             {
                 await _session.SetCompositionVisualizerAsync(
-                    compositionId, null, visualizerId: cueId.ToString()).ConfigureAwait(false);
+                    attachment.CompositionId, null, visualizerId: attachment.VisualizerId).ConfigureAwait(false);
             }
             catch (Exception failure) when (failure is not OutOfMemoryException)
             {
@@ -185,7 +387,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 // be disposed either way, which is what the loop below is for.
             }
 
-            source.Dispose();
+            attachment.Source.Dispose();
         }
     }
 

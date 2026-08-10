@@ -1,7 +1,16 @@
 using HaCue2.Core.Model;
 using S.Media.Session;
+using S.Media.Time;
 
 namespace HaCue2.Engine;
+
+/// <summary>One media-backed cue prepared for a timeline edge.</summary>
+/// <param name="Cue">The media or text cue to start.</param>
+/// <param name="StartPosition">
+/// Optional FILE position to arm at. Null means the cue's normal in-point; timeline rehearsal uses a
+/// concrete position so a straddling clip is already at the playhead before its clock is released.
+/// </param>
+public readonly record struct TimelineMediaStart(CueNode Cue, TimeSpan? StartPosition = null);
 
 /// <summary>
 /// Everything firing a cue needs from a running show.
@@ -37,23 +46,25 @@ public interface ICueExecutionHost
         FadeShape crossfadeCurve = default);
 
     /// <summary>
-    /// Opens several clip cues at once and starts them on the same edge.
+    /// Fully prepares media cues, then holds their clocks at a caller-owned start edge.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// What "all together" actually means, and the reason it needs its own verb. Fired one after
-    /// another, each cue's media is OPENED before the next one is even asked for — so a group of eleven
-    /// stems began playing as a staircase, each stem late by the sum of every open before it. On files
-    /// large enough to take a moment to open (a 1080p60 ProRes clip is), that is audible as flam and
-    /// visible as two layers arriving at different times, and the whole GO takes as long as all the
-    /// opens added together instead of as long as the slowest one.
-    /// </para>
-    /// <para>
-    /// The session opens them concurrently and holds every one at a barrier until the last is ready,
-    /// so they commit on one edge. Cues that did not start are simply absent from the result.
-    /// </para>
+    /// <paramref name="waitForStartEdge"/> is entered only after every viable cue has opened, committed,
+    /// filled its audio pre-roll and presented its synchronization frame. It may therefore wait against an
+    /// absolute master-clock deadline without making decoder-open time part of the authored timeline.
     /// </remarks>
-    Task<IReadOnlyList<Guid>> PlayTogetherAsync(IReadOnlyList<CueNode> cues, CueList? list);
+    Task<IReadOnlyList<Guid>> PlayTimelineMediaAsync(
+        IReadOnlyList<TimelineMediaStart> cues,
+        CueList? list,
+        Func<CancellationToken, Task> waitForStartEdge,
+        CancellationToken cancellationToken);
+
+    /// <summary>Prepares visualizer renderers hidden, then reveals them at a caller-owned edge.</summary>
+    Task<IReadOnlyList<Guid>> PlayTimelineVisualizersAsync(
+        IReadOnlyList<VisualizerCueNode> cues,
+        CueList? list,
+        Func<CancellationToken, Task> waitForStartEdge,
+        CancellationToken cancellationToken);
 
     /// <summary>Moves a list's cursor, or clears it when the cue is null.</summary>
     Task SetStandbyAsync(CueList list, Guid? cueId);
@@ -103,8 +114,17 @@ public interface ICueExecutionHost
     /// </remarks>
     Task<bool> DelayAsync(TimeSpan duration);
 
-    /// <summary>Runs a cue later, on the show's own clock — a timeline group's children.</summary>
-    void Schedule(Guid cueId, TimeSpan when, int depth);
+    /// <summary>The authoritative show clock timeline scheduling follows.</summary>
+    IPlaybackClock TimelineClock { get; }
+
+    /// <summary>Whether the operator has paused the show. A timeline freezes while this is true.</summary>
+    bool TimelinePaused { get; }
+
+    /// <summary>
+    /// Cancellable scheduler wait. Kept on the host seam so tests can advance a virtual master clock
+    /// without sleeping for the authored duration.
+    /// </summary>
+    Task DelayTimelineAsync(TimeSpan duration, CancellationToken cancellationToken);
 
     /// <summary>
     /// What the probe says a cue's media runs for, or null when nobody has looked.
@@ -116,12 +136,4 @@ public interface ICueExecutionHost
     /// </remarks>
     TimeSpan? MediaLength(Guid cueId);
 
-    /// <summary>
-    /// Moves a sounding cue to a position inside its own media.
-    /// </summary>
-    /// <remarks>
-    /// In FILE time, not group time: the clip's in-point is already applied, so a caller starting a
-    /// clip part-way through has to add the trim itself. Doing it here would apply it twice.
-    /// </remarks>
-    Task SeekCueAsync(Guid cueId, TimeSpan position);
 }

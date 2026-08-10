@@ -690,6 +690,11 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
                 && !await _session.WouldPreservePlaybackAsync(document).ConfigureAwait(false))
                 return false;
 
+            // A pending edge was compiled from the previous document. Let active, preservation-compatible
+            // voices survive the edit, but never fire an old cue id against the replacement transport map.
+            if (_executor is { } executor)
+                await executor.CancelTimelineRunsAsync().ConfigureAwait(false);
+
             var cueGroups = document.Cues
                 .Where(cue => Guid.TryParse(cue.Id, out _) && cue.GroupId is { Length: > 0 })
                 .ToDictionary(cue => Guid.Parse(cue.Id), cue => cue.GroupId!);
@@ -1010,6 +1015,8 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     {
         // Cancelled FIRST: scheduled timeline cues and in-flight pre-waits have to stop reaching for a
         // session that is about to go away, or disposal races a fire.
+        if (_executor is { } executor)
+            await executor.CancelTimelineRunsAsync().ConfigureAwait(false);
         await _life.CancelAsync().ConfigureAwait(false);
 
         // Before the session goes: the window is attached to it, and detaching afterwards would be

@@ -1,6 +1,7 @@
 using HaCue2.Core.Model;
 using HaCue2.Core.Patch;
 using S.Media.Session;
+using S.Media.Time;
 
 namespace HaCue2.Engine;
 
@@ -35,12 +36,116 @@ public sealed class CueExecutor(ICueExecutionHost host)
         Guid LastFiredId,
         bool FinalPending);
 
+    private sealed class TimelineRun(CancellationTokenSource cancellation)
+    {
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource Finished { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Completion => Finished.Task;
+        public void Complete() => Finished.TrySetResult();
+    }
+
+    private sealed class TimelineEvent(TimeSpan due)
+    {
+        public TimeSpan Due { get; } = due;
+        public List<TimelineMediaStart> Media { get; } = [];
+        public List<VisualizerCueNode> Visualizers { get; } = [];
+        public List<CueNode> Controls { get; } = [];
+        public TimelineStartGate MediaGate { get; } = new();
+        public TimelineStartGate VisualizerGate { get; } = new();
+        public Task<IReadOnlyList<Guid>>? MediaTask { get; set; }
+        public Task<IReadOnlyList<Guid>>? VisualizerTask { get; set; }
+    }
+
+    /// <summary>One callback shared by all media voices at an authored timeline position.</summary>
+    private sealed class TimelineStartGate
+    {
+        private readonly TaskCompletionSource _ready =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Ready => _ready.Task;
+
+        public async Task WaitAsync(CancellationToken cancellationToken)
+        {
+            _ready.TrySetResult();
+            await _release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        public void EnsureReady() => _ready.TrySetResult();
+        public void Release() => _release.TrySetResult();
+        public void Cancel(CancellationToken cancellationToken) =>
+            _release.TrySetCanceled(cancellationToken);
+    }
+
+    /// <summary>
+    /// A pause-aware, continuity-preserving coordinate over the bay's late-bound audio clock. Device-clock
+    /// epochs may change underneath it; <see cref="SessionClock"/> splices those changes without a jump.
+    /// </summary>
+    private sealed class TimelineRunClock
+    {
+        // Five milliseconds keeps pause/resume quantisation comfortably below one 60 Hz frame while still
+        // using one lightweight scheduler loop per active timeline (not one timer per cue/output).
+        private static readonly TimeSpan MaxPoll = TimeSpan.FromMilliseconds(5);
+        private static readonly TimeSpan MinimumPoll = TimeSpan.FromMilliseconds(1);
+
+        private readonly ICueExecutionHost _host;
+        private readonly SessionClock _master;
+        private TimeSpan _lastMaster;
+        private TimeSpan _position;
+
+        public TimelineRunClock(ICueExecutionHost host, TimeSpan initialPosition)
+        {
+            _host = host;
+            _master = new SessionClock(host.TimelineClock);
+            _lastMaster = _master.Now;
+            _position = initialPosition;
+        }
+
+        public TimeSpan Position
+        {
+            get
+            {
+                var now = _master.Now;
+                var delta = now - _lastMaster;
+                _lastMaster = now;
+                if (!_host.TimelinePaused && _master.IsAdvancing && delta > TimeSpan.Zero)
+                    _position += delta;
+                return _position;
+            }
+        }
+
+        public async Task WaitUntilAsync(TimeSpan target, CancellationToken cancellationToken)
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var remaining = target - Position;
+                if (remaining <= TimeSpan.Zero)
+                    return;
+
+                var wait = remaining > MaxPoll ? MaxPoll : remaining;
+                if (wait < MinimumPoll)
+                    wait = MinimumPoll;
+                await _host.DelayTimelineAsync(wait, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
     private readonly Lock _stateGate = new();
     private readonly Dictionary<Guid, PlaylistRun> _playlistRuns = [];
     private readonly Dictionary<Guid, ArmedRun> _armedRuns = [];
     private readonly Dictionary<Guid, Guid> _armedOwners = [];
     private readonly Dictionary<Guid, IReadOnlyList<Guid>> _stableShuffleOrders = [];
     private readonly Dictionary<Guid, int> _jumpVisits = [];
+    private readonly Dictionary<Guid, TimelineRun> _timelineRuns = [];
+
+    // Preparing five seconds ahead absorbs decoder/open jitter without holding every clip in a long show open
+    // for the life of the timeline. A cue that explicitly disables pre-roll is prepared at its due point.
+    private static readonly TimeSpan TimelinePreparationLead = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// How deep a chain of auto-continues and jumps may run from one GO.
@@ -65,7 +170,8 @@ public sealed class CueExecutor(ICueExecutionHost host)
         Guid cueId,
         int depth,
         TimeSpan? crossfade = null,
-        FadeShape crossfadeCurve = default)
+        FadeShape crossfadeCurve = default,
+        bool skipPreWait = false)
     {
         if (depth > MaxChainDepth)
         {
@@ -86,7 +192,8 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         // The pre-wait belongs to every kind, not just the ones that play something: "wait two seconds,
         // then tell the lighting desk" is an ordinary thing to author.
-        if (cue.PreWaitMs > 0
+        if (!skipPreWait
+            && cue.PreWaitMs > 0
             && !await host.DelayAsync(TimeSpan.FromMilliseconds(cue.PreWaitMs)).ConfigureAwait(false))
             return false;
 
@@ -205,22 +312,93 @@ public sealed class CueExecutor(ICueExecutionHost host)
                             && child.Trigger != CueTrigger.Continue
                             && !IsSequenceOwned(child.Id))
             .ToList();
+        var visualizers = children
+            .OfType<VisualizerCueNode>()
+            .Where(child => child.PreWaitMs == 0
+                            && child.PostWaitMs == 0
+                            && child.Trigger != CueTrigger.Continue
+                            && !IsSequenceOwned(child.Id))
+            .ToList();
 
-        var started = batched.Count > 1
-            ? await host.PlayTogetherAsync(batched, Project.ListOf(batched[0].Id)).ConfigureAwait(false)
-            : [];
-
-        var fired = new HashSet<Guid>(started);
-
-        // In authored order, so anything not in the batch still reaches the canvas in the order the
-        // list shows — and so a batch that could not run degrades to exactly the old behaviour.
-        foreach (var child in children)
+        if (batched.Count == 0 && visualizers.Count == 0)
         {
-            if (fired.Contains(child.Id))
-                continue;
-
-            await FireAsync(child.Id, depth + 1).ConfigureAwait(false);
+            // Every authored wait begins from the group GO, rather than one child's delay being added to
+            // every child after it merely because it appeared first in the list.
+            await Task.WhenAll(children.Select(child => FireAsync(child.Id, depth + 1)))
+                .ConfigureAwait(false);
+            return true;
         }
+
+        var mediaGate = new TimelineStartGate();
+        var visualizerGate = new TimelineStartGate();
+        var mediaTask = batched.Count > 0
+            ? PrepareTogetherMediaAsync()
+            : Task.FromResult<IReadOnlyList<Guid>>([]);
+        var visualizerTask = visualizers.Count > 0
+            ? PrepareTogetherVisualizersAsync()
+            : Task.FromResult<IReadOnlyList<Guid>>([]);
+
+        async Task<IReadOnlyList<Guid>> PrepareTogetherMediaAsync()
+        {
+            try
+            {
+                return await host.PlayTimelineMediaAsync(
+                        [.. batched.Select(cue => new TimelineMediaStart(cue))],
+                        Project.ListOf(batched[0].Id),
+                        mediaGate.WaitAsync,
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                mediaGate.EnsureReady();
+            }
+        }
+
+        async Task<IReadOnlyList<Guid>> PrepareTogetherVisualizersAsync()
+        {
+            try
+            {
+                return await host.PlayTimelineVisualizersAsync(
+                        visualizers,
+                        Project.ListOf(visualizers[0].Id),
+                        visualizerGate.WaitAsync,
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                visualizerGate.EnsureReady();
+            }
+        }
+
+        // The callback means every media voice is fully prepared. Release it and launch visualizers/actions/
+        // nested groups in this same continuation; none of them waits for post-start session bookkeeping.
+        var ready = new List<Task>(2);
+        if (batched.Count > 0)
+            ready.Add(mediaGate.Ready);
+        if (visualizers.Count > 0)
+            ready.Add(visualizerGate.Ready);
+        await Task.WhenAll(ready).ConfigureAwait(false);
+        mediaGate.Release();
+        visualizerGate.Release();
+        var otherTasks = children
+            .Where(child => batched.All(media => media.Id != child.Id)
+                            && visualizers.All(visualizer => visualizer.Id != child.Id))
+            .Select(child => FireAsync(child.Id, depth + 1))
+            .ToArray();
+
+        var started = await mediaTask.ConfigureAwait(false);
+        var startedVisualizers = await visualizerTask.ConfigureAwait(false);
+        var fired = started.Concat(startedVisualizers).ToHashSet();
+
+        // A failed batch still degrades to ordinary fires. Launch them together as well: the mode's contract
+        // is simultaneity, even on the slower recovery path.
+        var retries = batched.Cast<CueNode>().Concat(visualizers)
+            .Where(child => !fired.Contains(child.Id))
+            .Select(child => FireAsync(child.Id, depth + 1))
+            .ToArray();
+        await Task.WhenAll(otherTasks.Concat(retries)).ConfigureAwait(false);
 
         return true;
     }
@@ -293,6 +471,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// <summary>Starts the next transport run with no state left by the stopped show.</summary>
     public void ResetTransientState()
     {
+        CancelTimelineRuns();
         lock (_stateGate)
         {
             _playlistRuns.Clear();
@@ -301,6 +480,48 @@ public sealed class CueExecutor(ICueExecutionHost host)
             _stableShuffleOrders.Clear();
             _jumpVisits.Clear();
         }
+    }
+
+    /// <summary>Cancels every pending timeline edge and every voice prepared behind one.</summary>
+    public void CancelTimelineRuns()
+    {
+        var runs = DetachTimelineRuns();
+        foreach (var run in runs)
+        {
+            try { run.Cancellation.Cancel(); }
+            catch (ObjectDisposedException) { /* completed between the snapshot and cancellation */ }
+        }
+    }
+
+    /// <summary>Cancels pending edges and waits until prepared media/visualizer resources have unwound.</summary>
+    public async Task CancelTimelineRunsAsync()
+    {
+        var runs = DetachTimelineRuns();
+        foreach (var run in runs)
+        {
+            try { run.Cancellation.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+        await Task.WhenAll(runs.Select(run => run.Completion)).ConfigureAwait(false);
+    }
+
+    private TimelineRun[] DetachTimelineRuns()
+    {
+        lock (_stateGate)
+        {
+            var runs = _timelineRuns.Values.ToArray();
+            _timelineRuns.Clear();
+            return runs;
+        }
+    }
+
+    /// <summary>Test/diagnostic seam: completes after every edge in this run has dispatched.</summary>
+    public Task WaitForTimelineCompletionAsync(Guid groupId)
+    {
+        lock (_stateGate)
+            return _timelineRuns.TryGetValue(groupId, out var run)
+                ? run.Completion
+                : Task.CompletedTask;
     }
 
     /// <summary>
@@ -825,32 +1046,340 @@ public sealed class CueExecutor(ICueExecutionHost host)
         ArgumentNullException.ThrowIfNull(group);
 
         var playhead = from < TimeSpan.Zero ? TimeSpan.Zero : from;
+        var events = BuildTimelineEvents(group, playhead);
+        var run = new TimelineRun(new CancellationTokenSource());
+        TimelineRun? displaced;
+
+        lock (_stateGate)
+        {
+            _timelineRuns.TryGetValue(group.Id, out displaced);
+            _timelineRuns[group.Id] = run;
+        }
+
+        if (displaced is not null)
+        {
+            try { displaced.Cancellation.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+
+        // Do not invoke an async run while holding _stateGate: a virtual clock (and an empty timeline) can
+        // complete synchronously, and its finally block takes the same gate to retire itself.
+        _ = RunTimelineAsync(group, events, playhead, depth, run);
+
+        // Starting/rehearsing a timeline is complete once any cue that belongs at the playhead has actually
+        // crossed its edge. Future authored positions remain owned by the background run.
+        await run.Started.Task.ConfigureAwait(false);
+    }
+
+    private IReadOnlyList<TimelineEvent> BuildTimelineEvents(GroupCueNode group, TimeSpan playhead)
+    {
+        var byDue = new SortedDictionary<long, TimelineEvent>();
+
+        TimelineEvent EventAt(TimeSpan due)
+        {
+            if (!byDue.TryGetValue(due.Ticks, out var scheduled))
+            {
+                scheduled = new TimelineEvent(due);
+                byDue.Add(due.Ticks, scheduled);
+            }
+            return scheduled;
+        }
 
         foreach (var child in group.Children.Where(child => child.Enabled))
         {
-            var start = TimeSpan.FromMilliseconds(child.TimelineOffsetMs);
+            // Pre-wait is part of the authored start coordinate, not a second wall-clock timer launched
+            // after the timeline says the cue is due.
+            var authoredStart = TimeSpan.FromMilliseconds(
+                Math.Max(0L, (long)child.TimelineOffsetMs + child.PreWaitMs));
+            var due = authoredStart;
+            TimeSpan? initialPosition = null;
 
-            if (start >= playhead)
+            if (authoredStart < playhead)
             {
-                host.Schedule(child.Id, start - playhead, depth);
-                continue;
+                var into = playhead - authoredStart;
+
+                // Media/text and a still-held visualizer can reconstruct the state at a rehearsal playhead.
+                // Instant controls before the playhead are history: replaying an old patch, OSC action or jump
+                // while rehearsing later in the scene would be both surprising and potentially destructive.
+                var canStraddle = child is MediaCueNode or TextCueNode or VisualizerCueNode;
+                if (!canStraddle)
+                    continue;
+
+                if (Length(child) is { } length && into >= length)
+                {
+                    if (child is MediaCueNode { Loop: true } or MediaCueNode { EndBehavior: CueEndBehavior.Loop })
+                    {
+                        if (length <= TimeSpan.Zero)
+                            continue;
+                        into = TimeSpan.FromTicks(into.Ticks % length.Ticks);
+                    }
+                    else if (child is MediaCueNode { EndBehavior: CueEndBehavior.FreezeLastFrame })
+                    {
+                        // Arm on the final decodable instant and let the session's ordinary end monitor enter
+                        // its freeze state. Seeking exactly to duration is EOF on several demuxers.
+                        into = length > TimeSpan.FromMilliseconds(1)
+                            ? length - TimeSpan.FromMilliseconds(1)
+                            : TimeSpan.Zero;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+
+                due = playhead;
+                if (child is MediaCueNode or TextCueNode)
+                {
+                    var trimIn = child is MediaCueNode media ? media.TrimInMs : 0;
+                    initialPosition = into + TimeSpan.FromMilliseconds(trimIn);
+                }
             }
 
-            var into = playhead - start;
+            var timelineEvent = EventAt(due);
+            if (child is MediaCueNode or TextCueNode)
+                timelineEvent.Media.Add(new TimelineMediaStart(child, initialPosition));
+            else if (child is VisualizerCueNode visualizer)
+                timelineEvent.Visualizers.Add(visualizer);
+            else
+                timelineEvent.Controls.Add(child);
+        }
 
-            // No probe, no length, no way to tell whether it is still running. Firing it is the
-            // answer that plays something.
-            if (Length(child) is { } length && into >= length)
-                continue;
+        return [.. byDue.Values];
+    }
 
-            if (!await FireAsync(child.Id, depth + 1).ConfigureAwait(false))
-                continue;
+    private async Task RunTimelineAsync(
+        GroupCueNode group,
+        IReadOnlyList<TimelineEvent> events,
+        TimeSpan playhead,
+        int depth,
+        TimelineRun run)
+    {
+        var cancellationToken = run.Cancellation.Token;
+        var dispatched = new List<Task>();
+        try
+        {
+            var initial = events.FirstOrDefault(item => item.Due <= playhead);
+            TimelineRunClock clock;
 
-            await host.SeekCueAsync(
-                child.Id,
-                into + TimeSpan.FromMilliseconds(child is MediaCueNode media ? media.TrimInMs : 0))
+            if (initial is not null)
+            {
+                StartTimelinePreparation(initial, cancellationToken);
+                var initialReady = new List<Task>(2);
+                if (initial.Media.Count > 0)
+                    initialReady.Add(initial.MediaGate.Ready);
+                if (initial.Visualizers.Count > 0)
+                    initialReady.Add(initial.VisualizerGate.Ready);
+                await Task.WhenAll(initialReady).WaitAsync(cancellationToken).ConfigureAwait(false);
+
+                // Decoder/open latency is paid before the timeline epoch exists. Position zero (or the
+                // rehearsal playhead) is therefore the release edge, not the time opening happened to begin.
+                clock = new TimelineRunClock(host, playhead);
+                await DispatchTimelineEventAsync(initial, depth, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                clock = new TimelineRunClock(host, playhead);
+            }
+
+            run.Started.TrySetResult();
+
+            var future = events.Where(item => item.Due > playhead).ToList();
+            var transitions = future
+                .SelectMany(item => new[]
+                {
+                    (At: TimelinePreparationAt(item, playhead), Prepare: true, Event: item),
+                    (At: item.Due, Prepare: false, Event: item),
+                })
+                .OrderBy(item => item.At)
+                .ThenByDescending(item => item.Prepare)
+                .GroupBy(item => item.At);
+
+            foreach (var transition in transitions)
+            {
+                await clock.WaitUntilAsync(transition.Key, cancellationToken).ConfigureAwait(false);
+
+                foreach (var item in transition.Where(item => item.Prepare))
+                    StartTimelinePreparation(item.Event, cancellationToken);
+
+                foreach (var item in transition.Where(item => !item.Prepare))
+                {
+                    StartTimelinePreparation(item.Event, cancellationToken);
+                    dispatched.Add(DispatchTimelineEventAsync(
+                        item.Event, depth, cancellationToken));
+                }
+
+                // Let the just-released dispatcher continuations run before sampling/advancing toward the
+                // next transition. This is normally only a few microseconds, but makes the edge ownership
+                // explicit and prevents a fast virtual clock from overtaking its own released voices.
+                if (transition.Any(item => !item.Prepare))
+                    await Task.Yield();
+            }
+
+            await Task.WhenAll(dispatched).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // STOP, reload, re-fire or disposal owns this cancellation. Prepared voices unwind through
+            // ShowSession's exact-voice rollback and future events simply never dispatch.
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            host.Report($"“{group.Label}” timeline stopped — {failure.Message}");
+        }
+        finally
+        {
+            foreach (var timelineEvent in events)
+            {
+                timelineEvent.MediaGate.Cancel(cancellationToken);
+                timelineEvent.VisualizerGate.Cancel(cancellationToken);
+            }
+
+            // Cancellation is not complete until committed session voices and hidden visualizer slots have
+            // observed it and released their resources. Reload/STOP await the run specifically for this edge.
+            var preparations = events
+                .SelectMany(timelineEvent => new Task?[]
+                    { timelineEvent.MediaTask, timelineEvent.VisualizerTask })
+                .Where(task => task is not null)
+                .Cast<Task>()
+                .ToArray();
+            try { await Task.WhenAll(preparations).ConfigureAwait(false); }
+            catch { /* the run's catch already reported non-cancellation failures */ }
+            run.Started.TrySetResult();
+
+            run.Cancellation.Dispose();
+            run.Complete();
+
+            lock (_stateGate)
+                if (_timelineRuns.TryGetValue(group.Id, out var current) && ReferenceEquals(current, run))
+                    _timelineRuns.Remove(group.Id);
+        }
+    }
+
+    private static TimeSpan TimelinePreparationAt(TimelineEvent timelineEvent, TimeSpan playhead)
+    {
+        // A live/device source may explicitly forbid opening early. If it shares an edge with prepared files,
+        // those files wait for it rather than sacrificing simultaneity.
+        var preRollAllowed = timelineEvent.Media.All(item =>
+            item.Cue is not MediaCueNode { DisablePreRoll: true });
+        if (!preRollAllowed)
+            return timelineEvent.Due;
+
+        var prepareAt = timelineEvent.Due - TimelinePreparationLead;
+        return prepareAt < playhead ? playhead : prepareAt;
+    }
+
+    private void StartTimelinePreparation(TimelineEvent timelineEvent, CancellationToken cancellationToken)
+    {
+        if (timelineEvent.MediaTask is null && timelineEvent.Media.Count > 0)
+            timelineEvent.MediaTask = PrepareTimelineMediaAsync(timelineEvent, cancellationToken);
+
+        if (timelineEvent.VisualizerTask is null && timelineEvent.Visualizers.Count > 0)
+            timelineEvent.VisualizerTask = PrepareTimelineVisualizersAsync(timelineEvent, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<Guid>> PrepareTimelineMediaAsync(
+        TimelineEvent timelineEvent,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await host.PlayTimelineMediaAsync(
+                    timelineEvent.Media,
+                    Project.ListOf(timelineEvent.Media[0].Cue.Id),
+                    timelineEvent.MediaGate.WaitAsync,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
+        finally
+        {
+            // A host failure before entering the callback must not strand the event's control cues forever.
+            timelineEvent.MediaGate.EnsureReady();
+        }
+    }
+
+    private async Task<IReadOnlyList<Guid>> PrepareTimelineVisualizersAsync(
+        TimelineEvent timelineEvent,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await host.PlayTimelineVisualizersAsync(
+                    timelineEvent.Visualizers,
+                    Project.ListOf(timelineEvent.Visualizers[0].Id),
+                    timelineEvent.VisualizerGate.WaitAsync,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            timelineEvent.VisualizerGate.EnsureReady();
+        }
+    }
+
+    private async Task DispatchTimelineEventAsync(
+        TimelineEvent timelineEvent,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var ready = new List<Task>(2);
+            if (timelineEvent.Media.Count > 0)
+                ready.Add(timelineEvent.MediaGate.Ready);
+            if (timelineEvent.Visualizers.Count > 0)
+                ready.Add(timelineEvent.VisualizerGate.Ready);
+            await Task.WhenAll(ready).WaitAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Release prepared media and dispatch non-media participants in the same continuation. Media
+            // starters then serialize through one dispatcher turn; controls no longer wait for decoder opens.
+            timelineEvent.MediaGate.Release();
+            timelineEvent.VisualizerGate.Release();
+            var controls = timelineEvent.Controls
+                .Select(cue => FireAsync(
+                    cue.Id, depth + 1, skipPreWait: true))
+                .ToArray();
+
+            IReadOnlyList<Guid> started = [];
+            if (timelineEvent.MediaTask is not null)
+                started = await timelineEvent.MediaTask.ConfigureAwait(false);
+            if (timelineEvent.VisualizerTask is not null)
+                await timelineEvent.VisualizerTask.ConfigureAwait(false);
+
+            foreach (var mediaStart in timelineEvent.Media.Where(item => started.Contains(item.Cue.Id)))
+                await FinishScheduledMediaCueAsync(mediaStart.Cue, depth, cancellationToken)
+                    .ConfigureAwait(false);
+
+            await Task.WhenAll(controls).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            host.Report($"a timeline event at {timelineEvent.Due:c} did not fire — {failure.Message}");
+        }
+    }
+
+    private async Task FinishScheduledMediaCueAsync(
+        CueNode cue,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (IsSequenceOwned(cue.Id)
+            || cue.Trigger != CueTrigger.Continue
+            || Project.ListOf(cue.Id) is not { } list)
+            return;
+
+        if (cue.PostWaitMs > 0)
+            await host.DelayTimelineAsync(
+                    TimeSpan.FromMilliseconds(cue.PostWaitMs), cancellationToken)
+                .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        await ContinueFromAsync(cue with { PostWaitMs = 0 }, list, depth, follow: false)
+            .ConfigureAwait(false);
     }
 
     /// <summary>How long a child occupies the timeline: its TRIMMED length, not the file's.</summary>
@@ -858,6 +1387,9 @@ public sealed class CueExecutor(ICueExecutionHost host)
     {
         if (cue is TextCueNode { DurationMs: > 0 } text)
             return TimeSpan.FromMilliseconds(text.DurationMs);
+
+        if (cue is VisualizerCueNode { HoldMs: > 0 } visualizer)
+            return TimeSpan.FromMilliseconds(visualizer.HoldMs);
 
         var probed = host.MediaLength(cue.Id);
 

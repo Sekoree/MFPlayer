@@ -182,9 +182,9 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
 
     Task<CueExecutionStatus> ICueRunnerHost.FireCueIndependentAtBarrierAsync(
         string cueId, string independentGroupId, Func<Task>? waitForStartBarrier, Func<Task>? waitForStartEdge,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken, TimeSpan? initialPosition) =>
         FireCueIndependentAtBarrierAsync(
-            cueId, independentGroupId, waitForStartBarrier, waitForStartEdge, cancellationToken);
+            cueId, independentGroupId, waitForStartBarrier, waitForStartEdge, cancellationToken, initialPosition);
 
     Task<(int Cursor, int Generation)> ICueRunnerHost.ReadGoCursorAsync(string groupId) =>
         InvokeAsync(() => Task.FromResult((GetGoCursor(groupId), _showGeneration)));
@@ -943,7 +943,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         CancellationToken cancellationToken,
         Func<Task>? waitForStartBarrier = null,
         Func<Task>? waitForStartEdge = null,
-        (TimeSpan Duration, FadeShape Curve)? crossfade = null)
+        (TimeSpan Duration, FadeShape Curve)? crossfade = null,
+        TimeSpan? initialPosition = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (binding is null)
@@ -964,7 +965,14 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         // --- OPEN (OFF the dispatcher): arm the clip through the standby engine - it opens via the registry
         // (auto-wiring adaptive-rate drift correction) and seeks to the trim-in (Window.Start), reusing a warm
         // prepared clip when present. The long part; the dispatcher loop stays free throughout (NXT-03).
-        var armed = await _standby.ArmAsync(BuildClipSpec(binding), cancellationToken).ConfigureAwait(false);
+        var armPosition = initialPosition is { } requestedPosition
+            ? TimeSpan.FromTicks(Math.Max(binding.StartOffset.Ticks, requestedPosition.Ticks))
+            : binding.StartOffset;
+        var cueElapsed = armPosition - binding.StartOffset;
+        var armVariant = initialPosition is not null ? $"scheduled-{armPosition.Ticks}" : null;
+        var armed = await _standby.ArmAsync(
+                BuildClipSpec(binding, armVariant, armPosition), cancellationToken)
+            .ConfigureAwait(false);
 
         if (waitForStartBarrier is not null)
         {
@@ -987,7 +995,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         // (decode spin-up, buffer wait, sync present) but does not start its clocks - the starter comes back.
         var startVoice = await InvokeAsync(() => CommitClipAsync(
                 groupId, binding, cancellationToken, setup, armed, crossfade,
-                deferStart: waitForStartEdge is not null))
+                deferStart: waitForStartEdge is not null,
+                cueElapsed: cueElapsed))
             .ConfigureAwait(false);
 
         if (waitForStartEdge is null)
@@ -999,24 +1008,39 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         // dispatcher but each is a few thread-starts - microseconds, not milliseconds.
         // A discarded commit (reload/STOP/superseded during the open) still waits at the edge so the
         // barrier's participant count stays truthful; it just has nothing to start.
-        await waitForStartEdge().ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            await waitForStartEdge().ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
 
-        if (startVoice is not null)
-            await InvokeAsync(() =>
-            {
-                try
+            if (startVoice is not null)
+                await InvokeAsync(() =>
                 {
-                    startVoice();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // A STOP tore the committed voice down while it waited at the edge. Starting a
-                    // dead voice is moot, and the stop already owns the teardown.
-                }
-                return Task.CompletedTask;
-            }).ConfigureAwait(false);
+                    try
+                    {
+                        startVoice.Start();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // A STOP tore the committed voice down while it waited at the edge. Starting a
+                        // dead voice is moot, and the stop already owns the teardown.
+                    }
+                    return Task.CompletedTask;
+                }).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The voice is already committed while it waits at an absolute edge. Cancellation therefore
+            // has to roll the exact voice back through its group; releasing only the armed clip would leave
+            // a hidden active layer and a program-bus lease behind.
+            if (startVoice is not null)
+                await InvokeAsync(() => ReleaseVoiceAsync(startVoice.Group, startVoice.Voice).AsTask())
+                    .ConfigureAwait(false);
+            throw;
+        }
     }
+
+    private sealed record DeferredClipStart(TransportGroup Group, TransportVoice Voice, Action Start);
 
     /// <summary>Test-only fault seam (§A): raised on the dispatcher immediately AFTER a clip has committed to
     /// its group - i.e. after a crossfade handoff has moved the displaced voice into its release. The
@@ -1031,14 +1055,15 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// <param name="deferStart">Group fires: prepare the voice fully (decode spin-up, buffer wait,
     /// sync present) but return the clock start as the result instead of running it, so the caller can
     /// start every sibling on one edge. False (single fires) starts inline and returns null.</param>
-    private async Task<Action?> CommitClipAsync(
+    private async Task<DeferredClipStart?> CommitClipAsync(
         string groupId,
         ShowClipBinding binding,
         CancellationToken cancellationToken,
         (int generation, TransportGroup group, long ticket) setup,
         IArmedClip armed,
         (TimeSpan Duration, FadeShape Curve)? crossfade = null,
-        bool deferStart = false)
+        bool deferStart = false,
+        TimeSpan cueElapsed = default)
     {
         // Superseded by a later open on the same group (see TransportGroup.OpenSequence), cancelled, or
         // straddling a reload - discard without touching the live show.
@@ -1080,6 +1105,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         FadeShape fadeInCurve = binding.FadeIn > TimeSpan.Zero
             ? new FadeShape(binding.FadeInCurve, binding.FadeInShape)
             : crossfade?.Curve ?? FadeCurve.Linear;
+        cueElapsed = cueElapsed < TimeSpan.Zero ? TimeSpan.Zero : cueElapsed;
+        var fadeInStartLevel = fadeIn
+            ? FadeCurves.LevelUp(cueElapsed, fadeInDuration, fadeInCurve)
+            : 1f;
         // Retained for the active clip so both fade-in and every stop path ramp each route relative to its
         // configured gain rather than assuming unity.
         var routeTargets = new List<AudioRouteTarget>();
@@ -1161,13 +1190,13 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             // (the video twin of the envelope seeding below, and the same clip-relative time basis).
             if (binding.OpacityEnvelope is { Count: > 0 } seedLane && layers.Count > 0)
             {
-                var seed = Math.Clamp(VolumeEnvelopes.Sample(seedLane, TimeSpan.Zero), 0f, 1f);
+                var seed = Math.Clamp(VolumeEnvelopes.Sample(seedLane, cueElapsed), 0f, 1f);
                 foreach (var placed in layers)
                     placed.Slot.AutomationLevel = seed;
             }
 
             IReadOnlyList<float>? fadeInFullLevels = null;
-            if (fadeIn && layers.Count > 0)
+            if ((fadeIn || deferStart) && layers.Count > 0)
             {
                 fadeInFullLevels = layers.Select(placed => placed.Slot.FadeLevel).ToArray();
                 foreach (var placed in layers)
@@ -1185,7 +1214,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 // whose automation begins below unity would otherwise attach at unity and burst until the
                 // runner's first tick - loud on a cue authored quiet. The runner then simply keeps writing the
                 // same component as the clip plays on.
-                voice.Level.Envelope = VolumeEnvelopes.Sample(binding.VolumeEnvelope, TimeSpan.Zero);
+                voice.Level.Envelope = VolumeEnvelopes.Sample(binding.VolumeEnvelope, cueElapsed);
                 // The level every route attaches at, so the FIRST buffer the device sees is already at the
                 // composed level: 0 for a fade-in (the ramp lifts it), else the voice's own composition -
                 // the master trim it stamped at construction, times the envelope seeded just above.
@@ -1194,7 +1223,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 // reconciling pass after the commit (which awaits the displaced clip's teardown). Every other
                 // route write in the session - the voice attach, the hot rebuild, every ramp - already goes
                 // through the composition; this was the one outlier.
-                var attachLevel = fadeIn ? 0f : voice.EffectiveAudioLevel;
+                var attachLevel = fadeIn || deferStart ? 0f : voice.EffectiveAudioLevel;
                 if (programSends is not null)
                 {
                     // HaCue logical sends: the voice plays into the project's program bus through ONE
@@ -1292,7 +1321,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             // butt-spliced away, and this voice becomes the group's Active.
             await CommitVoiceAsync(groupId, group, voice, crossfade).ConfigureAwait(false);
             PostCommitFault?.Invoke(groupId);
-            voice.SetFadeMetadata(routeTargets, fadeIn ? 0f : 1f, fadeInFullLevels);
+            var committedLevel = deferStart ? 0f : fadeInStartLevel;
+            voice.SetFadeMetadata(routeTargets, committedLevel, fadeInFullLevels);
             // One composition pass over the committed targets. The routes already attached AT this level, so
             // it is value-identical by construction - it is here so the level composition, not the attach
             // site, stays the authority (the same reason the live re-apply and the hot rebuild end with it).
@@ -1314,14 +1344,17 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 && end > binding.StartOffset;
             var hasEnvelope = binding.VolumeEnvelope is { Count: > 0 } && routeTargets.Count > 0;
             var hasOpacityLane = binding.OpacityEnvelope is { Count: > 0 } && layers.Count > 0;
-            if (fadeIn || endHandling || hasEnvelope || hasOpacityLane)
+            void BeginClipWork()
             {
+                if (!fadeIn && !endHandling && !hasEnvelope && !hasOpacityLane)
+                    return;
+
                 var clipCts = new CancellationTokenSource();
                 voice.SetClipWorkCts(clipCts);
-                if (fadeIn && (routeTargets.Count > 0 || layers.Count > 0))
+                if (fadeIn && cueElapsed < fadeInDuration && (routeTargets.Count > 0 || layers.Count > 0))
                     StartFadeIn(
                         groupId, voice, routeTargets, fadeInDuration, fadeInCurve,
-                        fadesVideo: layers.Count > 0, clipCts.Token);
+                        fadesVideo: layers.Count > 0, clipCts.Token, cueElapsed);
                 if (hasEnvelope)
                     StartEnvelopeRunner(groupId, voice, binding.VolumeEnvelope!, clipCts.Token);
                 if (hasOpacityLane)
@@ -1330,7 +1363,24 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                     StartEndMonitor(groupId, voice, end, clipCts.Token);
             }
 
-            return deferredStart;
+            if (!deferStart)
+            {
+                BeginClipWork();
+                return null;
+            }
+
+            return new DeferredClipStart(group, voice, () =>
+            {
+                // Prepared audio is attached silent and prepared video is black. Restore the authored
+                // instantaneous level at the very same dispatcher turn that starts the voice clock; a
+                // rehearsal start in the middle of a fade therefore joins the curve in progress.
+                if (fadeIn)
+                    voice.ApplyFadeLevel(routeTargets, 1f, voice.BaseLayerFadeLevels, fadeInStartLevel);
+                else
+                    voice.ApplyClipFadeLevel(routeTargets, 1f, voice.BaseLayerFadeLevels);
+                deferredStart!();
+                BeginClipWork();
+            });
         }
         catch
         {
@@ -1348,7 +1398,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
 
     /// <summary>Builds the standby <see cref="ClipSpec"/> for a clip binding - identical on the pre-roll
     /// (prepare) and fire (arm) paths, so a warmed clip is found by its key (cue id + media path).</summary>
-    private ClipSpec BuildClipSpec(ShowClipBinding binding, string? variant = null)
+    private ClipSpec BuildClipSpec(
+        ShowClipBinding binding,
+        string? variant = null,
+        TimeSpan? initialPosition = null)
     {
         // A clip that plays into the PROGRAM BUS must decode at the project's mix rate, not at any
         // device's. Its clip router submits into a bay producer, and the bay bridges a foreign rate by
@@ -1376,8 +1429,11 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             TargetAudioSampleRate = targetAudioRate,
             FileVideoDecodeQueueCapacity = 16,
         };
-        var window = binding.StartOffset > TimeSpan.Zero
-            ? new S.Media.Core.ClipWindow(binding.StartOffset, TimeSpan.Zero, TimeSpan.Zero, HasKnownEnd: false)
+        var windowStart = initialPosition is { } requestedPosition
+            ? TimeSpan.FromTicks(Math.Max(binding.StartOffset.Ticks, requestedPosition.Ticks))
+            : binding.StartOffset;
+        var window = windowStart > TimeSpan.Zero
+            ? new S.Media.Core.ClipWindow(windowStart, TimeSpan.Zero, TimeSpan.Zero, HasKnownEnd: false)
             : S.Media.Core.ClipWindow.Unbounded;
         // A non-null variant (e.g. "preview") gives a distinct standby key so this arms a FRESH instance
         // instead of consuming GO's prepared clip.

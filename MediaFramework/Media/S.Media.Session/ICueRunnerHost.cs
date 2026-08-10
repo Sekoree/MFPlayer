@@ -44,7 +44,7 @@ internal interface ICueRunnerHost
     /// serialized commits.</summary>
     Task<CueExecutionStatus> FireCueIndependentAtBarrierAsync(
         string cueId, string independentGroupId, Func<Task>? waitForStartBarrier, Func<Task>? waitForStartEdge,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken, TimeSpan? initialPosition = null);
 
     /// <summary>
     /// The group's GO cursor (the last fired cue number) and the show generation it was read under.

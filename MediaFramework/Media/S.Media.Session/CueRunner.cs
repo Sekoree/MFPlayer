@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace S.Media.Session;
 
 /// <summary>
@@ -21,6 +23,11 @@ internal sealed class CueRunner
     // The cancellation source of the in-flight cue fire (its pre/post-wait + open + auto-continue chain). Set
     // while a fire runs; read off-dispatcher by CancelActiveFire so STOP/LOAD/DISPOSE can abort it (NXT-03).
     private volatile CancellationTokenSource? _activeFireCts;
+
+    // Absolute timeline fires release the ordinary fire lock once every voice is prepared, otherwise a cue
+    // waiting several seconds for its authored edge would prevent later timeline events from preparing. They
+    // still have to remain STOP-cancellable after that release, so keep their linked sources separately.
+    private readonly ConcurrentDictionary<CancellationTokenSource, byte> _pendingScheduledFires = new();
 
     // Off-dispatcher fire model (NXT-03): a cue fire runs OFF the serial dispatcher (its pre-wait + media open
     // no longer park the loop, so STOP/seek/load/queries stay responsive), re-entering only for short state
@@ -245,6 +252,86 @@ internal sealed class CueRunner
         }
     }
 
+    /// <summary>
+    /// Prepares a batch behind the normal arm/commit barriers, releases the ordinary fire lock, and then holds
+    /// every committed voice behind one caller-owned absolute start edge.
+    /// </summary>
+    public async Task<IReadOnlyList<CueExecutionStatus>> FireCuesIndependentScheduledAsync(
+        IReadOnlyList<ScheduledCueStart> targets,
+        Func<CancellationToken, Task> waitForStartEdge,
+        CancellationToken cancellationToken)
+    {
+        if (targets.Count == 0)
+        {
+            await waitForStartEdge(cancellationToken).ConfigureAwait(false);
+            return [];
+        }
+
+        await _fireLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var lockHeld = true;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _pendingScheduledFires.TryAdd(cts, 0);
+        _activeFireCts = cts;
+
+        var releasePrepared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<CueExecutionStatus>[]? fires = null;
+        try
+        {
+            var startBarrier = new CoordinatedFireBarrier(targets.Count);
+            var preparedEdge = new CoordinatedFireBarrier(targets.Count);
+            fires = new Task<CueExecutionStatus>[targets.Count];
+            for (var i = 0; i < targets.Count; i++)
+            {
+                var target = targets[i];
+                fires[i] = FireIndependentForGroupAsync(
+                    target.CueId,
+                    target.RuntimeGroupId,
+                    startBarrier,
+                    preparedEdge,
+                    cts.Token,
+                    target.StartPosition,
+                    releasePrepared.Task);
+            }
+
+            // All viable voices have opened, committed, pre-rolled and presented their synchronization frame.
+            // Let unrelated fires and later timeline events prepare while these voices wait for absolute time.
+            await preparedEdge.Released.WaitAsync(cts.Token).ConfigureAwait(false);
+            _activeFireCts = null;
+            _fireLock.Release();
+            lockHeld = false;
+
+            await waitForStartEdge(cts.Token).ConfigureAwait(false);
+            cts.Token.ThrowIfCancellationRequested();
+            releasePrepared.TrySetResult();
+            return await Task.WhenAll(fires).ConfigureAwait(false);
+        }
+        catch
+        {
+            try { cts.Cancel(); }
+            catch (ObjectDisposedException) { }
+            releasePrepared.TrySetCanceled(cts.Token);
+
+            // A committed voice owns real layers/routes while it waits. Do not return until every participant
+            // has observed cancellation and run the PlayClipAsync rollback path.
+            if (fires is not null)
+            {
+                try { await Task.WhenAll(fires).ConfigureAwait(false); }
+                catch { /* preserve the scheduling/cancellation exception that initiated teardown */ }
+            }
+            throw;
+        }
+        finally
+        {
+            _pendingScheduledFires.TryRemove(cts, out _);
+            if (lockHeld)
+            {
+                if (ReferenceEquals(_activeFireCts, cts))
+                    _activeFireCts = null;
+                _fireLock.Release();
+            }
+        }
+    }
+
     /// <summary>One cue's fire within a <see cref="FireCuesAsync"/> group: maps cancellation to a non-throwing
     /// <see cref="CueExecutionStatus.Failed"/> (so one cancelled cue doesn't fault the whole <c>WhenAll</c>); a
     /// <see cref="CueFaultPolicy.StopShow"/> fault still propagates, matching single-cue fire.</summary>
@@ -259,7 +346,9 @@ internal sealed class CueRunner
         string runtimeGroupId,
         CoordinatedFireBarrier startBarrier,
         CoordinatedFireBarrier startEdge,
-        CancellationToken token)
+        CancellationToken token,
+        TimeSpan? initialPosition = null,
+        Task? externalStartRelease = null)
     {
         var reachedBarrier = false;
         var reachedEdge = false;
@@ -277,8 +366,11 @@ internal sealed class CueRunner
                     {
                         reachedEdge = true;
                         await startEdge.SignalAndWaitAsync(token).ConfigureAwait(false);
+                        if (externalStartRelease is not null)
+                            await externalStartRelease.WaitAsync(token).ConfigureAwait(false);
                     },
-                    token)
+                    token,
+                    initialPosition)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -303,6 +395,8 @@ internal sealed class CueRunner
         private readonly TaskCompletionSource _released =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public Task Released => _released.Task;
+
         public void Signal()
         {
             if (Interlocked.Decrement(ref _remaining) == 0)
@@ -323,10 +417,17 @@ internal sealed class CueRunner
     public void CancelActiveFire()
     {
         var cts = _activeFireCts;
-        if (cts is null)
-            return;
-        try { cts.Cancel(); }
-        catch (ObjectDisposedException) { /* the fire already finished and disposed it */ }
+        if (cts is not null)
+        {
+            try { cts.Cancel(); }
+            catch (ObjectDisposedException) { /* the fire already finished and disposed it */ }
+        }
+
+        foreach (var pending in _pendingScheduledFires.Keys)
+        {
+            try { pending.Cancel(); }
+            catch (ObjectDisposedException) { /* completed between snapshot and cancellation */ }
+        }
     }
 
     /// <summary>See <see cref="ShowSession.GoAsync"/> (the public doc lives there).</summary>

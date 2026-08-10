@@ -606,12 +606,12 @@ public class CueExecutorTests
         var (executor, host, _) = Show(group);
 
         await executor.FireAsync(group.Id);
+        await executor.WaitForTimelineCompletionAsync(group.Id);
 
-        // Scheduled, not chained: a timeline's cues do not depend on each other's lengths.
-        Assert.Empty(host.Played);
+        // Independently released from the same master coordinate; the virtual clock makes the wait instant.
         Assert.Equal(
             [(first.Id, TimeSpan.Zero), (second.Id, TimeSpan.FromSeconds(8))],
-            host.Scheduled.Select(entry => (entry.Cue, entry.When)));
+            host.TimelineStarts.Select(entry => (entry.Cue, entry.MasterTime)));
     }
 
     [Fact]

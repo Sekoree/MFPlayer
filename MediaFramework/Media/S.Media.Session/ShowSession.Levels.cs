@@ -30,7 +30,7 @@ public sealed partial class ShowSession
     /// final full-level step would destroy the fade cue's result.</summary>
     private void StartFadeIn(string groupId, TransportVoice voice,
         IReadOnlyList<AudioRouteTarget> routes, TimeSpan duration, FadeShape curve, bool fadesVideo,
-        CancellationToken ct)
+        CancellationToken ct, TimeSpan initialElapsed = default)
     {
         var player = voice.Player;
         if (player.AudioSourceId is null && !fadesVideo)
@@ -51,13 +51,14 @@ public sealed partial class ShowSession
                 voice.EndClipFade(slotToken);
                 return Task.FromResult(true);
             }
-            var frac = FadeRamp.LevelUp(elapsed, duration, curve);
+            var totalElapsed = elapsed + initialElapsed;
+            var frac = FadeRamp.LevelUp(totalElapsed, duration, curve);
             // Audio leg = ApplyAudioScale(frac), exactly as before; the opacity leg ramps each layer
             // from 0 toward its authored value (base × frac) - the mirror of the stop fade's ramp down.
             voice.ApplyFadeLevel(routes, 1f, voice.BaseLayerFadeLevels, frac);
             // A custom curve may intentionally end below 1. Completion is temporal, not inferred
             // from the authored endpoint value, otherwise that fade slot can remain claimed forever.
-            if (elapsed < duration)
+            if (totalElapsed < duration)
                 return Task.FromResult(false);
             voice.EndClipFade(slotToken);
             return Task.FromResult(true);

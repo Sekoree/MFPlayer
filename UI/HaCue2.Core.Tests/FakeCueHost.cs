@@ -1,6 +1,7 @@
 using HaCue2.Core.Model;
 using HaCue2.Engine;
 using S.Media.Session;
+using S.Media.Time;
 
 namespace HaCue2.Core.Tests;
 
@@ -13,11 +14,8 @@ namespace HaCue2.Core.Tests;
 /// asserted without a session, a device or a socket. Waits complete instantly — a test of chain logic
 /// must not take as long as the show it describes.
 /// </para>
-/// <para>
-/// Scheduled cues are recorded rather than run. A timeline group's whole point is that its children
-/// fire at authored offsets on the show's clock, and a fake that ran them immediately would prove the
-/// opposite of what the test is asking.
-/// </para>
+/// <para>The timeline clock is virtual: scheduler waits advance it immediately, preserving authored
+/// positions without making the test sleep.</para>
 /// </remarks>
 internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
 {
@@ -33,7 +31,8 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
     public List<Guid> Stopped { get; } = [];
     public List<(Guid Cue, double LevelDb)> Levels { get; } = [];
     public List<(Guid Cue, double LevelDb, TimeSpan Duration, FadeShape Curve, bool Stop)> CueFades { get; } = [];
-    public List<(Guid Cue, TimeSpan When, int Depth)> Scheduled { get; } = [];
+    public List<(Guid Cue, TimeSpan? StartPosition, TimeSpan MasterTime)> TimelineStarts { get; } = [];
+    public List<(Guid Cue, TimeSpan MasterTime)> ControlStarts { get; } = [];
     public List<(ActionCueNode Cue, ActionEndpoint? Endpoint)> Actions { get; } = [];
     public List<TimeSpan> Waits { get; } = [];
     public List<string> Problems { get; } = [];
@@ -67,6 +66,7 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
             return Task.FromResult(false);
 
         Played.Add(cue.Id);
+        ControlStarts.Add((cue.Id, _timelineClock.ElapsedSinceStart));
         Transitions.Add((cue.Id, crossfade, crossfadeCurve));
         SoundingCues.Add(cue.Id);
         return Task.FromResult(true);
@@ -75,23 +75,49 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
     /// <summary>Batches recorded as batches, so a test can tell "all together" from "one after another".</summary>
     public List<IReadOnlyList<Guid>> PlayedTogether { get; } = [];
 
-    public Task<IReadOnlyList<Guid>> PlayTogetherAsync(IReadOnlyList<CueNode> cues, CueList? list)
+    public async Task<IReadOnlyList<Guid>> PlayTimelineMediaAsync(
+        IReadOnlyList<TimelineMediaStart> cues,
+        CueList? list,
+        Func<CancellationToken, Task> waitForStartEdge,
+        CancellationToken cancellationToken)
     {
+        await waitForStartEdge(cancellationToken);
         if (PlayFails)
-            return Task.FromResult<IReadOnlyList<Guid>>([]);
+            return [];
 
-        // Recorded into the SAME lists a one-at-a-time fire writes, in the batch's order: the executor's
-        // existing expectations are about what played and in what order, and batching changes neither.
+        foreach (var start in cues)
+        {
+            Played.Add(start.Cue.Id);
+            Transitions.Add((start.Cue.Id, null, default));
+            SoundingCues.Add(start.Cue.Id);
+            TimelineStarts.Add((start.Cue.Id, start.StartPosition, _timelineClock.ElapsedSinceStart));
+        }
+
+        IReadOnlyList<Guid> started = [.. cues.Select(start => start.Cue.Id)];
+        if (started.Count > 1)
+            PlayedTogether.Add(started);
+        return started;
+    }
+
+    public async Task<IReadOnlyList<Guid>> PlayTimelineVisualizersAsync(
+        IReadOnlyList<VisualizerCueNode> cues,
+        CueList? list,
+        Func<CancellationToken, Task> waitForStartEdge,
+        CancellationToken cancellationToken)
+    {
+        await waitForStartEdge(cancellationToken);
+        if (PlayFails)
+            return [];
+
         foreach (var cue in cues)
         {
             Played.Add(cue.Id);
+            ControlStarts.Add((cue.Id, _timelineClock.ElapsedSinceStart));
             Transitions.Add((cue.Id, null, default));
             SoundingCues.Add(cue.Id);
         }
 
-        IReadOnlyList<Guid> started = [.. cues.Select(cue => cue.Id)];
-        PlayedTogether.Add(started);
-        return Task.FromResult(started);
+        return [.. cues.Select(cue => cue.Id)];
     }
 
     public Task SetStandbyAsync(CueList list, Guid? cueId)
@@ -140,6 +166,7 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
     public Task<string?> SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint)
     {
         Actions.Add((action, endpoint));
+        ControlStarts.Add((action.Id, _timelineClock.ElapsedSinceStart));
         return Task.FromResult(ActionFailure);
     }
 
@@ -155,20 +182,63 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
         return Task.FromResult(!Cancelled);
     }
 
-    public void Schedule(Guid cueId, TimeSpan when, int depth) => Scheduled.Add((cueId, when, depth));
+    private readonly VirtualPlaybackClock _timelineClock = new();
+
+    public IPlaybackClock TimelineClock => _timelineClock;
+
+    public bool TimelinePaused { get; set; }
+
+    public Func<TimeSpan, CancellationToken, Task>? TimelineDelayOverride { get; set; }
+
+    public TimeSpan TotalTimelineAdvanced => _timelineClock.TotalAdvanced;
+
+    public void AdvanceTimeline(TimeSpan duration) => _timelineClock.Advance(duration);
+
+    public void ReanchorTimeline(TimeSpan elapsed) => _timelineClock.Reanchor(elapsed);
+
+    public async Task DelayTimelineAsync(TimeSpan duration, CancellationToken cancellationToken)
+    {
+        if (TimelineDelayOverride is { } delay)
+        {
+            await delay(duration, cancellationToken);
+            return;
+        }
+
+        // Yield before advancing so a voice released at the preceding edge gets its continuation before
+        // the virtual master moves toward the next event (real device time naturally has that property).
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        _timelineClock.Advance(duration);
+    }
+
+    private sealed class VirtualPlaybackClock : IPlaybackClock
+    {
+        private long _elapsedTicks;
+        private long _totalAdvancedTicks;
+        private long _epoch;
+
+        public TimeSpan ElapsedSinceStart => TimeSpan.FromTicks(Volatile.Read(ref _elapsedTicks));
+        public TimeSpan TotalAdvanced => TimeSpan.FromTicks(Volatile.Read(ref _totalAdvancedTicks));
+        public bool IsAdvancing => true;
+        public ClockReading Read() => new(Volatile.Read(ref _epoch), ElapsedSinceStart, IsAdvancing);
+
+        public void Advance(TimeSpan duration)
+        {
+            var ticks = Math.Max(0, duration.Ticks);
+            Interlocked.Add(ref _elapsedTicks, ticks);
+            Interlocked.Add(ref _totalAdvancedTicks, ticks);
+        }
+
+        public void Reanchor(TimeSpan elapsed)
+        {
+            Volatile.Write(ref _elapsedTicks, Math.Max(0, elapsed.Ticks));
+            Volatile.Write(ref _epoch, PlaybackEpoch.Next());
+        }
+    }
 
     /// <summary>What a probe would have said. Absent means nobody has looked, exactly as in the app.</summary>
     public Dictionary<Guid, TimeSpan> Lengths { get; } = [];
 
-    /// <summary>Every seek, as (cue, position in FILE time).</summary>
-    public List<(Guid Cue, TimeSpan Position)> Seeks { get; } = [];
-
     public TimeSpan? MediaLength(Guid cueId) =>
         Lengths.TryGetValue(cueId, out var length) ? length : null;
-
-    public Task SeekCueAsync(Guid cueId, TimeSpan position)
-    {
-        Seeks.Add((cueId, position));
-        return Task.CompletedTask;
-    }
 }

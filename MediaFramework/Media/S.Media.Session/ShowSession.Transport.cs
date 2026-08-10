@@ -4,6 +4,19 @@ using S.Media.Time;
 namespace S.Media.Session;
 
 /// <summary>
+/// A cue prepared ahead of an externally scheduled start edge.
+/// </summary>
+/// <param name="CueId">Compiled cue/clip id.</param>
+/// <param name="RuntimeGroupId">Independent transport slot the cue owns.</param>
+/// <param name="StartPosition">
+/// Optional media-file position to arm at. Null uses the binding's normal trim-in.
+/// </param>
+public readonly record struct ScheduledCueStart(
+    string CueId,
+    string RuntimeGroupId,
+    TimeSpan? StartPosition = null);
+
+/// <summary>
 /// The operator's transport verbs: fire a cue (on the cue graph or independently of it), GO, and seek -
 /// one group or several coordinated. All of them marshal onto the session dispatcher (D5), so this file is
 /// where "a command arrived" turns into "the dispatcher will do it, in order".
@@ -103,11 +116,12 @@ public sealed partial class ShowSession
         string independentGroupId,
         Func<Task>? waitForStartBarrier,
         Func<Task>? waitForStartEdge,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? initialPosition = null)
     {
         ArgumentNullException.ThrowIfNull(waitForStartBarrier);
         return FireCueIndependentCoreAsync(
-            cueId, independentGroupId, waitForStartBarrier, waitForStartEdge, cancellationToken);
+            cueId, independentGroupId, waitForStartBarrier, waitForStartEdge, cancellationToken, initialPosition);
     }
 
     private async Task<CueExecutionStatus> FireCueIndependentCoreAsync(
@@ -115,7 +129,8 @@ public sealed partial class ShowSession
         string independentGroupId,
         Func<Task>? waitForStartBarrier,
         Func<Task>? waitForStartEdge,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? initialPosition = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cueId);
         ArgumentException.ThrowIfNullOrWhiteSpace(independentGroupId);
@@ -134,7 +149,9 @@ public sealed partial class ShowSession
         {
             if (cue.PreWait > TimeSpan.Zero)
                 await Task.Delay(cue.PreWait, cancellationToken).ConfigureAwait(false);
-            await PlayClipAsync(independentGroupId, binding, cancellationToken, waitForStartBarrier, waitForStartEdge)
+            await PlayClipAsync(
+                    independentGroupId, binding, cancellationToken, waitForStartBarrier, waitForStartEdge,
+                    initialPosition: initialPosition)
                 .ConfigureAwait(false);
             if (cue.PostWait > TimeSpan.Zero)
                 await Task.Delay(cue.PostWait, cancellationToken).ConfigureAwait(false);
@@ -182,6 +199,33 @@ public sealed partial class ShowSession
         }
 
         return _fires.FireCuesIndependentAsync(targets, cancellationToken);
+    }
+
+    /// <summary>
+    /// Prepares several independent cues as one batch, then releases the session fire lock while their
+    /// clocks wait at <paramref name="waitForStartEdge"/>. The callback is entered exactly once, after every
+    /// viable voice has committed, filled its pre-roll and presented its synchronization frame.
+    /// </summary>
+    /// <remarks>
+    /// This is the absolute-time counterpart of <see cref="FireCuesIndependentAsync"/>. Keeping the
+    /// preparation and start edge separate lets a timeline pay decoder/open latency before the authored
+    /// cue point. The prepared voices remain silent and their video layers remain hidden until release.
+    /// </remarks>
+    public Task<IReadOnlyList<CueExecutionStatus>> FireCuesIndependentScheduledAsync(
+        IReadOnlyList<ScheduledCueStart> targets,
+        Func<CancellationToken, Task> waitForStartEdge,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        ArgumentNullException.ThrowIfNull(waitForStartEdge);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        foreach (var target in targets)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(target.CueId, nameof(targets));
+            ArgumentException.ThrowIfNullOrWhiteSpace(target.RuntimeGroupId, nameof(targets));
+        }
+
+        return _fires.FireCuesIndependentScheduledAsync(targets, waitForStartEdge, cancellationToken);
     }
 
     /// <summary>GO - fires the next armed and enabled cue in <paramref name="groupId"/> after the cursor. A
