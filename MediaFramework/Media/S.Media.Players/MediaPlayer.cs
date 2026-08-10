@@ -351,6 +351,20 @@ public sealed class MediaPlayer : IDisposable
         IPlaybackClock? videoOnlyMaster = null,
         Func<bool>? verifyPrebufferAfterPrefill = null)
     {
+        // Idempotence: a Play on an already-running player is a cheap no-op (the coordinator makes the
+        // same check for its own callers). Guarded HERE as well because this method has pre-coordinator
+        // side effects that must not run mid-stream: RebaseToLatest re-anchors a live source's
+        // synthesized PTS timeline, and BeginSession re-anchors the video-only PTS master - both are
+        // start-of-run actions that would step a live playhead. The audio predicate matches the
+        // coordinator's: at natural EOF the router run loop has exited while the clock object still
+        // reads running, and a restart (seek + Play) from that state needs the full path. Skipping the
+        // epoch stamp is right too - no new run started, so the stamp from the running run stays valid.
+        var alreadyRunning = _liveAudioRouter is not null && _liveAudioClock is not null
+            ? _liveAudioClock.IsRunning && _liveAudioRouter.IsRunning
+            : _liveClock is { IsRunning: true };
+        if (alreadyRunning)
+            return static () => { };
+
         // Live video: re-anchor the source's synthesized PTS to the master so prebuffered + subsequent frames
         // present Scheduled against the session clock (Doc 03 §2), not master-less. No-op for file sources.
         _liveVideoSource?.RebaseToLatest(_liveClock?.CurrentPosition ?? TimeSpan.Zero);
@@ -1006,11 +1020,17 @@ public sealed class MediaPlayer : IDisposable
             }
 
             var vin = router.AddInput(primaryOutputId);
-            var decodeQueueCap = options.FileVideoDecodeQueueCapacity > 0
-                ? options.FileVideoDecodeQueueCapacity
-                : options.LiveVideoDecodeQueueCapacity > 0
-                    ? options.LiveVideoDecodeQueueCapacity
-                    : 4;
+            // The jitter-buffer depth splits on what KIND of source this is, and each kind consults
+            // only its own option. Live (NDI/capture) keeps the shallow 4-frame queue - depth there is
+            // pure added latency, the sender paces delivery and there is no decode-time variance worth
+            // banking against. File/decoder opens default to 16 per FileVideoDecodeQueueCapacity's doc:
+            // per-frame decode time varies hard (complex scenes, post-seek warmup) and the 4-frame
+            // queue dropped ~25-40% of frames as "late" right after seeks. The old fallback chain
+            // collapsed both kinds onto 4 (and let LiveVideoDecodeQueueCapacity leak into file opens),
+            // so every file open that didn't explicitly pass 16 silently ran the seek-fragile queue.
+            var decodeQueueCap = liveVideo is not null
+                ? options.LiveVideoDecodeQueueCapacity > 0 ? options.LiveVideoDecodeQueueCapacity : 4
+                : options.FileVideoDecodeQueueCapacity > 0 ? options.FileVideoDecodeQueueCapacity : 16;
             videoPlayer = new VideoPlayer(
                 effectiveVideoSource,
                 vin.Output,

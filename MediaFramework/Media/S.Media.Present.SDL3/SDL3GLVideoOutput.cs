@@ -102,6 +102,35 @@ public sealed unsafe class SDL3GLVideoOutput : INonBlockingVideoOutput, IVideoOu
     private int _nonBlockingSwapStreak;
 
     /// <summary>
+    /// Whether the vsynced render loop paces frame promotion by PTS-vs-predicted-vblank (see
+    /// <see cref="PresentFramePacer"/>) instead of showing the newest queued frame at every vblank.
+    /// Latest-wins alone lets the producer's arrival phase pick the vblank, so 60 fps content on a
+    /// 165 Hz panel shows an irregular repeat pattern (4-2 beats, drop+repeat pairs) instead of the
+    /// clean 3-3-3-2 rotation. Default on; set <c>MFP_SDL3_PRESENT_PACING=0</c> to restore the old
+    /// latest-wins behaviour in the field (same kill-switch pattern as <c>MFP_PORTAUDIO_CALLBACK</c>).
+    /// </summary>
+    private static readonly bool PresentPacingEnabled =
+        Environment.GetEnvironmentVariable("MFP_SDL3_PRESENT_PACING") != "0";
+
+    /// <summary>Cadence decisions for the vsynced render loop. Touched only by the presenting thread.</summary>
+    private readonly PresentFramePacer _pacer = new();
+
+    /// <summary>
+    /// <see cref="Stopwatch.GetTimestamp"/> of the last swap return that actually blocked on a vblank,
+    /// or 0 when the previous swap did not block (the interval to the next blocking swap would then
+    /// span an unknown number of refreshes, so the measurement chain is broken on purpose).
+    /// Presenting thread only.
+    /// </summary>
+    private long _lastBlockingSwapReturn;
+
+    /// <summary>Manual-mode analogue of the render loop's empty-pull streak, for repeat accounting in <see cref="Pump"/>.</summary>
+    private int _pumpEmptyPulls;
+
+    /// <summary>Converts a <see cref="Stopwatch"/> reading to a monotonic <see cref="TimeSpan"/> for the pacer.</summary>
+    private static TimeSpan StopwatchToTimeSpan(long stopwatchTicks) =>
+        TimeSpan.FromTicks((long)(stopwatchTicks * (double)TimeSpan.TicksPerSecond / Stopwatch.Frequency));
+
+    /// <summary>
     /// Smoothed submit-to-swap-return latency, in <see cref="Stopwatch"/> ticks. Written only by the presenting
     /// thread, read by anyone. An exponential average rather than a lifetime one so it follows a window
     /// moved to a different panel instead of averaging the two forever.
@@ -536,6 +565,21 @@ public sealed unsafe class SDL3GLVideoOutput : INonBlockingVideoOutput, IVideoOu
         _presentQueue.Enqueue(frame, out var evicted);
         evicted?.Dispose();
 
+        // Dispose sets _disposed, joins the render thread, and then drains the queue. A Submit that
+        // passed the guard above can interleave after that drain and park a pooled frame with no
+        // presenter left to ever collect it (a pooled-buffer leak, not just a stale frame), so
+        // re-check afterwards and clean up ourselves. DrainAll is atomic, so if Dispose already took
+        // the frames this returns empty rather than double-freeing them. The same reasoning covers a
+        // concurrent AbandonQueuedFrames: enqueue-after-its-drain is fine while the output is alive
+        // (the presenter will collect the frame), and fatal only in this disposed case.
+        // Same pattern as VideoOpenGlControl.Submit.
+        if (_disposed)
+        {
+            foreach (var stranded in _presentQueue.DrainAll())
+                stranded.Dispose();
+            throw new ObjectDisposedException(nameof(SDL3GLVideoOutput));
+        }
+
         if (_ownsThread) _wakeup.Set();
     }
 
@@ -585,6 +629,7 @@ public sealed unsafe class SDL3GLVideoOutput : INonBlockingVideoOutput, IVideoOu
                 stale.Dispose();
             if (frame is not null)
             {
+                _pumpEmptyPulls = 0;
                 var presented = false;
                 try { presented = PresentFrame(frame); }
                 catch (Exception ex)
@@ -598,11 +643,25 @@ public sealed unsafe class SDL3GLVideoOutput : INonBlockingVideoOutput, IVideoOu
             }
             else if (_canIdleRepaint)
             {
-                try { PresentWithoutNewUpload(); }
+                // Same repeat accounting as the RenderLoop's empty pull: a repaint that actually
+                // reached the panel while content was still flowing is a repeat that the
+                // IVideoOutputPresentDiagnostics contract requires us to report, but once the queue
+                // has been dry for a while the window is just idle and counting would bury the real
+                // signal. Without this, manual-Pump outputs reported RepeatedFrames == 0 forever,
+                // which made a producer slower than the display look perfectly healthy.
+                var contentWasFlowing = _pumpEmptyPulls < EmptyPullsBeforeIdle;
+                if (contentWasFlowing)
+                    _pumpEmptyPulls++;
+
+                var swapped = false;
+                try { swapped = PresentWithoutNewUpload(); }
                 catch (Exception ex)
                 {
                     MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.Pump PresentWithoutNewUpload");
                 }
+
+                if (swapped && contentWasFlowing)
+                    Interlocked.Increment(ref _repeated);
             }
         }
         finally
@@ -697,68 +756,194 @@ public sealed unsafe class SDL3GLVideoOutput : INonBlockingVideoOutput, IVideoOu
                 //   * the swap isn't actually blocking (vsync off, or occluded/minimised window)
                 var swapPacedUs = false;
                 var emptyPulls = 0;
-                while (!token.IsCancellationRequested)
+
+                // A frame pulled from the queue but deliberately not yet shown: the pacer decided its
+                // ideal display time is nearer the FOLLOWING vblank than the upcoming one. Held here
+                // rather than left in the queue because PresentFrameQueue has no peek, and because the
+                // hold slot is what gives a jittery producer a vblank of arrival slack (see
+                // PresentFramePacer). Only ever non-null while the swap is pacing the loop, so it is
+                // shown or discarded within a refresh or two - never parked. Disposed on loop exit.
+                VideoFrame? heldForPacing = null;
+                long heldForPacingQueuedAt = 0;
+
+                try
                 {
-                    if (!swapPacedUs)
+                    while (!token.IsCancellationRequested)
                     {
-                        var idx = WaitHandle.WaitAny(handles, 50);
-                        if (idx == 1) break;
-                    }
-
-                    DrainEvents();
-
-                    var swapped = false;
-                    Interlocked.Increment(ref _activePresentations);
-                    try
-                    {
-                        var frame = _presentQueue.TryDequeueLatest(out var queuedAt, out var superseded);
-                        foreach (var stale in superseded)
-                            stale.Dispose();
-                        if (frame is not null)
+                        if (!swapPacedUs)
                         {
-                            emptyPulls = 0;
-                            try { swapped = PresentFrame(frame); }
-                            catch (Exception ex)
-                            {
-                                MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentFrame");
-                            }
-                            finally { frame.Dispose(); }
-
-                            // AFTER the swap returns, so the sample includes the vsync block - that wait
-                            // is most of the latency and measuring before it would report a fraction of it.
-                            if (swapped)
-                                RecordPresentLatency(queuedAt);
+                            var idx = WaitHandle.WaitAny(handles, 50);
+                            if (idx == 1) break;
                         }
-                        else if (_canIdleRepaint)
+
+                        DrainEvents();
+
+                        var swapped = false;
+                        Interlocked.Increment(ref _activePresentations);
+                        try
                         {
-                            // The producer had nothing for this vblank.
-                            var contentWasFlowing = emptyPulls < EmptyPullsBeforeIdle;
-                            if (contentWasFlowing)
-                                emptyPulls++;
+                            // Pacing needs the swap to actually be the loop's clock AND a converged
+                            // refresh estimate AND a blocking swap return to predict the next vblank
+                            // from. Anything less (vsync off, occluded window, fresh panel) keeps the
+                            // proven latest-wins behaviour.
+                            var paceThisVblank = PresentPacingEnabled
+                                                 && swapPacedUs
+                                                 && _pacer.RefreshEstimateReady
+                                                 && _lastBlockingSwapReturn != 0;
 
-                            try { swapped = PresentWithoutNewUpload(); }
-                            catch (Exception ex)
+                            VideoFrame? frameToShow = null;
+                            long frameQueuedAt = 0;
+                            var deliberateHold = false;
+
+                            if (paceThisVblank)
                             {
-                                MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentWithoutNewUpload");
+                                // Producer got two or more frames ahead of a frame we were holding:
+                                // pacing must never convert producer lead into latency, so the held
+                                // frame loses its slot and the loop falls back toward latest-wins.
+                                // The pacer's phase anchor referred to the abandoned cadence.
+                                if (heldForPacing is not null && _presentQueue.Count > 1)
+                                {
+                                    heldForPacing.Dispose();
+                                    heldForPacing = null;
+                                    Interlocked.Increment(ref _droppedNew);
+                                    _pacer.ResetPhase();
+                                }
+
+                                if (heldForPacing is null)
+                                {
+                                    if (_presentQueue.Count > 1)
+                                    {
+                                        // Depth beyond one means the content is outrunning the panel;
+                                        // holding anything would only add latency. Latest-wins.
+                                        frameToShow = _presentQueue.TryDequeueLatest(out frameQueuedAt, out var superseded);
+                                        foreach (var stale in superseded)
+                                            stale.Dispose();
+                                        _pacer.ResetPhase();
+                                    }
+                                    else
+                                    {
+                                        heldForPacing = _presentQueue.TryDequeue(out heldForPacingQueuedAt);
+                                    }
+                                }
+
+                                if (frameToShow is null && heldForPacing is not null)
+                                {
+                                    var decision = _pacer.DecideAtVblank(
+                                        StopwatchToTimeSpan(_lastBlockingSwapReturn),
+                                        hasCurrentFrame: Volatile.Read(ref _hasLastPresentedPts) != 0,
+                                        currentFramePts: TimeSpan.FromTicks(Volatile.Read(ref _lastPresentedPtsTicks)),
+                                        nextFramePts: heldForPacing.PresentationTime);
+                                    if (decision == PresentPacingDecision.ShowNext)
+                                    {
+                                        frameToShow = heldForPacing;
+                                        frameQueuedAt = heldForPacingQueuedAt;
+                                        heldForPacing = null;
+                                    }
+                                    else
+                                    {
+                                        deliberateHold = true;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                if (heldForPacing is not null)
+                                {
+                                    // Pacing just disengaged with a frame in hand (swap stopped
+                                    // blocking, estimate reseeded, or the kill switch semantics never
+                                    // held one). Fold it back into latest-wins: anything queued was
+                                    // submitted after it, so the newest queued frame supersedes it.
+                                    _pacer.ResetPhase();
+                                    frameToShow = heldForPacing;
+                                    frameQueuedAt = heldForPacingQueuedAt;
+                                    heldForPacing = null;
+                                }
+
+                                var newest = _presentQueue.TryDequeueLatest(out var newestQueuedAt, out var superseded);
+                                foreach (var stale in superseded)
+                                    stale.Dispose();
+                                if (newest is not null)
+                                {
+                                    if (frameToShow is not null)
+                                    {
+                                        frameToShow.Dispose();
+                                        Interlocked.Increment(ref _droppedNew);
+                                    }
+
+                                    frameToShow = newest;
+                                    frameQueuedAt = newestQueuedAt;
+                                }
                             }
 
-                            // Only a repaint that actually reached the panel, and only while content was
-                            // still flowing, is a repeat. Once the queue has been dry for a while the
-                            // window is simply idle and the repaint is just keeping it alive - counting
-                            // those would bury the real signal under a steady idle drip.
-                            if (swapped && contentWasFlowing)
-                                Interlocked.Increment(ref _repeated);
-                        }
-                    }
-                    finally
-                    {
-                        Interlocked.Decrement(ref _activePresentations);
-                    }
+                            if (frameToShow is not null)
+                            {
+                                emptyPulls = 0;
+                                try { swapped = PresentFrame(frameToShow); }
+                                catch (Exception ex)
+                                {
+                                    MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentFrame");
+                                }
+                                finally { frameToShow.Dispose(); }
 
-                    swapPacedUs = swapped
-                                  && _vsync
-                                  && emptyPulls < EmptyPullsBeforeIdle
-                                  && _nonBlockingSwapStreak < NonBlockingSwapStreakLimit;
+                                // AFTER the swap returns, so the sample includes the vsync block - that wait
+                                // is most of the latency and measuring before it would report a fraction of it.
+                                if (swapped)
+                                    RecordPresentLatency(frameQueuedAt);
+                            }
+                            else if (deliberateHold)
+                            {
+                                // The pacer is parking the queued frame for the vblank nearest its
+                                // ideal time. The panel still re-shows the previous frame, and by the
+                                // diagnostics contract that is a repeat whether it was deliberate or
+                                // not - the viewer saw the same frame twice either way. Content is
+                                // flowing (a frame is literally in hand), so no empty-pull bookkeeping.
+                                emptyPulls = 0;
+                                try { swapped = PresentWithoutNewUpload(); }
+                                catch (Exception ex)
+                                {
+                                    MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentWithoutNewUpload");
+                                }
+
+                                if (swapped)
+                                    Interlocked.Increment(ref _repeated);
+                            }
+                            else if (_canIdleRepaint)
+                            {
+                                // The producer had nothing for this vblank.
+                                var contentWasFlowing = emptyPulls < EmptyPullsBeforeIdle;
+                                if (contentWasFlowing)
+                                    emptyPulls++;
+
+                                try { swapped = PresentWithoutNewUpload(); }
+                                catch (Exception ex)
+                                {
+                                    MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentWithoutNewUpload");
+                                }
+
+                                // Only a repaint that actually reached the panel, and only while content was
+                                // still flowing, is a repeat. Once the queue has been dry for a while the
+                                // window is simply idle and the repaint is just keeping it alive - counting
+                                // those would bury the real signal under a steady idle drip.
+                                if (swapped && contentWasFlowing)
+                                    Interlocked.Increment(ref _repeated);
+                            }
+                        }
+                        finally
+                        {
+                            Interlocked.Decrement(ref _activePresentations);
+                        }
+
+                        swapPacedUs = swapped
+                                      && _vsync
+                                      && emptyPulls < EmptyPullsBeforeIdle
+                                      && _nonBlockingSwapStreak < NonBlockingSwapStreakLimit;
+                    }
+                }
+                finally
+                {
+                    // A held frame is loop-local, so Dispose's queue drain cannot see it - collect it
+                    // here or it strands a pooled buffer exactly like the Submit/Dispose race.
+                    heldForPacing?.Dispose();
                 }
             }
             finally
@@ -1041,14 +1226,26 @@ public sealed unsafe class SDL3GLVideoOutput : INonBlockingVideoOutput, IVideoOu
     {
         var started = Stopwatch.GetTimestamp();
         SDL.GLSwapWindow(_window);
-        if (Stopwatch.GetElapsedTime(started) < NonBlockingSwapThreshold)
+        var returned = Stopwatch.GetTimestamp();
+        if (Stopwatch.GetElapsedTime(started, returned) < NonBlockingSwapThreshold)
         {
             if (_nonBlockingSwapStreak < NonBlockingSwapStreakLimit)
                 _nonBlockingSwapStreak++;
+
+            // This swap did not land on a vblank, so the interval from here to the next blocking
+            // swap spans an unknown number of refreshes - break the pacer's measurement chain
+            // rather than feed it a length it would have to guess at.
+            _lastBlockingSwapReturn = 0;
         }
         else
         {
             _nonBlockingSwapStreak = 0;
+
+            // Two consecutive blocking swap returns straddle exactly the vblanks between them; the
+            // pacer's own outlier rejection discards the double-length intervals of a missed vblank.
+            if (_lastBlockingSwapReturn != 0)
+                _pacer.ObserveSwapInterval(Stopwatch.GetElapsedTime(_lastBlockingSwapReturn, returned));
+            _lastBlockingSwapReturn = returned;
         }
     }
 

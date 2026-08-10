@@ -163,16 +163,42 @@ internal sealed class AudibleClientClock : IPlaybackClock
     /// off and advance at wall rate from there. If the terminal recovers, its (lower) reading is held at
     /// the high-water until it catches up - bounded by the outage, not by the whole session.
     /// </summary>
+    /// <remarks>
+    /// Ordering matters: the flag is published LAST, after the epoch is written, both under
+    /// <see cref="_epochGate"/>. The original code claimed the flag first (Interlocked.Exchange) and
+    /// wrote the epoch second, which opened a two-reader race at the first terminal failure of an
+    /// outage: A won the exchange and blocked on the gate; B saw the flag already set, returned
+    /// immediately, and computed elapsed from the STALE pre-splice epoch - i.e. wall-time-since-attach,
+    /// potentially minutes ahead. That reading flowed through <see cref="ReportAudible"/> and PERMANENTLY
+    /// ratcheted <see cref="_maxAudibleTicks"/> (the monotonic high-water cannot come back down), pinning
+    /// the clock far in the future for the rest of the session. With flag-last ordering a reader either
+    /// observes the flag set - the volatile read/write pair guarantees it then also observes the spliced
+    /// epoch - or takes the gate and finds the splice done (or does it itself). The common no-outage
+    /// path is untouched and stays lock-free: successful terminal reads only ever Volatile.Read the flag.
+    /// </remarks>
     private void RebaseFallbackToHighWater()
     {
-        if (Interlocked.Exchange(ref _fallbackRebased, 1) != 0)
-            return;
+        if (Volatile.Read(ref _fallbackRebased) != 0)
+            return; // already spliced for this outage - the fast path for every subsequent fallback read
         lock (_epochGate)
         {
+            if (_fallbackRebased != 0)
+                return; // lost the race; the winner wrote the epoch before it published the flag
+            FallbackSpliceUnderGateForTest?.Invoke();
             Volatile.Write(ref _fallbackEpochTicks,
                 _fallbackElapsed.Elapsed.Ticks - Volatile.Read(ref _maxSinceEpochTicks));
+            Volatile.Write(ref _fallbackRebased, 1);
         }
     }
+
+    /// <summary>
+    /// Test seam: runs under <see cref="_epochGate"/> before the outage splice writes the fallback
+    /// epoch (and before the flag is published). Lets a test hold the first faller inside the
+    /// transition and prove a concurrent reader cannot observe the pre-splice epoch - the exact
+    /// interleaving of the flag-before-epoch bug this method's remarks describe. Never set in
+    /// production; the null-conditional invoke costs one branch on the (already rare) outage path.
+    /// </summary>
+    internal Action? FallbackSpliceUnderGateForTest;
 
     /// <summary>
     /// Maps raw since-epoch ticks to this client's <em>audible</em> position. The raw reading leads the

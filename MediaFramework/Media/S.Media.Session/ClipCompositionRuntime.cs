@@ -177,11 +177,17 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             if (output.Output is null)
                 continue;
-            var acquired = new AcquiredOutput(output);
+            var acquired = new AcquiredOutput(output, this);
             if (output.Mapping is not null)
                 acquired.SetMapping(output.Mapping, _canvasFormat, out _);
             _acquired.Add(acquired);
             acquired.SubscribePumpPressure(this);
+            // A PresentWhenIdle lease has opted into being live from the moment it is patched, so its
+            // (possibly seconds-long) first window/GL configure runs NOW on a worker, before the first
+            // cue needs it - the common case then drops no frames at all. Other leases keep the lazy
+            // first configure: their window must not appear before their first content does.
+            if (output.PresentWhenIdle)
+                acquired.RequestConfigure(acquired.MappingStage?.OutputFormat ?? _canvasFormat);
         }
         RepublishAcquiredSnapshot();
 
@@ -368,9 +374,26 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     public long PumpStartCount => Volatile.Read(ref _pumpStartCount);
 
+    /// <summary>Test seam: the composition's slave pump clock, so a test can drive a driver
+    /// restart (Pause/Start) against the freerun PTS fallback - the scenario is otherwise
+    /// unreachable from public API because nothing pauses the pump clock in production paths.</summary>
+    internal MediaClock? PumpClockForTests
+    {
+        get { lock (_gate) return _slaveClock; }
+    }
+
     public event EventHandler<ClipCompositionDriftWarning>? DriftWarning;
 
     public event EventHandler<ClipCompositionPumpPressureWarning>? PumpPressureWarning;
+
+    /// <summary>
+    /// One output's <c>Configure</c> threw on the worker thread that runs sink configuration
+    /// (window/GL creation, live format changes). Raised ONCE per fault, not per dropped frame: the
+    /// output latches the failed format and drops its frames without retrying until the format changes
+    /// again (e.g. a later mapping edit), at which point a fresh attempt - and, on failure, a fresh
+    /// warning - happens. Sibling outputs are unaffected throughout; that isolation is the point.
+    /// </summary>
+    public event EventHandler<ClipCompositionOutputConfigureFailure>? OutputConfigureFailure;
 
     /// <summary>
     /// Worst measured software submit-to-present latency across outputs that report one. This is
@@ -482,6 +505,15 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (retired is not null)
             _retiredMappingStages.Enqueue(retired);
         ReevaluateIntegratedWarp();
+
+        // A mapping edit that changes the output size changes the format the sink will next receive,
+        // and that format is known RIGHT NOW - so start the (up to 4 s, for an SDL sink) reconfigure
+        // from this control thread instead of letting the next tick discover it and drop frames while
+        // the worker catches up. Restricted to sinks that were already configured: for a
+        // never-configured output an eager configure would create its window ahead of its first
+        // content, which only PresentWhenIdle leases have opted into.
+        target.RequestConfigure(
+            target.MappingStage?.OutputFormat ?? _canvasFormat, onlyIfAlreadyConfigured: true);
         return true;
     }
 
@@ -501,7 +533,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (output.Output is null)
             return false;
 
-        var acquired = new AcquiredOutput(output);
+        var acquired = new AcquiredOutput(output, this);
         if (output.Mapping is not null)
             acquired.SetMapping(output.Mapping, _canvasFormat, out _);
 
@@ -516,6 +548,12 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         acquired.SubscribePumpPressure(this);
         ReevaluateIntegratedWarp();
+
+        // Same eager-configure opt-in as the constructor path: a PresentWhenIdle output is on for the
+        // evening, so its first window/GL configure starts here on a worker rather than costing dropped
+        // frames at the top of the first cue. Lazy for everything else - see AcquiredOutput.RequestConfigure.
+        if (output.PresentWhenIdle)
+            acquired.RequestConfigure(acquired.MappingStage?.OutputFormat ?? _canvasFormat);
 
         // A cue player's output is on for the evening, so it has to be receiving frames before the
         // first cue rather than from it: the pump otherwise starts with the first layer, and until
@@ -1267,7 +1305,21 @@ public sealed class ClipCompositionRuntime : IDisposable
             else if (sourceTime is { } source)
                 outputPts = _canvasGrid.SnapAtOrBefore(source);
             else if (_slaveClock is { } driver)
-                outputPts = _canvasGrid.TimestampAt(Math.Max(0, driver.LastVideoTickIndex - 1));
+            {
+                // Freerun fallback: anchor to the driver's POSITION, not its tick INDEX. The two look
+                // interchangeable while the clock runs uninterrupted, but LastVideoTickIndex is
+                // session-relative - DriverLoopCore restarts it from 1 at every Start - so a
+                // pause/resume of the slave clock would snap the composition PTS back to ~0 while the
+                // sinks (and any PTS-keyed state downstream) persist across it. CurrentPosition folds
+                // accrued time into its base across Pause/Start (and across a master detach in
+                // ResetClockMaster), so the PTS stays continuous and monotonic. The grid snap plus the
+                // "- 1" preserve the previous semantics exactly: the canonical grid timestamp one frame
+                // BEHIND the boundary the driver just fired for (at tick N the position sits at or past
+                // frame N's deadline, so FrameAtOrBefore lands on N and we stamp N-1, matching the old
+                // LastVideoTickIndex - 1).
+                var freerunIndex = _canvasGrid.FrameAtOrBefore(driver.CurrentPosition);
+                outputPts = _canvasGrid.TimestampAt(Math.Max(0, freerunIndex - 1));
+            }
 
             canvasAlignmentTime = sourceTime ?? outputPts;
             surfaceRenderTime = sourceTime ?? outputPts;
@@ -1718,6 +1770,26 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
     }
 
+    /// <summary>Same shape as <see cref="RaiseOutputPumpPressure"/>: called from an output's configure
+    /// worker thread, guarded so an alerting subscriber can never fault the worker.</summary>
+    internal void RaiseOutputConfigureFailure(string outputId, string outputName, VideoFormat format, string error)
+    {
+        try
+        {
+            OutputConfigureFailure?.Invoke(this, new ClipCompositionOutputConfigureFailure(
+                CompositionId,
+                CompositionName,
+                outputId,
+                outputName,
+                format,
+                error));
+        }
+        catch (Exception ex)
+        {
+            Trace.LogTrace(ex, "ClipCompositionRuntime: OutputConfigureFailure handler threw");
+        }
+    }
+
     public void Dispose()
     {
         MediaClock? slaveClock;
@@ -1939,6 +2011,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     private sealed class AcquiredOutput
     {
         private readonly ClipCompositionOutputLease _lease;
+        private readonly ClipCompositionRuntime _owner;
         private readonly object _lifecycleGate = new();
         private EventHandler<VideoOutputPumpPressureEventArgs>? _pressureHandler;
         private long _lastReportedDrops;
@@ -1946,6 +2019,26 @@ public sealed class ClipCompositionRuntime : IDisposable
         private volatile OutputMappingStage? _mappingStage;
         private VideoFormat? _configuredFormat;
         private bool _retired;
+
+        // --- Asynchronous configure state (all guarded by _lifecycleGate). -----------------------------
+        // Output.Configure must NEVER run on the compositor tick thread: an ownsThread SDL sink's FIRST
+        // configure blocks in _ready.Wait with no timeout (window + GL context creation), and a
+        // REconfigure (live mapping resize) blocks up to 4 s in done.Wait - during either, the tick
+        // stalls and EVERY sibling output on this canvas starves. So TrySubmit only ever kicks a
+        // worker-thread configure and drops this output's frames until it lands. Dropping a few frames
+        // on one output during its own window creation is strictly better than freezing the whole show.
+        /// <summary>A worker is (or is queued to be) inside <c>Output.Configure</c>. While set, TrySubmit
+        /// drops and Retire defers sink disposal to the worker - nothing else may touch the sink.</summary>
+        private bool _configureInFlight;
+        /// <summary>The format whose configure THREW. Frames of this format are dropped without retrying
+        /// every tick (a broken sink would otherwise be hammered at canvas rate); a DIFFERENT format is a
+        /// real change and clears the fault, so a later mapping edit can revive the output.</summary>
+        private VideoFormat? _faultedFormat;
+        /// <summary>Retire ran while a configure was in flight: the worker performs the pump/sink
+        /// disposal when its configure returns, so the sink is neither disposed under a live Configure
+        /// nor leaked.</summary>
+        private bool _disposeDeferredToConfigureWorker;
+        private string? _retireOperation;
 
         /// <summary>Calibration frame that REPLACES the canvas for this output only. Volatile: the pump
         /// reads it once per frame, a UI thread swaps it.</summary>
@@ -1961,9 +2054,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         private long _refused;
         private long _failed;
 
-        public AcquiredOutput(ClipCompositionOutputLease lease)
+        public AcquiredOutput(ClipCompositionOutputLease lease, ClipCompositionRuntime owner)
         {
             _lease = lease;
+            _owner = owner;
             // A presenter that already owns a prompt in-memory hand-off must not receive a second queue:
             // that only hides its real latency and can retain a stale frame. Potentially blocking sinks
             // (network/encode/third-party) remain isolated, with one waiting frame for lowest latency.
@@ -2061,16 +2155,21 @@ public sealed class ClipCompositionRuntime : IDisposable
             }
         }
 
-        /// <summary>Configure-on-change: mapped and unmapped outputs see different formats, and a
-        /// live mapping resize changes the format mid-run. Configure is idempotent downstream.</summary>
-        private void EnsureConfigured(VideoFormat format)
-        {
-            if (_configuredFormat == format)
-                return;
-            Output.Configure(format);
-            _configuredFormat = format;
-        }
-
+        /// <summary>
+        /// Pump-tick thread. Submits when the sink is already configured for the frame's format;
+        /// otherwise kicks an asynchronous (re)configure and drops THIS frame (counted as refused).
+        /// Configure-on-change is still the contract - mapped and unmapped outputs see different
+        /// formats, and a live mapping resize changes the format mid-run - but the configure itself
+        /// runs on a worker (see the configure-state fields), because the tick thread must never wait
+        /// on window/GL-context creation.
+        /// </summary>
+        /// <remarks>
+        /// The submit itself stays under <c>_lifecycleGate</c>: that mutual exclusion with Retire's
+        /// mark step is what guarantees no submit is mid-flight into the sink when Retire disposes it
+        /// (see <see cref="Retire"/>). The hold is short by contract - the sink here is either an
+        /// <see cref="INonBlockingVideoOutput"/> (prompt hand-off) or our own
+        /// <see cref="VideoOutputPump"/> (enqueue only).
+        /// </remarks>
         public bool TrySubmit(VideoFrame frame)
         {
             lock (_lifecycleGate)
@@ -2081,11 +2180,136 @@ public sealed class ClipCompositionRuntime : IDisposable
                     return false;
                 }
 
-                EnsureConfigured(frame.Format);
+                // A configure is running on a worker: the sink is not ours to touch (Submit racing a
+                // Configure is undefined for a raw sink), and its format is about to change anyway.
+                // Do NOT re-kick with this frame's format - a stale-format frame still in flight from
+                // the pre-swap snapshot would ping-pong the target; the first frame after the worker
+                // finishes re-checks and converges.
+                if (_configureInFlight)
+                {
+                    Interlocked.Increment(ref _refused);
+                    return false;
+                }
+
+                if (_configuredFormat != frame.Format)
+                {
+                    KickConfigureLocked(frame.Format);
+                    Interlocked.Increment(ref _refused);
+                    return false;
+                }
+
                 Output.Submit(frame);
                 Interlocked.Increment(ref _submitted);
                 return true;
             }
+        }
+
+        /// <summary>
+        /// Pre-configures the sink from a CONTROL thread when the format it will receive is already
+        /// known, so the (possibly seconds-long) first window/GL creation happens before frames flow
+        /// and the common case drops nothing.
+        /// </summary>
+        /// <param name="onlyIfAlreadyConfigured">Restrict to sinks that already went through a first
+        /// configure. A windowed sink CREATES ITS WINDOW in Configure, so an eager first configure is
+        /// a visible act - only a <see cref="ClipCompositionOutputLease.PresentWhenIdle"/> lease (an
+        /// output that is "on for the evening") has opted into that; for everything else the window
+        /// must keep appearing with its first content, exactly as before.</param>
+        public void RequestConfigure(VideoFormat format, bool onlyIfAlreadyConfigured = false)
+        {
+            lock (_lifecycleGate)
+            {
+                if (_retired)
+                    return;
+                if (onlyIfAlreadyConfigured && _configuredFormat is null && !_configureInFlight)
+                    return;
+                if (_configuredFormat == format)
+                    return;
+                KickConfigureLocked(format);
+            }
+        }
+
+        /// <summary>Starts a worker-thread configure for <paramref name="format"/>. Caller holds
+        /// <c>_lifecycleGate</c>. No-op while one is in flight (the next frame after it lands
+        /// re-checks and converges) and for a format whose configure already failed (no per-tick
+        /// retry storm against a broken sink; any OTHER format clears the fault and tries again).</summary>
+        private void KickConfigureLocked(VideoFormat format)
+        {
+            if (_configureInFlight)
+                return;
+            if (_faultedFormat == format)
+                return;
+
+            _faultedFormat = null;
+            _configureInFlight = true;
+            ThreadPool.UnsafeQueueUserWorkItem(
+                static state => state.Self.ConfigureWorker(state.Format),
+                (Self: this, Format: format),
+                preferLocal: false);
+        }
+
+        /// <summary>
+        /// Worker-thread configure. Owns the sink for its duration: TrySubmit drops while
+        /// <c>_configureInFlight</c> is set, and a Retire that arrives mid-configure defers the sink
+        /// disposal to this method's tail instead of pulling the sink out from under a live
+        /// <c>Configure</c> call.
+        /// </summary>
+        private void ConfigureWorker(VideoFormat format)
+        {
+            // A Retire that ran between the kick and this thread starting wins without the sink ever
+            // being touched - Configure on a disposed (or about-to-be-disposed) sink is exactly the
+            // use-after-dispose this handshake exists to prevent.
+            bool touchSink;
+            lock (_lifecycleGate)
+                touchSink = !_retired;
+
+            Exception? failure = null;
+            if (touchSink)
+            {
+                try
+                {
+                    Output.Configure(format);
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            }
+
+            string? deferredRetireOperation = null;
+            lock (_lifecycleGate)
+            {
+                if (touchSink)
+                {
+                    if (failure is null)
+                        _configuredFormat = format;
+                    else
+                        _faultedFormat = format;
+                }
+
+                _configureInFlight = false;
+                if (_disposeDeferredToConfigureWorker)
+                {
+                    _disposeDeferredToConfigureWorker = false;
+                    deferredRetireOperation = _retireOperation ?? "ClipCompositionRuntime.Retire";
+                }
+            }
+
+            if (failure is not null)
+            {
+                // Surface it the way other per-output failures surface: a counted stat (the line reads
+                // as failing in the diagnostics row, not only in a log) plus the composition-level
+                // warning event, mirroring pump-pressure. Deliberately once per fault - the fault latch
+                // above stops a per-tick retry from re-raising this at canvas rate.
+                RecordSubmitFailure();
+                Trace.LogWarning(
+                    failure,
+                    "ClipCompositionRuntime: output {Line} failed to configure for {Format}; its frames are dropped until the format changes",
+                    DisplayName, format);
+                _owner.RaiseOutputConfigureFailure(OutputId, DisplayName, format, failure.Message);
+            }
+
+            if (deferredRetireOperation is not null)
+                DisposeSinkCore(deferredRetireOperation);
         }
 
         /// <summary>Counts a submit that threw, so a failing line is visible as more than a log line.</summary>
@@ -2158,15 +2382,42 @@ public sealed class ClipCompositionRuntime : IDisposable
             pump.PumpPressure += _pressureHandler;
         }
 
+        /// <summary>
+        /// Marks this output retired under <c>_lifecycleGate</c>, then disposes its pump/sink OUTSIDE
+        /// the gate.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The gate is held only for the mark. It used to be held across the whole teardown, and that
+        /// stalled the show: disposing the per-output <see cref="VideoOutputPump"/> joins its drain
+        /// thread (up to 2 s), and a lease-owned SDL sink's Dispose joins its render thread (up to
+        /// 45 s) - while a compositor tick that had captured the pre-removal snapshot sat blocked in
+        /// TrySubmit on this same gate, freezing the canvas and every SIBLING output for the entire
+        /// dispose. Now the blocked-on-tick path sees <c>_retired</c> after at most one short submit
+        /// and drops the frame instead.
+        /// </para>
+        /// <para>
+        /// The safety property the long hold used to provide survives: no submit is mid-flight into
+        /// the sink when it is disposed. Submits run entirely under <c>_lifecycleGate</c>
+        /// (<see cref="TrySubmit"/>), so taking that same gate to set <c>_retired</c> means any
+        /// in-flight submit has fully returned before the mark completes, and every later one refuses
+        /// before touching the sink. The one other sink-toucher - a worker-thread configure - is
+        /// handled by deferral: if one is in flight, IT disposes the sink when its Configure returns
+        /// (<see cref="ConfigureWorker"/>), so Retire neither blocks on a window-creation wait nor
+        /// leaks the sink.
+        /// </para>
+        /// </remarks>
         public OutputMappingStage? Retire(string operation, Action<VideoFrame> retireStaticFrame)
         {
+            OutputMappingStage? retired;
+            bool disposeNow;
             lock (_lifecycleGate)
             {
                 if (_retired)
                     return null;
 
                 _retired = true;
-                var retired = _mappingStage;
+                retired = _mappingStage;
                 _mappingStage = null;
                 // The calibration frame is plain pixel data (never a GL resource), so it is safe to
                 // release here rather than deferring to the driver thread.
@@ -2180,18 +2431,37 @@ public sealed class ClipCompositionRuntime : IDisposable
                     retireStaticFrame(idle);
                 UnsubscribePumpPressureCore();
 
-                // Our pump goes down first (joins its thread, flushes its queue) so nothing can be
-                // mid-Submit into the lease's output when that output is released below. The pump
-                // never owns the inner sink - the lease's dispose policy stays the authority.
-                if (_ownsPump && _output is IDisposable pumpDisposable)
-                    MediaDiagnostics.SwallowDisposeErrors(pumpDisposable.Dispose, $"{operation}: output pump dispose");
-                if (DisposeOutputOnRuntimeDispose && _lease.Output is IDisposable disposable)
-                    MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, $"{operation}: output dispose");
-                if (Release is not null)
-                    MediaDiagnostics.SwallowDisposeErrors(Release, $"{operation}: output release");
-
-                return retired;
+                disposeNow = !_configureInFlight;
+                if (!disposeNow)
+                {
+                    _disposeDeferredToConfigureWorker = true;
+                    _retireOperation = operation;
+                }
             }
+
+            if (disposeNow)
+                DisposeSinkCore(operation);
+
+            return retired;
+        }
+
+        /// <summary>
+        /// The actual pump/sink teardown. Runs OUTSIDE <c>_lifecycleGate</c> (see <see cref="Retire"/>),
+        /// exactly once, after <c>_retired</c> is set and no submit/configure can be touching the sink:
+        /// either directly from Retire, or from the configure worker's tail when Retire found one in
+        /// flight.
+        /// </summary>
+        private void DisposeSinkCore(string operation)
+        {
+            // Our pump goes down first (joins its thread, flushes its queue) so nothing can be
+            // mid-Submit into the lease's output when that output is released below. The pump
+            // never owns the inner sink - the lease's dispose policy stays the authority.
+            if (_ownsPump && _output is IDisposable pumpDisposable)
+                MediaDiagnostics.SwallowDisposeErrors(pumpDisposable.Dispose, $"{operation}: output pump dispose");
+            if (DisposeOutputOnRuntimeDispose && _lease.Output is IDisposable disposable)
+                MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, $"{operation}: output dispose");
+            if (Release is not null)
+                MediaDiagnostics.SwallowDisposeErrors(Release, $"{operation}: output release");
         }
 
         private void UnsubscribePumpPressureCore()
@@ -2780,7 +3050,9 @@ public readonly record struct ClipCompositionRuntimeStats(
 /// <param name="OutputId">Stable id of the line.</param>
 /// <param name="DisplayName">Operator-facing name.</param>
 /// <param name="FramesSubmitted">Frames handed to this sink.</param>
-/// <param name="FramesRefused">Frames dropped because the output had already retired.</param>
+/// <param name="FramesRefused">Frames dropped because the output had already retired, or because its
+/// sink was not yet configured for the frame's format (configuration runs asynchronously so a slow
+/// window/GL creation on one output cannot stall the canvas; frames arriving meanwhile are refused).</param>
 /// <param name="SubmitFailures">Submits that threw - a failing line, visible as a number rather than
 /// only as a log line.</param>
 /// <param name="IsMapped">Whether this output runs its own mapping stage (warped) or takes the raw canvas.</param>
@@ -2823,3 +3095,14 @@ public readonly record struct ClipCompositionPumpPressureWarning(
     string OutputName,
     long DroppedSinceLastReport,
     long DroppedTotal);
+
+/// <summary>One output's sink configuration (window/GL creation, live format change) failed on its
+/// worker thread. The output drops frames for the failed <paramref name="Format"/> until the format
+/// changes again; siblings keep running. See <see cref="ClipCompositionRuntime.OutputConfigureFailure"/>.</summary>
+public readonly record struct ClipCompositionOutputConfigureFailure(
+    string CompositionId,
+    string CompositionName,
+    string OutputId,
+    string OutputName,
+    VideoFormat Format,
+    string Error);

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using S.Media.Core.Diagnostics;
 
 namespace S.Media.Session;
 
@@ -26,14 +27,37 @@ internal sealed class CueRunner
 
     // Absolute timeline fires release the ordinary fire lock once every voice is prepared, otherwise a cue
     // waiting several seconds for its authored edge would prevent later timeline events from preparing. They
-    // still have to remain STOP-cancellable after that release, so keep their linked sources separately.
-    private readonly ConcurrentDictionary<CancellationTokenSource, byte> _pendingScheduledFires = new();
+    // still have to remain cancellable after that release - but only by an operation that actually MEANS
+    // them: the batch remembers which cues and runtime groups it carries, so a per-cue or per-group stop can
+    // target it while a stop of some unrelated cue leaves it waiting for its edge. Blanket cancellation here
+    // once let any single-cue stop silently kill every prepared timeline event on every list (a window of
+    // seconds per event, mid-show) - the timeline run's own token already covers run-level teardown, so the
+    // pending set only needs panic/load/dispose plus these targeted forms.
+    private readonly ConcurrentDictionary<CancellationTokenSource, PendingScheduledFire> _pendingScheduledFires = new();
+
+    private sealed record PendingScheduledFire(IReadOnlyList<string> CueIds, IReadOnlyList<string> RuntimeGroupIds);
 
     // Off-dispatcher fire model (NXT-03): a cue fire runs OFF the serial dispatcher (its pre-wait + media open
     // no longer park the loop, so STOP/seek/load/queries stay responsive), re-entering only for short state
     // commits. _fireLock serializes fires; the session's show generation lets a fire whose open straddled a
     // reload discard its (now-stale) clip at commit instead of corrupting the newer show.
     private readonly SemaphoreSlim _fireLock = new(1, 1);
+
+    // A batch fire's preparation stage (open + commit + pre-roll + sync present) is bounded work by
+    // construction - no authored waits live inside it - so a stage that has not finished in this long is
+    // WEDGED, almost always a synchronous native open that cancellation cannot reach (the CancelActiveFire
+    // doc's caveat). Without a bound, that one open held _fireLock forever and every subsequent GO on every
+    // list blocked behind it for the rest of the show. The figure is deliberately far above any legitimate
+    // open (cold 4K network files included): tripping it on a slow-but-alive open would tear down a batch
+    // an operator still wanted, which is worse than waiting. Settable so a test can wedge a fake open
+    // without waiting half a minute; production never writes it.
+    internal TimeSpan BatchPreparationTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    // After a preparation timeout cancels the batch, responsive participants roll back promptly; the wedged
+    // one, by definition, may never answer. Wait this long for the rollbacks, then abandon the batch task
+    // rather than trading "GO blocks forever" for "STOP blocks forever". An abandoned voice's own finally
+    // still runs if its open ever returns.
+    internal TimeSpan AbandonedBatchDrainTimeout { get; set; } = TimeSpan.FromSeconds(15);
 
     /// <summary>The live cue graph. Volatile: staged off the dispatcher during a load and swapped in by a
     /// single atomic reference assignment, so a fire that straddles the load sees one graph or the other -
@@ -243,7 +267,27 @@ internal sealed class CueRunner
                     target.CueId, target.RuntimeGroupId, startBarrier, startEdge, cts.Token);
             }
 
-            return await Task.WhenAll(fires).ConfigureAwait(false);
+            // This whole batch is bounded work (open + commit + start; no authored waits inside), so the
+            // same wedged-open bound as the scheduled path applies - without it one uncancellable native
+            // open held _fireLock for the rest of the show.
+            try
+            {
+                return await Task.WhenAll(fires).WaitAsync(BatchPreparationTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException timedOut)
+            {
+                try { cts.Cancel(); }
+                catch (ObjectDisposedException) { }
+                try { await Task.WhenAll(fires).WaitAsync(AbandonedBatchDrainTimeout).ConfigureAwait(false); }
+                catch (TimeoutException)
+                {
+                    MediaDiagnostics.LogError(
+                        timedOut,
+                        "CueRunner: abandoning an all-together batch whose participant is wedged in an " +
+                        "uncancellable stage - its resources release if the stage ever returns");
+                }
+                throw;
+            }
         }
         finally
         {
@@ -270,7 +314,9 @@ internal sealed class CueRunner
         await _fireLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         var lockHeld = true;
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _pendingScheduledFires.TryAdd(cts, 0);
+        _pendingScheduledFires.TryAdd(cts, new PendingScheduledFire(
+            [.. targets.Select(t => t.CueId)],
+            [.. targets.Select(t => t.RuntimeGroupId)]));
         _activeFireCts = cts;
 
         var releasePrepared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -295,7 +341,10 @@ internal sealed class CueRunner
 
             // All viable voices have opened, committed, pre-rolled and presented their synchronization frame.
             // Let unrelated fires and later timeline events prepare while these voices wait for absolute time.
-            await preparedEdge.Released.WaitAsync(cts.Token).ConfigureAwait(false);
+            // Bounded (see BatchPreparationTimeout): a wedged open must fail THIS batch with a message, not
+            // hold the fire lock over every list until the show ends.
+            await preparedEdge.Released
+                .WaitAsync(BatchPreparationTimeout, cts.Token).ConfigureAwait(false);
             _activeFireCts = null;
             _fireLock.Release();
             lockHeld = false;
@@ -305,17 +354,28 @@ internal sealed class CueRunner
             releasePrepared.TrySetResult();
             return await Task.WhenAll(fires).ConfigureAwait(false);
         }
-        catch
+        catch (Exception failure)
         {
             try { cts.Cancel(); }
             catch (ObjectDisposedException) { }
             releasePrepared.TrySetCanceled(cts.Token);
 
             // A committed voice owns real layers/routes while it waits. Do not return until every participant
-            // has observed cancellation and run the PlayClipAsync rollback path.
+            // has observed cancellation and run the PlayClipAsync rollback path - EXCEPT a wedged participant
+            // that will never answer, which gets AbandonedBatchDrainTimeout and is then left behind so the
+            // stop/timeout that initiated this teardown can complete (its own finally still runs if the
+            // wedged call ever returns).
             if (fires is not null)
             {
-                try { await Task.WhenAll(fires).ConfigureAwait(false); }
+                try { await Task.WhenAll(fires).WaitAsync(AbandonedBatchDrainTimeout).ConfigureAwait(false); }
+                catch (TimeoutException)
+                {
+                    MediaDiagnostics.LogError(
+                        failure,
+                        "CueRunner: abandoning a scheduled batch whose participant is wedged in an " +
+                        "uncancellable stage (rollback did not complete within " +
+                        $"{AbandonedBatchDrainTimeout.TotalSeconds:0} s) - its resources release if the stage ever returns");
+                }
                 catch { /* preserve the scheduling/cancellation exception that initiated teardown */ }
             }
             throw;
@@ -413,7 +473,10 @@ internal sealed class CueRunner
     /// <summary>Cancels the in-flight cue fire, if any, WITHOUT marshaling onto the dispatcher - so a stop/load/
     /// dispose can unblock the serial loop that a long pre-wait or open is parking, then run promptly (NXT-03).
     /// A no-op when nothing is firing. Note: a synchronous, uninterruptible native open still runs to completion;
-    /// this preempts the (common) pre/post-wait and any cancellable stage.</summary>
+    /// this preempts the (common) pre/post-wait and any cancellable stage.
+    /// Deliberately does NOT touch <see cref="_pendingScheduledFires"/>: a prepared timeline event waiting for
+    /// its absolute edge is not "the in-flight fire", and a surgical stop must not kill it (see the field doc;
+    /// use <see cref="CancelAllFires"/> or the targeted forms for that).</summary>
     public void CancelActiveFire()
     {
         var cts = _activeFireCts;
@@ -422,10 +485,45 @@ internal sealed class CueRunner
             try { cts.Cancel(); }
             catch (ObjectDisposedException) { /* the fire already finished and disposed it */ }
         }
+    }
 
-        foreach (var pending in _pendingScheduledFires.Keys)
+    /// <summary>Panic/load/dispose semantics: the active fire AND every prepared batch still waiting for its
+    /// absolute start edge - after this, nothing new starts.</summary>
+    public void CancelAllFires()
+    {
+        CancelActiveFire();
+        CancelPendingScheduledFires(static _ => true);
+    }
+
+    /// <summary>A per-cue stop's reach: the active fire, plus any pending scheduled batch that CONTAINS the
+    /// cue. The whole batch goes down, not just the one member - a scheduled batch shares one cancellation
+    /// source and one coordinated edge, and starting the surviving siblings without the stopped member would
+    /// mean firing an event the operator just visibly vetoed part of. Batches not involving the cue keep
+    /// waiting untouched.</summary>
+    public void CancelFiresForCue(string cueId)
+    {
+        CancelActiveFire();
+        CancelPendingScheduledFires(pending => pending.CueIds.Contains(cueId, StringComparer.Ordinal));
+    }
+
+    /// <summary>A group stop's reach: the active fire, plus any pending scheduled batch that would start a
+    /// voice on the group - "take this group down" includes what is about to come up on it. Note scheduled
+    /// batches run on RUNTIME group ids (per-child synthesized for timeline events), so a session-group stop
+    /// matches only batches actually targeting that id; non-matching batches are left alone, and a voice they
+    /// later start is still stoppable normally.</summary>
+    public void CancelFiresForGroup(string runtimeGroupId)
+    {
+        CancelActiveFire();
+        CancelPendingScheduledFires(pending => pending.RuntimeGroupIds.Contains(runtimeGroupId, StringComparer.Ordinal));
+    }
+
+    private void CancelPendingScheduledFires(Func<PendingScheduledFire, bool> affects)
+    {
+        foreach (var (cts, pending) in _pendingScheduledFires)
         {
-            try { pending.Cancel(); }
+            if (!affects(pending))
+                continue;
+            try { cts.Cancel(); }
             catch (ObjectDisposedException) { /* completed between snapshot and cancellation */ }
         }
     }

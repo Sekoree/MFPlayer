@@ -39,6 +39,29 @@ internal sealed class BlockingOpenProvider : IMediaDecoderProvider
     public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new BlockingOpenProvider()));
 }
 
+/// <summary>A provider whose open IGNORES cancellation - the shape of a wedged synchronous native open,
+/// which is exactly what <see cref="CueRunner"/>'s batch-preparation bound exists for. Probes only the
+/// <c>wedged://</c> scheme. <see cref="Unwedge"/> lets a test release the abandoned open at teardown so
+/// its task does not outlive the run.</summary>
+internal sealed class WedgedOpenProvider : IMediaDecoderProvider
+{
+    private readonly TaskCompletionSource _wedge = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public string Name => "wedged";
+    public double Probe(string uri, MediaKind kind) => uri.StartsWith("wedged://", StringComparison.Ordinal) ? 1.0 : 0.0;
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) => throw new NotSupportedException();
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) => throw new NotSupportedException();
+
+    public async ValueTask<MediaOpenResult> OpenAsync(
+        MediaOpenRequest request, IProgress<MediaPrepareProgress>? progress = null, CancellationToken cancellationToken = default)
+    {
+        await _wedge.Task.ConfigureAwait(false); // deliberately NOT linked to the token
+        throw new InvalidOperationException("wedged open released by the test - never opens");
+    }
+
+    public void Unwedge() => _wedge.TrySetResult();
+}
+
 /// <summary>A provider that opens any <c>tone://</c> URI as a constant-amplitude source
 /// (<see cref="Amplitude"/> in every sample) - lets a headless test measure the route gain actually
 /// written for a clip by peak-reading its output's submits (the silent fake would hide any gain

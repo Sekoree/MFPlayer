@@ -399,6 +399,14 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             report += "\nVideo & compositions\n" + string.Join("\n", lines) + "\n";
         }
 
+        // Whether authored timeline times were actually honoured. Late = past one 60 Hz frame; the worst
+        // slip is the number to quote in a bug thread - a healthy rig stays in single milliseconds.
+        var (dispatched, late, maxLateness, lastLateness) = Executor.TimelineDispatchTiming;
+        if (dispatched > 0)
+            report += "\nCue timing\n" +
+                      $"  timeline dispatches {dispatched} · late (>1 frame) {late} · " +
+                      $"worst {maxLateness.TotalMilliseconds:0.0} ms · last {lastLateness.TotalMilliseconds:0.0} ms\n";
+
         return report
                + (Problems.Count == 0 ? "" : "\nProblems\n  " + string.Join("\n  ", Problems) + "\n");
     }

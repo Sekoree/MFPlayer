@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Time;
@@ -20,6 +21,22 @@ internal static class AvPlaybackCoordinator
     /// ring (~85 ms) + pump (~80 ms) + device (~180 ms observed); the cap only exists to stop a
     /// pathological measurement from parking a picture indefinitely.</summary>
     private static readonly TimeSpan MaxStartDeferral = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Remembers, per voice clock, the SHOW clock this coordinator's genlock branch mastered it to
+    /// (the silent-voice case below). Needed because pause/resume must be able to tell the two kinds
+    /// of master apart: a voice's own producer clock FREEZES and flushes with the voice, so
+    /// <see cref="MediaClock.StartCore"/>'s fold of same-epoch master drift across a pause is exactly
+    /// right for it - while the shared show clock keeps advancing through this one voice's pause and
+    /// never changes epoch for it, so the same fold turns the whole pause duration into a forward
+    /// position jump (a 30 s pause = a 30 s skip; the measured bug). The session resume path calls
+    /// plain <c>Play()</c> with no <c>videoOnlyMaster</c>, so the resume cannot recognise the genlock
+    /// by comparing against the parameter - this table is the explicit "I applied that genlock"
+    /// record (deliberately not type-sniffing <see cref="MediaClock.Master"/>: producer leases and
+    /// the show clock can share an implementation type). Weak on the clock so a disposed voice's
+    /// entry vanishes with it.
+    /// </summary>
+    private static readonly ConditionalWeakTable<MediaClock, IPlaybackClock> AppliedGenlocks = new();
 
     public static void Play(
         VideoPlayer video,
@@ -61,6 +78,29 @@ internal static class AvPlaybackCoordinator
         Trace.LogDebug("Play: hasAudio={HasAudio} hasPrefill={HasPrefill} hasStartHw={HasStartHw} hasVoMaster={HasVoMaster}",
             audioRouter is not null, prefillBeforeHardware is not null, startHardware is not null, videoOnlyMaster is not null);
 
+        // Idempotence: a Play on an ALREADY-RUNNING transport is a cheap no-op. Hosts do issue them -
+        // the session's seek/resume paths call Play() unconditionally - and re-running the slow half
+        // mid-stream is actively harmful: TryPresentBufferedFrameForSync steals a queued frame from
+        // the live jitter buffer (a visible glitch), and the pre-roll branch would BeginPreRoll a LIVE
+        // producer (muting it) and then EndPreRoll with a fresh pacing-target baseline plus a mid-run
+        // Reanchor (~200 ms position step). "Running" is the clock AND the router for the audio path:
+        // at natural EOF the router's run loop has exited (CompletedNaturally) while the clock object
+        // keeps its running flag, and a restart (seek + Play) from that state still needs the full
+        // path so audioRouter.Start() actually spins production back up.
+        if (audioRouter is not null && audioClock is not null)
+        {
+            if (audioClock.IsRunning && audioRouter.IsRunning)
+            {
+                Trace.LogDebug("Play: transport already running (clock={Position}) - no-op", audioClock.CurrentPosition);
+                return static () => { };
+            }
+        }
+        else if (video.Clock.IsRunning)
+        {
+            Trace.LogDebug("Play: video clock already running (clock={Position}) - no-op", video.Clock.CurrentPosition);
+            return static () => { };
+        }
+
         if (prefillBeforeHardware is not null)
             prefillBeforeHardware.Invoke();
 
@@ -96,9 +136,20 @@ internal static class AvPlaybackCoordinator
             // Genlock it to the show's clock instead, which is exactly what videoOnlyMaster is for - the
             // old branch just never reached it, because it keyed on "has an audio router" rather than
             // "has a clock worth trusting".
+            // Was THIS coordinator's genlock (below) the thing that mastered this clock? If the host
+            // re-mastered it since (a real pacing primary was promoted, or the master was cleared),
+            // the record is stale - drop it and treat the clock as producer-mastered from here on.
+            AppliedGenlocks.TryGetValue(audioClock, out var appliedGenlock);
+            if (appliedGenlock is not null && !ReferenceEquals(audioClock.Master, appliedGenlock))
+            {
+                AppliedGenlocks.Remove(audioClock);
+                appliedGenlock = null;
+            }
+
             if (videoOnlyMaster is not null && audioClock.Master is null)
             {
                 audioClock.SetMaster(videoOnlyMaster);
+                AppliedGenlocks.AddOrUpdate(audioClock, videoOnlyMaster);
                 Trace.LogDebug(
                     "Play: audio router has no pacing primary - mastering this voice's clock to the show clock ({ClockType}) so its video cannot drift against the audio device",
                     videoOnlyMaster.GetType().Name);
@@ -123,6 +174,38 @@ internal static class AvPlaybackCoordinator
                             "Play: deferred this voice's start by the audio pipeline depth ({DeferMs:0}ms of {LeadMs:0}ms measured) so its picture lands on the audible programme",
                             deferral.TotalMilliseconds, lead.TotalMilliseconds);
                     }
+                    audioRouter.Start();
+                    audioClock.Start();
+                };
+            }
+
+            // GENLOCKED RESUME: this clock is still mastered to the shared show clock that the branch
+            // above attached on the first Play. That master kept advancing (and kept its epoch) all
+            // through this voice's pause, so the drift fold in MediaClock.Start - which is CORRECT for
+            // a producer-mastered voice whose clock froze/flushed with it - would count the entire
+            // pause duration as forward progress (measured: a 30 s pause resumed 30 s ahead). Re-run
+            // SetMaster exactly like the video-only branch below does on every Play: it discards the
+            // pause-time master reading and re-anchors at the CURRENT position, so Start folds nothing
+            // and the voice resumes where it paused. Producer-mastered voices never reach this branch
+            // (their master is not the genlock this coordinator recorded) and keep the fold.
+            //
+            // The pipeline-lead start deferral is deliberately NOT re-applied here. It exists to hold a
+            // brand-new picture back by the audio path depth so frame 0 lands when sample 0 of the
+            // sounding siblings becomes audible - a start-of-audio edge. A resume of a silent voice has
+            // no such edge: its frames are already on screen, and DeferStart would rewind the playhead
+            // by the lead (~150-500 ms), visibly re-showing frames to chase a sibling refill transient
+            // that the resume prefill largely hides anyway.
+            if (appliedGenlock is not null)
+            {
+                var showClock = videoOnlyMaster ?? appliedGenlock;
+                audioClock.SetMaster(showClock);
+                if (!ReferenceEquals(showClock, appliedGenlock))
+                    AppliedGenlocks.AddOrUpdate(audioClock, showClock);
+                Trace.LogDebug(
+                    "Play: genlocked resume - re-anchored this voice's clock on the show clock ({ClockType}) at {Position} so the pause duration is not folded in",
+                    showClock.GetType().Name, audioClock.CurrentPosition);
+                return () =>
+                {
                     audioRouter.Start();
                     audioClock.Start();
                 };

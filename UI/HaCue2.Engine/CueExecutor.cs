@@ -94,6 +94,11 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         private readonly ICueExecutionHost _host;
         private readonly SessionClock _master;
+        // Position accumulates on READ (delta since the last look), so a second concurrent reader would
+        // race the accumulator and corrupt the coordinate. The scheduler loop was the only reader for a
+        // long time; dispatch-lateness sampling added another, hence the gate. Contention is trivial - a
+        // few hundred sub-microsecond reads per second.
+        private readonly Lock _positionGate = new();
         private TimeSpan _lastMaster;
         private TimeSpan _position;
 
@@ -109,12 +114,15 @@ public sealed class CueExecutor(ICueExecutionHost host)
         {
             get
             {
-                var now = _master.Now;
-                var delta = now - _lastMaster;
-                _lastMaster = now;
-                if (!_host.TimelinePaused && _master.IsAdvancing && delta > TimeSpan.Zero)
-                    _position += delta;
-                return _position;
+                lock (_positionGate)
+                {
+                    var now = _master.Now;
+                    var delta = now - _lastMaster;
+                    _lastMaster = now;
+                    if (!_host.TimelinePaused && _master.IsAdvancing && delta > TimeSpan.Zero)
+                        _position += delta;
+                    return _position;
+                }
             }
         }
 
@@ -146,6 +154,51 @@ public sealed class CueExecutor(ICueExecutionHost host)
     // Preparing five seconds ahead absorbs decoder/open jitter without holding every clip in a long show open
     // for the life of the timeline. A cue that explicitly disables pre-roll is prepared at its due point.
     private static readonly TimeSpan TimelinePreparationLead = TimeSpan.FromSeconds(5);
+
+    // Lateness accounting for timeline dispatches. The scheduler can only ever fire LATE (the poll loop
+    // exits at-or-after the target, never before), and normally by single milliseconds - but a dispatch
+    // can also slip visibly when its preparation was not done by the due point or its release queued
+    // behind a long dispatcher turn. Those excursions used to be invisible: an event that fired 300 ms
+    // past its authored time looked identical, in every log and panel, to one that fired on time. Counted
+    // above one 60 Hz frame (anything smaller is scheduler weather), reported to the operator above a
+    // threshold no show should ever hit in normal operation.
+    private static readonly TimeSpan LateDispatchCountThreshold = TimeSpan.FromMilliseconds(17);
+    private static readonly TimeSpan LateDispatchReportThreshold = TimeSpan.FromMilliseconds(45);
+    private readonly Lock _timingGate = new();
+    private long _timelineDispatches;
+    private long _timelineLateDispatches;
+    private TimeSpan _timelineMaxLateness;
+    private TimeSpan _timelineLastLateness;
+
+    /// <summary>Timeline dispatch timing since load — dispatch count, how many slipped past one frame,
+    /// and the worst/most recent slip. For the rig report: this is the number that says whether authored
+    /// times are actually being honoured, which no per-voice clock readout can.</summary>
+    public (long Dispatched, long Late, TimeSpan MaxLateness, TimeSpan LastLateness) TimelineDispatchTiming
+    {
+        get
+        {
+            lock (_timingGate)
+                return (_timelineDispatches, _timelineLateDispatches, _timelineMaxLateness, _timelineLastLateness);
+        }
+    }
+
+    private void RecordTimelineDispatch(TimeSpan due, TimeSpan lateness)
+    {
+        lock (_timingGate)
+        {
+            _timelineDispatches++;
+            if (lateness > LateDispatchCountThreshold)
+                _timelineLateDispatches++;
+            if (lateness > _timelineMaxLateness)
+                _timelineMaxLateness = lateness;
+            _timelineLastLateness = lateness;
+        }
+
+        if (lateness > LateDispatchReportThreshold)
+            host.Report(
+                $"timeline event at {due:mm\\:ss\\.fff} fired {lateness.TotalMilliseconds:0} ms late — " +
+                "its media was still preparing at the due time, or the release queued behind other work");
+    }
 
     /// <summary>
     /// How deep a chain of auto-continues and jumps may run from one GO.
@@ -1205,7 +1258,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
                 {
                     StartTimelinePreparation(item.Event, cancellationToken);
                     dispatched.Add(DispatchTimelineEventAsync(
-                        item.Event, depth, cancellationToken));
+                        item.Event, depth, cancellationToken, clock));
                 }
 
                 // Let the just-released dispatcher continuations run before sampling/advancing toward the
@@ -1319,7 +1372,8 @@ public sealed class CueExecutor(ICueExecutionHost host)
     private async Task DispatchTimelineEventAsync(
         TimelineEvent timelineEvent,
         int depth,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimelineRunClock? clock = null)
     {
         try
         {
@@ -1330,6 +1384,13 @@ public sealed class CueExecutor(ICueExecutionHost host)
                 ready.Add(timelineEvent.VisualizerGate.Ready);
             await Task.WhenAll(ready).WaitAsync(cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
+
+            // Sampled at the actual release moment (scheduler wait AND ready-gates both behind us), against
+            // the same pause-aware coordinate that scheduled the event - so the number is the show-time slip
+            // the audience got, not a wall-clock artifact. Null clock = the initial straddled event, whose
+            // release IS the timeline epoch; it cannot be late by definition.
+            if (clock is not null)
+                RecordTimelineDispatch(timelineEvent.Due, clock.Position - timelineEvent.Due);
 
             // Release prepared media and dispatch non-media participants in the same continuation. Media
             // starters then serialize through one dispatcher turn; controls no longer wait for decoder opens.

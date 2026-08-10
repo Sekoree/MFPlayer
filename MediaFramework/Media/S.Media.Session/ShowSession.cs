@@ -599,7 +599,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         bool preserveActiveGroups = false)
     {
         ArgumentNullException.ThrowIfNull(document);
-        _fires.CancelActiveFire(); // a reload must not wait behind a long in-flight fire (NXT-03)
+        _fires.CancelAllFires(); // a reload must not wait behind a long in-flight fire (NXT-03), and prepared batches hold pre-reload clips
         return InvokeAsync(() =>
             LoadDocumentCoreAsync(document, preserveMatchingCompositions, preserveActiveGroups));
     }
@@ -990,14 +990,49 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             }
         }
 
-        // --- COMMIT (on the dispatcher): swap the armed clip in, or discard it if the show was reloaded / the
-        // fire was cancelled (STOP) during the open (NXT-03). For a group fire the commit PREPARES the voice
-        // (decode spin-up, buffer wait, sync present) but does not start its clocks - the starter comes back.
-        var startVoice = await InvokeAsync(() => CommitClipAsync(
+        // --- STAGE (on the dispatcher): build the voice and attach everything it owns (layers black, audio
+        // routes at their start level), or discard the armed clip if the show was reloaded / the fire was
+        // cancelled (STOP) during the open (NXT-03). Deliberately does NOT prepare or start anything - this
+        // turn is milliseconds.
+        var staged = await InvokeAsync(() => StageClipCommitAsync(
                 groupId, binding, cancellationToken, setup, armed, crossfade,
                 deferStart: waitForStartEdge is not null,
                 cueElapsed: cueElapsed))
             .ConfigureAwait(false);
+
+        // --- PREPARE (OFF the dispatcher): decode spin-up, audio buffer wait, sync present - the slow half,
+        // up to 250 ms for a video clip and bounded by the video-buffer cap. This used to run inside the
+        // commit's dispatcher turn, which parked the serial loop for its whole duration: a manual GO on a
+        // video cue ~200 ms before a timeline edge made the edge's starters queue behind the present-sync
+        // and the whole aligned group started late. The staged voice is NOT yet committed, so no stop, seek
+        // or live edit can reach this player while it prepares - the only rollback owner is this method.
+        // A dedicated thread because PrepareStart BLOCKS (buffer waits): an all-together batch prepares its
+        // siblings concurrently, and parking N pool threads on waits would starve unrelated continuations.
+        if (staged is not null)
+        {
+            try
+            {
+                await Task.Factory.StartNew(
+                        staged.Prepare, cancellationToken,
+                        TaskCreationOptions.LongRunning, TaskScheduler.Default)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                // Not committed yet, so the voice releases on its own: layers, routes and the armed clip
+                // (prepared = no longer pristine, so the clip disposes rather than returning to standby).
+                await InvokeAsync(() => staged.Voice.ReleaseAsync().AsTask()).ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        // --- COMMIT (on the dispatcher): swap the prepared voice in as the group's Active. A discarded
+        // stage (reload/STOP/superseded during the open) skips this but still waits at the edge below so
+        // the barrier's participant count stays truthful. For a single fire the clocks start inside this
+        // same turn - prepare is already paid, so the turn is short either way.
+        var startVoice = staged is null
+            ? null
+            : await InvokeAsync(() => FinalizeClipCommitAsync(staged, cancellationToken)).ConfigureAwait(false);
 
         if (waitForStartEdge is null)
             return;
@@ -1048,14 +1083,57 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// narrow point rather than a general hook. Null in production.</summary>
     internal Action<string>? PostCommitFault { get; set; }
 
-    /// <summary>The on-dispatcher commit half of <see cref="PlayClipAsync"/> (NXT-03): attaches the freshly-armed
-    /// clip's outputs, masters the composition, and swaps it in - unless the show was reloaded (generation moved)
-    /// or the fire was cancelled while the clip opened off the dispatcher, in which case it discards the now-stale
-    /// clip without touching the live show.</summary>
-    /// <param name="deferStart">Group fires: prepare the voice fully (decode spin-up, buffer wait,
-    /// sync present) but return the clock start as the result instead of running it, so the caller can
-    /// start every sibling on one edge. False (single fires) starts inline and returns null.</param>
-    private async Task<DeferredClipStart?> CommitClipAsync(
+    /// <summary>Test-only access to the cue runner, for tuning the wedge bounds
+    /// (<see cref="CueRunner.BatchPreparationTimeout"/>) without a half-minute test.</summary>
+    internal CueRunner FireRunnerForTest => _fires;
+
+    /// <summary>Everything the finalize turn needs from the stage turn, carried across the off-dispatcher
+    /// preparation between them (see <see cref="PlayClipAsync"/>'s STAGE/PREPARE/COMMIT phases). The voice is
+    /// staged but NOT committed while this exists - no session command can reach it - so the record's owner
+    /// (the one fire that built it) is the only code that may release it.</summary>
+    private sealed class StagedClipCommit
+    {
+        public required string GroupId { get; init; }
+        public required ShowClipBinding Binding { get; init; }
+        public required (int generation, TransportGroup group, long ticket) Setup { get; init; }
+        public required IArmedClip Armed { get; init; }
+        public required TransportGroup Group { get; init; }
+        public required TransportVoice Voice { get; init; }
+        public required (TimeSpan Duration, FadeShape Curve)? Crossfade { get; init; }
+        public required bool DeferStart { get; init; }
+        public required List<AudioRouteTarget> RouteTargets { get; init; }
+        public required List<(string OutputId, string DeviceId)> AudioPumps { get; init; }
+        public required bool FadeIn { get; init; }
+        public required float FadeInStartLevel { get; init; }
+        public required IReadOnlyList<float>? FadeInFullLevels { get; init; }
+        public required IPlaybackClock? VideoOnlyMaster { get; init; }
+        public required Action BeginClipWork { get; init; }
+
+        /// <summary>Deferred GPU-surface attach, run by the finalize turn AFTER the timeline re-anchor so
+        /// the pull-rendered surface can never composite against the previous clip's coordinate. Null on
+        /// the frame path. Returns the authored full fade level it attached black, or null.</summary>
+        public required Func<IReadOnlyList<float>?>? AttachSurfaceLayer { get; init; }
+
+        /// <summary>The clock starter produced by <see cref="Prepare"/>. Written on the preparation thread,
+        /// read on the dispatcher strictly after the preparation task completed - the await is the fence.</summary>
+        public Action? Starter { get; private set; }
+
+        /// <summary>The slow half (decode spin-up, buffer wait, sync present), run OFF the dispatcher. The
+        /// armed clip is marked started from here on, so a discard after this point disposes it rather than
+        /// returning it to warm standby.</summary>
+        public void Prepare() => Starter = Armed.PrepareStart(videoOnlyMaster: VideoOnlyMaster);
+    }
+
+    /// <summary>The on-dispatcher STAGE half of <see cref="PlayClipAsync"/> (NXT-03): builds the voice and
+    /// attaches everything it owns (composition layers, audio routes, subtitles, taps) - unless the show was
+    /// reloaded (generation moved) or the fire was cancelled while the clip opened off the dispatcher, in
+    /// which case it discards the now-stale clip without touching the live show and returns null. Deliberately
+    /// starts NOTHING: preparation runs off the dispatcher afterwards and <see cref="FinalizeClipCommitAsync"/>
+    /// swaps the voice in, so this turn stays milliseconds no matter how heavy the media is.</summary>
+    /// <param name="deferStart">Group fires: the caller will hold the prepared voice at a start edge, so audio
+    /// attaches silent and layers black regardless of fades - the starter restores levels at the edge. False
+    /// (single fires) attaches at the live level and the finalize turn starts the clocks itself.</param>
+    private async Task<StagedClipCommit?> StageClipCommitAsync(
         string groupId,
         ShowClipBinding binding,
         CancellationToken cancellationToken,
@@ -1114,6 +1192,9 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         var routeTargets = new List<AudioRouteTarget>();
         // Device-tagged routed outputs (OutputId → device) for the per-line audio-health poll.
         var audioPumps = new List<(string OutputId, string DeviceId)>();
+        // Deferred GPU-surface attach (see the surface branch below) - runs in the finalize turn, after
+        // the timeline re-anchor; returns the authored full fade level it zeroed, or null.
+        Func<IReadOnlyList<float>?>? attachSurfaceLayer = null;
         try
         {
             if (player.VideoSource is { } videoSource)
@@ -1140,20 +1221,42 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 // TransportTimeline that selects decoded frames), so transport (seek/pause/trim/end
                 // monitoring) behaves identically to the frame path. Multi-placement clips keep the frame
                 // path: one decoded stream fans out cheaply, N independent GPU renders would not.
+                //
+                // Attached from the FINALIZE turn, after CommitVoiceAsync re-anchors the group timeline -
+                // not here. A surface is PULL-rendered: the moment it is on the canvas the pump renders it
+                // at the timeline's source coordinate, and between stage and commit that timeline still
+                // describes the PREVIOUS clip (or an anchor that does not exist yet), so an early attach
+                // composited the new surface against the wrong coordinate for the whole preparation window.
+                // Frame layers below have no such problem (nothing selects until frames are submitted) and
+                // MUST attach now - the preparation's sync present parks frame 0 into their slots.
                 if (player.VideoSource is ILayerSurfaceVideoSource surfaceSource
                     && placements.Count == 1
                     && _compositions.TryGetValue(placements[0].CompositionId, out var surfaceComp)
                     && surfaceComp.SupportsSurfaceLayers)
                 {
                     var placement = placements[0];
-                    var surfaceSlot = surfaceComp.AddSurfaceLayer(
-                        surfaceSource.CreateLayerSurface(),
-                        BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement));
-                    layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, surfaceSlot));
-                    timelineClaims.Add(surfaceComp.AcquireTransportTimeline(group.Timeline));
-                    MediaDiagnostics.LogInformation(
-                        "clip {CueId}: video composites as a GPU layer surface on {Composition} (NXT-10)",
-                        binding.ClipId, placement.CompositionId);
+                    attachSurfaceLayer = () =>
+                    {
+                        var surfaceSlot = surfaceComp.AddSurfaceLayer(
+                            surfaceSource.CreateLayerSurface(),
+                            BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement));
+                        layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, surfaceSlot));
+                        timelineClaims.Add(surfaceComp.AcquireTransportTimeline(group.Timeline));
+                        surfaceSlot.TimeSelectionOffset = -VideoPlayheadOffset;
+                        if (binding.OpacityEnvelope is { Count: > 0 } surfaceLane)
+                            surfaceSlot.AutomationLevel =
+                                Math.Clamp(VolumeEnvelopes.Sample(surfaceLane, cueElapsed), 0f, 1f);
+                        MediaDiagnostics.LogInformation(
+                            "clip {CueId}: video composites as a GPU layer surface on {Composition} (NXT-10)",
+                            binding.ClipId, placement.CompositionId);
+                        // The same attach-black rule the staged layers follow, applied at the deferred
+                        // attach point; the authored full level goes back through BaseLayerFadeLevels.
+                        if (!fadeIn && !deferStart)
+                            return null;
+                        var fullLevel = surfaceSlot.FadeLevel;
+                        surfaceSlot.FadeLevel = 0f;
+                        return [fullLevel];
+                    };
                 }
                 else
                 {
@@ -1302,39 +1405,11 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             PublishItemMetadata(binding);
             WireRouterAlerts(player, binding.ClipId);
 
-            // One show, one time base. A voice whose audio reaches no clocked output (a silent video
-            // cue) would otherwise be timed by a Stopwatch while everything audible is timed by the
-            // audio device, and the picture would slide away from the sound for as long as the show
-            // runs. Only consumed when the player has no pacing primary of its own - a sounding voice
-            // is already mastered by its own program lease, which is the same clock one lead further on.
-            //
-            // A group fire PREPARES here (the slow half: decode spin-up, buffer wait, sync present)
-            // and hands the clock start back to PlayClipAsync, which runs every sibling's starter
-            // after the batch's start edge - the voice below commits as Active either way, it just
-            // holds at its start position until the edge.
-            Action? deferredStart = null;
-            if (deferStart)
-                deferredStart = armed.PrepareStart(videoOnlyMaster: _programAudio?.MasterClock);
-            else
-                armed.Start(videoOnlyMaster: _programAudio?.MasterClock);
-            // Commit: the displaced voice moves to its release (ramp armed inside the handoff) or is
-            // butt-spliced away, and this voice becomes the group's Active.
-            await CommitVoiceAsync(groupId, group, voice, crossfade).ConfigureAwait(false);
-            PostCommitFault?.Invoke(groupId);
-            var committedLevel = deferStart ? 0f : fadeInStartLevel;
-            voice.SetFadeMetadata(routeTargets, committedLevel, fadeInFullLevels);
-            // One composition pass over the committed targets. The routes already attached AT this level, so
-            // it is value-identical by construction - it is here so the level composition, not the attach
-            // site, stays the authority (the same reason the live re-apply and the hot rebuild end with it).
-            voice.ApplyAudioScale(voice.RouteTargets, voice.ClipLevel);
-            // Publish the device-tagged audio outputs for the line-health poll (CommitVoiceAsync republished
-            // the group views before these were set, so refresh once more now they're known).
-            voice.SetAudioPumps(audioPumps);
-            PublishGroupViews();
-
             // Background per-clip work - the fade-in ramp + the end-of-clip (loop/trim-out/freeze) monitor -
             // shares one cancellation, cancelled when the voice leaves the transport. Both gated, so a plain
             // play-to-end cue with no fade starts nothing. End handling needs a known duration (live = 0).
+            // Built HERE (the stage turn) as a closure because every input is a stage-time fact; it runs
+            // from the finalize turn or the start edge, strictly after the voice committed.
             var end = player.Duration - binding.EndOffset;
             var endHandling = (binding.Loop || binding.EndBehavior != ClipEndBehavior.Stop
                                || binding.EndOffset > TimeSpan.Zero || binding.FadeOut > TimeSpan.Zero
@@ -1343,9 +1418,11 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 && player.Duration > TimeSpan.Zero
                 && end > binding.StartOffset;
             var hasEnvelope = binding.VolumeEnvelope is { Count: > 0 } && routeTargets.Count > 0;
-            var hasOpacityLane = binding.OpacityEnvelope is { Count: > 0 } && layers.Count > 0;
             void BeginClipWork()
             {
+                // layers is the LIVE voice list, read at run time rather than captured as a count: a
+                // GPU-surface layer attaches in the finalize turn, after this closure was built.
+                var hasOpacityLane = binding.OpacityEnvelope is { Count: > 0 } && layers.Count > 0;
                 if (!fadeIn && !endHandling && !hasEnvelope && !hasOpacityLane)
                     return;
 
@@ -1363,9 +1440,94 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                     StartEndMonitor(groupId, voice, end, clipCts.Token);
             }
 
-            if (!deferStart)
+            // One show, one time base: the master clock a silent-video voice genlocks to is a dispatcher-
+            // owned fact, captured now so the off-dispatcher preparation never reads session state.
+            return new StagedClipCommit
             {
-                BeginClipWork();
+                GroupId = groupId,
+                Binding = binding,
+                Setup = setup,
+                Armed = armed,
+                Group = group,
+                Voice = voice,
+                Crossfade = crossfade,
+                DeferStart = deferStart,
+                RouteTargets = routeTargets,
+                AudioPumps = audioPumps,
+                FadeIn = fadeIn,
+                FadeInStartLevel = fadeInStartLevel,
+                FadeInFullLevels = fadeInFullLevels,
+                VideoOnlyMaster = _programAudio?.MasterClock,
+                BeginClipWork = BeginClipWork,
+                AttachSurfaceLayer = attachSurfaceLayer,
+            };
+        }
+        catch
+        {
+            // The voice was never handed to the group (commit happens in the finalize turn), so it releases
+            // on its own: layers, routes, claims and the armed clip.
+            await voice.ReleaseAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>The on-dispatcher COMMIT half of <see cref="PlayClipAsync"/>: re-checks that the show did not
+    /// move underneath the off-dispatcher preparation (reload, STOP, a later fire's ticket), then swaps the
+    /// prepared voice in as the group's Active. The stale case discards exactly like the stage turn would
+    /// have - the prepared clip disposes rather than returning to warm standby, which
+    /// <see cref="IArmedClip.PrepareStart"/> already guarantees by marking it started.</summary>
+    private async Task<DeferredClipStart?> FinalizeClipCommitAsync(
+        StagedClipCommit staged, CancellationToken cancellationToken)
+    {
+        var (groupId, group, voice) = (staged.GroupId, staged.Group, staged.Voice);
+        if (cancellationToken.IsCancellationRequested
+            || _showGeneration != staged.Setup.generation
+            || staged.Setup.group.OpenSequence != staged.Setup.ticket
+            || _disposed)
+        {
+            await voice.ReleaseAsync().ConfigureAwait(false);
+            return null;
+        }
+
+        try
+        {
+            // The crossfade was normalized at stage time, but its partner may have stopped during the
+            // off-dispatcher preparation - degrade to a butt-splice rather than handing CommitVoiceAsync a
+            // crossfade with nobody to fade out (the incoming voice still ramps in from its silent attach).
+            var crossfade = staged.Crossfade;
+            if (crossfade is not null && group.ActiveVoice is null)
+                crossfade = null;
+
+            // Single fires: start the clocks NOW, before the handoff, so the displaced voice's release ramp
+            // and the incoming voice's first samples share the commit turn exactly as the old inline
+            // armed.Start() did. Preparation is already paid, so this is thread-starts - microseconds.
+            if (!staged.DeferStart)
+                staged.Starter!();
+
+            // Commit: the displaced voice moves to its release (ramp armed inside the handoff) or is
+            // butt-spliced away, and this voice becomes the group's Active.
+            await CommitVoiceAsync(groupId, group, voice, crossfade).ConfigureAwait(false);
+            PostCommitFault?.Invoke(groupId);
+            // GPU-surface clips attach their layer NOW - the timeline above already describes this clip,
+            // so the surface's very first pull-render is on the right coordinate (see the stage turn's
+            // surface branch for why attaching earlier composited against the outgoing clip's time).
+            var fadeInFullLevels = staged.FadeInFullLevels;
+            if (staged.AttachSurfaceLayer is { } attachSurface)
+                fadeInFullLevels = attachSurface() ?? fadeInFullLevels;
+            var committedLevel = staged.DeferStart ? 0f : staged.FadeInStartLevel;
+            voice.SetFadeMetadata(staged.RouteTargets, committedLevel, fadeInFullLevels);
+            // One composition pass over the committed targets. The routes already attached AT this level, so
+            // it is value-identical by construction - it is here so the level composition, not the attach
+            // site, stays the authority (the same reason the live re-apply and the hot rebuild end with it).
+            voice.ApplyAudioScale(voice.RouteTargets, voice.ClipLevel);
+            // Publish the device-tagged audio outputs for the line-health poll (CommitVoiceAsync republished
+            // the group views before these were set, so refresh once more now they're known).
+            voice.SetAudioPumps(staged.AudioPumps);
+            PublishGroupViews();
+
+            if (!staged.DeferStart)
+            {
+                staged.BeginClipWork();
                 return null;
             }
 
@@ -1374,20 +1536,20 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 // Prepared audio is attached silent and prepared video is black. Restore the authored
                 // instantaneous level at the very same dispatcher turn that starts the voice clock; a
                 // rehearsal start in the middle of a fade therefore joins the curve in progress.
-                if (fadeIn)
-                    voice.ApplyFadeLevel(routeTargets, 1f, voice.BaseLayerFadeLevels, fadeInStartLevel);
+                if (staged.FadeIn)
+                    voice.ApplyFadeLevel(staged.RouteTargets, 1f, voice.BaseLayerFadeLevels, staged.FadeInStartLevel);
                 else
-                    voice.ApplyClipFadeLevel(routeTargets, 1f, voice.BaseLayerFadeLevels);
-                deferredStart!();
-                BeginClipWork();
+                    voice.ApplyClipFadeLevel(staged.RouteTargets, 1f, voice.BaseLayerFadeLevels);
+                staged.Starter!();
+                staged.BeginClipWork();
             });
         }
         catch
         {
-            // One teardown for both halves of the commit. An ARMING voice was never handed to the group, so
-            // it releases on its own; a voice that already committed goes back through the group, which
-            // clears the transport binding and drops its bus registration - and leaves any tail it displaced
-            // to finish on the ramp the handoff armed.
+            // One teardown whichever side of the commit the fault landed on. An ARMING voice was never
+            // handed to the group, so it releases on its own; a voice that already committed goes back
+            // through the group, which clears the transport binding and drops its bus registration - and
+            // leaves any tail it displaced to finish on the ramp the handoff armed.
             if (voice.State == VoiceState.Arming)
                 await voice.ReleaseAsync().ConfigureAwait(false);
             else
@@ -1650,7 +1812,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         if (_disposed)
             return;
         _disposed = true;
-        _fires.CancelActiveFire(); // unblock the dispatcher so disposal isn't stuck behind a long in-flight fire (NXT-03)
+        _fires.CancelAllFires(); // unblock the dispatcher so disposal isn't stuck behind a long in-flight fire (NXT-03)
         _completionMonitor.Stop();
 
         if (_dispatcher.IsOnDispatcherThread)

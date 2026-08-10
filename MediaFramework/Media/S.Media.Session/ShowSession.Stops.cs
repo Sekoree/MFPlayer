@@ -34,7 +34,9 @@ public sealed partial class ShowSession
         TimeSpan? fadeDuration = null,
         FadeCurve curve = FadeCurve.Linear)
     {
-        _fires.CancelActiveFire();
+        // Group-scoped, not blanket: a prepared timeline batch waiting for its edge on some OTHER group
+        // must survive this stop (see CueRunner._pendingScheduledFires).
+        _fires.CancelFiresForGroup(groupId);
         // An explicit non-positive duration hard-cuts even past a configured clip FadeOut (Panic
         // semantics), matching StopAllAsync and this method's own contract.
         if (fadeDuration is { } explicitDuration && explicitDuration <= TimeSpan.Zero)
@@ -60,7 +62,7 @@ public sealed partial class ShowSession
     /// <summary>Stops every program source using a built-in or authored custom fade shape.</summary>
     public async Task StopAllAsync(TimeSpan? fadeDuration, FadeShape curve)
     {
-        _fires.CancelActiveFire();
+        _fires.CancelAllFires(); // Panic reach: prepared batches waiting for their edge must not start after this
         var request = new SoundingStopRequest(fadeDuration ?? DefaultStopFade, curve);
         IReadOnlyList<SoundingSourceRegistration> program;
         try
@@ -69,7 +71,7 @@ public sealed partial class ShowSession
             {
                 // Panic also means "nothing new starts": a voice whose media is still opening is not on the
                 // bus yet (nothing sounds), so the enumeration alone would let it begin playing right after
-                // the stop. Cue fires are already preempted by CancelActiveFire above.
+                // the stop. Cue fires are already preempted by CancelAllFires above.
                 _voicePlayer.CancelPendingVoiceOpens();
                 return Task.FromResult(_sounding.ProgramSources());
             }).ConfigureAwait(false);
@@ -131,7 +133,10 @@ public sealed partial class ShowSession
     /// clip playing and vice versa. No-op when that cue isn't currently sounding anywhere.</summary>
     public Task StopCueAsync(string cueId)
     {
-        _fires.CancelActiveFire();
+        // Cue-scoped, not blanket: this stop once cancelled EVERY pending scheduled batch, so stopping one
+        // unrelated cue while a timeline event's voices waited for their edge silently killed that event
+        // (a window of several seconds per event). Only batches containing this cue go down with it.
+        _fires.CancelFiresForCue(cueId);
         return StopVoicesCoreAsync(
             () => [.. _groups.Values.SelectMany(
                 group => group.Voices
