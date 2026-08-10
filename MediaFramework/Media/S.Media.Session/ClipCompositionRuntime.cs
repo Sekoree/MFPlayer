@@ -893,10 +893,28 @@ public sealed class ClipCompositionRuntime : IDisposable
             // MasterAligned would freeze on the first frame, since every frame is equidistant from the clock.
             if (alignmentTimeline is not null && keepPolicy == SlotKeepPolicy.MasterAligned)
             {
-                // Map the exact output-grid target into this source's PTS domain. Sampling GetSnapshot()
-                // here instead would select for "now", a little after the grid deadline, and reintroduce
-                // phase-dependent choices at every layer.
-                rawSlot.AlignmentTimeMapper = alignmentTimeline.SourceTimeAt;
+                // Whose domain is the canvas time in? SourceTimeAt interprets its argument on ITS OWN
+                // group's master clock, but outputPts is stamped by whichever timeline currently owns
+                // this canvas - and those two clocks only share a domain by luck. Each transport
+                // group's SessionClock is monotonic PER GROUP and persists across idle, so a re-fired
+                // cue's group carries its accumulated time while a sibling fired for the first time
+                // starts near zero (all-together children are one transport group each, by design).
+                // Mapping a fresh-domain canvas time through a 150-seconds-older timeline put the
+                // alignment target minutes in the past and froze the layer on its first frame while
+                // its player poured frames into the slot (panic → group re-fire, 2026-08-10).
+                //
+                // So: grid-exact mapping only when this layer's timeline IS the canvas clock - that
+                // path must stay grid-derived, because sampling "now" would reintroduce
+                // phase-dependent choices at the layer that defines the grid. A layer on a FOREIGN
+                // canvas clock aligns to its own transport's current source time instead:
+                // domain-correct by construction, frame-accurate to its own group, and its sub-ms
+                // clock-read jitter sits inside the VideoPlayer.DeliveryLead margin. The canvas
+                // owner is read per call, so a claim handoff re-sorts every layer on the next tick.
+                var ownTimeline = alignmentTimeline;
+                rawSlot.AlignmentTimeMapper = outputTime =>
+                    ReferenceEquals(Volatile.Read(ref _transportTimeline), ownTimeline)
+                        ? ownTimeline.SourceTimeAt(outputTime)
+                        : ownTimeline.GetSnapshot().SourceTime;
                 // Own-clock alignment needs no canvas master; it engages immediately.
                 rawSlot.KeepPolicy = keepPolicy;
             }

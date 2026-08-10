@@ -291,7 +291,8 @@ public class SourceCueTests
         var row = shell.Cues.AllRows.First(item => item.Id == cue.Id);
 
         Assert.DoesNotContain(row.Badges, badge => badge.Text == "live");
-        Assert.Equal("3:33", row.Length);
+        // Milliseconds always shown (2026-08-10): the length column carries the digits a trim edits.
+        Assert.Equal("3:33.000", row.Length);
     });
 
     [Fact]

@@ -218,6 +218,20 @@ public partial class CuesView : UserControl
             _ = cues.SeekActiveAsync(cueId, e.Fraction);
     }
 
+    /// <summary>A drag on a group header's bar moves every sounding child to the same absolute time.</summary>
+    private void OnSeekGroup(object? sender, Controls.SeekEventArgs e)
+    {
+        if (DataContext is CuesViewModel cues && (sender as Control)?.Tag is Guid groupId)
+            _ = cues.SeekGroupAsync(groupId, e.Fraction);
+    }
+
+    /// <summary>Double-tap on a group header toggles its expander — a larger target than the ▾.</summary>
+    private void OnToggleGroupRow(object? sender, TappedEventArgs e)
+    {
+        if ((sender as Control)?.DataContext is ActiveGroupRow row)
+            row.IsExpanded = !row.IsExpanded;
+    }
+
     private void OnStopAll(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not CuesViewModel cues)

@@ -131,18 +131,27 @@ public sealed partial class ShowSession
     /// clip OR as a crossfade tail still fading out under a newer cue (per-cue stop / cancel - the GUI's
     /// <c>CancelCueCallback</c>). It targets the cue's own VOICES, so stopping the tail leaves the incoming
     /// clip playing and vice versa. No-op when that cue isn't currently sounding anywhere.</summary>
-    public Task StopCueAsync(string cueId)
+    public Task StopCueAsync(string cueId) => StopCueAsync(cueId, fadeDuration: null);
+
+    /// <summary>Per-cue stop with the same fade-override contract as <see cref="StopAsync"/>: a configured
+    /// clip fade-out wins, <paramref name="fadeDuration"/> covers clips without one, and a NON-POSITIVE
+    /// value hard-cuts even past a configured fade. The escalation path: an operator whose first stop is
+    /// already ramping presses again to mean "now", and re-running the same 2-second fade said no.</summary>
+    public Task StopCueAsync(string cueId, TimeSpan? fadeDuration, FadeCurve curve = FadeCurve.Linear)
     {
         // Cue-scoped, not blanket: this stop once cancelled EVERY pending scheduled batch, so stopping one
         // unrelated cue while a timeline event's voices waited for their edge silently killed that event
         // (a window of several seconds per event). Only batches containing this cue go down with it.
         _fires.CancelFiresForCue(cueId);
+        var fade = fadeDuration is not { } explicitDuration || explicitDuration > TimeSpan.Zero;
         return StopVoicesCoreAsync(
             () => [.. _groups.Values.SelectMany(
                 group => group.Voices
                     .Where(voice => string.Equals(voice.Clip.Spec.Id, cueId, StringComparison.Ordinal))
                     .Select(voice => (group, voice)))],
-            fade: true);
+            fade,
+            fadeDuration,
+            curve);
     }
 
     /// <summary>Every voice of one group as stop targets - the group-wide stop's selection.</summary>

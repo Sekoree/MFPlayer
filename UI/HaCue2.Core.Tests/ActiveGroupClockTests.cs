@@ -51,7 +51,7 @@ public class ActiveGroupClockTests
 
         // Eleven three-minute stems fired at once run for three minutes, with two and a half left —
         // not thirty-three minutes with twenty-seven and a half left.
-        Assert.Equal("−02:30 / 03:00", header.Clock);
+        Assert.Equal("−02:30.000 / 03:00.000", header.Clock);
         Assert.InRange(header.Progress, 0.16, 0.17);
     }
 
@@ -80,7 +80,7 @@ public class ActiveGroupClockTests
         var header = CuePresentation.ActivePanel(project, active, durations).OfType<ActiveGroupRow>().Single();
 
         // Six minutes of material, two and a half left of item one plus three still queued.
-        Assert.Equal("−05:30 / 06:00", header.Clock);
+        Assert.Equal("−05:30.000 / 06:00.000", header.Clock);
         Assert.Single(header.Upcoming);
         Assert.Equal("in 02:30", header.Upcoming[0].Countdown);
     }
@@ -109,7 +109,7 @@ public class ActiveGroupClockTests
 
         // The bed runs 0:00–3:00 and the stab 1:00–4:00, so the group is four minutes long and thirty
         // seconds in. The stab is due in another thirty.
-        Assert.Equal("−03:30 / 04:00", header.Clock);
+        Assert.Equal("−03:30.000 / 04:00.000", header.Clock);
         Assert.Single(header.Upcoming);
         Assert.Equal("in 00:30", header.Upcoming[0].Countdown);
     }

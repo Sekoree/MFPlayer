@@ -307,10 +307,14 @@
             <ListBox.DataTemplates>
 
               <DataTemplate DataType="vm:ActiveGroupRow">
-                <Border Classes="actrow grp" Classes.near="{Binding IsNearEnd}">
+                <!-- Double-tap anywhere on the header toggles the expander — the ▾ works too, but a
+                     22-pixel toggle is a small target for a booth in the dark. -->
+                <Border Classes="actrow grp" Classes.near="{Binding IsNearEnd}"
+                        DoubleTapped="OnToggleGroupRow">
                   <StackPanel Margin="0,0,10,0">
                     <Grid ColumnDefinitions="3,22,46,*,52,120,150,22" ColumnSpacing="7">
-                      <Border Grid.Column="0" Classes="stripe is-go grp" />
+                      <Border Grid.Column="0" Classes="stripe is-go grp"
+                              Classes.fading="{Binding IsFading}" />
                       <!-- Expanded by default: a group that hid its children would show LESS than the
                            flat list it replaced. -->
                       <ToggleButton Grid.Column="1" Classes="tight" MinWidth="20" Padding="3,0"
@@ -328,13 +332,23 @@
                                  Text="{Binding Position}" ToolTip.Tip="where the group is in its chain" />
                       <TextBlock Grid.Column="5" Classes="clock" Text="{Binding Clock}"
                                  ToolTip.Tip="the WHOLE group's remaining and total" />
-                      <ProgressBar Grid.Column="6" Maximum="1" Value="{Binding Progress}"
-                                   VerticalAlignment="Center"
-                                   Classes.near="{Binding IsNearEnd}" />
+                      <!-- Seekable for a together-group: one drag lands every stem and every video on
+                           the same absolute time. A playlist header stays a plain progress readout —
+                           its children play in sequence, so its bar has no one place to seek to. -->
+                      <c:SeekBar Grid.Column="6" Maximum="1" Value="{Binding Progress}"
+                                 AutomationProperties.Name="Seek active group"
+                                 IsSeekable="{Binding CanSeek}"
+                                 IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanSeekActive}"
+                                 VerticalAlignment="Center"
+                                 Seeked="OnSeekGroup"
+                                 Tag="{Binding GroupId}"
+                                 Classes.fading="{Binding IsFading}"
+                                 Classes.near="{Binding IsNearEnd}"
+                                 ToolTip.Tip="Drag to seek the whole group." />
                       <Button Grid.Column="7" Classes="icon" Content="×" Click="OnStopGroup"
                               Tag="{Binding GroupId}"
                               AutomationProperties.Name="Stop active group"
-                              ToolTip.Tip="Stop everything in this group." />
+                              ToolTip.Tip="Stop everything in this group. Press again during the fade to cut." />
                     </Grid>
 
                     <StackPanel Margin="24,2,0,0" IsVisible="{Binding IsExpanded}">

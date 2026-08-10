@@ -157,16 +157,16 @@ public static class CuePresentation
                 Qualifier = project.CueLists.Count > 1
                     ? project.CueLists.FirstOrDefault(list => list.Id == state.ListId)?.Name ?? ""
                     : "",
-                // Milliseconds on the LIVE clock only (remaining/length keep the calm second grid):
-                // the Active panel is where an operator judges whether two cues are actually
-                // together, and a seconds readout hides everything below the one threshold that
-                // matters for sync questions.
+                // Milliseconds on every readout: the Active panel is where an operator judges
+                // whether two cues are actually together, and a seconds readout hides everything
+                // below the one threshold that matters for sync questions.
                 Clock = PreciseClock(state.Elapsed),
                 // Counted DOWN, and marked as such. "How long have I got" is the question somebody
                 // driving a show asks; "how long has it been" is the question they ask afterwards.
-                Remaining = remaining is { } left ? $"−{Clock(left)}" : "",
-                Length = length is { } run ? Clock(run) : "",
+                Remaining = remaining is { } left ? $"−{PreciseClock(left)}" : "",
+                Length = length is { } run ? PreciseClock(run) : "",
                 Position = state.Elapsed,
+                PolledAtTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
                 Duration = length,
                 Progress = length is { TotalMilliseconds: > 0 } span
                     ? Math.Clamp(state.Elapsed / span, 0, 1)
@@ -355,11 +355,17 @@ public static class CuePresentation
                 ? (Start(child) > elapsed ? Start(child) - elapsed : TimeSpan.Zero)
                 : ahead;
 
-            header.Upcoming.Add(new UpcomingCueRow(
-                Number(child.Number),
-                child.Label,
-                Played(child, durations) is { } run ? Clock(run) : "—",
-                $"in {Clock(starts)}"));
+            header.Upcoming.Add(new UpcomingCueRow
+            {
+                Number = Number(child.Number),
+                Label = child.Label,
+                Length = Played(child, durations) is { } run ? PreciseClock(run) : "—",
+                // Staged precision: whole seconds while the start is far away, milliseconds (via the
+                // smooth-clock timer) inside the last ten — see UpcomingCueRow.
+                Countdown = UpcomingCountdown(starts),
+                StartsInAtPoll = starts,
+                PolledAtTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+            });
 
             if (!overlaps)
             {
@@ -369,14 +375,27 @@ public static class CuePresentation
         }
 
         header.Clock = known && total > TimeSpan.Zero
-            ? $"−{Clock(remaining)} / {Clock(total)}"
+            ? $"−{PreciseClock(remaining)} / {PreciseClock(total)}"
             : $"{header.Children.Count} playing";
 
         header.Progress = known && total.TotalMilliseconds > 0
             ? Math.Clamp(1 - (remaining / total), 0, 1)
             : 0;
 
+        // Values + stamp for the smooth-clock timer; zero total marks "unknown, leave it alone".
+        header.TotalValue = known ? total : TimeSpan.Zero;
+        header.RemainingAtPoll = remaining;
+        header.PolledAtTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+
         header.IsNearEnd = known && remaining > TimeSpan.Zero && remaining <= TimeSpan.FromSeconds(10);
+
+        // The header's own feedback and its bar. Fading only when EVERYTHING it holds is ramping —
+        // one stem stopped early must not paint the whole group as going down. The bar seeks only
+        // for a together-group: one absolute time means the same place in every child there, which
+        // is not true of a sequence (playlist) and not yet wired for offset children (timeline).
+        header.IsFading = header.Children.Count > 0 && header.Children.All(child => child.IsFading);
+        header.CanSeek = group.FireMode is GroupFireMode.AllTogether
+                         && header.Children.Any(child => child.CanSeek);
 
         // "item 3/12" is the position an operator calls out over talkback.
         var playable = group.Children.Count(child => child.Enabled);
@@ -433,9 +452,18 @@ public static class CuePresentation
             ? $"{(int)value.TotalHours}:{value.Minutes:00}:{value.Seconds:00}"
             : $"{value.Minutes:00}:{value.Seconds:00}";
 
-    /// <summary><see cref="Clock"/> with milliseconds - the Active panel's live playhead.</summary>
-    private static string PreciseClock(TimeSpan value) =>
+    /// <summary><see cref="Clock"/> with milliseconds - the Active panel's live readouts.</summary>
+    internal static string PreciseClock(TimeSpan value) =>
         $"{Clock(value)}.{value.Milliseconds:000}";
+
+    /// <summary>Inside this window an upcoming cue's countdown carries milliseconds and ticks at UI
+    /// rate; farther out it reads in calm whole seconds. See <see cref="UpcomingCueRow"/>.</summary>
+    internal static readonly TimeSpan UpcomingPreciseWindow = TimeSpan.FromSeconds(10);
+
+    /// <summary>The staged countdown text for an upcoming cue, shared by the poll rebuild and the
+    /// smooth-clock timer so the two can never disagree on the format.</summary>
+    internal static string UpcomingCountdown(TimeSpan starts) =>
+        starts <= UpcomingPreciseWindow ? $"in {PreciseClock(starts)}" : $"in {Clock(starts)}";
 
     /// <summary>
     /// A media cue carrying a placement IS the mockup's video cue.
@@ -573,9 +601,11 @@ public static class CuePresentation
         return FormatDuration(played);
     }
 
+    // Milliseconds in the tree too: a cue list is where trims are authored, and a length column
+    // that rounds to seconds hides exactly the digits a trim edit changes.
     private static string FormatDuration(TimeSpan value) => value.TotalHours >= 1
-        ? value.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
-        : value.ToString(@"m\:ss", CultureInfo.InvariantCulture);
+        ? value.ToString(@"h\:mm\:ss\.fff", CultureInfo.InvariantCulture)
+        : value.ToString(@"m\:ss\.fff", CultureInfo.InvariantCulture);
 
     private static string Level(CueNode cue) => cue switch
     {

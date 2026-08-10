@@ -68,6 +68,13 @@ public partial class CuesViewModel : ObservableObject
         Cues = [];
         ActiveCues = [.. runtime.ActiveCues];
 
+        // The smooth clock: the engine is polled at 4 Hz, but the Active panel's millisecond digits
+        // tick at UI rate by extrapolating each row from its poll stamp. Corrections land with every
+        // poll rebuild, so the readout can never drift more than one poll interval from the truth.
+        _smoothClock = new DispatcherTimer(
+            TimeSpan.FromMilliseconds(50), DispatcherPriority.Background, (_, _) => TickSmoothClock());
+        _smoothClock.Start();
+
         // The source exists BEFORE the first Rebuild: Rebuild clears the tree selection before it
         // touches the rows, and it cannot do that against a source that has not been built yet. The
         // source observes the collection, so filling it afterwards is what it expects.
@@ -453,8 +460,16 @@ public partial class CuesViewModel : ObservableObject
     /// <remarks>
     /// By id rather than "the selected one", because the row IS the selection here: an operator
     /// pressing × on the third row means the third row, whatever the cue tree has highlighted.
+    /// Pressing × on a cue that is ALREADY fading escalates to a hard cut: the first press started
+    /// the configured fade, and a second press during it means "now", not "restart the fade".
     /// </remarks>
-    public void StopCue(Guid cueId) => _ = Engine?.StopCueAsync(cueId);
+    public void StopCue(Guid cueId)
+    {
+        if (Engine is not { } host)
+            return;
+        var escalate = _runtime.ActiveCues.FirstOrDefault(row => row.CueId == cueId)?.IsFading == true;
+        _ = host.StopCueAsync(cueId, escalate ? TimeSpan.Zero : null);
+    }
 
     /// <summary>
     /// Stops everything a group is holding.
@@ -469,8 +484,29 @@ public partial class CuesViewModel : ObservableObject
         if (Engine is not { } host || Project.FindCue(groupId) is not GroupCueNode group)
             return;
 
-        foreach (var child in group.Children.Where(child => _runtime.Sounding.Contains(child.Id)))
-            _ = host.StopCueAsync(child.Id);
+        // Every sounding DESCENDANT, not just direct children: a nested group's grandchildren are what
+        // is actually sounding, and a header × that left them playing looked like it did nothing.
+        var sounding = new List<Guid>();
+        CollectSoundingDescendants(group, sounding);
+
+        // Escalation, same contract as the single-row ×: when everything this group holds is already
+        // ramping down, the second press means "now" — a hard cut instead of the same fade again.
+        var escalate = sounding.Count > 0 && sounding.All(id =>
+            _runtime.ActiveCues.FirstOrDefault(row => row.CueId == id)?.IsFading == true);
+
+        foreach (var id in sounding)
+            _ = host.StopCueAsync(id, escalate ? TimeSpan.Zero : null);
+    }
+
+    private void CollectSoundingDescendants(GroupCueNode group, List<Guid> sounding)
+    {
+        foreach (var child in group.Children)
+        {
+            if (_runtime.Sounding.Contains(child.Id))
+                sounding.Add(child.Id);
+            if (child is GroupCueNode nested)
+                CollectSoundingDescendants(nested, sounding);
+        }
     }
 
     /// <summary>
@@ -502,6 +538,57 @@ public partial class CuesViewModel : ObservableObject
 
         if (await host.SeekCueAsync(cueId, target).ConfigureAwait(true) is { } problem)
             TransportProblem = problem;
+    }
+
+    /// <summary>
+    /// Moves a whole sounding group to a fraction of its length — the bar on its Active header row.
+    /// </summary>
+    /// <remarks>
+    /// The group's length is its longest sounding child (the same measure its clock shows), and the
+    /// target is one ABSOLUTE time every child seeks to: eleven stems and two videos land on the same
+    /// bar of the song, which is what seeking a together-group means. A child shorter than the target
+    /// seeks to its own end and takes its configured end behavior from there — the same outcome as
+    /// letting it play to that point. Playlist headers do not get this bar: their children play in
+    /// SEQUENCE, so one absolute time does not name a place in a playlist; the current item's own row
+    /// remains seekable.
+    /// </remarks>
+    public async Task SeekGroupAsync(Guid groupId, double fraction)
+    {
+        if (Engine is not { } host)
+            return;
+
+        if (!CanSeekActive)
+        {
+            TransportProblem = "seeking is locked — unlock it above the Active panel first";
+            return;
+        }
+
+        if (Project.FindCue(groupId) is not GroupCueNode group)
+            return;
+
+        var sounding = new List<Guid>();
+        CollectSoundingDescendants(group, sounding);
+        if (sounding.Count == 0)
+            return;
+
+        var rows = sounding
+            .Select(id => _runtime.ActiveCues.FirstOrDefault(row => row.CueId == id))
+            .OfType<ActiveCueRow>()
+            .ToArray();
+        var lengths = rows
+            .Where(row => row.Duration is { })
+            .Select(row => row.Duration!.Value)
+            .ToArray();
+        if (lengths.Length == 0)
+            return;
+
+        var target = lengths.Max() * Math.Clamp(fraction, 0, 1);
+        foreach (var row in rows)
+        {
+            var childTarget = row.Duration is { } length && length < target ? length : target;
+            if (await host.SeekCueAsync(row.CueId, childTarget).ConfigureAwait(true) is { } problem)
+                TransportProblem = problem;
+        }
     }
 
     /// <summary>The last refusal from a transport gesture, or nothing.</summary>
@@ -1641,6 +1728,76 @@ public partial class CuesViewModel : ObservableObject
     /// neither should have to walk a tree to find one.
     /// </remarks>
     public ObservableCollection<object> ActivePanelRows { get; } = [];
+
+    private readonly DispatcherTimer _smoothClock;
+
+    /// <summary>
+    /// One UI-rate tick of the Active panel's clocks — see the timer's construction for the design.
+    /// </summary>
+    /// <remarks>
+    /// Extrapolation is gated on the transport actually running: a paused show's clocks must hold
+    /// still rather than creep a poll interval ahead and snap back. A fading cue still advances — its
+    /// playhead genuinely runs through the ramp. Upcoming countdowns are STAGED: they stay on their
+    /// calm whole-second poll text until the start is inside <see cref="CuePresentation.UpcomingPreciseWindow"/>,
+    /// then tick their milliseconds here.
+    /// </remarks>
+    private void TickSmoothClock()
+    {
+        if (ActivePanelRows.Count == 0 || _runtime.IsPaused)
+            return;
+
+        var now = Stopwatch.GetTimestamp();
+
+        foreach (var item in ActivePanelRows)
+        {
+            switch (item)
+            {
+                case ActiveCueRow row:
+                    TickActiveRow(row, now);
+                    break;
+                case ActiveGroupRow group:
+                {
+                    foreach (var child in group.Children)
+                        TickActiveRow(child, now);
+
+                    if (group.TotalValue > TimeSpan.Zero)
+                    {
+                        var remaining = group.RemainingAtPoll - Stopwatch.GetElapsedTime(group.PolledAtTicks, now);
+                        if (remaining < TimeSpan.Zero)
+                            remaining = TimeSpan.Zero;
+                        group.Clock =
+                            $"−{CuePresentation.PreciseClock(remaining)} / {CuePresentation.PreciseClock(group.TotalValue)}";
+                        group.Progress = Math.Clamp(1 - (remaining / group.TotalValue), 0, 1);
+                    }
+
+                    foreach (var upcoming in group.Upcoming)
+                    {
+                        var starts = upcoming.StartsInAtPoll - Stopwatch.GetElapsedTime(upcoming.PolledAtTicks, now);
+                        if (starts < TimeSpan.Zero)
+                            starts = TimeSpan.Zero;
+                        if (starts <= CuePresentation.UpcomingPreciseWindow)
+                            upcoming.Countdown = CuePresentation.UpcomingCountdown(starts);
+                    }
+
+                    break;
+                }
+            }
+        }
+    }
+
+    private static void TickActiveRow(ActiveCueRow row, long now)
+    {
+        var elapsed = row.Position + Stopwatch.GetElapsedTime(row.PolledAtTicks, now);
+        row.Clock = CuePresentation.PreciseClock(elapsed);
+        if (row.Duration is { TotalMilliseconds: > 0 } length)
+        {
+            var remaining = length - elapsed;
+            if (remaining < TimeSpan.Zero)
+                remaining = TimeSpan.Zero;
+            row.Remaining = $"−{CuePresentation.PreciseClock(remaining)}";
+            row.Progress = Math.Clamp(elapsed / length, 0, 1);
+        }
+    }
 
     /// <summary>Shows sounding cues without group headers when the operator prefers a flat run list.</summary>
     public bool FlatActiveList { get; set; }

@@ -172,7 +172,13 @@ public sealed record CueRow
 }
 
 /// <summary>One row of the Active panel — everything sounding, in or out of the current scope.</summary>
-public sealed record ActiveCueRow
+/// <remarks>
+/// The LIVE readouts (<see cref="Clock"/>, <see cref="Remaining"/>, <see cref="Progress"/>) are
+/// observable rather than init-only: the engine is polled at 4 Hz, but the panel's millisecond
+/// digits tick at UI rate — a smooth-clock timer extrapolates them between polls from
+/// <see cref="Position"/> and <see cref="PolledAtTicks"/>, and each poll's rebuild re-corrects.
+/// </remarks>
+public sealed partial class ActiveCueRow : ObservableObject
 {
     /// <summary>
     /// Which cue this row is. Needed because the row is a TARGET, not just a readout — bare STOP acts
@@ -187,10 +193,12 @@ public sealed record ActiveCueRow
     public string Qualifier { get; init; } = "";
 
     /// <summary>Where the playhead is, as the transport reports it — not wall time since the fire.</summary>
-    public string Clock { get; init; } = "";
+    [ObservableProperty]
+    private string _clock = "";
 
     /// <summary>Counting DOWN, with its minus sign. Empty when nothing knows how long the clip runs.</summary>
-    public string Remaining { get; init; } = "";
+    [ObservableProperty]
+    private string _remaining = "";
 
     /// <summary>The clip's whole length, for the readout beside the bar.</summary>
     public string Length { get; init; } = "";
@@ -198,12 +206,18 @@ public sealed record ActiveCueRow
     /// <summary>The playhead and the length as VALUES, which is what a seek is computed against.</summary>
     public TimeSpan Position { get; init; }
 
+    /// <summary><see cref="Stopwatch.GetTimestamp"/> when <see cref="Position"/> was read, so the
+    /// smooth-clock timer can extrapolate the playhead between engine polls.</summary>
+    public long PolledAtTicks { get; init; }
+
     public TimeSpan? Duration { get; init; }
 
     /// <summary>Whether the bar can be dragged: a cue whose length nobody knows cannot be seeked.</summary>
     public bool CanSeek => Duration is { TotalMilliseconds: > 0 };
 
-    public double Progress { get; init; }
+    [ObservableProperty]
+    private double _progress;
+
     public string Destination { get; init; } = "—";
     public bool IsGroup { get; init; }
     public bool IsChild { get; init; }
@@ -242,13 +256,30 @@ public sealed partial class ActiveGroupRow : ObservableObject
     public List<UpcomingCueRow> Upcoming { get; } = [];
 
     /// <summary>The WHOLE group's remaining and total — what somebody waiting for the list wants.</summary>
-    public string Clock { get; set; } = "";
+    [ObservableProperty]
+    private string _clock = "";
 
     /// <summary>"item 3/12", the position called out over talkback.</summary>
     public string Position { get; set; } = "";
 
-    public double Progress { get; set; }
+    [ObservableProperty]
+    private double _progress;
+
     public bool IsNearEnd { get; set; }
+
+    /// <summary>Everything the group holds is ramping down — the header's feedback that its × took.</summary>
+    public bool IsFading { get; set; }
+
+    /// <summary>Whether the header's bar seeks. Only a together-group has one absolute time all its
+    /// children can move to; a playlist's children play in sequence, so its header stays read-only.</summary>
+    public bool CanSeek { get; set; }
+
+    /// <summary>The aggregate as VALUES plus their poll stamp, so the smooth-clock timer can tick the
+    /// header's milliseconds between engine polls. Zero total = unknown, and the timer leaves it alone.</summary>
+    public TimeSpan TotalValue { get; set; }
+
+    public TimeSpan RemainingAtPoll { get; set; }
+    public long PolledAtTicks { get; set; }
 
     public bool HasUpcoming => Upcoming.Count > 0;
 
@@ -257,8 +288,25 @@ public sealed partial class ActiveGroupRow : ObservableObject
 }
 
 /// <summary>One cue the group has not reached yet, and the countdown to it.</summary>
-/// <param name="Countdown">"in 2:14" — measured from what is playing now, through the chain.</param>
-public sealed record UpcomingCueRow(string Number, string Label, string Length, string Countdown);
+/// <remarks>
+/// The countdown text is observable and STAGED: far from its start it reads (and updates) in whole
+/// seconds on the 4 Hz poll, and inside the last ten seconds the smooth-clock timer takes over and
+/// ticks its milliseconds — the closer the start, the more precision the readout carries.
+/// </remarks>
+public sealed partial class UpcomingCueRow : ObservableObject
+{
+    public required string Number { get; init; }
+    public required string Label { get; init; }
+    public required string Length { get; init; }
+
+    [ObservableProperty]
+    private string _countdown = "";
+
+    /// <summary>How far away the start was at poll time, plus the stamp to extrapolate from.</summary>
+    public TimeSpan StartsInAtPoll { get; init; }
+
+    public long PolledAtTicks { get; init; }
+}
 
 /// <summary>A generic status word plus its gel — used across every table's result column.</summary>
 public sealed record Status(string Text, Gel Gel = Gel.Neutral)

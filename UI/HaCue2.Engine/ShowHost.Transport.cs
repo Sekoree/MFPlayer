@@ -192,14 +192,19 @@ public sealed partial class ShowHost
     /// operator who wants the video gone almost never wants the bed gone with it. Stop-all is a
     /// separate, deliberate verb.
     /// </remarks>
-    public async Task StopCueAsync(Guid cueId)
+    public Task StopCueAsync(Guid cueId) => StopCueAsync(cueId, fadeDuration: null);
+
+    /// <summary>The bare STOP with a fade override: null keeps the cue's configured fade-out, a
+    /// non-positive duration hard-cuts past it — the operator's second press on a stop that is
+    /// already ramping means "now", not "start the same 2-second fade again".</summary>
+    public async Task StopCueAsync(Guid cueId, TimeSpan? fadeDuration)
     {
         MarkFading(cueId);
 
         // A visualizer holds a renderer rather than a voice, so the session has nothing to stop for it
         // — asking anyway would silently do nothing and leave the canvas lit.
         await _visualizers.StopAsync(cueId).ConfigureAwait(false);
-        await _session.StopCueAsync(cueId.ToString()).ConfigureAwait(false);
+        await _session.StopCueAsync(cueId.ToString(), fadeDuration).ConfigureAwait(false);
         Forget(cueId.ToString());
         Executor.OnStopped(cueId);
     }

@@ -253,7 +253,7 @@ public class TextCueTests
             runtime.MediaDurations));
 
         Assert.Equal(HaCue2.ViewModels.CueKind.Text, row.Kind);
-        Assert.Equal("0:04", row.Length);
+        Assert.Equal("0:04.000", row.Length);
         Assert.Equal("0.5", row.Fade);
         Assert.Contains(row.Badges, badge => badge.Text == "Cyc");
         Assert.Contains(row.Badges, badge => badge.Text.StartsWith("opac", StringComparison.Ordinal));
