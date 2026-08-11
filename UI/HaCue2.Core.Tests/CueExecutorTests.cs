@@ -196,6 +196,171 @@ public class CueExecutorTests
         Assert.Contains(TimeSpan.FromMilliseconds(1_500), host.Waits);
     }
 
+    // ── prepared follows (ProjectSettings.FollowLeadMs) ───────────────────────────────────────
+
+    [Fact]
+    public async Task WithNoFollowLead_TheSuccessorOnlyOpensAtTheOutPoint()
+    {
+        // The historical shape, and still the default: nothing happens on the pre-end notification, so
+        // the successor's whole media open lands AFTER the edge.
+        var first = Media("1");
+        first.Trigger = CueTrigger.Follow;
+        var next = Media("2");
+        var (executor, host, _) = Show(first, next);
+
+        await executor.FireAsync(first.Id);
+        await executor.OnApproachingEndAsync(first.Id);
+        Assert.Equal([first.Id], host.Played);
+
+        await executor.OnNaturalEndAsync(first.Id);
+        Assert.Equal([first.Id, next.Id], host.Played);
+    }
+
+    [Fact]
+    public async Task WithAFollowLead_TheSuccessorIsPreparedEarlyAndStartsOnTheOutPoint()
+    {
+        var first = Media("1");
+        first.Trigger = CueTrigger.Follow;
+        var next = Media("2");
+        var (executor, host, project) = Show(first, next);
+        project.Settings.FollowLeadMs = 2_000;
+
+        await executor.FireAsync(first.Id);
+
+        // The lead OPENS it - the fake only records a play once its edge is released, so "not yet
+        // played" here is exactly "opened but holding at the edge".
+        await executor.OnApproachingEndAsync(first.Id);
+        Assert.Equal([first.Id], host.Played);
+
+        // ...and the out-point releases it. Same instant it would have started before; the difference
+        // is that the open is already behind us.
+        await executor.OnNaturalEndAsync(first.Id);
+        Assert.Equal([first.Id, next.Id], host.Played);
+    }
+
+    [Fact]
+    public async Task APreparedSuccessorIsStartedExactlyOnce()
+    {
+        // The out-point must not ALSO take the ordinary cold path - that would fire the successor twice.
+        var first = Media("1");
+        first.Trigger = CueTrigger.Follow;
+        var next = Media("2");
+        var (executor, host, project) = Show(first, next);
+        project.Settings.FollowLeadMs = 2_000;
+
+        await executor.FireAsync(first.Id);
+        await executor.OnApproachingEndAsync(first.Id);
+        await executor.OnNaturalEndAsync(first.Id);
+
+        Assert.Equal([first.Id, next.Id], host.Played);
+        Assert.Single(host.Played, id => id == next.Id);
+    }
+
+    [Fact]
+    public async Task StoppingTheOutgoingCueRollsBackItsPreparedSuccessor()
+    {
+        // A stop is the operator vetoing the chain. The successor was already opened and holding at its
+        // edge; the stop must roll it back rather than leave it parked, waiting to be released by
+        // whatever reaches an out-point next.
+        var first = Media("1");
+        first.Trigger = CueTrigger.Follow;
+        var next = Media("2");
+        var (executor, host, project) = Show(first, next);
+        project.Settings.FollowLeadMs = 2_000;
+
+        await executor.FireAsync(first.Id);
+        await executor.OnApproachingEndAsync(first.Id);
+
+        executor.OnStopped(first.Id);
+        Assert.Equal([first.Id], host.Played); // rolled back, not started
+
+        // A stopped cue does not go on to reach a natural end in a real show, but if one arrives it
+        // must not find a parked voice to release - it takes the ordinary cold path, exactly as it
+        // does with no lead configured, and starts the successor exactly once.
+        await executor.OnNaturalEndAsync(first.Id);
+        Assert.Equal([first.Id, next.Id], host.Played);
+    }
+
+    [Fact]
+    public async Task APostWaitOnTheOutgoingCueDisablesTheLead()
+    {
+        // An authored wait sits between the out-point and the successor, so the out-point is NOT the
+        // successor's start and there is no fixed edge to schedule against.
+        var first = Media("1");
+        first.Trigger = CueTrigger.Follow;
+        first.PostWaitMs = 500;
+        var next = Media("2");
+        var (executor, host, project) = Show(first, next);
+        project.Settings.FollowLeadMs = 2_000;
+
+        await executor.FireAsync(first.Id);
+        await executor.OnApproachingEndAsync(first.Id);
+        Assert.Equal([first.Id], host.Played);
+
+        await executor.OnNaturalEndAsync(first.Id);
+
+        // Still advances - through the ordinary path, honouring the wait.
+        Assert.Equal([first.Id, next.Id], host.Played);
+        Assert.Contains(TimeSpan.FromMilliseconds(500), host.Waits);
+    }
+
+    [Fact]
+    public async Task APreWaitOnTheSuccessorDisablesTheLead()
+    {
+        var first = Media("1");
+        first.Trigger = CueTrigger.Follow;
+        var next = Media("2");
+        next.PreWaitMs = 400;
+        var (executor, host, project) = Show(first, next);
+        project.Settings.FollowLeadMs = 2_000;
+
+        await executor.FireAsync(first.Id);
+        await executor.OnApproachingEndAsync(first.Id);
+        Assert.Equal([first.Id], host.Played);
+
+        await executor.OnNaturalEndAsync(first.Id);
+        Assert.Equal([first.Id, next.Id], host.Played);
+        Assert.Contains(TimeSpan.FromMilliseconds(400), host.Waits);
+    }
+
+    [Fact]
+    public async Task ALeadResolvesTheSameSuccessorTheColdPathWould()
+    {
+        // A lead that prepared a DIFFERENT cue from the one the chain picks would be worse than no
+        // lead, so the disabled-cue policy has to be honoured identically on both paths.
+        var first = Media("1");
+        first.Trigger = CueTrigger.Follow;
+        var disabled = Media("2");
+        disabled.Enabled = false;
+        var (executor, host, project) = Show(first, disabled);
+        project.Settings.FollowLeadMs = 2_000;
+        project.Settings.DisabledCueFollow = DisabledCueFollow.StopTheChain;
+        project.Settings.AtListEnd = AtListEnd.Loop;
+
+        await executor.FireAsync(first.Id);
+        await executor.OnApproachingEndAsync(first.Id);
+        await executor.OnNaturalEndAsync(first.Id);
+
+        Assert.Equal([first.Id], host.Played);
+    }
+
+    [Fact]
+    public async Task ALeadFollowsAnExplicitEndTarget()
+    {
+        var first = Media("1");
+        var skipped = Media("2");
+        var target = Media("3");
+        var (executor, host, project) = Show(first, skipped, target);
+        first.EndTargetCueId = target.Id;
+        project.Settings.FollowLeadMs = 2_000;
+
+        await executor.FireAsync(first.Id);
+        await executor.OnApproachingEndAsync(first.Id);
+        await executor.OnNaturalEndAsync(first.Id);
+
+        Assert.Equal([first.Id, target.Id], host.Played);
+    }
+
     [Fact]
     public async Task FollowStopsAtADisabledCueEvenWhenTheListWouldLoop()
     {

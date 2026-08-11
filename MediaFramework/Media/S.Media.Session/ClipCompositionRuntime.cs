@@ -97,7 +97,6 @@ public sealed class ClipCompositionRuntime : IDisposable
     // Nullable so "not yet primed" is distinct from a master parked at exactly 0 - with a
     // TimeSpan.Zero sentinel a 0-position master re-primed every tick and drift was never measured.
     private TimeSpan? _lastMasterPosition;
-    private IPlaybackClock? _master;
 
     /// <summary>
     /// Opt-in per-second cadence trace (<c>MFP_VIDEO_CADENCE_TRACE=1</c>): one Information line per
@@ -112,14 +111,28 @@ public sealed class ClipCompositionRuntime : IDisposable
     private long _traceLastStamp;
     private ClipCompositionRuntimeStats _tracePrev;
     private readonly Dictionary<string, ClipCompositionOutputStats> _tracePrevOutputs = new();
-    private IPlayhead? _timeline;
-    private ITransportTimeline? _transportTimeline;
+    /// <summary>
+    /// The timeline this composition is currently mastered to, or null while it free-runs. It is always
+    /// the timeline of <see cref="_timelineClaims"/>[0] - there is no other way to become master.
+    /// </summary>
+    /// <remarks>
+    /// This used to be five fields (<c>_master</c>, <c>_timeline</c>, <c>_transportTimeline</c>,
+    /// <c>_masterOwnedByTransportClaim</c>, <c>_transportTimelineClaims</c>) serving three public entry
+    /// points with subtly different first-wins rules: <c>SetClockMaster</c> (legacy, an
+    /// <c>IPlaybackClock</c> plus an unrelated <c>IPlayhead</c>), <c>SetTransportTimeline</c> (which had
+    /// no production caller at all) and <c>AcquireTransportTimeline</c>. Only the claim model was ever
+    /// reached by a running show, and only it can hand the clock to the next group when a clip ends - the
+    /// other two mastered the composition permanently to whoever got there first. Collapsing to it
+    /// removes the ambiguity about which mechanism is authoritative, and takes the legacy branch out of
+    /// <see cref="PumpOneFrame"/> with it.
+    /// </remarks>
+    private ITransportTimeline? _activeTimeline;
+
     // Active transport-bound clips claim the composition clock for the lifetime of their placed layers.
-    // A composition is still one clock domain: claims for another timeline wait behind the current owner,
-    // then take over when its final claim is released. This lets sequential transport groups reuse one
+    // A composition is one clock domain: claims for another timeline wait behind the current owner, then
+    // take over when its final claim is released. This lets sequential transport groups reuse one
     // composition without leaving it permanently slaved to the first group's stopped timeline.
-    private readonly List<TransportTimelineClaim> _transportTimelineClaims = [];
-    private bool _masterOwnedByTransportClaim;
+    private readonly List<TransportTimelineClaim> _timelineClaims = [];
     private MediaClock? _slaveClock;
     private int _driverDisposeState;
     private bool _disposed;
@@ -461,7 +474,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             TimeSpan.FromTicks(Volatile.Read(ref _lastPumpFrameTicks)),
             TimeSpan.FromTicks(Volatile.Read(ref _maxPumpFrameTicks)),
             Volatile.Read(ref _framesBehindMaster),
-            _master is not null,
+            _activeTimeline is not null,
             layerCount,
             _pumpTiming.Snapshot(),
             _compositeTiming.Snapshot(),
@@ -682,69 +695,6 @@ public sealed class ClipCompositionRuntime : IDisposable
             MediaDiagnostics.SwallowDisposeErrors(frame.Dispose, "ClipCompositionRuntime: retired static frame");
     }
 
-    public void SetClockMaster(IPlaybackClock master, IPlayhead? timeline = null)
-    {
-        ArgumentNullException.ThrowIfNull(master);
-        MediaClock? clockToRetarget = null;
-        lock (_gate)
-        {
-            if (_disposed) return;
-            if (_master is not null)
-            {
-                // Preserve the first-master contract. In particular, a legacy caller must not detach an
-                // already-installed TransportTimeline and leave source selection reading master coordinates.
-                if (_transportTimeline is null && timeline is not null)
-                    _timeline = timeline;
-                return;
-            }
-            _master = master;
-            _timeline = timeline;
-            _transportTimeline = null;
-            _masterOwnedByTransportClaim = false;
-            foreach (var layer in _slots)
-                layer.RawSlot.KeepPolicy = layer.RequestedKeepPolicy;
-            clockToRetarget = _slaveClock;
-        }
-
-        clockToRetarget?.SetMaster(master);
-        Trace.LogInformation(
-            "ClipCompositionRuntime: composition {Composition} pump now slaved to master clock",
-            CompositionName);
-    }
-
-    /// <summary>
-    /// Masters this composition to the transport group's authoritative timeline. The master coordinate drives
-    /// pump cadence/output scheduling while <see cref="TransportTimelineSnapshot.SourceTime"/> selects decoded
-    /// frames. The same contract is also passed to subtitle feeds, keeping seek/trim/live correlation on one
-    /// generation instead of combining a raw player playhead with an unrelated session clock (NXT-04).
-    /// </summary>
-    public void SetTransportTimeline(ITransportTimeline timeline)
-    {
-        ArgumentNullException.ThrowIfNull(timeline);
-        MediaClock? clockToRetarget = null;
-        lock (_gate)
-        {
-            if (_disposed) return;
-            // A composition is one clock domain. The first transport group to drive it owns that domain until
-            // the composition is rebuilt; a later concurrent group must not retarget every existing layer.
-            // Repeated calls from successive clips in the SAME group carry the same stable timeline object.
-            if (_master is not null)
-                return;
-            _transportTimeline = timeline;
-            _timeline = null;
-            _master = timeline;
-            _masterOwnedByTransportClaim = false;
-            clockToRetarget = _slaveClock;
-            foreach (var layer in _slots)
-                layer.RawSlot.KeepPolicy = layer.RequestedKeepPolicy;
-        }
-
-        clockToRetarget?.SetMaster(timeline);
-        Trace.LogInformation(
-            "ClipCompositionRuntime: composition {Composition} now follows the transport timeline",
-            CompositionName);
-    }
-
     /// <summary>
     /// Claims this composition's single transport clock domain for an active clip. The first timeline owns the
     /// domain while any of its claims remain; claims from other groups wait in acquisition order. Disposing the
@@ -761,14 +711,11 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             claim = new TransportTimelineClaim(this, timeline);
-            _transportTimelineClaims.Add(claim);
+            _timelineClaims.Add(claim);
 
-            if (_master is null)
+            if (_activeTimeline is null)
             {
-                _transportTimeline = timeline;
-                _timeline = null;
-                _master = timeline;
-                _masterOwnedByTransportClaim = true;
+                _activeTimeline = timeline;
                 clockToRetarget = _slaveClock;
                 becameMaster = true;
                 foreach (var layer in _slots)
@@ -794,22 +741,18 @@ public sealed class ClipCompositionRuntime : IDisposable
         var handedOff = false;
         lock (_gate)
         {
-            if (!_transportTimelineClaims.Remove(claim) || _disposed)
+            if (!_timelineClaims.Remove(claim) || _disposed)
                 return;
-            if (!_masterOwnedByTransportClaim
-                || !ReferenceEquals(_transportTimeline, claim.Timeline)
-                || _transportTimelineClaims.Any(c => ReferenceEquals(c.Timeline, claim.Timeline)))
+            // Only the LAST claim of the OWNING timeline hands the clock on: a group holding several
+            // claims (one per placed layer) must keep the domain until its final layer goes.
+            if (!ReferenceEquals(_activeTimeline, claim.Timeline)
+                || _timelineClaims.Any(c => ReferenceEquals(c.Timeline, claim.Timeline)))
             {
                 return;
             }
 
-            nextTimeline = _transportTimelineClaims.Count > 0
-                ? _transportTimelineClaims[0].Timeline
-                : null;
-            _transportTimeline = nextTimeline;
-            _timeline = null;
-            _master = nextTimeline;
-            _masterOwnedByTransportClaim = nextTimeline is not null;
+            nextTimeline = _timelineClaims.Count > 0 ? _timelineClaims[0].Timeline : null;
+            _activeTimeline = nextTimeline;
             clockToRetarget = _slaveClock;
             released = nextTimeline is null;
             handedOff = nextTimeline is not null;
@@ -845,11 +788,8 @@ public sealed class ClipCompositionRuntime : IDisposable
         lock (_gate)
         {
             if (_disposed) return;
-            _master = null;
-            _transportTimeline = null;
-            _timeline = null;
-            _masterOwnedByTransportClaim = false;
-            _transportTimelineClaims.Clear();
+            _activeTimeline = null;
+            _timelineClaims.Clear();
             clockToClear = _slaveClock;
         }
 
@@ -912,13 +852,13 @@ public sealed class ClipCompositionRuntime : IDisposable
                 // owner is read per call, so a claim handoff re-sorts every layer on the next tick.
                 var ownTimeline = alignmentTimeline;
                 rawSlot.AlignmentTimeMapper = outputTime =>
-                    ReferenceEquals(Volatile.Read(ref _transportTimeline), ownTimeline)
+                    ReferenceEquals(Volatile.Read(ref _activeTimeline), ownTimeline)
                         ? ownTimeline.SourceTimeAt(outputTime)
                         : ownTimeline.GetSnapshot().SourceTime;
                 // Own-clock alignment needs no canvas master; it engages immediately.
                 rawSlot.KeepPolicy = keepPolicy;
             }
-            else if (_master is not null)
+            else if (_activeTimeline is not null)
                 rawSlot.KeepPolicy = keepPolicy;
             layer = new LayerSlot(this, rawSlot, sourceFormat, placement, Interlocked.Increment(ref _nextLayerSequence))
             {
@@ -1216,8 +1156,8 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (_slaveClock is not null) return;
 
         _slaveClock = new MediaClock(_canvasRate, VideoTickCatchUpPolicy.Coalesce);
-        if (_master is not null)
-            _slaveClock.SetMaster(_master);
+        if (_activeTimeline is not null)
+            _slaveClock.SetMaster(_activeTimeline);
         _slaveClock.VideoTick += OnSlaveVideoTick;
         _slaveClock.Start();
         Interlocked.Increment(ref _pumpStartCount);
@@ -1225,7 +1165,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             "ClipCompositionRuntime: composition {Composition} pump started (videoTick={PeriodMs:0.00}ms, mastered={Mastered})",
             CompositionName,
             _canvasPeriod.TotalMilliseconds,
-            _master is not null);
+            _activeTimeline is not null);
     }
 
     private void OnSlaveVideoTick(object? sender, EventArgs e)
@@ -1306,7 +1246,7 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     private void CheckMasterDrift()
     {
-        var master = _master;
+        var master = _activeTimeline;
         if (master is null) return;
 
         TimeSpan masterPos;
@@ -1357,7 +1297,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         TimeSpan? outputPts = null;
         TimeSpan? canvasAlignmentTime = null;
         TimeSpan? surfaceRenderTime = null;
-        if (_transportTimeline is { } transportTimeline)
+        if (_activeTimeline is { } transportTimeline)
         {
             try
             {
@@ -1373,45 +1313,23 @@ public sealed class ClipCompositionRuntime : IDisposable
             }
             catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: transport timeline read"); }
         }
-        else
+        else if (_slaveClock is { } driver)
         {
-            TimeSpan? masterTime = null;
-            if (_master is not null)
-            {
-                try { masterTime = _master.ElapsedSinceStart; }
-                catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: master read"); }
-            }
-
-            TimeSpan? sourceTime = null;
-            if (_timeline is not null)
-            {
-                try { sourceTime = _timeline.CurrentPosition; }
-                catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: timeline read"); }
-            }
-
-            if (masterTime is { } master)
-                outputPts = _canvasGrid.SnapAtOrBefore(master);
-            else if (sourceTime is { } source)
-                outputPts = _canvasGrid.SnapAtOrBefore(source);
-            else if (_slaveClock is { } driver)
-            {
-                // Freerun fallback: anchor to the driver's POSITION, not its tick INDEX. The two look
-                // interchangeable while the clock runs uninterrupted, but LastVideoTickIndex is
-                // session-relative - DriverLoopCore restarts it from 1 at every Start - so a
-                // pause/resume of the slave clock would snap the composition PTS back to ~0 while the
-                // sinks (and any PTS-keyed state downstream) persist across it. CurrentPosition folds
-                // accrued time into its base across Pause/Start (and across a master detach in
-                // ResetClockMaster), so the PTS stays continuous and monotonic. The grid snap plus the
-                // "- 1" preserve the previous semantics exactly: the canonical grid timestamp one frame
-                // BEHIND the boundary the driver just fired for (at tick N the position sits at or past
-                // frame N's deadline, so FrameAtOrBefore lands on N and we stamp N-1, matching the old
-                // LastVideoTickIndex - 1).
-                var freerunIndex = _canvasGrid.FrameAtOrBefore(driver.CurrentPosition);
-                outputPts = _canvasGrid.TimestampAt(Math.Max(0, freerunIndex - 1));
-            }
-
-            canvasAlignmentTime = sourceTime ?? outputPts;
-            surfaceRenderTime = sourceTime ?? outputPts;
+            // FREERUN: no clip has claimed this composition (an idle canvas, or one kept alive across a
+            // reload for its persistent surface layers). Anchor to the driver's POSITION, not its tick
+            // INDEX. The two look interchangeable while the clock runs uninterrupted, but
+            // LastVideoTickIndex is session-relative - DriverLoopCore restarts it from 1 at every Start -
+            // so a pause/resume of the slave clock would snap the composition PTS back to ~0 while the
+            // sinks (and any PTS-keyed state downstream) persist across it. CurrentPosition folds accrued
+            // time into its base across Pause/Start (and across a master detach in ResetClockMaster), so
+            // the PTS stays continuous and monotonic. The grid snap plus the "- 1" preserve the previous
+            // semantics exactly: the canonical grid timestamp one frame BEHIND the boundary the driver
+            // just fired for (at tick N the position sits at or past frame N's deadline, so
+            // FrameAtOrBefore lands on N and we stamp N-1, matching the old LastVideoTickIndex - 1).
+            var freerunIndex = _canvasGrid.FrameAtOrBefore(driver.CurrentPosition);
+            outputPts = _canvasGrid.TimestampAt(Math.Max(0, freerunIndex - 1));
+            canvasAlignmentTime = outputPts;
+            surfaceRenderTime = outputPts;
         }
 
         var snapshot = _acquiredSnapshot; // lock-free, allocation-free per-frame read (NXT-11)

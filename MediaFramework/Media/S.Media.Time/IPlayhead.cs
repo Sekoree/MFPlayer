@@ -19,8 +19,21 @@ namespace S.Media.Time;
 /// happens to be advancing.
 /// </para>
 /// </remarks>
-public interface IPlayhead
+public interface IPlayhead : IPlaybackClock
 {
+    // --- IPlaybackClock, expressed over the playhead's own members ---------------------------------
+    //
+    // A playhead IS a clock: both report (epoch, time, running) and both promise monotonicity within an
+    // epoch. Keeping them unrelated meant every seam between them needed an adapter that did nothing but
+    // rename - ShowSession's PlayheadPlaybackClock and ProgramBusProducer were two of them, sitting in
+    // the middle of the chain a cue's timing runs through. Naming them apart was worth something (see
+    // CurrentPosition's remarks on the three position-like properties); making them different TYPES was
+    // not. Defaulted here, so no existing implementer changes.
+    TimeSpan IPlaybackClock.ElapsedSinceStart => CurrentPosition;
+    bool IPlaybackClock.IsAdvancing => IsRunning;
+    long IPlaybackClock.EpochId => PositionEpoch;
+    ClockReading IPlaybackClock.Read() => ReadPosition();
+
     /// <summary>
     /// The playhead position on the media timeline. Naming disambiguation for the three
     /// position-like properties in the framework: this is the <em>clock-side</em> playhead;

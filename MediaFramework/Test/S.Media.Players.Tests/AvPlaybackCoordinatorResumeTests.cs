@@ -41,9 +41,8 @@ public sealed class AvPlaybackCoordinatorResumeTests
         using var graph = SilentVoiceGraph.Create();
         var show = new ManualShowClock();
 
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock,
-            videoOnlyMaster: show, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            videoOnlyMaster: show)();
         Assert.Same(show, graph.Clock.Master); // the genlock branch took the show clock
 
         show.Advance(TimeSpan.FromSeconds(1));
@@ -57,9 +56,8 @@ public sealed class AvPlaybackCoordinatorResumeTests
         show.Advance(TimeSpan.FromSeconds(30));
 
         // Session-shaped resume: plain Play() passes NO videoOnlyMaster.
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock,
-            videoOnlyMaster: null, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            videoOnlyMaster: null)();
 
         // Bug shape: 31.0 s. Fixed: resumes where it paused...
         Assert.Equal(1.0, graph.Clock.CurrentPosition.TotalSeconds, 2);
@@ -77,16 +75,14 @@ public sealed class AvPlaybackCoordinatorResumeTests
         using var graph = SilentVoiceGraph.Create();
         var show = new ManualShowClock();
 
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock,
-            videoOnlyMaster: show, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            videoOnlyMaster: show)();
         show.Advance(TimeSpan.FromSeconds(2));
         AvPlaybackCoordinator.Pause(graph.Video, graph.Router, graph.Clock);
         show.Advance(TimeSpan.FromSeconds(10));
 
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock,
-            videoOnlyMaster: show, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            videoOnlyMaster: show)();
 
         Assert.Equal(2.0, graph.Clock.CurrentPosition.TotalSeconds, 2);
         Assert.Same(show, graph.Clock.Master);
@@ -107,9 +103,8 @@ public sealed class AvPlaybackCoordinatorResumeTests
         graph.Router.Connect(graph.SourceId, producerId);
 
         var show = new ManualShowClock();
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock,
-            videoOnlyMaster: show, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            videoOnlyMaster: show)();
         Assert.Same(producer, graph.Clock.Master); // producer-mastered: the genlock never applied
 
         producer.Advance(TimeSpan.FromSeconds(1));
@@ -119,9 +114,8 @@ public sealed class AvPlaybackCoordinatorResumeTests
         // Audio still draining out of the device after the clock froze - same epoch, real progress.
         producer.Advance(TimeSpan.FromSeconds(0.2));
 
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock,
-            videoOnlyMaster: show, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            videoOnlyMaster: show)();
 
         Assert.Equal(1.2, graph.Clock.CurrentPosition.TotalSeconds, 2);
     }
@@ -133,20 +127,17 @@ public sealed class AvPlaybackCoordinatorResumeTests
     {
         using var graph = SilentVoiceGraph.Create();
         var show = new ManualShowClock();
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock,
-            videoOnlyMaster: show, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            videoOnlyMaster: show)();
         Assert.True(graph.Clock.IsRunning);
         Assert.True(graph.Router.IsRunning);
 
         var prefills = 0;
         var hardwareStarts = 0;
-        var starter = AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock,
+        var starter = graph.Start.Prepare(
             prefillBeforeHardware: () => prefills++,
             startHardware: () => hardwareStarts++,
-            videoOnlyMaster: show,
-            audioSourceId: graph.SourceId);
+            videoOnlyMaster: show);
         starter();
 
         // The slow half never ran: no prefill, no hardware start, and the transport kept its state.
@@ -167,13 +158,13 @@ public sealed class AvPlaybackCoordinatorResumeTests
         var producerId = graph.Router.AddOutput(producer, "_producer");
         graph.Router.Connect(graph.SourceId, producerId);
 
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            )();
         Assert.Equal(1, producer.BeginPreRollCount); // the legitimate group-fire pre-roll
         Assert.Equal(1, producer.EndPreRollCount);
 
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            )();
 
         Assert.Equal(1, producer.BeginPreRollCount); // never re-held mid-stream
         Assert.Equal(1, producer.EndPreRollCount);
@@ -187,8 +178,8 @@ public sealed class AvPlaybackCoordinatorResumeTests
         // check would turn the seek+Play restart into a no-op and the clip would never sound again.
         using var graph = SilentVoiceGraph.Create(finiteAudioChunks: 4);
 
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            )();
         Assert.True(
             SpinWait.SpinUntil(() => graph.Router.CompletedNaturally, TimeSpan.FromSeconds(5)),
             "router did not reach natural EOF within the window");
@@ -196,8 +187,8 @@ public sealed class AvPlaybackCoordinatorResumeTests
         Assert.False(graph.Router.IsRunning);
 
         AvPlaybackCoordinator.Seek(graph.Video, graph.Router, graph.Clock, graph.SourceId, TimeSpan.Zero);
-        AvPlaybackCoordinator.PreparePlay(
-            graph.Video, graph.Router, graph.Clock, audioSourceId: graph.SourceId)();
+        graph.Start.Prepare(
+            )();
 
         Assert.True(graph.Router.IsRunning, "restart after natural EOF must run the full path");
         Assert.False(graph.Router.CompletedNaturally);
@@ -211,11 +202,11 @@ public sealed class AvPlaybackCoordinatorResumeTests
         using var clock = new Time.MediaClock();
         using var video = new VideoPlayer(source, sink, clock, queueCapacity: 4);
 
-        AvPlaybackCoordinator.PreparePlay(video)();
+        new VoiceStartPolicy(video, null, null, null).Prepare()();
         Assert.True(clock.IsRunning);
 
         var prefills = 0;
-        AvPlaybackCoordinator.PreparePlay(video, prefillBeforeHardware: () => prefills++)();
+        new VoiceStartPolicy(video, null, null, null).Prepare(prefillBeforeHardware: () => prefills++)();
 
         Assert.Equal(0, prefills);
         Assert.True(clock.IsRunning);
@@ -238,6 +229,12 @@ public sealed class AvPlaybackCoordinatorResumeTests
         public required AudioRouter Router { get; init; }
         public required VideoPlayer Video { get; init; }
         public required string SourceId { get; init; }
+
+        /// <summary>ONE policy per graph: its genlock memory is exactly what the resume tests exercise,
+        /// so a fresh policy per call would defeat them.</summary>
+        public VoiceStartPolicy Start => _start ??= new VoiceStartPolicy(Video, Router, Clock, SourceId);
+
+        private VoiceStartPolicy? _start;
 
         public static SilentVoiceGraph Create(bool addDiscardOutput = true, int? finiteAudioChunks = null)
         {

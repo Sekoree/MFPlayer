@@ -14,9 +14,17 @@ public sealed record MediaPlayerMetrics(
     PortAudioMetricsSnapshot? PortAudio,
     NDIIngestMetricsSnapshot? NDI);
 
+/// <param name="MasterRegressions">
+/// How many times the attached master broke its per-epoch monotonic contract and was clamped, and the
+/// worst single regression. <strong>Any non-zero value names a fault in a clock BELOW this one</strong>
+/// (or a read torn across its re-anchor) - the clamp keeps the playhead safe, but it also used to hide
+/// the breach, so the symptom surfaced layers away from the cause. This is that breach, at its source.
+/// </param>
 public sealed record MediaClockMetricsSnapshot(
     TimeSpan CurrentPosition,
-    string MasterTypeName);
+    string MasterTypeName,
+    long MasterRegressions = 0,
+    TimeSpan WorstMasterRegression = default);
 
 public sealed record VideoPlayerMetricsSnapshot(
     long DecodedCount,

@@ -365,6 +365,13 @@
                              Text="positive shows the picture earlier · set by eye at the venue" />
                 </Grid>
               </HeaderedContentControl>
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="Follow lead">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                  <TextBox Grid.Column="0" Classes="short" Text="{Binding FollowLead}" />
+                  <TextBlock Grid.Column="1" Classes="mono dim3 micro" VerticalAlignment="Center"
+                             Text="opens a follow cue&apos;s next cue this early · 0 disables · costs a second decoder while open" />
+                </Grid>
+              </HeaderedContentControl>
               <CheckBox Margin="10,3" IsChecked="{Binding ExternalInputOffOnOpen}"
                         Content="External input off when the project opens" />
               <CheckBox Margin="10,3" IsChecked="{Binding ClickMovesStandby}"

@@ -57,6 +57,10 @@ public sealed class VideoPlayer : IDisposable
     // prevents a downstream composition from ever sampling the timestamp that was discarded.
     private readonly List<VideoFrame> _dueFrames = [];
     private readonly object _queueGate = new();
+    /// <summary>Pulsed on every enqueue; see <see cref="WaitForFrames"/>. Never disposed - a decode
+    /// thread winding down may still Set it after the player is torn down, and an ObjectDisposedException
+    /// there would fault a teardown path for nothing.</summary>
+    private readonly ManualResetEventSlim _frameQueued = new(false);
     // Never dispose/recreate mid-flight: a clock tick may already be inside a dequeue loop
     // after its IsRunning check (see DrainQueue).
     private readonly SemaphoreSlim _slotsAvailable;
@@ -156,6 +160,41 @@ public sealed class VideoPlayer : IDisposable
     /// waiting for an earlier frame that can never arrive.
     /// </summary>
     internal bool IsJitterBufferSaturated => _queue.Count >= _queueCapacity;
+
+    /// <summary>
+    /// Blocks until <paramref name="condition"/> holds or <paramref name="timeout"/> elapses; returns
+    /// whether it held. Woken by every frame the decode thread enqueues, so a start that is waiting for
+    /// the jitter buffer reacts as soon as the frame it needs exists.
+    /// </summary>
+    /// <remarks>
+    /// The start path used to spin on <c>Thread.Sleep(5)</c> here - up to 1 600 sleeps against an 8 s
+    /// cap, and up to 5 ms of pure lateness added to a voice's arrival at the group start barrier, where
+    /// every sibling waits for the slowest. The wait is still capped per iteration because some
+    /// conditions callers pass do NOT depend on an enqueue (source exhaustion is read straight off the
+    /// source, and hosts supply their own predicates), so the signal is the fast path and the cap is the
+    /// safety net - not the other way round.
+    /// </remarks>
+    internal bool WaitForFrames(Func<bool> condition, TimeSpan timeout)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        const int maxWaitSliceMs = 50;
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (true)
+        {
+            if (condition())
+                return true;
+            var remaining = deadline - Environment.TickCount64;
+            if (remaining <= 0)
+                return false;
+
+            // Reset BEFORE the second check: a frame enqueued between the two checks sets the event
+            // again, so the Wait below returns immediately rather than missing the wake-up.
+            _frameQueued.Reset();
+            if (condition())
+                return true;
+            _frameQueued.Wait((int)Math.Min(remaining, maxWaitSliceMs));
+        }
+    }
 
     /// <summary>
     /// True when the underlying source reports it will produce no further frames - e.g. an audio-only
@@ -572,6 +611,7 @@ public sealed class VideoPlayer : IDisposable
                 }
                 lock (_queueGate)
                     _queue.Enqueue(frame);
+                _frameQueued.Set(); // wakes WaitForFrames instead of making it poll
             }
         }
         catch (ObjectDisposedException ex) when (token.IsCancellationRequested)

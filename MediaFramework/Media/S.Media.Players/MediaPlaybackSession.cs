@@ -21,7 +21,13 @@ internal sealed class MediaPlaybackSession : IAvPlaybackSession
         AudioRouter = audioRouter;
         AudioClock = audioClock;
         AudioSourceId = audioSourceId;
+        _start = new VoiceStartPolicy(Video, AudioRouter, AudioClock, AudioSourceId);
     }
+
+    /// <summary>This voice's start discipline, and its memory of how it started last time. One per
+    /// session, because the clock/router/source it decides over are created together by one open and
+    /// never change.</summary>
+    private readonly VoiceStartPolicy _start;
 
     public VideoPlayer Video { get; }
     public IMediaClock Clock { get; }
@@ -34,16 +40,14 @@ internal sealed class MediaPlaybackSession : IAvPlaybackSession
         Action? startHardware = null,
         IPlaybackClock? videoOnlyMaster = null,
         Func<bool>? verifyPrebufferAfterPrefill = null) =>
-        AvPlaybackCoordinator.Play(Video, AudioRouter, AudioClock, prefillBeforeHardware, startHardware, videoOnlyMaster,
-            verifyPrebufferAfterPrefill, AudioSourceId);
+        PreparePlay(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill)();
 
     public Action PreparePlay(
         Action? prefillBeforeHardware = null,
         Action? startHardware = null,
         IPlaybackClock? videoOnlyMaster = null,
         Func<bool>? verifyPrebufferAfterPrefill = null) =>
-        AvPlaybackCoordinator.PreparePlay(Video, AudioRouter, AudioClock, prefillBeforeHardware, startHardware,
-            videoOnlyMaster, verifyPrebufferAfterPrefill, AudioSourceId);
+        _start.Prepare(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
 
     public void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null) =>
         AvPlaybackCoordinator.Pause(Video, AudioRouter, AudioClock, cancellationToken, flushSharedMuxAfterPause);

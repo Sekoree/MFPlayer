@@ -176,7 +176,7 @@ public static class ShowCompiler
                                 context,
                                 inheritedLanes) with
                             {
-                                PreEndNotify = preEndNotify,
+                                PreEndNotify = MaxNotify(preEndNotify, FollowLead(project, media)),
                             });
                         }
 
@@ -242,6 +242,27 @@ public static class ShowCompiler
             // The application executor owns Continue and Follow for every cue kind; the framework
             // graph intentionally receives no second, media-only chain.
             AutoContinue: false);
+
+    /// <summary>
+    /// How far before this cue's out-point the session should raise "approaching end" so a chained
+    /// successor can be OPENED before the edge rather than after it. Zero unless the project sets
+    /// <see cref="ProjectSettings.FollowLeadMs"/> and this cue actually hands on to something: a plain
+    /// cue that simply stops needs no lead and must not pay for one.
+    /// </summary>
+    private static TimeSpan FollowLead(HaCueProject project, MediaCueNode media)
+    {
+        if (project.Settings.FollowLeadMs <= 0)
+            return TimeSpan.Zero;
+        var handsOn = media.Trigger == CueTrigger.Follow || media.EndTargetCueId is not null;
+        return handsOn ? TimeSpan.FromMilliseconds(project.Settings.FollowLeadMs) : TimeSpan.Zero;
+    }
+
+    /// <summary>
+    /// One notify window per clip, so a playlist crossfade and a follow lead cannot cancel each other
+    /// out. The LONGER wins: both want the notification EARLIER than the out-point, and the app decides
+    /// per-notification what to do with it.
+    /// </summary>
+    private static TimeSpan MaxNotify(TimeSpan a, TimeSpan b) => a >= b ? a : b;
 
     /// <summary>What the probe says this cue's file runs for, or null when nobody has looked.</summary>
     private static TimeSpan? Duration(

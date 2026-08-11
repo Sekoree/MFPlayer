@@ -210,6 +210,33 @@ public sealed record ProjectSettings
     /// </remarks>
     public int AvOffsetMs { get; set; }
 
+    /// <summary>
+    /// How long before a Follow cue's out-point its successor is opened, in milliseconds. Zero (the
+    /// default) keeps the historical behaviour: the successor is opened only once the current cue has
+    /// ended, so its decoder-open time lands AFTER the out-point and pushes the chain late.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A follow chain used to accumulate error per hop, because each hop paid for its own media open
+    /// after the edge rather than before it — a cold 4K file is hundreds of milliseconds, and nothing
+    /// compensated. With a lead, the successor opens, commits, pre-rolls and presents its
+    /// synchronization frame DURING the outgoing clip's last <c>FollowLeadMs</c>, and is then released
+    /// on the out-point itself. The instant it starts is unchanged; what changes is that the open no
+    /// longer happens inside it.
+    /// </para>
+    /// <para>
+    /// The cost is real and is why this is opt-in: during the lead window the chain holds two decoders
+    /// and two producer leases instead of one, so the lead multiplies against the voice budget. Set it
+    /// to comfortably exceed the slowest open in the show (2000 is a sane starting point for local
+    /// files) rather than to the largest number that fits.
+    /// </para>
+    /// <para>
+    /// Ignored where there is no fixed edge to schedule against or the successor is not a playable
+    /// cue — see <c>CueExecutor.TryBeginPreparedFollow</c> for the exact opt-outs.
+    /// </para>
+    /// </remarks>
+    public int FollowLeadMs { get; set; }
+
     /// <summary>Off by default: a GO is a performance action and a disk write on it is a stall.</summary>
     public bool SaveOnGo { get; set; }
 

@@ -184,6 +184,57 @@ public class MediaClockMasterTests
         Assert.True(p2 <= p1, "position should clamp instead of moving backwards");
     }
 
+    [Fact]
+    public void AClampedMasterRegression_isCounted_notSilentlyAbsorbed()
+    {
+        // The clamp is right and stays - but it used to be invisible, and that is what made a fault in
+        // one clock surface as a symptom several layers away. A clamp firing means the layer BELOW
+        // broke its per-epoch monotonic contract, so it has to be nameable at its source.
+        using var clock = new MediaClock();
+        var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(10), IsAdvancing = true };
+        clock.SetMaster(master);
+        clock.Start();
+
+        Assert.Equal(0, clock.MasterRegressions.Count);
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(11);
+        var high = clock.CurrentPosition;
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(9.4); // illegal: same epoch, backwards
+        var held = clock.CurrentPosition;
+
+        Assert.True(held <= high, "the clamp must still hold the playhead");
+        Assert.Equal(1, clock.MasterRegressions.Count);
+        Assert.Equal(1.6, clock.MasterRegressions.Worst.TotalSeconds, 2);
+    }
+
+    [Fact]
+    public void ALegitimateEpochChange_isNotCountedAsARegression()
+    {
+        // Re-anchoring is the ANNOUNCED, correct way for a master to move backwards. Counting it would
+        // make the diagnostic cry wolf at every seek and output flush.
+        using var clock = new MediaClock();
+        var master = new EpochFakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(10), IsAdvancing = true };
+        clock.SetMaster(master);
+        clock.Start();
+        _ = clock.CurrentPosition;
+
+        master.ElapsedSinceStart = TimeSpan.Zero; // a flush rewound the device clock...
+        master.Epoch++;                           // ...and said so
+        _ = clock.CurrentPosition;
+
+        Assert.Equal(0, clock.MasterRegressions.Count);
+    }
+
+    private sealed class EpochFakeClock : IPlaybackClock
+    {
+        public TimeSpan ElapsedSinceStart { get; set; }
+        public bool IsAdvancing { get; set; } = true;
+        public long Epoch = 1;
+        public long EpochId => Epoch;
+        public ClockReading Read() => new(Epoch, ElapsedSinceStart, IsAdvancing);
+    }
+
     private sealed class FakeClock : IPlaybackClock
     {
         public TimeSpan ElapsedSinceStart { get; set; }

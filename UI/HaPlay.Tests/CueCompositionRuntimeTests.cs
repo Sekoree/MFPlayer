@@ -8,19 +8,16 @@ namespace HaPlay.Tests;
 public sealed class CueCompositionRuntimeTests
 {
     [Fact]
-    public void SetClockMaster_ThenEnsurePumpStarted_StartsExactlyOnce()
+    public void AcquireTransportTimeline_ThenEnsurePumpStarted_StartsExactlyOnce()
     {
-        // Regression for the Phase 5.4 double-start bug - when the engine called
-        // SetClockMaster (which started a slaved MediaClock) and then AddLayer
-        // (which called EnsurePumpStarted), a second MediaClock + driver thread
-        // would spawn because EnsurePumpStarted only checked the (always-null)
-        // Stopwatch _pumpTask field. This test ensures one and only one pump
-        // start happens across the typical engine call sequence.
-        var outputs = new OutputManagementViewModel();
-        var composition = new CueComposition { Id = Guid.NewGuid(), Name = "Test", Width = 320, Height = 180, FrameRateNum = 30, FrameRateDen = 1 };
-        using var runtime = new CueCompositionRuntime(composition, [], outputs);
+        // Regression for the Phase 5.4 double-start bug - when the engine mastered the composition
+        // (which started a slaved MediaClock) and then AddLayer (which called EnsurePumpStarted), a
+        // second MediaClock + driver thread would spawn because EnsurePumpStarted only checked the
+        // (always-null) Stopwatch _pumpTask field. This test ensures one and only one pump start
+        // happens across the typical engine call sequence.
+        using var runtime = NewRuntime();
 
-        runtime.SetClockMaster(new FakeMasterClock());
+        using var claim = runtime.AcquireTransportTimeline(NewTimeline());
         runtime.EnsurePumpStarted();
         runtime.EnsurePumpStarted();
         runtime.EnsurePumpStarted();
@@ -29,43 +26,54 @@ public sealed class CueCompositionRuntimeTests
     }
 
     [Fact]
-    public void EnsurePumpStarted_BeforeSetClockMaster_StaysSingleStart()
+    public void EnsurePumpStarted_BeforeAcquiringATimeline_StaysSingleStart()
     {
-        // The "no master yet" path also has to stay single-shot - the runtime
-        // creates one MediaClock with master=null and later swaps the master
-        // in via MediaClock.SetMaster (same driver thread, same GL context).
-        var outputs = new OutputManagementViewModel();
-        var composition = new CueComposition { Id = Guid.NewGuid(), Name = "Test", Width = 320, Height = 180, FrameRateNum = 30, FrameRateDen = 1 };
-        using var runtime = new CueCompositionRuntime(composition, [], outputs);
+        // The "no master yet" path also has to stay single-shot - the runtime creates one MediaClock
+        // with master=null and later swaps the master in via MediaClock.SetMaster (same driver thread,
+        // same GL context).
+        using var runtime = NewRuntime();
 
         runtime.EnsurePumpStarted();
-        runtime.SetClockMaster(new FakeMasterClock());
+        using var claim = runtime.AcquireTransportTimeline(NewTimeline());
         runtime.EnsurePumpStarted();
 
         Assert.Equal(1, runtime.PumpStartCount);
-        // Stats should report the runtime as mastered after SetClockMaster.
         Assert.True(runtime.GetStats().ClockMastered);
     }
 
     [Fact]
-    public void SetClockMaster_SecondCallIsIgnored()
+    public void SecondTimelineWaitsBehindTheFirst_AndTakesOverWhenItIsReleased()
     {
-        // Two cues firing into the same composition can each resolve a master; the runtime
-        // must take the first and ignore subsequent ones so concurrent cues don't fight for
-        // the slave clock's master assignment. The pump still starts exactly once via
-        // EnsurePumpStarted, regardless of how many masters tried to claim it.
-        var outputs = new OutputManagementViewModel();
-        var composition = new CueComposition { Id = Guid.NewGuid(), Name = "Test", Width = 320, Height = 180, FrameRateNum = 30, FrameRateDen = 1 };
-        using var runtime = new CueCompositionRuntime(composition, [], outputs);
+        // A composition is ONE clock domain: two cues firing into it must not fight over the slave
+        // clock's master assignment, so the first claim owns it. Unlike the old first-wins
+        // SetClockMaster, releasing that claim hands the domain to the waiting one rather than
+        // stranding the composition on a stopped timeline forever.
+        using var runtime = NewRuntime();
 
-        var first = new FakeMasterClock();
-        var second = new FakeMasterClock();
-        runtime.SetClockMaster(first);
-        runtime.SetClockMaster(second);
+        var first = NewTimeline();
+        var second = NewTimeline();
+        var firstClaim = runtime.AcquireTransportTimeline(first);
+        using var secondClaim = runtime.AcquireTransportTimeline(second);
         runtime.EnsurePumpStarted();
 
         Assert.Equal(1, runtime.PumpStartCount);
         Assert.True(runtime.GetStats().ClockMastered);
+
+        firstClaim.Dispose();
+        Assert.True(runtime.GetStats().ClockMastered); // handed to `second`, not released
+    }
+
+    [Fact]
+    public void ReleasingTheLastClaimReturnsTheCompositionToFreerun()
+    {
+        using var runtime = NewRuntime();
+
+        var claim = runtime.AcquireTransportTimeline(NewTimeline());
+        runtime.EnsurePumpStarted();
+        Assert.True(runtime.GetStats().ClockMastered);
+
+        claim.Dispose();
+        Assert.False(runtime.GetStats().ClockMastered);
     }
 
     [Fact]
@@ -90,9 +98,17 @@ public sealed class CueCompositionRuntimeTests
         Assert.False(runtime.DrivesLine(line.Definition.Id));
     }
 
-    private sealed class FakeMasterClock : IPlaybackClock
+    private static CueCompositionRuntime NewRuntime()
     {
-        public TimeSpan ElapsedSinceStart => TimeSpan.Zero;
-        public bool IsAdvancing => true;
+        var outputs = new OutputManagementViewModel();
+        var composition = new CueComposition
+        {
+            Id = Guid.NewGuid(), Name = "Test", Width = 320, Height = 180, FrameRateNum = 30, FrameRateDen = 1,
+        };
+        return new CueCompositionRuntime(composition, [], outputs);
     }
+
+    // A real timeline rather than a stub: the runtime only ever stores and forwards it, so the genuine
+    // article costs nothing and cannot drift from the contract.
+    private static TransportTimeline NewTimeline() => new(SessionClock.LiveWallClock());
 }

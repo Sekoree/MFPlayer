@@ -123,6 +123,25 @@ public sealed class SessionClock
             new Anchor(anchor.Reference, reading.EpochId, preservedNow - reading.Elapsed));
     }
 
+    /// <summary>
+    /// How many times the reference went backwards inside one epoch and was held at the floor, and the
+    /// worst single regression. Inside an epoch the reference is monotonic BY CONTRACT, so a non-zero
+    /// count means the clock below this one is faulty (or a read tore across its re-anchor) - it is not
+    /// a normal event and it is not this clock's fault.
+    /// </summary>
+    /// <remarks>
+    /// The clamp itself stays: holding at the floor is the only safe response, and group time must never
+    /// rewind. What changes is that it is no longer silent. Group time passes through several layers that
+    /// each enforce this same contract, so a breach at the bottom gets absorbed by the first clamp above
+    /// it and the symptom surfaces somewhere unrelated. Counting each clamp where it fires is what makes
+    /// the actual culprit nameable instead of inferred.
+    /// </remarks>
+    public (long Count, TimeSpan Worst) ReferenceRegressions =>
+        (Interlocked.Read(ref _referenceRegressions), new TimeSpan(Interlocked.Read(ref _worstRegressionTicks)));
+
+    private long _referenceRegressions;
+    private long _worstRegressionTicks;
+
     /// <summary>CAS high-water on <see cref="_nowFloorTicks"/>; returns the resulting master time.</summary>
     private TimeSpan RaiseFloor(TimeSpan now)
     {
@@ -136,6 +155,21 @@ public sealed class SessionClock
             seen = previous;
         }
 
+        if (ticks < seen)
+            NoteRegression(seen - ticks);
         return new TimeSpan(seen);
+    }
+
+    private void NoteRegression(long backwardsTicks)
+    {
+        Interlocked.Increment(ref _referenceRegressions);
+        var worst = Interlocked.Read(ref _worstRegressionTicks);
+        while (backwardsTicks > worst)
+        {
+            var previous = Interlocked.CompareExchange(ref _worstRegressionTicks, backwardsTicks, worst);
+            if (previous == worst)
+                return;
+            worst = previous;
+        }
     }
 }

@@ -189,7 +189,9 @@ public sealed class MediaPlayer : IDisposable
         var masterName = clock is MediaClock mc
             ? mc.Master?.GetType().Name ?? "(freerun)"
             : "(external)";
-        var clockSnap = new MediaClockMetricsSnapshot(clock.CurrentPosition, masterName);
+        var regressions = clock is MediaClock counted ? counted.MasterRegressions : default;
+        var clockSnap = new MediaClockMetricsSnapshot(
+            clock.CurrentPosition, masterName, regressions.Count, regressions.Worst);
 
         var vp = Video;
         var videoSnap = new VideoPlayerMetricsSnapshot(

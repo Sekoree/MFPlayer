@@ -550,6 +550,7 @@ public partial class SettingsViewModel : ObservableObject
         _triggerMode = _settings.NewCueTrigger.ToString().ToLowerInvariant();
         _autoRenumber = _settings.AutoRenumberOnInsert;
         _avOffset = $"{_settings.AvOffsetMs} ms";
+        _followLead = $"{_settings.FollowLeadMs} ms";
         _autosaveCadence = $"{_settings.AutosaveSeconds} s";
         _recoveryCopies = _settings.RecoveryCopies.ToString();
         _saveOnGo = _settings.SaveOnGo;
@@ -738,6 +739,10 @@ public partial class SettingsViewModel : ObservableObject
     partial void OnAvOffsetChanged(string value) =>
         Write("avOffset", () => _settings.AvOffsetMs, ms => _settings.AvOffsetMs = ms,
             SignedDigits(value, _settings.AvOffsetMs), "A/V offset");
+
+    partial void OnFollowLeadChanged(string value) =>
+        Write("followLead", () => _settings.FollowLeadMs, ms => _settings.FollowLeadMs = ms,
+            Digits(value, _settings.FollowLeadMs), "follow lead");
 
     partial void OnAutosaveCadenceChanged(string value) =>
         Write("autosave", () => _settings.AutosaveSeconds, seconds => _settings.AutosaveSeconds = seconds,
@@ -1428,6 +1433,7 @@ public partial class SettingsViewModel : ObservableObject
 
     /// <summary>Venue A/V trim, e.g. "20 ms" or "-15 ms" — positive shows the picture earlier.</summary>
     [ObservableProperty] private string _avOffset = "0 ms";
+    [ObservableProperty] private string _followLead = "0 ms";
     [ObservableProperty] private string _recoveryCopies = "5";
     [ObservableProperty] private string _recoveryLocation = "beside the project file";
 

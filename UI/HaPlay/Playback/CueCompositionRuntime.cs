@@ -104,8 +104,14 @@ internal sealed class CueCompositionRuntime : IDisposable
 
     public void EnsurePumpStarted() => _inner.EnsurePumpStarted();
 
-    public void SetClockMaster(IPlaybackClock master, IPlayhead? timeline = null) =>
-        _inner.SetClockMaster(master, timeline);
+    /// <summary>
+    /// Masters this composition to an active clip's transport timeline for as long as the returned lease
+    /// is held; the next waiting claim takes over when it is released. Replaces the old
+    /// <c>SetClockMaster(IPlaybackClock, IPlayhead?)</c>, which mastered the composition permanently to
+    /// whoever called first and so could not hand the clock to the next clip.
+    /// </summary>
+    public IDisposable AcquireTransportTimeline(ITransportTimeline timeline) =>
+        _inner.AcquireTransportTimeline(timeline);
 
     public LayerSlot AddLayer(VideoFormat sourceFormat, CueVideoPlacement placement)
     {

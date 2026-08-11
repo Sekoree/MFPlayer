@@ -8,250 +8,20 @@ using S.Media.Core.Video;
 namespace S.Media.Players;
 
 /// <summary>
-/// Coordinates start/stop/seek order for combined <see cref="AudioRouter"/> +
-/// <see cref="MediaClock"/> and <see cref="VideoPlayer"/> sessions.
+/// Coordinates pause/stop/seek ORDER across a voice's graph (<see cref="AudioRouter"/> +
+/// <see cref="MediaClock"/> + <see cref="VideoPlayer"/>). Everything here is stateless ordering: which
+/// component to touch first so the playhead does not jump.
 /// </summary>
+/// <remarks>
+/// Starting a voice is NOT here - it is <see cref="VoiceStartPolicy"/>, which owns the graph as an
+/// instance and picks between five start disciplines. Starting is stateful (a voice has to remember
+/// whether it was genlocked to the show clock last time) and ordering is not, which is why they are two
+/// types now instead of one static class with a side table.
+/// </remarks>
 internal static class AvPlaybackCoordinator
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Playback.AvPlaybackCoordinator");
-    private static readonly TimeSpan SyncStartVideoOutputTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan AudioRealignTolerance = TimeSpan.FromMilliseconds(1);
-    /// <summary>Upper bound on the silent-voice start deferral (see the videoOnlyMaster branch).
-    /// With master pacing the device ring runs full, so a legitimate pipeline depth is
-    /// ring (~85 ms) + pump (~80 ms) + device (~180 ms observed); the cap only exists to stop a
-    /// pathological measurement from parking a picture indefinitely.</summary>
-    private static readonly TimeSpan MaxStartDeferral = TimeSpan.FromMilliseconds(500);
-
-    /// <summary>
-    /// Remembers, per voice clock, the SHOW clock this coordinator's genlock branch mastered it to
-    /// (the silent-voice case below). Needed because pause/resume must be able to tell the two kinds
-    /// of master apart: a voice's own producer clock FREEZES and flushes with the voice, so
-    /// <see cref="MediaClock.StartCore"/>'s fold of same-epoch master drift across a pause is exactly
-    /// right for it - while the shared show clock keeps advancing through this one voice's pause and
-    /// never changes epoch for it, so the same fold turns the whole pause duration into a forward
-    /// position jump (a 30 s pause = a 30 s skip; the measured bug). The session resume path calls
-    /// plain <c>Play()</c> with no <c>videoOnlyMaster</c>, so the resume cannot recognise the genlock
-    /// by comparing against the parameter - this table is the explicit "I applied that genlock"
-    /// record (deliberately not type-sniffing <see cref="MediaClock.Master"/>: producer leases and
-    /// the show clock can share an implementation type). Weak on the clock so a disposed voice's
-    /// entry vanishes with it.
-    /// </summary>
-    private static readonly ConditionalWeakTable<MediaClock, IPlaybackClock> AppliedGenlocks = new();
-
-    public static void Play(
-        VideoPlayer video,
-        AudioRouter? audioRouter = null,
-        MediaClock? audioClock = null,
-        Action? prefillBeforeHardware = null,
-        Action? startHardware = null,
-        IPlaybackClock? videoOnlyMaster = null,
-        Func<bool>? verifyPrebufferAfterPrefill = null,
-        string? audioSourceId = null) =>
-        PreparePlay(
-            video, audioRouter, audioClock, prefillBeforeHardware, startHardware,
-            videoOnlyMaster, verifyPrebufferAfterPrefill, audioSourceId)();
-
-    /// <summary>
-    /// The slow half of <see cref="Play"/> — prefill, hardware start, decode spin-up, the video
-    /// buffer wait and the sync-frame present — WITHOUT starting the clocks. The returned action is
-    /// the start edge: it starts the router and clock (or the free-run clock) and is cheap enough to
-    /// call for a whole group of voices back-to-back.
-    /// </summary>
-    /// <remarks>
-    /// This split exists for group fires. A batch of siblings must start on ONE edge, but their
-    /// commits run serially on the session dispatcher — and when this method's slow half lived in the
-    /// same call as the clock start, every voice queued behind a video sibling started late by that
-    /// sibling's present-sync (up to 250 ms each; measured half-second staggers, in per-run-random
-    /// order). Prepare each voice first, then fire the returned starters together.
-    /// </remarks>
-    public static Action PreparePlay(
-        VideoPlayer video,
-        AudioRouter? audioRouter = null,
-        MediaClock? audioClock = null,
-        Action? prefillBeforeHardware = null,
-        Action? startHardware = null,
-        IPlaybackClock? videoOnlyMaster = null,
-        Func<bool>? verifyPrebufferAfterPrefill = null,
-        string? audioSourceId = null)
-    {
-        ArgumentNullException.ThrowIfNull(video);
-        Trace.LogDebug("Play: hasAudio={HasAudio} hasPrefill={HasPrefill} hasStartHw={HasStartHw} hasVoMaster={HasVoMaster}",
-            audioRouter is not null, prefillBeforeHardware is not null, startHardware is not null, videoOnlyMaster is not null);
-
-        // Idempotence: a Play on an ALREADY-RUNNING transport is a cheap no-op. Hosts do issue them -
-        // the session's seek/resume paths call Play() unconditionally - and re-running the slow half
-        // mid-stream is actively harmful: TryPresentBufferedFrameForSync steals a queued frame from
-        // the live jitter buffer (a visible glitch), and the pre-roll branch would BeginPreRoll a LIVE
-        // producer (muting it) and then EndPreRoll with a fresh pacing-target baseline plus a mid-run
-        // Reanchor (~200 ms position step). "Running" is the clock AND the router for the audio path:
-        // at natural EOF the router's run loop has exited (CompletedNaturally) while the clock object
-        // keeps its running flag, and a restart (seek + Play) from that state still needs the full
-        // path so audioRouter.Start() actually spins production back up.
-        if (audioRouter is not null && audioClock is not null)
-        {
-            if (audioClock.IsRunning && audioRouter.IsRunning)
-            {
-                Trace.LogDebug("Play: transport already running (clock={Position}) - no-op", audioClock.CurrentPosition);
-                return static () => { };
-            }
-        }
-        else if (video.Clock.IsRunning)
-        {
-            Trace.LogDebug("Play: video clock already running (clock={Position}) - no-op", video.Clock.CurrentPosition);
-            return static () => { };
-        }
-
-        if (prefillBeforeHardware is not null)
-            prefillBeforeHardware.Invoke();
-
-        if (startHardware is not null)
-            startHardware.Invoke();
-
-        if (audioRouter is not null && audioClock is not null)
-        {
-            // Realign audio before video.Play() - video starts the decode thread and may start
-            // the shared clock; audio Position tracks emitted samples (≈ clock at pause) so a
-            // drift threshold would skip realign even when video decode is ~700ms ahead.
-            if (!audioClock.IsRunning)
-                RealignAudioSourceBeforeStart(audioRouter, audioClock, audioSourceId);
-
-            video.Play();
-
-            WaitForVideoBufferBeforeStartingAudio(video, video.Clock, verifyPrebufferAfterPrefill);
-            var syncFramePresented = video.TryPresentBufferedFrameForSync(
-                video.Clock.CurrentPosition,
-                SyncStartVideoOutputTimeout);
-            if (!syncFramePresented)
-            {
-                Trace.LogDebug(
-                    "Play: sync video presentation did not complete before audio start (timeout={Timeout}, queued={Queued}, latestDecoded={Latest})",
-                    SyncStartVideoOutputTimeout, video.QueuedFrameCount, video.LatestDecodedPresentationTime);
-            }
-            // A clip can HAVE an audio router and still have no authoritative clock: its audio reaches
-            // no clocked output, so nothing promoted a pacing primary and this MediaClock free-runs on
-            // a Stopwatch. That is the case for a silent video cue - a .mov whose audio is routed
-            // nowhere - and it means such a voice is timed by WALL time while every sounding voice is
-            // timed by the audio DEVICE. The two are never the same crystal, so the picture slides away
-            // from the sound without bound (measured 0.72%/s on this rig: seconds apart within minutes).
-            // Genlock it to the show's clock instead, which is exactly what videoOnlyMaster is for - the
-            // old branch just never reached it, because it keyed on "has an audio router" rather than
-            // "has a clock worth trusting".
-            // Was THIS coordinator's genlock (below) the thing that mastered this clock? If the host
-            // re-mastered it since (a real pacing primary was promoted, or the master was cleared),
-            // the record is stale - drop it and treat the clock as producer-mastered from here on.
-            AppliedGenlocks.TryGetValue(audioClock, out var appliedGenlock);
-            if (appliedGenlock is not null && !ReferenceEquals(audioClock.Master, appliedGenlock))
-            {
-                AppliedGenlocks.Remove(audioClock);
-                appliedGenlock = null;
-            }
-
-            if (videoOnlyMaster is not null && audioClock.Master is null)
-            {
-                audioClock.SetMaster(videoOnlyMaster);
-                AppliedGenlocks.AddOrUpdate(audioClock, videoOnlyMaster);
-                Trace.LogDebug(
-                    "Play: audio router has no pacing primary - mastering this voice's clock to the show clock ({ClockType}) so its video cannot drift against the audio device",
-                    videoOnlyMaster.GetType().Name);
-                var deferAgainstProgramme = videoOnlyMaster as AudibleClientClock;
-                return () =>
-                {
-                    // Rate alone is not enough: the show clock is already ADVANCING, so an anchor
-                    // taken at Start makes this voice's timeline move immediately — while a sounding
-                    // voice's producer clock holds at zero until its first sample actually leaves the
-                    // speaker, one audio-pipeline depth later. Without the deferral the picture led
-                    // the programme by exactly that depth (measured ~150–500 ms), rate-locked, for
-                    // the whole cue. Measured HERE, at the start edge, not at prepare: a group fire
-                    // prepares its siblings first, and the fill transient during those preparations
-                    // reads far above the depth the siblings will actually start with (measuring at
-                    // prepare landed the picture ~170 ms BEHIND the stems). Capped as a safety net —
-                    // the cap sits above any steady-state depth this pipeline produces.
-                    if (deferAgainstProgramme?.CurrentPipelineLead is { Ticks: > 0 } lead)
-                    {
-                        var deferral = lead <= MaxStartDeferral ? lead : MaxStartDeferral;
-                        audioClock.DeferStart(deferral);
-                        Trace.LogDebug(
-                            "Play: deferred this voice's start by the audio pipeline depth ({DeferMs:0}ms of {LeadMs:0}ms measured) so its picture lands on the audible programme",
-                            deferral.TotalMilliseconds, lead.TotalMilliseconds);
-                    }
-                    audioRouter.Start();
-                    audioClock.Start();
-                };
-            }
-
-            // GENLOCKED RESUME: this clock is still mastered to the shared show clock that the branch
-            // above attached on the first Play. That master kept advancing (and kept its epoch) all
-            // through this voice's pause, so the drift fold in MediaClock.Start - which is CORRECT for
-            // a producer-mastered voice whose clock froze/flushed with it - would count the entire
-            // pause duration as forward progress (measured: a 30 s pause resumed 30 s ahead). Re-run
-            // SetMaster exactly like the video-only branch below does on every Play: it discards the
-            // pause-time master reading and re-anchors at the CURRENT position, so Start folds nothing
-            // and the voice resumes where it paused. Producer-mastered voices never reach this branch
-            // (their master is not the genlock this coordinator recorded) and keep the fold.
-            //
-            // The pipeline-lead start deferral is deliberately NOT re-applied here. It exists to hold a
-            // brand-new picture back by the audio path depth so frame 0 lands when sample 0 of the
-            // sounding siblings becomes audible - a start-of-audio edge. A resume of a silent voice has
-            // no such edge: its frames are already on screen, and DeferStart would rewind the playhead
-            // by the lead (~150-500 ms), visibly re-showing frames to chase a sibling refill transient
-            // that the resume prefill largely hides anyway.
-            if (appliedGenlock is not null)
-            {
-                var showClock = videoOnlyMaster ?? appliedGenlock;
-                audioClock.SetMaster(showClock);
-                if (!ReferenceEquals(showClock, appliedGenlock))
-                    AppliedGenlocks.AddOrUpdate(audioClock, showClock);
-                Trace.LogDebug(
-                    "Play: genlocked resume - re-anchored this voice's clock on the show clock ({ClockType}) at {Position} so the pause duration is not folded in",
-                    showClock.GetType().Name, audioClock.CurrentPosition);
-                return () =>
-                {
-                    audioRouter.Start();
-                    audioClock.Start();
-                };
-            }
-
-            // PRE-ROLL (group-fire alignment): when the pacing primary can be held out of the mix,
-            // start the router NOW - the producer ring fills with the clip's first samples while the
-            // bus skips it and the voice's clock stays frozen - and make the start edge a release.
-            // Every sibling released in one tight pass joins the same (or the adjacent) mix chunk,
-            // which is what "an all-together group starts together" actually requires: without this
-            // the audio still raced decode → ring → bus after the edge, and that race's length was
-            // scheduler weather (measured 0-180 ms of stem scatter, quantized by the pump depth).
-            if (audioRouter.PrimaryOutputId is { } primaryId
-                && audioRouter.TryGetOutput(primaryId, out var primaryOutput)
-                && primaryOutput is IPreRollableOutput preRollable)
-            {
-                preRollable.BeginPreRoll();
-                audioRouter.Start();
-                return () =>
-                {
-                    preRollable.EndPreRoll();
-                    audioClock.Start();
-                };
-            }
-
-            return () =>
-            {
-                audioRouter.Start();
-                audioClock.Start();
-            };
-        }
-
-        video.Play();
-
-        if (verifyPrebufferAfterPrefill is not null && !verifyPrebufferAfterPrefill())
-            throw new InvalidOperationException(
-                "AvPlaybackCoordinator.Play: verifyPrebufferAfterPrefill returned false.");
-
-        if (videoOnlyMaster is not null)
-            video.Clock.SetMaster(videoOnlyMaster);
-        return () =>
-        {
-            if (!video.Clock.IsRunning)
-                video.Clock.Start();
-        };
-    }
 
     /// <summary>
     /// After a seek/resume, the compositor/scaler path can decode far slower than realtime. Hold audio
@@ -288,58 +58,13 @@ internal static class AvPlaybackCoordinator
     internal static bool NoVideoToAwait(VideoPlayer video) =>
         video.IsSourceExhausted && video.QueuedFrameCount == 0 && video.PendingBufferedCount == 0;
 
-    private static void WaitForVideoBufferBeforeStartingAudio(
-        VideoPlayer video,
-        IMediaClock clock,
-        Func<bool>? verify)
-    {
-        const int maxWaitMs = 8000;
-        var deadline = Environment.TickCount64 + maxWaitMs;
-        var target = clock.CurrentPosition;
-        var waitStart = Environment.TickCount64;
-
-        while (Environment.TickCount64 < deadline)
-        {
-            if (verify is not null)
-            {
-                if (verify()) goto Done;
-            }
-            else if (IsVideoBufferReadyForSync(video, target) || NoVideoToAwait(video))
-            {
-                goto Done;
-            }
-
-            Thread.Sleep(5);
-        }
-
-        if (verify is not null && !verify())
-            throw new InvalidOperationException(
-                "AvPlaybackCoordinator.Play: verifyPrebufferAfterPrefill returned false after waiting for the video buffer.");
-
-        Done:
-        if (Trace.IsEnabled(LogLevel.Debug))
-        {
-            var playhead = target - video.PlayheadOffset;
-            var lead = video.SyncStartupLead;
-            TimeSpan? masterElapsed = null;
-            if (clock is MediaClock mc && mc.Master is { } master)
-                masterElapsed = master.ElapsedSinceStart;
-            Trace.LogDebug(
-                "WaitForVideoBuffer: waitedMs={WaitMs} target={Target} queued={Queued} lifetimePending={LifetimePending} latestDecoded={Latest} clock={Clock} syncReady={SyncReady} leadMs={LeadMs} masterElapsed={MasterElapsed}",
-                Environment.TickCount64 - waitStart, target, video.QueuedFrameCount, video.PendingBufferedCount,
-                video.LatestDecodedPresentationTime, clock.CurrentPosition,
-                video.HasFrameWithinLeadOf(playhead, lead), lead.TotalMilliseconds,
-                masterElapsed);
-        }
-    }
-
     /// <summary>
     /// After pause/resume the shared demux can leave audio decode/resampler state out of step with
     /// the frozen clock even when <see cref="ISeekableSource.Position"/> still reports emitted
     /// samples (≈ clock). Realign when there is measurable drift, but never let that recovery step
     /// abort transport startup.
     /// </summary>
-    private static void RealignAudioSourceBeforeStart(
+    internal static void RealignAudioSourceBeforeStart(
         AudioRouter audioRouter,
         MediaClock audioClock,
         string? audioSourceId)

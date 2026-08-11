@@ -109,6 +109,26 @@ public sealed class MediaClock : IMediaClock, IDisposable
 
     private static readonly ILogger TraceLog = MediaDiagnostics.CreateLogger("S.Media.Core.Clock.MediaClock");
 
+    /// <summary>
+    /// The ONE origin every clock's frame grid is measured from, process-wide.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Each driver used to anchor its grid at its own <see cref="Start"/>, so thirteen voices at 60 fps
+    /// ticked at thirteen unrelated phases: siblings selecting frames for the same master instant could
+    /// do so up to a full frame period apart, for no reason other than the order their clocks happened
+    /// to start in. A shared origin makes same-rate clocks tick on the SAME instants by construction -
+    /// the sync benefit a shared timing wheel would have bought, without putting independent tick
+    /// handlers behind one thread (a composition pump is ~5.6 ms of a 16.7 ms budget; three of them
+    /// serialized would saturate it and turn independent pumps into a head-of-line queue).
+    /// </para>
+    /// <para>
+    /// It also removes a discontinuity: the grid index no longer restarts at 1 on every Start, so a
+    /// pause/resume does not rewind anything derived from it.
+    /// </para>
+    /// </remarks>
+    private static readonly long SharedGridEpoch = Stopwatch.GetTimestamp();
+
     public MediaClock() : this(DefaultVideoTickInterval, logger: null) { }
 
     public MediaClock(ILogger? logger)
@@ -466,15 +486,16 @@ public sealed class MediaClock : IMediaClock, IDisposable
 
     private void DriverLoopCore(CancellationToken token)
     {
-        var sessionStart  = Stopwatch.GetTimestamp();
-        var nextVideoIndex = 1L;
+        // Deadlines are absolute on the SHARED grid, so this loop joins the cadence already in progress
+        // rather than starting one of its own: seek forward to the first boundary still ahead of us.
+        var nextVideoIndex = FrameIndexAt(Stopwatch.GetElapsedTime(SharedGridEpoch)) + 1;
         var nextVideo     = VideoDeadlineAt(nextVideoIndex);
 
         var waitHandle = token.WaitHandle;
 
         while (!token.IsCancellationRequested)
         {
-            var elapsed = Stopwatch.GetElapsedTime(sessionStart);
+            var elapsed = Stopwatch.GetElapsedTime(SharedGridEpoch);
             var sleep = nextVideo - elapsed;
 
             if (sleep > TimeSpan.Zero)
@@ -493,7 +514,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
                 if (waitHandle.WaitOne(waitMs)) break;
             }
 
-            elapsed = Stopwatch.GetElapsedTime(sessionStart);
+            elapsed = Stopwatch.GetElapsedTime(SharedGridEpoch);
 
             if (elapsed >= nextVideo)
             {
@@ -508,7 +529,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
                     SafeInvoke(VideoTick);
                     nextVideoIndex = dueIndex + 1;
                     nextVideo = grid.DeadlineAt(nextVideoIndex);
-                    elapsed = Stopwatch.GetElapsedTime(sessionStart);
+                    elapsed = Stopwatch.GetElapsedTime(SharedGridEpoch);
                 }
                 else
                 {
@@ -518,7 +539,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
                         Interlocked.Exchange(ref _lastVideoTickIndex, nextVideoIndex++);
                         SafeInvoke(VideoTick);
                         nextVideo = VideoDeadlineAt(nextVideoIndex);
-                        elapsed = Stopwatch.GetElapsedTime(sessionStart);
+                        elapsed = Stopwatch.GetElapsedTime(SharedGridEpoch);
                     }
 
                     while (nextVideo <= elapsed)
@@ -534,6 +555,11 @@ public sealed class MediaClock : IMediaClock, IDisposable
     private TimeSpan VideoDeadlineAt(long frameIndex) => _videoFrameGrid is { } grid
         ? grid.DeadlineAt(frameIndex)
         : TimeSpan.FromTicks(checked(_videoTickInterval.Ticks * frameIndex));
+
+    /// <summary>The grid index at or before <paramref name="elapsed"/> on the shared origin.</summary>
+    private long FrameIndexAt(TimeSpan elapsed) => _videoFrameGrid is { } grid
+        ? grid.FrameAtOrBefore(elapsed)
+        : elapsed.Ticks / _videoTickInterval.Ticks;
 
     private void SafeInvoke(EventHandler? handler)
     {
@@ -604,10 +630,62 @@ public sealed class MediaClock : IMediaClock, IDisposable
 
             if (reading.Elapsed > _masterElapsedHighWater)
                 _masterElapsedHighWater = reading.Elapsed;
+            else if (reading.Elapsed < _masterElapsedHighWater)
+                NoteMasterRegressionUnlocked(reading);
             return _basePosition + (_masterElapsedHighWater - _masterAnchor);
         }
         return _basePosition + _stopwatch.Elapsed;
     }
+
+    /// <summary>
+    /// Records that the master went BACKWARDS without announcing a new epoch. Must be called under
+    /// <see cref="_gate"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The clamp above is correct and stays: holding at the high-water is the only safe response, and
+    /// removing it would let a misbehaving master rewind every playhead derived from it. What was wrong
+    /// was that it happened <em>silently</em>. A voice's position passes through several layers that each
+    /// enforce this same contract, so a clock that breaks it is absorbed by the first clamp above it and
+    /// the symptom appears somewhere else entirely - which is exactly the debugging pattern this
+    /// subsystem kept producing. A clamp that fires is not a normal event: it means the layer BELOW is
+    /// broken, or a read tore across its re-anchor. Counting it makes the real culprit nameable.
+    /// </para>
+    /// <para>
+    /// Logged once per clock at Warning (with the offending master's type), then counted only - a broken
+    /// master is read hundreds of times a second and must not be able to flood the log.
+    /// </para>
+    /// </remarks>
+    private void NoteMasterRegressionUnlocked(ClockReading reading)
+    {
+        _masterRegressions++;
+        var backwardsBy = _masterElapsedHighWater - reading.Elapsed;
+        if (backwardsBy > _worstMasterRegression)
+            _worstMasterRegression = backwardsBy;
+        if (_masterRegressions != 1)
+            return;
+
+        TraceLog.LogWarning(
+            "Position: master {Master} regressed inside epoch {Epoch} by {BackwardsMs}ms " +
+            "(high-water={HighWater}, read={Read}) - held at the high-water. This is a broken per-epoch " +
+            "monotonic contract in the master, or a read torn across its re-anchor; further occurrences " +
+            "on this clock are counted only.",
+            _master?.GetType().Name ?? "(none)", reading.EpochId, backwardsBy.TotalMilliseconds,
+            _masterElapsedHighWater, reading.Elapsed);
+    }
+
+    /// <summary>
+    /// How many times the attached master broke its per-epoch monotonic contract and was held at the
+    /// high-water, and the worst single regression. Non-zero means a clock BELOW this one is faulty -
+    /// see <see cref="NoteMasterRegressionUnlocked"/>. Reported through <c>MediaPlayer.GetMetrics</c>.
+    /// </summary>
+    public (long Count, TimeSpan Worst) MasterRegressions
+    {
+        get { lock (_gate) return (_masterRegressions, _worstMasterRegression); }
+    }
+
+    private long _masterRegressions;
+    private TimeSpan _worstMasterRegression;
 
     private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
 

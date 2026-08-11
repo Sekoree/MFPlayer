@@ -151,6 +151,30 @@ public sealed class CueExecutor(ICueExecutionHost host)
     private readonly Dictionary<Guid, int> _jumpVisits = [];
     private readonly Dictionary<Guid, TimelineRun> _timelineRuns = [];
 
+    /// <summary>
+    /// Follow chains whose successor is already opening, keyed by the OUTGOING cue. Populated at
+    /// "approaching end" and consumed at the out-point; see <see cref="TryBeginPreparedFollowAsync"/>.
+    /// </summary>
+    private readonly Dictionary<Guid, PreparedFollow> _preparedFollows = [];
+
+    /// <summary>
+    /// A successor that has been fully opened, committed, pre-rolled and sync-presented, and is now
+    /// holding its clock at <see cref="Edge"/>. Completing the edge starts it; cancelling
+    /// <see cref="Cancellation"/> rolls it back.
+    /// </summary>
+    /// <remarks>
+    /// This is the whole point of the lead: the media open happens BEFORE the out-point instead of
+    /// after it, so the successor's start no longer carries its own decoder-open time. The instant it
+    /// starts is unchanged - the edge is still the outgoing clip's natural end - which is why this
+    /// needs no new time source and can never fire early.
+    /// </remarks>
+    private sealed record PreparedFollow(
+        Guid SuccessorId,
+        CueList SuccessorList,
+        TaskCompletionSource Edge,
+        CancellationTokenSource Cancellation,
+        Task Run);
+
     // Preparing five seconds ahead absorbs decoder/open jitter without holding every clip in a long show open
     // for the life of the timeline. A cue that explicitly disables pre-roll is prepared at its due point.
     private static readonly TimeSpan TimelinePreparationLead = TimeSpan.FromSeconds(5);
@@ -461,6 +485,12 @@ public sealed class CueExecutor(ICueExecutionHost host)
     {
         host.Forget(cueId);
 
+        // A successor prepared during the lead window is ALREADY holding its clock at this exact edge -
+        // releasing it here is the whole hop. Checked first: the ordinary paths below would fire it a
+        // second time, from cold.
+        if (await TryReleasePreparedFollowAsync(cueId).ConfigureAwait(false))
+            return;
+
         if (await AdvancePlaylistAsync(cueId, approaching: false).ConfigureAwait(false))
             return;
 
@@ -486,8 +516,221 @@ public sealed class CueExecutor(ICueExecutionHost host)
             await ContinueFromAsync(cue, list, depth: 0, follow: true).ConfigureAwait(false);
     }
 
-    /// <summary>Starts the next playlist item early when the current clip enters its crossfade window.</summary>
-    public Task OnApproachingEndAsync(Guid cueId) => AdvancePlaylistAsync(cueId, approaching: true);
+    /// <summary>
+    /// The clip is inside its pre-end window. Two things can want that notification: a playlist
+    /// crossfade (start the next item early, overlapping) and a follow lead (OPEN the successor early
+    /// but start it on the out-point). The playlist gets first refusal, because when a group owns the
+    /// cue its crossfade is the authored intent and a follow lead would fire a second successor.
+    /// </summary>
+    public async Task OnApproachingEndAsync(Guid cueId)
+    {
+        if (await AdvancePlaylistAsync(cueId, approaching: true).ConfigureAwait(false))
+            return;
+        await TryBeginPreparedFollowAsync(cueId).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Opens this cue's follow successor now, and parks it on an edge that the out-point will release.
+    /// Returns false - leaving the historical open-after-the-edge path in charge - whenever the chain is
+    /// not one this can schedule.
+    /// </summary>
+    /// <remarks>
+    /// The opt-outs are all "there is no fixed edge to schedule against, or nothing to pre-open":
+    /// <list type="bullet">
+    /// <item>the outgoing cue has a <c>PostWaitMs</c> - an authored wait sits between the out-point and
+    /// the successor, so the out-point is not the successor's start;</item>
+    /// <item>the successor has a <c>PreWaitMs</c> - same thing on the other side;</item>
+    /// <item>the successor is not a playable cue (a group, jump, fade, patch or action) - those resolve
+    /// to decisions rather than to media, and there is nothing to open ahead of time;</item>
+    /// <item>a prepared follow for this cue already exists - the notification is one-shot per committed
+    /// clip, but a re-fire can re-arm it.</item>
+    /// </list>
+    /// </remarks>
+    private async Task<bool> TryBeginPreparedFollowAsync(Guid cueId)
+    {
+        // Gated HERE as well as in the compiler: a playlist crossfade sets PreEndNotify on its own
+        // account, so "approaching end" reaches cues in shows that configured no follow lead at all.
+        if (Project.Settings.FollowLeadMs <= 0)
+            return false;
+        if (Project.FindCue(cueId) is not { } cue || Project.ListOf(cueId) is not { } list)
+            return false;
+        if (cue.PostWaitMs > 0)
+            return false;
+
+        var successor = ResolveFollowSuccessor(cue, list);
+        if (successor is null || successor.PreWaitMs > 0)
+            return false;
+        if (successor is not (MediaCueNode or TextCueNode))
+            return false;
+
+        var successorList = Project.ListOf(successor.Id) ?? list;
+        var edge = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellation = new CancellationTokenSource();
+
+        // PlayTimelineMediaAsync does the opening, committing, pre-rolling and sync-presenting, then
+        // enters waitForStartEdge. Everything expensive is therefore behind us when the edge completes.
+        var run = host.PlayTimelineMediaAsync(
+            [new TimelineMediaStart(successor)],
+            successorList,
+            async ct => await edge.Task.WaitAsync(ct).ConfigureAwait(false),
+            cancellation.Token);
+
+        lock (_stateGate)
+        {
+            if (_preparedFollows.ContainsKey(cueId))
+            {
+                cancellation.Cancel();
+                cancellation.Dispose();
+                return false;
+            }
+
+            _preparedFollows[cueId] = new PreparedFollow(
+                successor.Id, successorList, edge, cancellation, run);
+        }
+
+        // NOT AdvanceAsync here: the cursor marks what the show has moved on to, and during the lead
+        // window it has not - the outgoing cue is still playing. Advancing at prepare time would make
+        // the standby readout jump forward seconds early, and a stop inside the window would leave it
+        // pointing at a cue that never started. It happens at the edge instead, as it always did.
+        _ = ObservePreparedFollowAsync(cueId, run);
+        return true;
+    }
+
+    /// <summary>Completes a prepared successor's edge, if there is one. True when this hop is handled.</summary>
+    private async Task<bool> TryReleasePreparedFollowAsync(Guid cueId)
+    {
+        PreparedFollow? prepared;
+        lock (_stateGate)
+        {
+            if (!_preparedFollows.TryGetValue(cueId, out prepared))
+                return false;
+            _preparedFollows.Remove(cueId);
+        }
+
+        // If preparation already failed or was cancelled, the run is finished and setting the edge is a
+        // no-op - fall through to the ordinary path so the chain still advances, from cold.
+        if (!prepared.Edge.TrySetResult())
+        {
+            prepared.Cancellation.Dispose();
+            return false;
+        }
+
+        prepared.Cancellation.Dispose();
+        await AdvanceAsync(prepared.SuccessorList, prepared.SuccessorId).ConfigureAwait(false);
+
+        // Await the run itself, not just the edge: TrySetResult merely RELEASES the successor, and its
+        // start then runs on whatever thread picks up the continuation. Callers of the natural-end
+        // handler are entitled to treat its return as "the hop happened".
+        try
+        {
+            await prepared.Run.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Raced with a stop between the release and the start - the chain simply ends here.
+        }
+        catch (Exception failure)
+        {
+            host.Report($"the prepared next cue failed to start — {failure.Message}");
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Drops a prepared follow that never reached its edge - the outgoing cue was stopped, the document
+    /// reloaded, or its own preparation faulted - and rolls the successor back.
+    /// </summary>
+    private void CancelPreparedFollow(Guid cueId)
+    {
+        PreparedFollow? prepared;
+        lock (_stateGate)
+        {
+            if (!_preparedFollows.TryGetValue(cueId, out prepared))
+                return;
+            _preparedFollows.Remove(cueId);
+        }
+
+        try { prepared.Cancellation.Cancel(); }
+        catch (ObjectDisposedException) { }
+        prepared.Cancellation.Dispose();
+    }
+
+    /// <summary>Cancels every prepared follow and returns their rollbacks to await.</summary>
+    private Task[] CancelAllPreparedFollows()
+    {
+        PreparedFollow[] pending;
+        lock (_stateGate)
+        {
+            pending = [.. _preparedFollows.Values];
+            _preparedFollows.Clear();
+        }
+
+        foreach (var prepared in pending)
+        {
+            try { prepared.Cancellation.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+
+        // Swallow here rather than at the join: a cancelled preparation faulting its own task is the
+        // EXPECTED outcome of this method, and ObservePreparedFollowAsync already reports real failures.
+        return [.. pending.Select(async prepared =>
+        {
+            try { await prepared.Run.ConfigureAwait(false); }
+            catch { /* rolled back */ }
+            finally { prepared.Cancellation.Dispose(); }
+        })];
+    }
+
+    /// <summary>
+    /// Reports a preparation that failed on its own (a missing file, a decoder that would not open) and
+    /// clears its entry, so the out-point falls back to the ordinary cold path instead of releasing an
+    /// edge nothing is waiting on.
+    /// </summary>
+    private async Task ObservePreparedFollowAsync(Guid cueId, Task run)
+    {
+        try
+        {
+            await run.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopped, reloaded, or superseded - not a fault.
+        }
+        catch (Exception failure)
+        {
+            lock (_stateGate)
+                _preparedFollows.Remove(cueId);
+            host.Report($"follow pre-open failed — the next cue will open at its edge instead ({failure.Message})");
+        }
+    }
+
+    /// <summary>
+    /// Where this cue hands on to: its explicit end target if it has one, otherwise the next enabled cue
+    /// in the list. Deliberately the SAME resolution <see cref="OnNaturalEndAsync"/> and
+    /// <see cref="ContinueFromAsync"/> use, including the disabled-cue policy - a lead that prepared a
+    /// different successor from the one the chain would pick is worse than no lead.
+    /// </summary>
+    private CueNode? ResolveFollowSuccessor(CueNode cue, CueList list)
+    {
+        if (cue is MediaCueNode { EndTargetCueId: { } targetId } && targetId != cue.Id)
+        {
+            return Project.FindCue(targetId) is { Enabled: true } target && target is not CommentCueNode
+                ? target
+                : null;
+        }
+
+        if (cue.Trigger != CueTrigger.Follow)
+            return null;
+
+        if (Project.Settings.DisabledCueFollow == DisabledCueFollow.StopTheChain)
+        {
+            var next = NextAfterSubtree(list, cue.Id);
+            return next is { Enabled: false } ? null : next;
+        }
+
+        return CueOrder.NextEnabled(list, cue.Id);
+    }
 
     /// <summary>
     /// Releases sequence state when a cue is stopped instead of reaching its natural end.
@@ -500,6 +743,9 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// </remarks>
     public void OnStopped(Guid cueId)
     {
+        // A stop is the operator vetoing this cue's chain: the successor it was quietly opening must go
+        // back rather than start when something else ends.
+        CancelPreparedFollow(cueId);
         lock (_stateGate)
         {
             if (_armedOwners.Remove(cueId, out var armedGroupId))
@@ -525,6 +771,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
     public void ResetTransientState()
     {
         CancelTimelineRuns();
+        _ = CancelAllPreparedFollows(); // the awaited form is CancelTimelineRunsAsync; this path is fire-and-forget
         lock (_stateGate)
         {
             _playlistRuns.Clear();
@@ -555,7 +802,13 @@ public sealed class CueExecutor(ICueExecutionHost host)
             try { run.Cancellation.Cancel(); }
             catch (ObjectDisposedException) { }
         }
-        await Task.WhenAll(runs.Select(run => run.Completion)).ConfigureAwait(false);
+
+        // A prepared follow is the same kind of thing as a timeline run - a committed voice holding at
+        // an edge - so it has to roll back here too, and be AWAITED. Without that, a successor opened
+        // during a lead window could cross its edge while the already-active set was fading out.
+        var follows = CancelAllPreparedFollows();
+
+        await Task.WhenAll(runs.Select(run => run.Completion).Concat(follows)).ConfigureAwait(false);
     }
 
     private TimelineRun[] DetachTimelineRuns()

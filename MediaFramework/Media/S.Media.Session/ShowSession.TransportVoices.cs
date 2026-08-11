@@ -604,9 +604,11 @@ public sealed partial class ShowSession
         /// ACTIVE voice drives them - which is exactly why a tail's layers leave master alignment.</summary>
         private void BindTransport(TransportVoice? voice)
         {
+            // The playhead IS the reference now - IPlayhead extends IPlaybackClock, so the adapter that
+            // used to sit here (PlayheadPlaybackClock) has nothing left to translate.
             Clock.SetReference(voice is null
                 ? new MonotonicWallClock(start: false)
-                : new PlayheadPlaybackClock(voice.Player.PlayClock));
+                : voice.Player.PlayClock);
 
             if (voice is null)
             {
@@ -631,15 +633,5 @@ public sealed partial class ShowSession
             var releasing = _voices.Where(v => v.State == VoiceState.Releasing).ToArray();
             return releasing.Length <= MaxReleasingVoices ? [] : releasing[..^MaxReleasingVoices];
         }
-    }
-
-    private sealed class PlayheadPlaybackClock(IPlayhead playhead) : IPlaybackClock
-    {
-        public TimeSpan ElapsedSinceStart => playhead.CurrentPosition;
-        public bool IsAdvancing => playhead.IsRunning;
-        // Forwarded: a seek/loop-wrap moves the playhead discontinuously, and a slaved MediaClock must see
-        // that as an epoch boundary rather than as a same-epoch regression it is required to hold through.
-        public long EpochId => playhead.PositionEpoch;
-        public ClockReading Read() => playhead.ReadPosition();
     }
 }
