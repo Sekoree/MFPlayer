@@ -21,18 +21,6 @@ public sealed class PlaybackClockAllocationTests
     }
 
     [Fact]
-    public void CompositePlaybackClock_ElapsedSinceStart_does_not_allocate_per_read()
-    {
-        var inner = new StubPlaybackClock(advancing: true, TimeSpan.FromSeconds(4));
-        var composite = new CompositePlaybackClock(new PlaybackClockCandidate(inner, 1));
-        AssertNoAllocationOnHotPath(() =>
-        {
-            _ = composite.ElapsedSinceStart;
-            _ = composite.IsAdvancing;
-        });
-    }
-
-    [Fact]
     public void VideoPtsClock_ElapsedSinceStart_does_not_allocate_per_read()
     {
         var pts = new VideoPtsClock();
@@ -53,14 +41,11 @@ public sealed class PlaybackClockAllocationTests
         var pts = new VideoPtsClock();
         pts.NotifyFramePts(TimeSpan.FromMilliseconds(40));
         pts.Resume();
-        var composite = new CompositePlaybackClock(
-            new PlaybackClockCandidate(new StubPlaybackClock(advancing: true, TimeSpan.FromSeconds(4)), 1));
         IPlaybackClock stub = new StubPlaybackClock(advancing: true, TimeSpan.FromSeconds(2));
 
         AssertNoAllocationOnHotPath(() =>
         {
             _ = pts.Read();
-            _ = composite.Read();
             _ = stub.Read(); // the interface's default composition
         });
     }

@@ -941,7 +941,7 @@ public sealed class MediaPlayer : IDisposable
         {
             if (options.IncludeAudioRouter && audioSource is not null)
             {
-                audioClock = new MediaClock(MediaClock.DefaultAudioTickInterval, videoTickInterval);
+                audioClock = new MediaClock(videoTickInterval);
                 var targetAudioRate = options.TargetAudioSampleRate is > 0
                     ? options.TargetAudioSampleRate.Value
                     : audioSource.Format.SampleRate;
@@ -979,7 +979,7 @@ public sealed class MediaPlayer : IDisposable
             }
             else
             {
-                freerun = new MediaClock(MediaClock.DefaultAudioTickInterval, videoTickInterval);
+                freerun = new MediaClock(videoTickInterval);
                 playClock = freerun;
                 if (disposeSourcesOnDispose && audioSource is IDisposable audioDisposable)
                     ownedDisposables.Add(audioDisposable);

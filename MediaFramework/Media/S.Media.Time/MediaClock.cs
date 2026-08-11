@@ -8,26 +8,32 @@ namespace S.Media.Time;
 
 /// <summary>
 /// Master playback clock. Free-running by default (backed by
-/// <see cref="Stopwatch"/>); call <see cref="SetMaster"/> (or
-/// <see cref="MediaClockExtensions.SetMasterChain"/> for <see cref="IMediaClock"/>) to slave it to an external
+/// <see cref="Stopwatch"/>); call <see cref="SetMaster"/> to slave it to an external
 /// <see cref="IPlaybackClock"/> (typically the audio output) so reported position
 /// tracks actual played samples instead of wall time.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Tick events (<see cref="AudioTick"/>, <see cref="VideoTick"/>,
-/// <see cref="PositionChanged"/>) are driven by an internal wall-clock thread
-/// regardless of master attachment - they're "render at this cadence" signals,
-/// not "media time advanced by X." When a tick handler runs long or the thread
-/// wakes late, the default driver <strong>bursts</strong> missed deadlines (capped) and then fast-forwards
-/// the schedule so a long stall does not freeze the process. The rational-rate constructor can instead
-/// coalesce missed video deadlines, which is the appropriate policy for a rendered composition.
+/// <see cref="VideoTick"/> is driven by an internal wall-clock thread regardless of master
+/// attachment - it is a "render at this cadence" signal, not "media time advanced by X." When a tick
+/// handler runs long or the thread wakes late, the default driver <strong>bursts</strong> missed
+/// deadlines (capped) and then fast-forwards the schedule so a long stall does not freeze the process.
+/// The rational-rate constructor can instead coalesce missed deadlines, which is the appropriate
+/// policy for a rendered composition.
 /// </para>
 /// <para>
-/// <see cref="PositionChanged"/> is usually raised from the driver thread at
-/// ~30 Hz. <see cref="Reset"/> and <see cref="Seek"/> raise it synchronously
-/// on the caller's thread immediately after updating the stored position -
-/// marshal if your UI requires a single context.
+/// <strong>The driver services exactly one deadline grid.</strong> It used to service three - a 100 Hz
+/// audio tick, the video grid and a 30 Hz position broadcast - and the outer two had no subscriber
+/// anywhere in the framework or the apps, so roughly 130 of every 190 wakes per second raised events
+/// nobody handled. Worse, the 30 Hz one was not free: it read <see cref="CurrentPosition"/>, which
+/// takes <c>_gate</c> and walks the entire master chain. A show runs one clock per voice plus one per
+/// composition, so that cost was paid sixteen times over on a 13-stem cue. Anything that needs a
+/// continuous position readout should poll <see cref="CurrentPosition"/> at its own display rate.
+/// </para>
+/// <para>
+/// <see cref="PositionChanged"/> therefore fires on <strong>re-anchor only</strong> - <see cref="Reset"/>
+/// and <see cref="Seek"/> raise it synchronously on the caller's thread immediately after updating the
+/// stored position (marshal if your UI requires a single context). It is not a cadence.
 /// </para>
 /// <para>
 /// When a master clock is attached, <see cref="Pause"/> snapshots how far the
@@ -44,9 +50,6 @@ namespace S.Media.Time;
 /// </remarks>
 public sealed class MediaClock : IMediaClock, IDisposable
 {
-    /// <summary>Audio-tick cadence used by the parameterless constructors (100 Hz).</summary>
-    public static readonly TimeSpan DefaultAudioTickInterval = TimeSpan.FromMilliseconds(10);
-
     /// <summary>
     /// Video-tick cadence used by the parameterless constructors (~60 Hz). This is a FALLBACK for
     /// callers that do not know their source's frame rate - a host that does should derive the
@@ -55,11 +58,8 @@ public sealed class MediaClock : IMediaClock, IDisposable
     /// </summary>
     public static readonly TimeSpan DefaultVideoTickInterval = TimeSpan.FromTicks(166_667); // ~60 Hz
 
-    private static readonly TimeSpan PositionChangedInterval  = TimeSpan.FromMilliseconds(33); // ~30 Hz
-
     private readonly Stopwatch _stopwatch = new();
     private readonly Lock _gate = new();
-    private readonly TimeSpan _audioTickInterval;
     private readonly TimeSpan _videoTickInterval;
     private readonly RationalFrameGrid? _videoFrameGrid;
     private readonly VideoTickCatchUpPolicy _videoTickCatchUpPolicy;
@@ -109,18 +109,15 @@ public sealed class MediaClock : IMediaClock, IDisposable
 
     private static readonly ILogger TraceLog = MediaDiagnostics.CreateLogger("S.Media.Core.Clock.MediaClock");
 
-    public MediaClock() : this(DefaultAudioTickInterval, DefaultVideoTickInterval, logger: null) { }
+    public MediaClock() : this(DefaultVideoTickInterval, logger: null) { }
 
     public MediaClock(ILogger? logger)
-        : this(DefaultAudioTickInterval, DefaultVideoTickInterval, logger) { }
+        : this(DefaultVideoTickInterval, logger) { }
 
-    public MediaClock(TimeSpan audioTickInterval, TimeSpan videoTickInterval, ILogger? logger = null)
+    public MediaClock(TimeSpan videoTickInterval, ILogger? logger = null)
     {
-        if (audioTickInterval <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(audioTickInterval));
         if (videoTickInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(videoTickInterval));
-        _audioTickInterval = audioTickInterval;
         _videoTickInterval = videoTickInterval;
         _videoTickCatchUpPolicy = VideoTickCatchUpPolicy.Burst;
         _log = logger;
@@ -131,25 +128,23 @@ public sealed class MediaClock : IMediaClock, IDisposable
     /// <see cref="TimeSpan"/> interval, absolute-index deadlines do not accumulate timing error.
     /// </summary>
     public MediaClock(
-        TimeSpan audioTickInterval,
         Rational videoFrameRate,
         VideoTickCatchUpPolicy videoTickCatchUpPolicy = VideoTickCatchUpPolicy.Coalesce,
         ILogger? logger = null)
     {
-        if (audioTickInterval <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(audioTickInterval));
         if (videoFrameRate.Numerator <= 0 || videoFrameRate.Denominator <= 0)
             throw new ArgumentOutOfRangeException(nameof(videoFrameRate));
 
-        _audioTickInterval = audioTickInterval;
         _videoFrameGrid = new RationalFrameGrid(videoFrameRate);
         _videoTickInterval = _videoFrameGrid.Value.ApproximatePeriod;
         _videoTickCatchUpPolicy = videoTickCatchUpPolicy;
         _log = logger;
     }
 
+    /// <summary>Raised when the position is explicitly re-established (<see cref="Seek"/>,
+    /// <see cref="Reset"/>), synchronously on the caller's thread. NOT a cadence - see the type remarks.</summary>
     public event EventHandler<TimeSpan>? PositionChanged;
-    public event EventHandler? AudioTick;
+
     public event EventHandler? VideoTick;
 
     /// <summary>Absolute frame-grid index associated with the most recently raised video tick.</summary>
@@ -472,50 +467,33 @@ public sealed class MediaClock : IMediaClock, IDisposable
     private void DriverLoopCore(CancellationToken token)
     {
         var sessionStart  = Stopwatch.GetTimestamp();
-        var nextAudio     = _audioTickInterval;
         var nextVideoIndex = 1L;
         var nextVideo     = VideoDeadlineAt(nextVideoIndex);
-        var nextPosition  = PositionChangedInterval;
 
         var waitHandle = token.WaitHandle;
 
         while (!token.IsCancellationRequested)
         {
             var elapsed = Stopwatch.GetElapsedTime(sessionStart);
-            var nextDeadline = Min(nextAudio, Min(nextVideo, nextPosition));
-            var sleep = nextDeadline - elapsed;
+            var sleep = nextVideo - elapsed;
 
             if (sleep > TimeSpan.Zero)
             {
                 // WaitHandle.WaitOne(TimeSpan) TRUNCATES to whole milliseconds, so a sub-millisecond
                 // remainder waits zero and returns instantly - and this loop then re-runs, and waits
                 // zero again, until the deadline finally passes. That busy-spin was the STEADY STATE,
-                // not an edge case: the three deadlines (10 ms audio, 16.667 ms video, 33 ms position)
-                // practically never land on a whole-millisecond boundary together, so nearly every wait
-                // gave back its fraction to be spun. ~59 ms of every second, on a thread at
-                // AboveNormal priority - and a show runs one clock PER VOICE, so a 13-stem cue paid it
-                // thirteen times over (measured ~10.5% of a core per clock thread, ~1.5 cores total).
-                // Rounding up costs at most a millisecond of lateness on one tick; the accumulators
-                // below still advance by exact intervals, so the cadence itself does not drift.
+                // not an edge case: the deadlines practically never land on a whole-millisecond
+                // boundary, so nearly every wait gave back its fraction to be spun. ~59 ms of every
+                // second, on a thread at AboveNormal priority - and a show runs one clock PER VOICE,
+                // so a 13-stem cue paid it thirteen times over (measured ~10.5% of a core per clock
+                // thread, ~1.5 cores total). Rounding up costs at most a millisecond of lateness on one
+                // tick; the accumulator below still advances by exact intervals, so the cadence itself
+                // does not drift.
                 var waitMs = (int)Math.Ceiling(sleep.TotalMilliseconds);
                 if (waitHandle.WaitOne(waitMs)) break;
             }
 
             elapsed = Stopwatch.GetElapsedTime(sessionStart);
-
-            if (elapsed >= nextAudio)
-            {
-                var audioBurst = 0;
-                while (elapsed >= nextAudio && audioBurst++ < 64)
-                {
-                    SafeInvoke(AudioTick);
-                    nextAudio += _audioTickInterval;
-                    elapsed = Stopwatch.GetElapsedTime(sessionStart);
-                }
-
-                while (nextAudio <= elapsed)
-                    nextAudio += _audioTickInterval;
-            }
 
             if (elapsed >= nextVideo)
             {
@@ -549,20 +527,6 @@ public sealed class MediaClock : IMediaClock, IDisposable
                         nextVideo = VideoDeadlineAt(nextVideoIndex);
                     }
                 }
-            }
-
-            if (elapsed >= nextPosition)
-            {
-                var posBurst = 0;
-                while (elapsed >= nextPosition && posBurst++ < 8)
-                {
-                    RaisePositionChanged(CurrentPosition);
-                    nextPosition += PositionChangedInterval;
-                    elapsed = Stopwatch.GetElapsedTime(sessionStart);
-                }
-
-                while (nextPosition <= elapsed)
-                    nextPosition += PositionChangedInterval;
             }
         }
     }

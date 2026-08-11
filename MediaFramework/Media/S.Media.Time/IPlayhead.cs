@@ -12,8 +12,11 @@ namespace S.Media.Time;
 /// For a seek-free read-only dependency, use <see cref="PlaybackTimelineClockExtensions.AsPlayhead"/>.
 /// </para>
 /// <para>
-/// Other public clocks: <see cref="MediaClock"/> (driver), <see cref="CompositePlaybackClock"/>,
-/// <see cref="VideoPtsClock"/>, and NDI's <c>NDIIngestPlaybackClock</c> (ingest master).
+/// Other public clocks: <see cref="MediaClock"/> (driver), <see cref="VideoPtsClock"/>,
+/// and NDI's <c>NDIIngestPlaybackClock</c> (ingest master). To hand a clock off between
+/// references without a position jump, use <see cref="SessionClock.SetReference"/> - an explicit,
+/// continuity-preserving swap - rather than letting a merge infer the handoff from which leaf
+/// happens to be advancing.
 /// </para>
 /// </remarks>
 public interface IPlayhead

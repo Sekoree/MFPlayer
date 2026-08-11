@@ -140,32 +140,10 @@ public class MediaClockTests
     }
 
     [TimingFact] // real-time timer rate - starves on an oversubscribed CI VM; opt-in via MFP_TIMING_TESTS=1
-    public void AudioTick_FiresAtApproximateRate()
-    {
-        var interval = TimeSpan.FromMilliseconds(20);
-        using var clock = new MediaClock(audioTickInterval: interval, videoTickInterval: TimeSpan.FromMilliseconds(100));
-        var ticks = 0;
-        clock.AudioTick += (_, _) => Interlocked.Increment(ref ticks);
-
-        var sw = Stopwatch.StartNew();
-        clock.Start();
-        Thread.Sleep(300);
-        clock.Pause();
-        sw.Stop();
-
-        // The tick count scales with the ACTUAL Start→Pause window, not the requested 300 ms - a loaded
-        // CI runner sleeps well past 300 ms, so an absolute range is flaky. Derive the expected count from
-        // the measured elapsed and allow generous slack for timer resolution + scheduling.
-        var expected = sw.Elapsed.TotalMilliseconds / interval.TotalMilliseconds;
-        var observed = Volatile.Read(ref ticks);
-        Assert.InRange(observed, expected * 0.4, expected * 1.75 + 3);
-    }
-
-    [TimingFact] // real-time timer rate - starves on an oversubscribed CI VM; opt-in via MFP_TIMING_TESTS=1
     public void VideoTick_FiresAtApproximateRate()
     {
         var interval = TimeSpan.FromMilliseconds(50);
-        using var clock = new MediaClock(audioTickInterval: TimeSpan.FromMilliseconds(200), videoTickInterval: interval);
+        using var clock = new MediaClock(videoTickInterval: interval);
         var ticks = 0;
         clock.VideoTick += (_, _) => Interlocked.Increment(ref ticks);
 
@@ -175,7 +153,8 @@ public class MediaClockTests
         clock.Pause();
         sw.Stop();
 
-        // Scale the expected count by the ACTUAL elapsed window (CI sleeps run long); see AudioTick above.
+        // Scale the expected count by the ACTUAL elapsed window: a loaded CI runner sleeps well past the
+        // requested 300 ms, so an absolute range is flaky. Generous slack for timer resolution + scheduling.
         var expected = sw.Elapsed.TotalMilliseconds / interval.TotalMilliseconds;
         var observed = Volatile.Read(ref ticks);
         Assert.InRange(observed, expected * 0.4, expected * 1.75 + 3);
@@ -185,7 +164,6 @@ public class MediaClockTests
     public void Rational_coalescing_clock_skips_missed_video_deadlines_instead_of_bursting_them()
     {
         using var clock = new MediaClock(
-            audioTickInterval: TimeSpan.FromSeconds(1),
             videoFrameRate: new Rational(100, 1),
             videoTickCatchUpPolicy: VideoTickCatchUpPolicy.Coalesce);
         var ticks = 0;
@@ -213,7 +191,7 @@ public class MediaClockTests
     {
         using var clock = new MediaClock();
         var ticks = 0;
-        clock.AudioTick += (_, _) => Interlocked.Increment(ref ticks);
+        clock.VideoTick += (_, _) => Interlocked.Increment(ref ticks);
 
         clock.Start();
         Thread.Sleep(80);
@@ -232,7 +210,7 @@ public class MediaClockTests
     {
         var clock = new MediaClock();
         var ticks = 0;
-        clock.AudioTick += (_, _) => Interlocked.Increment(ref ticks);
+        clock.VideoTick += (_, _) => Interlocked.Increment(ref ticks);
 
         clock.Start();
         Thread.Sleep(60);

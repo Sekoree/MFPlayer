@@ -6,9 +6,13 @@ namespace S.Media.Time;
 /// </summary>
 public interface IMediaClock : IPlayhead
 {
+    /// <summary>Raised when the position is explicitly re-established (<see cref="Seek"/>,
+    /// <see cref="Reset"/>). This is a re-anchor notification, NOT a cadence - poll
+    /// <see cref="IPlayhead.CurrentPosition"/> at your own display rate for a continuous readout.</summary>
     public event EventHandler<TimeSpan>? PositionChanged;
 
-    public event EventHandler? AudioTick;
+    /// <summary>Render-at-this-cadence signal from the clock's driver. Wall-driven regardless of master
+    /// attachment; it does not mean "media time advanced by one frame".</summary>
     public event EventHandler? VideoTick;
 
     public void Start();

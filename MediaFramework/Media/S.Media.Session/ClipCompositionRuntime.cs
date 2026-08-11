@@ -1215,11 +1215,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     {
         if (_slaveClock is not null) return;
 
-        var audioInterval = TimeSpan.FromMilliseconds(50);
-        _slaveClock = new MediaClock(
-            audioInterval,
-            _canvasRate,
-            VideoTickCatchUpPolicy.Coalesce);
+        _slaveClock = new MediaClock(_canvasRate, VideoTickCatchUpPolicy.Coalesce);
         if (_master is not null)
             _slaveClock.SetMaster(_master);
         _slaveClock.VideoTick += OnSlaveVideoTick;

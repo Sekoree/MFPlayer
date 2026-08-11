@@ -11,6 +11,30 @@ namespace S.Media.Core.Threading;
 /// <c>Post</c>/<c>InvokeAsync</c>, never by blocking the loop on itself. Lives in Core so every tier
 /// shares one dispatcher contract; <c>S.Media.Session</c>'s <c>ShowSession</c> owns one (Phase 4).
 /// </summary>
+/// <remarks>
+/// <para>
+/// <strong>The loop owns a dedicated thread, not a thread-pool one.</strong> It used to be
+/// <c>Task.Run(RunLoopAsync)</c> with <c>await work()</c> inside the consuming <c>foreach</c>, which meant
+/// that after every awaited command the loop's own continuation - the code that dequeues and STARTS the
+/// next command - had to wait for a pool thread. Every show-critical commit (cue fire, start edge, level
+/// write, completion poll) therefore queued behind whatever else the app had given the pool, and under the
+/// starvation a GO produces the pool's hill-climbing injection delay (~500 ms per thread) landed directly
+/// on the cue start path. A dedicated thread cannot be starved by unrelated work.
+/// </para>
+/// <para>
+/// The thread also installs a single-threaded <see cref="SynchronizationContext"/>, so an <c>await</c>
+/// inside a command that does NOT say <c>ConfigureAwait(false)</c> resumes on the dispatcher thread
+/// instead of the pool. Commands that do say it still resume on the pool - unchanged, and still fully
+/// serialized, because the loop does not take the next command until the current task completes.
+/// </para>
+/// <para>
+/// <see cref="IsOnDispatcherThread"/> stays <see cref="AsyncLocal{T}"/>-based rather than comparing thread
+/// identity. It is a RE-ENTRANCY guard: a command that has awaited with <c>ConfigureAwait(false)</c> is
+/// running on a pool thread while the loop sits blocked on that very command, so a nested
+/// <c>InvokeAsync</c> from there must still run inline. Answering by thread identity would make it post
+/// instead - onto a loop that cannot reach it - and deadlock.
+/// </para>
+/// </remarks>
 public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
 {
     public const int DefaultCapacity = 4096;
@@ -18,8 +42,12 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
     private static readonly AsyncLocal<SessionDispatcher?> Current = new();
 
     private readonly BlockingCollection<Func<Task>> _queue;
+    private readonly ConcurrentQueue<(SendOrPostCallback Callback, object? State)> _continuations = new();
+    private readonly ManualResetEventSlim _pumpWake = new(false);
     private readonly object _metricsGate = new();
-    private readonly Task _pump;
+    private readonly Thread _thread;
+    private readonly TaskCompletionSource _pumpExited =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _disposeState;
     private int _queueDisposed;
     private int _queuedWorkCount;
@@ -34,7 +62,15 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
         Name = string.IsNullOrWhiteSpace(name) ? nameof(SessionDispatcher) : name;
         Capacity = capacity;
         _queue = new BlockingCollection<Func<Task>>(new ConcurrentQueue<Func<Task>>(), capacity);
-        _pump = Task.Run(RunLoopAsync);
+        _thread = new Thread(RunLoop)
+        {
+            IsBackground = true,
+            Name = Name,
+            // Honoured on Windows; a no-op for a normal-priority process on Linux, where real priority
+            // needs SCHED_FIFO + RLIMIT_RTPRIO. Harmless either way, and correct where it applies.
+            Priority = ThreadPriority.AboveNormal,
+        };
+        _thread.Start();
     }
 
     public string Name { get; }
@@ -179,8 +215,10 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
         }
     }
 
-    private async Task RunLoopAsync()
+    private void RunLoop()
     {
+        var previousContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(this));
         try
         {
             foreach (var work in _queue.GetConsumingEnumerable())
@@ -191,22 +229,129 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
                 Current.Value = this;
                 try
                 {
-                    await work().ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    MediaDiagnostics.LogWarning("SessionDispatcher '{0}': queued work threw: {1}", Name, ex.Message);
+                    RunToCompletion(work);
                 }
                 finally
                 {
                     Current.Value = previous;
                 }
+
+                // Anything the command left posted to this context after it completed (a
+                // fire-and-forget continuation) runs here rather than waiting for the next command.
+                DrainContinuations();
             }
+
+            DrainContinuations();
         }
         finally
         {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
             DisposeQueueOnce();
+            _pumpExited.TrySetResult();
         }
+    }
+
+    /// <summary>
+    /// Runs one command to completion, pumping this context's continuations while it is in flight. Not
+    /// taking the next command until the task completes is what keeps the loop SERIAL across awaits - the
+    /// property every "dispatcher-confined" comment in the session layer depends on.
+    /// </summary>
+    private void RunToCompletion(Func<Task> work)
+    {
+        Task task;
+        try
+        {
+            task = work() ?? Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogWarning("SessionDispatcher '{0}': queued work threw: {1}", Name, ex.Message);
+            return;
+        }
+
+        if (!task.IsCompleted)
+        {
+            // A command that awaited with ConfigureAwait(false) finishes on a pool thread and posts
+            // nothing back here, so completion itself has to wake the pump or it would block forever on
+            // an empty continuation queue.
+            task.ContinueWith(
+                static (_, state) => ((SessionDispatcher)state!)._pumpWake.Set(),
+                this,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+
+            while (!task.IsCompleted)
+            {
+                if (_continuations.TryDequeue(out var pending))
+                {
+                    InvokeContinuation(pending);
+                    continue;
+                }
+
+                // Reset AFTER the wait, never before the dequeue: an item enqueued in the gap is still
+                // found by the TryDequeue at the top of the next iteration, so no wake-up is lost.
+                _pumpWake.Wait();
+                _pumpWake.Reset();
+            }
+        }
+
+        if (task.IsFaulted && task.Exception is { } faults)
+        {
+            MediaDiagnostics.LogWarning(
+                "SessionDispatcher '{0}': queued work threw: {1}", Name, faults.GetBaseException().Message);
+        }
+    }
+
+    private void DrainContinuations()
+    {
+        while (_continuations.TryDequeue(out var pending))
+            InvokeContinuation(pending);
+    }
+
+    private void InvokeContinuation((SendOrPostCallback Callback, object? State) pending)
+    {
+        try
+        {
+            pending.Callback(pending.State);
+        }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogWarning(
+                "SessionDispatcher '{0}': posted continuation threw: {1}", Name, ex.Message);
+        }
+    }
+
+    private void PostContinuation(SendOrPostCallback callback, object? state)
+    {
+        _continuations.Enqueue((callback, state));
+        _pumpWake.Set();
+    }
+
+    /// <summary>
+    /// Makes an <c>await</c> inside a command that did not opt out with <c>ConfigureAwait(false)</c>
+    /// resume on the dispatcher thread instead of the pool. <c>Send</c> from the dispatcher thread runs
+    /// inline; from anywhere else it would have to block on a loop that may be waiting on the caller, so
+    /// it is refused rather than allowed to deadlock.
+    /// </summary>
+    private sealed class DispatcherSynchronizationContext(SessionDispatcher owner) : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state) => owner.PostContinuation(d, state);
+
+        public override void Send(SendOrPostCallback d, object? state)
+        {
+            if (ReferenceEquals(Thread.CurrentThread, owner._thread))
+            {
+                d(state);
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"Session dispatcher '{owner.Name}' does not support blocking Send from another thread " +
+                "(see the OQ8 no-blocking-Invoke rule); use Post or InvokeAsync.");
+        }
+
+        public override SynchronizationContext CreateCopy() => this;
     }
 
     public void Dispose()
@@ -215,7 +360,7 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
         if (IsOnDispatcherThread)
             return;
 
-        _pump.GetAwaiter().GetResult();
+        _thread.Join();
     }
 
     public async ValueTask DisposeAsync()
@@ -224,7 +369,7 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
         if (IsOnDispatcherThread)
             return;
 
-        await _pump.ConfigureAwait(false);
+        await _pumpExited.Task.ConfigureAwait(false);
     }
 
     private void CompleteAddingOnce()
