@@ -17,30 +17,34 @@
     <PackageVersion Include="Avalonia.Skia" Version="12.1.1" />
     <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.1.1" />
     <PackageVersion Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
-    <PackageVersion Include="Dock.Avalonia" Version="12.0.0.2" />
-    <PackageVersion Include="Dock.Avalonia.Themes.Fluent" Version="12.0.0.2" />
-    <PackageVersion Include="Dock.Avalonia.Themes.Simple" Version="12.0.0.2" />
-    <PackageVersion Include="Dock.Model.Mvvm" Version="12.0.0.2" />
+    <PackageVersion Include="Dock.Avalonia" Version="12.1.0" />
+    <PackageVersion Include="Dock.Avalonia.Themes.Fluent" Version="12.1.0" />
+    <PackageVersion Include="Dock.Avalonia.Themes.Simple" Version="12.1.0" />
+    <PackageVersion Include="Dock.Model.Mvvm" Version="12.1.0" />
     <PackageVersion Include="TreeDataGrid.Avalonia" Version="12.0.0" />
     <PackageVersion Include="Xaml.Behaviors.Avalonia" Version="12.0.5" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageVersion Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3" />
     <PackageVersion Include="StbImageSharp" Version="2.30.16" />
-    <PackageVersion Include="Avalonia.Headless" Version="12.1.0" />
+    <PackageVersion Include="Avalonia.Headless" Version="12.1.1" />
     <!-- Android head (UI/HaViz.Android) -->
-    <PackageVersion Include="Avalonia.Android" Version="12.1.0" />
+    <PackageVersion Include="Avalonia.Android" Version="12.1.1" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.10" />
-    <!-- Decode / encode (Phase 2). FFmpeg.AutoGen 8.1.0 binds FFmpeg 8.0 and loads the VERSIONED soname
-         (avcodec-62.dll / libavcodec.so.62), so the native FFmpeg MUST be avcodec-62 (FFmpeg 8.0). The
-         FFmpeg.GPL nightlies track master: builds through ~20260601 ship avcodec-62 (match), but ~20260619+
-         bumped to avcodec-63 (FFmpeg 9-dev) which AutoGen 8.1.0 would fail to load. Pin to a 62 build. -->
-    <PackageVersion Include="FFmpeg.AutoGen" Version="8.1.0" />
-    <PackageVersion Include="FFmpeg.GPL" Version="20260601.1.0" />
+    <!-- Decode / encode (Phase 2). FFmpeg.AutoGen 9.0.0 binds FFmpeg 9.0 and loads the VERSIONED soname
+         (avcodec-63.dll / libavcodec.so.63), so the native FFmpeg MUST be avcodec-63 (FFmpeg 9.x).
+         9.0.0 is NOT on nuget.org - upstream is still on 8.1. It is built from the vendored source in
+         External/FFmpeg.AutoGen and served from the ./packages local source declared in nuget.config;
+         see External/FFmpeg.AutoGen/README.md for how to regenerate it.
+         The FFmpeg.GPL nightlies track master: ~20260619+ ship avcodec-63, and the pinned build is
+         verified to carry avcodec-63 / avformat-63 / avutil-61 / swscale-10. Master will bump to
+         avcodec-64 for FFmpeg 10, so do not move this pin without re-checking the soname. -->
+    <PackageVersion Include="FFmpeg.AutoGen" Version="9.0.0" />
+    <PackageVersion Include="FFmpeg.GPL" Version="20260811.1.0" />
     <!-- Present / GPU (Phase 2/3) -->
-    <PackageVersion Include="SDL3-CS" Version="3.4.14" />
-    <PackageVersion Include="SDL3-CS.Linux" Version="3.4.14" />
-    <PackageVersion Include="SDL3-CS.Windows" Version="3.4.14" />
+    <PackageVersion Include="SDL3-CS" Version="3.4.14.1" />
+    <PackageVersion Include="SDL3-CS.Linux" Version="3.4.14.1" />
+    <PackageVersion Include="SDL3-CS.Windows" Version="3.4.14.1" />
     <PackageVersion Include="Silk.NET.OpenGL" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Core" Version="2.23.0" />
     <PackageVersion Include="SkiaSharp" Version="3.119.4" />

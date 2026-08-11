@@ -42,6 +42,7 @@
              ever suspect GC-thread contention with JACK, exactly as HaPlay's note says. -->
         <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
         <ServerGarbageCollection>true</ServerGarbageCollection>
+        <PublishAot>true</PublishAot>
     </PropertyGroup>
 
     <ItemGroup>

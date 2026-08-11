@@ -94,14 +94,10 @@ internal static class FfmpegEncodeMaps
     internal static unsafe IReadOnlyList<int> AudioEncoderSampleRates(EncodeAudioCodec codec)
     {
         var encoder = FindAudioEncoder(codec);
-#pragma warning disable CS0618 // FFmpeg retains this zero-terminated capability list for AVCodec.
-        if (encoder is null || encoder->supported_samplerates is null)
+        if (encoder is null ||
+            !FfmpegCodecConfig.TryGetSupportedConfig<int>(encoder, AVCodecConfig.AV_CODEC_CONFIG_SAMPLE_RATE, out var rates))
             return [];
-        var rates = new List<int>();
-        for (var p = encoder->supported_samplerates; *p != 0; p++)
-            rates.Add(*p);
-#pragma warning restore CS0618
-        return rates;
+        return rates.ToArray();
     }
 
     internal static unsafe bool VideoEncoderSupportsPixelFormat(EncodeVideoCodec codec, PixelFormat pixelFormat)
@@ -110,13 +106,12 @@ internal static class FfmpegEncodeMaps
         var avPixel = FfmpegVideoPixelMaps.ToAvPixelFormat(pixelFormat);
         if (encoder is null || avPixel is null)
             return false;
-#pragma warning disable CS0618 // FFmpeg retains this zero-terminated capability list for AVCodec.
-        if (encoder->pix_fmts is null)
+        // A codec that reports no pixel-format list accepts any of them.
+        if (!FfmpegCodecConfig.TryGetSupportedConfig<AVPixelFormat>(encoder, AVCodecConfig.AV_CODEC_CONFIG_PIX_FORMAT, out var formats))
             return true;
-        for (var p = encoder->pix_fmts; *p != AVPixelFormat.AV_PIX_FMT_NONE; p++)
-            if (*p == avPixel.Value)
+        foreach (var format in formats)
+            if (format == avPixel.Value)
                 return true;
-#pragma warning restore CS0618
         return false;
     }
 

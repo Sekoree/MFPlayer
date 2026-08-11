@@ -205,6 +205,11 @@ PublishScripts/
 **/[Pp]ackages/*
 # except build/, which is used as an MSBuild target.
 !**/[Pp]ackages/build/
+# ...and except FFmpeg.AutoGen, which is built from the vendored source in External/FFmpeg.AutoGen and
+# served from the ./packages local source declared in nuget.config - upstream has no FFmpeg 9 release
+# yet, so nuget.org cannot supply it and a fresh clone would fail to restore. Rebuild it with:
+#   dotnet pack External/FFmpeg.AutoGen/FFmpeg.AutoGen/FFmpeg.AutoGen.csproj -c Release -o packages
+!/packages/FFmpeg.AutoGen.*.nupkg
 # MediaFramework/Packages/ holds the SOURCE of the NuGet entry/meta packages (review P2-5), not a
 # NuGet restore cache - without these negations `git add` silently skips it and every fresh clone
 # fails with MSB3202. Re-include the project dirs plus exactly their source files (csproj + README);

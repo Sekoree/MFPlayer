@@ -299,17 +299,18 @@ internal sealed unsafe class FfmpegAudioEncoderCore : IDisposable
 
     private static AVSampleFormat PickSampleFormat(AVCodec* codec)
     {
-#pragma warning disable CS0618 // sample_fmts: avcodec_get_supported_config needs an open context we don't have yet
-        if (codec->sample_fmts is null)
+        // No list means the codec takes any sample format, so the preferred one is fine.
+        if (!FfmpegCodecConfig.TryGetSupportedConfig<AVSampleFormat>(codec, AVCodecConfig.AV_CODEC_CONFIG_SAMPLE_FORMAT, out var formats) ||
+            formats.IsEmpty)
             return AVSampleFormat.AV_SAMPLE_FMT_FLTP;
-        for (var p = codec->sample_fmts; *p != AVSampleFormat.AV_SAMPLE_FMT_NONE; p++)
+
+        foreach (var format in formats)
         {
-            if (*p == AVSampleFormat.AV_SAMPLE_FMT_FLTP)
+            if (format == AVSampleFormat.AV_SAMPLE_FMT_FLTP)
                 return AVSampleFormat.AV_SAMPLE_FMT_FLTP;
         }
 
-        return codec->sample_fmts[0];
-#pragma warning restore CS0618
+        return formats[0];
     }
 
     public void Dispose()
