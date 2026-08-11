@@ -35,6 +35,21 @@ public sealed record TransportSnapshot(
     /// above remain for UI/API compatibility; new timing-sensitive code should consume this contract.
     /// </summary>
     public TransportTimelineSnapshot Timeline { get; init; }
+
+    /// <summary>
+    /// How far <see cref="ClipPosition"/> leads what is actually AT THE SPEAKER right now, for a voice
+    /// whose clock is mastered by its own producer. Zero for genlocked (silent/video-only) voices,
+    /// whose position already reads in the on-air domain - their start was deferred by exactly this
+    /// depth - and zero when the session has no program-audio target.
+    /// </summary>
+    /// <remarks>
+    /// A producer-mastered clock anchors RELATIVELY at its start edge, so the producer clock's latency
+    /// subtraction cancels and the position tracks content entering the mix bus - one downstream depth
+    /// (master pump in-flight + device latency) ahead of the glass-and-speaker truth a panel wants to
+    /// show. A display that mixes both kinds of voice must subtract this from the producer-mastered
+    /// ones, or cues that ARE playing together read ~100-200 ms apart.
+    /// </remarks>
+    public TimeSpan AudibleLatency { get; init; }
 }
 
 /// <summary>A soundboard voice's playhead - for the UI's per-tile progress/countdown.</summary>

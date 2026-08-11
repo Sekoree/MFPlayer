@@ -130,11 +130,17 @@
          the sheet takes against the cue list is the same kind of per-show decision as the other two
          splits. Both the sheet and the splitter disappear together when it is closed or undocked. -->
     <Grid DockPanel.Dock="Bottom"
-          RowDefinitions="4,Auto"
           IsVisible="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).IsTimelineOpen}">
+      <!-- A CONCRETE row height, not Auto: the sheet stretches to its row (it carries no height of
+           its own so the floating window can size it), and a splitter cannot resize an Auto row —
+           the old pairing left the split visibly draggable and doing nothing. -->
+      <Grid.RowDefinitions>
+        <RowDefinition Height="4" />
+        <RowDefinition Height="300" MinHeight="140" />
+      </Grid.RowDefinitions>
       <GridSplitter Grid.Row="0" Height="4" HorizontalAlignment="Stretch"
                     Background="Transparent" ResizeDirection="Rows" />
-      <v:TimelineSheet Grid.Row="1" MinHeight="140" DataContext="{Binding Timeline}" />
+      <v:TimelineSheet Grid.Row="1" DataContext="{Binding Timeline}" />
     </Grid>
 
     <!-- ══ tree · active · right column ════════════════════════════════════════════════════ -->

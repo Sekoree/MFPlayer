@@ -27,6 +27,13 @@ public sealed partial class ShowSession
     public IReadOnlyList<TransportSnapshot> Snapshot()
     {
         var views = _groupViews; // single volatile read of the published view
+        // One downstream-depth read per snapshot, not per group: it is the same bay path under every
+        // producer-mastered voice. Null target (HaPlay's direct routes) or a non-lead-aware clock = zero,
+        // and AudibleLatency stays zero everywhere.
+        var showClock = _programAudio?.MasterClock;
+        var downstreamLead = showClock is S.Media.Time.IPipelineLeadClock pipeline
+            ? pipeline.CurrentPipelineLead
+            : TimeSpan.Zero;
         var snaps = new TransportSnapshot[views.Count];
         for (var i = 0; i < views.Count; i++)
         {
@@ -34,6 +41,7 @@ public sealed partial class ShowSession
             // The captured player/clock may be torn down concurrently by a transport command; a racing read
             // just yields a stale/zero value for one poll tick rather than throwing across the query.
             TimeSpan now = TimeSpan.Zero, pos = TimeSpan.Zero, dur = TimeSpan.Zero;
+            var audibleLatency = TimeSpan.Zero;
             var running = false;
             var liveDisconnected = false;
             var audioChannels = 0;
@@ -54,6 +62,17 @@ public sealed partial class ShowSession
                         audioChannels = audio.Format.Channels;
                         audioSampleRate = audio.Format.SampleRate;
                     }
+
+                    // Producer-mastered ⇔ the clock's master is NOT the show clock (the genlock path
+                    // masters silent voices to exactly that instance). Only those positions lead the
+                    // speaker by the downstream depth - see TransportSnapshot.AudibleLatency.
+                    if (downstreamLead > TimeSpan.Zero
+                        && p.AudioClock is { } audioClock
+                        && audioClock.Master is { } master
+                        && !ReferenceEquals(master, showClock))
+                    {
+                        audibleLatency = downstreamLead;
+                    }
                 }
             }
             catch { /* concurrent teardown - leave zeros for this tick */ }
@@ -62,6 +81,7 @@ public sealed partial class ShowSession
                 timeline.Generation)
             {
                 Timeline = timeline,
+                AudibleLatency = audibleLatency,
             };
         }
         return snaps;

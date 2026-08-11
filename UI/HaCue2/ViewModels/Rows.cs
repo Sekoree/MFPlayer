@@ -686,10 +686,18 @@ public sealed record OutputLineChip
 public sealed record ProgramMeter(string Caption, double Level, double Peak, bool IsClipping = false);
 
 /// <summary>A timeline lane and the clips on it (screen 05).</summary>
-public sealed record TimelineLane
+/// <remarks>
+/// An observable CLASS rather than a record on purpose: mid-drag the sheet updates a lane's clips IN
+/// PLACE. Replacing the Lanes list makes the ItemsControl unrealize every ClipLane, and Avalonia
+/// releases pointer capture on detach — which is how a clip drag used to die after its first motion
+/// event.
+/// </remarks>
+public sealed partial class TimelineLane : ObservableObject
 {
     public required string Name { get; init; }
-    public IReadOnlyList<TimelineClip> Clips { get; init; } = [];
+
+    [ObservableProperty]
+    private IReadOnlyList<TimelineClip> _clips = [];
 
     /// <summary>Only clip lanes are draggable; an effect lane's points are edited in the curve editor.</summary>
     public bool IsEditable => !IsEffect;
@@ -708,7 +716,9 @@ public sealed record TimelineLane
     /// <see cref="Geometry"/> because a stretched geometry is scaled by its own bounding box — see
     /// <see cref="Controls.EnvelopeGraph"/> for why that renders a plausible lie.
     /// </remarks>
-    public IReadOnlyList<CurvePoint> Envelope { get; init; } = [];
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasEnvelope))]
+    private IReadOnlyList<CurvePoint> _envelope = [];
 
     public bool HasEnvelope => Envelope.Count > 1;
 }

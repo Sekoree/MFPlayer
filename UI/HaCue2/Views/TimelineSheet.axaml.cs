@@ -15,10 +15,20 @@ public partial class TimelineSheet : UserControl
 
     /// <summary>Closing the sheet is the Cues view's state, not the sheet's — the sheet is only ever
     /// a projection of "is the timeline open".</summary>
+    /// <remarks>
+    /// Through <c>Timeline.Owner</c>, never an ancestor walk: in the floating window there is no
+    /// <see cref="CuesView"/> above this control, and the ancestor form made CLOSE a silent no-op
+    /// there. Undocked, CLOSE means "close the editor", not "dock it" — <c>RequestClose</c> takes the
+    /// window down without the re-dock its ordinary Closed handler performs.
+    /// </remarks>
     private void OnClose(object? sender, RoutedEventArgs e)
     {
-        if (this.FindAncestorOfType<CuesView>()?.DataContext is CuesViewModel cues)
-            cues.IsTimelineOpen = false;
+        if (Timeline is not { Owner: { } cues } timeline)
+            return;
+
+        if (timeline.IsUndocked)
+            timeline.RequestClose();
+        cues.IsTimelineOpen = false;
     }
 
     // Handled here rather than bound: a lane lives in a DataTemplate whose DataContext is one lane, and
@@ -118,10 +128,25 @@ public partial class TimelineSheet : UserControl
         cues.IsTimelineOpen = false;
 
         var window = new TimelineWindow { DataContext = timeline };
+
+        // RequestClose (CLOSE ⎋ while floating, or the group leaving timeline mode) closes the
+        // window WITHOUT the re-dock: those closes mean "the editor goes away", and re-docking would
+        // resurrect the sheet the caller just asked to be rid of. A plain window close (title bar,
+        // DOCK ↙) still docks, so the panel can never be lost.
+        var closing = false;
+        void CloseWithoutRedock()
+        {
+            closing = true;
+            window.Close();
+        }
+
+        timeline.CloseRequested += CloseWithoutRedock;
         window.Closed += (_, _) =>
         {
+            timeline.CloseRequested -= CloseWithoutRedock;
             timeline.IsUndocked = false;
-            cues.IsTimelineOpen = true;
+            if (!closing)
+                cues.IsTimelineOpen = true;
         };
 
         window.Show(this.FindAncestorOfType<Window>()!);
@@ -129,10 +154,49 @@ public partial class TimelineSheet : UserControl
 
     private void OnDuck(object? sender, RoutedEventArgs e)
     {
-        if (Timeline is not { Owner: { SelectedCue: { } selected } } timeline)
+        if (Timeline is not { } timeline)
             return;
 
-        PromptWindow.Show(this, timeline.Duck(selected.Id), timeline.Refresh);
+        // The refusal is SAID, in the transport row's problem slot: Duck's preconditions (a media cue
+        // of this group selected, something overlapping it) are easy to miss, and a button that does
+        // nothing silently reads as unimplemented.
+        if (timeline.Owner is not { SelectedCue: { } selected }
+            || timeline.Duck(selected.Id) is not { } prompt)
+        {
+            timeline.TransportProblem =
+                "duck needs a media cue of this group selected, with something overlapping it";
+            return;
+        }
+
+        timeline.TransportProblem = "";
+        PromptWindow.Show(this, prompt, timeline.Refresh);
+    }
+
+    /// <summary>
+    /// Adds an effect lane to the selected cue, from the footer's picker.
+    /// </summary>
+    /// <remarks>
+    /// Delegates to the inspector's <c>AddLane</c> — the one place that knows which kinds a cue can
+    /// carry — so the footer affordance and the inspector's stay one behaviour. The refusal goes to
+    /// the transport row, same as Duck's.
+    /// </remarks>
+    private void OnAddLane(object? sender, RoutedEventArgs e)
+    {
+        if (Timeline is not { Owner.Inspector: { } inspector } timeline
+            || (sender as Control)?.Tag is not string tag
+            || !int.TryParse(tag, out var kind))
+            return;
+
+        if (!inspector.CanAddLane(kind))
+        {
+            timeline.TransportProblem =
+                "select a cue that can carry that lane (and does not have one yet)";
+            return;
+        }
+
+        timeline.TransportProblem = "";
+        inspector.AddLane(kind);
+        timeline.Refresh();
     }
 
     private TimelineViewModel? Timeline => DataContext as TimelineViewModel;

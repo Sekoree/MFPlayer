@@ -1589,6 +1589,19 @@ public partial class CuesViewModel : ObservableObject
         Inspector.Facts = FactsFor(SelectedCue);
         Inspector.Reload();
         Timeline.Refresh();
+
+        // The editor follows a GROUP MODE, not a selection: when its group stops being a timeline —
+        // the fire mode was switched, the group deleted, or an undo took either back — the sheet and
+        // the floating window both close rather than keep editing offsets no run will read.
+        if ((IsTimelineOpen || Timeline.IsUndocked)
+            && (Timeline.Group is not { } timelineGroup
+                || !ReferenceEquals(Project.FindCue(timelineGroup.Id), timelineGroup)
+                || timelineGroup.FireMode != GroupFireMode.Timeline))
+        {
+            Timeline.RequestClose();
+            IsTimelineOpen = false;
+        }
+
         Tick();
         OnPropertyChanged(nameof(TreeHint));
         OnPropertyChanged(nameof(Breadcrumb));
@@ -2217,8 +2230,12 @@ public sealed partial class TimelineViewModel : ObservableObject
         if (_drag is null)
         {
             _dragSpan = _view.LengthMs;
+            // QUIET: each motion event journals a step, and a per-step Changed makes the shell run its
+            // whole refresh pass per pointer move — rebuilding the very lane controls this drag is
+            // captured on. The sheet follows the pointer through its own in-place Refresh below; the
+            // rest of the app sees ONE change when the gesture ends and the scope closes.
             _drag = _journal.Composite(
-                gesture.Edge == ClipEdge.Body ? "move clip" : "trim clip", "cues");
+                gesture.Edge == ClipEdge.Body ? "move clip" : "trim clip", "cues", quiet: true);
         }
 
         // Fractions of the WINDOW, so a drag means the same distance on screen however far in the
@@ -2261,6 +2278,15 @@ public sealed partial class TimelineViewModel : ObservableObject
         _drag?.Dispose();
         _drag = null;
     }
+
+    /// <summary>
+    /// Raised when the editor must close wherever it lives — the group left timeline mode, or left
+    /// the document. The floating window subscribes; the docked sheet needs only
+    /// <see cref="CuesViewModel.IsTimelineOpen"/>.
+    /// </summary>
+    public event Action? CloseRequested;
+
+    public void RequestClose() => CloseRequested?.Invoke();
 
     /// <summary>
     /// Ducks the selected clip under everything else that overlaps it.
@@ -2368,12 +2394,48 @@ public sealed partial class TimelineViewModel : ObservableObject
         // into part of the sheet with nothing beside them.
         _view = Clamp(_view);
 
-        Lanes = TimelinePresentation.Lanes(_group, _project, _runtime, _view);
+        var lanes = TimelinePresentation.Lanes(_group, _project, _runtime, _view);
+
+        // Mid-gesture the lane CONTAINERS must survive: replacing the Lanes list unrealizes every
+        // ClipLane, and Avalonia releases pointer capture on detach — the drag would die on its first
+        // motion event. A drag cannot change the lane STRUCTURE, so the fresh clips and envelopes are
+        // copied into the existing lane objects instead; anything structural falls through to the
+        // ordinary replacement.
+        if (_drag is not null && SameLaneStructure(Lanes, lanes))
+        {
+            for (var i = 0; i < lanes.Count; i++)
+            {
+                Lanes[i].Clips = lanes[i].Clips;
+                Lanes[i].Envelope = lanes[i].Envelope;
+            }
+        }
+        else
+        {
+            Lanes = lanes;
+        }
+
         Ruler = TimelinePresentation.Ruler(_group, _runtime, _view);
 
         OnPropertyChanged(nameof(Playhead));
         OnPropertyChanged(nameof(ZoomLabel));
         OnPropertyChanged(nameof(PlayheadLabel));
+    }
+
+    private static bool SameLaneStructure(
+        IReadOnlyList<TimelineLane> current, IReadOnlyList<TimelineLane> fresh)
+    {
+        if (current.Count != fresh.Count)
+            return false;
+
+        for (var i = 0; i < current.Count; i++)
+        {
+            if (current[i].Name != fresh[i].Name
+                || current[i].IsEffect != fresh[i].IsEffect
+                || current[i].IsGroup != fresh[i].IsGroup)
+                return false;
+        }
+
+        return true;
     }
 
     // ── the view window (screen 05's zoom controls) ───────────────────────────────────────────

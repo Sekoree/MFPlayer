@@ -10,12 +10,25 @@
        machine). Envelopes are not a fixed overlay: volume, opacity and outbound OSC/MIDI ramps are
        effect LANES added per cue or per group and hidden until added (register item 18). -->
 
-  <c:PanelBox Header="{Binding Title}" Hint="{Binding Hint}" Margin="7,0,7,7" Height="300">
+  <!-- No fixed height: docked, the host row (and its splitter) decide; floating, the window does.
+       A hard Height here was why the undocked editor ignored its window being resized and why the
+       docked splitter moved nothing. -->
+  <c:PanelBox Header="{Binding Title}" Hint="{Binding Hint}" Margin="7,0,7,7">
 
     <c:PanelBox.Footer>
       <Border Classes="chain">
         <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="7">
-          <Border Grid.Column="0" Classes="badge"><TextBlock Text="+ EFFECT LANE" /></Border>
+          <Button Grid.Column="0" Classes="icon" Content="+ EFFECT LANE ▾">
+            <Button.Flyout>
+              <MenuFlyout>
+                <MenuItem Header="Volume" Click="OnAddLane" Tag="0" />
+                <MenuItem Header="Opacity" Click="OnAddLane" Tag="1" />
+                <Separator />
+                <MenuItem Header="OSC ramp" Click="OnAddLane" Tag="2" />
+                <MenuItem Header="MIDI ramp" Click="OnAddLane" Tag="3" />
+              </MenuFlyout>
+            </Button.Flyout>
+          </Button>
           <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
                      TextTrimming="CharacterEllipsis"
                      Text="volume · opacity · OSC ramp · MIDI ramp — per cue or per group, hidden until added" />

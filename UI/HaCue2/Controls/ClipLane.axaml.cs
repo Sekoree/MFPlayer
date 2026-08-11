@@ -141,6 +141,24 @@ public partial class ClipLane : UserControl
         GestureCompleted?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// A capture that ends any other way — the window deactivated, the control was torn out of the
+    /// tree — must still complete the gesture: the view-model's journal composite stays open until
+    /// <see cref="GestureCompleted"/>, and an unclosed one folds every later edit into the drag's
+    /// undo step.
+    /// </summary>
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        base.OnPointerCaptureLost(e);
+
+        if (_draggedIndex < 0)
+            return;
+
+        _draggedIndex = -1;
+        _edge = ClipEdge.Body;
+        GestureCompleted?.Invoke(this, EventArgs.Empty);
+    }
+
     private int ClipAt(Point position, double laneWidth)
     {
         for (var index = Clips.Count - 1; index >= 0; index--)

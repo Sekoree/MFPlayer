@@ -541,7 +541,18 @@ public sealed partial class ShowHost
 
                     // The group's position when it has one, and wall time otherwise — a visualizer
                     // cue holds no transport at all, and counting up is better than standing still.
-                    var elapsed = playhead is { IsActive: true } ? playhead.ClipPosition : wall;
+                    //
+                    // ONE domain for the whole panel: on-air. A routed cue's transport position tracks
+                    // content entering the mix bus — one downstream depth (~pump + device latency)
+                    // ahead of the speaker — while a genlocked video-only cue's position tracks the
+                    // glass (its start was deferred by exactly that depth). Shown raw, cues that ARE
+                    // playing together read ~100–200 ms apart; subtracting AudibleLatency puts every
+                    // readout at the speaker/glass truth.
+                    var elapsed = playhead is { IsActive: true }
+                        ? playhead.ClipPosition > playhead.AudibleLatency
+                            ? playhead.ClipPosition - playhead.AudibleLatency
+                            : TimeSpan.Zero
+                        : wall;
                     var length = playhead is { ClipDuration.Ticks: > 0 }
                         ? (TimeSpan?)playhead.ClipDuration
                         : null;
