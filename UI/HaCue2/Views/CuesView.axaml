@@ -295,8 +295,15 @@
                     <TextBlock Text="{Binding SeekLockLabel}" />
                   </StackPanel>
                 </ToggleButton>
-                <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
-                           TextWrapping="Wrap" Text="{Binding SeekLockHint}" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                            VerticalAlignment="Center">
+                  <!-- Only while a seek is actually outstanding: a drag that takes a moment otherwise
+                       looks identical to one the app ignored, and the operator drags again. -->
+                  <Ellipse Classes="led warn" IsVisible="{Binding IsSeeking}"
+                           AutomationProperties.Name="Seek in progress" />
+                  <TextBlock Classes="mono dim3 small" TextWrapping="Wrap"
+                             Text="{Binding SeekLockHint}" />
+                </StackPanel>
               </Grid>
             </Border>
           </c:PanelBox.Footer>

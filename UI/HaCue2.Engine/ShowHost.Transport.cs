@@ -407,10 +407,23 @@ public sealed partial class ShowHost
         if (group.Length == 0)
             return "that cue has no transport to seek";
 
-        await _session.SeekAsync(position < TimeSpan.Zero ? TimeSpan.Zero : position, group)
-            .ConfigureAwait(false);
+        await _session.SeekAsync(MediaTimeFor(cueId, position), group).ConfigureAwait(false);
         return null;
     }
+
+    /// <summary>
+    /// CUE time (what the operator scrubbed to) → the MEDIA time the transport seeks in, for whichever
+    /// cue this is. Non-media cues have no trim and pass through.
+    /// </summary>
+    /// <remarks>
+    /// The arithmetic lives on <see cref="MediaCueNode.MediaTimeAt"/>, beside its inverse and beside
+    /// <see cref="MediaCueNode.TrimmedLength"/>, because this mapping having two independently-written
+    /// halves is precisely what made a trimmed cue seek to the wrong place.
+    /// </remarks>
+    private TimeSpan MediaTimeFor(Guid cueId, TimeSpan cueTime) =>
+        _project.FindCue(cueId) is MediaCueNode media
+            ? media.MediaTimeAt(cueTime)
+            : cueTime > TimeSpan.Zero ? cueTime : TimeSpan.Zero;
 
     /// <summary>
     /// Seeks several sounding cues as ONE transport operation — the group-header scrub.
@@ -429,8 +442,12 @@ public sealed partial class ShowHost
         {
             foreach (var (cueId, position) in seeks)
             {
+                // Per cue, not per batch: each cue carries its OWN trim, so one group-wide "seek to
+                // 30:50" is a different file position for a trimmed child than for an untrimmed one.
+                // That is exactly what a together-group seek means - land every child on the same bar
+                // of the song - and it is why the conversion cannot be hoisted out of this loop.
                 if (_sounding.TryGetValue(cueId, out var entry) && entry.GroupId.Length > 0)
-                    batch.Add((entry.GroupId, position < TimeSpan.Zero ? TimeSpan.Zero : position));
+                    batch.Add((entry.GroupId, MediaTimeFor(cueId, position)));
             }
         }
 
@@ -514,11 +531,7 @@ public sealed partial class ShowHost
                     if (playhead is { IsActive: true }
                         && _project.FindCue(entry.Key) is MediaCueNode media)
                     {
-                        if (media.TrimInMs > 0)
-                        {
-                            var relative = elapsed - TimeSpan.FromMilliseconds(media.TrimInMs);
-                            elapsed = relative > TimeSpan.Zero ? relative : TimeSpan.Zero;
-                        }
+                        elapsed = media.CueTimeAt(elapsed);
 
                         if (length is { } fullLength && media.TrimmedLength(fullLength) is { } trimmed)
                             length = trimmed;

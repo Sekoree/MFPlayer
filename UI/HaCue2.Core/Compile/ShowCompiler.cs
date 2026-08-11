@@ -323,6 +323,14 @@ public static class ShowCompiler
                 CueEndBehavior.FadeOutAndStop => ClipEndBehavior.FadeOutAndStop,
                 _ => media.Loop ? ClipEndBehavior.Loop : ClipEndBehavior.Stop,
             },
+            // Always on. The engine now monitors every clip with a known end, so the POSITION path
+            // (playhead reaches the out-point) no longer needs this flag — but the STALL path does, and
+            // it is the one that catches a source whose real content is SHORTER than its metadata says.
+            // A mis-tagged VBR file simply stops: its playhead never reaches the declared out-point, so
+            // without this the cue sits in the Active panel forever with nothing having ended it. HaCue2
+            // has follow cues and an Active panel, which is exactly the host this flag exists for, and
+            // it had never been set.
+            NotifyNaturalEnd = true,
             LoopCrossfade = TimeSpan.FromMilliseconds(Math.Max(0, media.LoopCrossfadeMs)),
             DisablePreRoll = media.DisablePreRoll,
             Placement = placement is null ? null : VideoPlacement(placement),

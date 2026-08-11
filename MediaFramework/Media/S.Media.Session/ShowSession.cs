@@ -1435,12 +1435,25 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             // Built HERE (the stage turn) as a closure because every input is a stage-time fact; it runs
             // from the finalize turn or the start edge, strictly after the voice committed.
             var end = player.Duration - binding.EndOffset;
-            var endHandling = (binding.Loop || binding.EndBehavior != ClipEndBehavior.Stop
-                               || binding.EndOffset > TimeSpan.Zero || binding.FadeOut > TimeSpan.Zero
-                               || binding.EndAtDuration || binding.NotifyNaturalEnd
-                               || binding.PreEndNotify > TimeSpan.Zero)
-                && player.Duration > TimeSpan.Zero
-                && end > binding.StartOffset;
+
+            // Armed for EVERY clip with a known end, not only for clips that authored something to
+            // happen there.
+            //
+            // It used to also require one of loop / non-Stop end behaviour / end offset / fade-out /
+            // EndAtDuration / NotifyNaturalEnd / pre-end notify - "so a plain play-to-end cue with no
+            // fade starts nothing". But noticing that a clip ENDED is not an optional end behaviour: the
+            // release path lives here and nowhere else, so a plain cue that ran out simply never
+            // released. It stayed its group's ActiveVoice holding a decoder, its outputs, its routes and
+            // its producer lease until something re-fired or stopped the group, and it never raised
+            // ClipNaturallyEnded - so a host's "what is sounding" list kept it forever (reported live:
+            // ended cues sat in the Active panel with their readout counting up, because the panel falls
+            // back to wall time for a listed cue whose transport is gone). A follow chain hung off the
+            // same event, so a Follow cue with no fade and no trim never followed either.
+            //
+            // The optional behaviours are still conditional - they are decided inside PollClipEndAsync,
+            // which is where they belong. The cost of arming this more widely is nil: completion polling
+            // is consolidated, so one dispatcher command already walks every group per tick.
+            var endHandling = player.Duration > TimeSpan.Zero && end > binding.StartOffset;
             var hasEnvelope = binding.VolumeEnvelope is { Count: > 0 } && routeTargets.Count > 0;
             void BeginClipWork()
             {

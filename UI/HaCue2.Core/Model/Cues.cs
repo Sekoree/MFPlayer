@@ -198,6 +198,45 @@ public sealed record MediaCueNode : CueNode
             : null;
     }
 
+    /// <summary>
+    /// CUE time (0 = this cue's in-point, what the operator reads and scrubs) → MEDIA time (0 = the
+    /// start of the file, what the transport seeks in). Clamped to the trimmed window.
+    /// </summary>
+    /// <remarks>
+    /// Kept ADJACENT to <see cref="CueTimeAt"/> on purpose. The two directions of this mapping were
+    /// written independently and in different assemblies - the read half lived in the engine's snapshot,
+    /// the write half did not exist at all - so a cue trimmed to start at 36:00 displayed correctly and
+    /// then seeked to the wrong place: a scrub to 30:50 CUE time reached the player as 30:50 FILE time,
+    /// landed before the cue's own in-point, and the display clamped the negative result to zero, which
+    /// read as "it jumped to the beginning". Asymmetric mappings are the bug; putting both halves in one
+    /// place, next to the length that uses the same numbers, is the fix.
+    /// </remarks>
+    public TimeSpan MediaTimeAt(TimeSpan cueTime)
+    {
+        if (cueTime < TimeSpan.Zero)
+            cueTime = TimeSpan.Zero;
+
+        var mediaTime = TimeSpan.FromMilliseconds(TrimInMs) + cueTime;
+        if (TrimOutMs > TrimInMs)
+        {
+            var trimOut = TimeSpan.FromMilliseconds(TrimOutMs);
+            if (mediaTime > trimOut)
+                mediaTime = trimOut;
+        }
+
+        return mediaTime;
+    }
+
+    /// <summary>
+    /// MEDIA time → CUE time: the inverse of <see cref="MediaTimeAt"/>, floored at zero (media before
+    /// the in-point is not part of this cue).
+    /// </summary>
+    public TimeSpan CueTimeAt(TimeSpan mediaTime)
+    {
+        var cueTime = mediaTime - TimeSpan.FromMilliseconds(TrimInMs);
+        return cueTime > TimeSpan.Zero ? cueTime : TimeSpan.Zero;
+    }
+
     public int FadeInMs { get; set; }
     public CurveSpec FadeInCurve { get; set; } = new();
     public int FadeOutMs { get; set; }

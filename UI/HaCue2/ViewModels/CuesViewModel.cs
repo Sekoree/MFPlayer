@@ -536,8 +536,7 @@ public partial class CuesViewModel : ObservableObject
 
         var target = length * Math.Clamp(fraction, 0, 1);
 
-        if (await host.SeekCueAsync(cueId, target).ConfigureAwait(true) is { } problem)
-            TransportProblem = problem;
+        await RunSeekAsync(() => host.SeekCueAsync(cueId, target));
     }
 
     /// <summary>
@@ -591,8 +590,7 @@ public partial class CuesViewModel : ObservableObject
             .Select(row => (row.CueId,
                 row.Duration is { } length && length < target ? length : target))
             .ToArray();
-        if (await host.SeekCuesAsync(batch).ConfigureAwait(true) is { } problem)
-            TransportProblem = problem;
+        await RunSeekAsync(() => host.SeekCuesAsync(batch));
     }
 
     /// <summary>The last refusal from a transport gesture, or nothing.</summary>
@@ -648,7 +646,52 @@ public partial class CuesViewModel : ObservableObject
         ? "SEEK ENABLED"
         : SeekUnlocked ? "SEEK UNLOCKED" : "SEEK LOCKED";
 
-    public string SeekLockHint => CanEditDocument
+    /// <summary>
+    /// True while a seek the operator asked for is still working, and has been for long enough to be
+    /// worth saying so.
+    /// </summary>
+    /// <remarks>
+    /// A seek is not instant: the transport pauses every target, the demux seeks (a cold 4 K file off a
+    /// slow disk is the bad case), the jitter buffer refills and a synchronisation frame is presented
+    /// before the clocks are released. With nothing on screen saying that, a drag that takes a moment is
+    /// indistinguishable from a drag the app ignored - so the operator drags again, which queues a
+    /// second seek behind the first and makes it worse.
+    /// <para>Deliberately delayed by <see cref="SeekBusyDelay"/> rather than set on entry: most seeks
+    /// finish well inside it, and an indicator that flickers on every quick scrub is noise that teaches
+    /// the operator to ignore it.</para>
+    /// </remarks>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SeekLockHint))]
+    private bool _isSeeking;
+
+    /// <summary>How long a seek may take before the panel admits it is working.</summary>
+    private static readonly TimeSpan SeekBusyDelay = TimeSpan.FromMilliseconds(150);
+
+    /// <summary>
+    /// Runs a seek, surfacing <see cref="IsSeeking"/> if it outlasts <see cref="SeekBusyDelay"/> and
+    /// reporting whatever refusal it returns. The one place both Active-panel seek gestures go through,
+    /// so the indicator cannot be wired to one and forgotten on the other.
+    /// </summary>
+    private async Task RunSeekAsync(Func<Task<string?>> seek)
+    {
+        var work = seek();
+        if (await Task.WhenAny(work, Task.Delay(SeekBusyDelay)).ConfigureAwait(true) != work)
+            IsSeeking = true;
+
+        try
+        {
+            if (await work.ConfigureAwait(true) is { } problem)
+                TransportProblem = problem;
+        }
+        finally
+        {
+            IsSeeking = false;
+        }
+    }
+
+    public string SeekLockHint => IsSeeking
+        ? "seeking…"
+        : CanEditDocument
         ? "editing mode — drag an Active bar to seek a playing cue"
         : SeekUnlocked
             ? "the bars in Active can be dragged — a drag moves a cue that is on air"

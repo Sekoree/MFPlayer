@@ -470,7 +470,13 @@ public sealed class ShowSessionTests
         // The NXT-04 discontinuity contract slice: seek, pause, resume, and clip replacement each bump the
         // group's timeline generation in the snapshot; plain playback progress does not. Pollers (the deck
         // end-confirmation, the end monitor's stall check) key their transient windows off the CHANGE.
-        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        //
+        // Enough chunks to outlast the whole test. The fake's DEFAULT is 8 chunks - 80 ms of samples
+        // behind a declared 10-second Duration - so the clip hits natural EOF before the second
+        // assertion. That used to go unnoticed because a plain play-to-end binding armed no end monitor
+        // at all, so nothing acted on the end; now that every clip with a known end is monitored, the
+        // voice is correctly released mid-test and "plain progress" becomes a clip replacement.
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 2_000));
         await session.LoadDocumentAsync(TwoAudioCues());
         await session.GoAsync();
         await Task.Delay(50);
@@ -2235,6 +2241,49 @@ public sealed class ShowSessionTests
         Assert.Equal("c", await naturallyEnded.Task.WaitAsync(TimeSpan.FromSeconds(3)));
         var snap = Assert.Single(await session.SnapshotAsync());
         Assert.Equal(TimeSpan.Zero, snap.ClipDuration); // released, not held
+    }
+
+    [Fact]
+    public async Task BarePlainStopClip_WithoutNotifyNaturalEnd_StillReleasesAtItsEnd()
+    {
+        // The sibling test above proves the OPT-IN path. This one proves there is no longer an opt-in to
+        // miss: the end monitor is armed for every clip with a known end, because noticing that a clip
+        // ended is not an optional end behaviour - the release path lives there and nowhere else.
+        //
+        // Reported from a live rig (2026-08-11): in a 13-cue together-group the shorter cues reached
+        // their end, stayed in the Active panel, and their readouts kept counting up. Nothing had asked
+        // for an end behaviour, so nothing was watching; the voices held their decoders, outputs, routes
+        // and producer leases indefinitely, and the panel - having a cue with no live transport - fell
+        // back to wall time. HaCue2 never sets NotifyNaturalEnd, so the opt-in was never taken.
+        var output = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "File")],
+            Clips:
+            [
+                new ShowClipBinding("c", "held://x", CompositionId: "screen")
+                {
+                    // Deliberately bare: no NotifyNaturalEnd, no trim, no fade, no loop, Stop at end.
+                    Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"),
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)], Routes: []);
+        await using var session = new ShowSession(
+            UnboundedHeldProvider.Registry(TimeSpan.FromMilliseconds(400)),
+            videoOutputFactory: (_, _, _, _) => [new ClipCompositionOutputLease("o", "Screen", output)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+        var naturallyEnded = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.ClipNaturallyEnded += cueId => naturallyEnded.TrySetResult(cueId);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal("c", await naturallyEnded.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+        var snap = Assert.Single(await session.SnapshotAsync());
+        Assert.Equal(TimeSpan.Zero, snap.ClipDuration); // released, so a host stops listing it
     }
 
     [Fact]

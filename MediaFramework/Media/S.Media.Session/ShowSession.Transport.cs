@@ -408,13 +408,48 @@ public sealed partial class ShowSession
                     (errors ??= []).Add(ex);
                 }
             }
+            // 3) Resume in TWO PHASES, exactly as a group fire does. player.Play() is prepare-and-start in
+            //    one call, and the prepare half is slow: decode spin-up, the video jitter-buffer wait, and
+            //    a sync present worth up to 250 ms EACH. Resuming with it in a loop therefore started
+            //    voice N's clock only after voices 1..N-1 had each finished their whole slow half, so the
+            //    barrier that had just frozen every clock together released them staggered - measured
+            //    live as ~57 ms per voice, ~700 ms across a 13-cue group, with positions descending in
+            //    list order. The pause/seek half was atomic and the resume threw that away.
+            //
+            //    This is the same defect PreparePlay was introduced to fix on the FIRE path (see
+            //    AvPlaybackCoordinator/VoiceStartPolicy: "every voice queued behind a video sibling
+            //    started late by that sibling's present-sync"); the seek path simply never adopted it.
+            var starters = new List<(TransportGroup Group, Action? Start, TimeSpan MasterBeforeSeek)>(targets.Count);
             foreach (var (group, player, _, resume, masterBeforeSeek) in targets)
             {
-                if (resume)
+                if (!resume)
+                {
+                    starters.Add((group, null, masterBeforeSeek));
+                    continue;
+                }
+
+                try
+                {
+                    starters.Add((group, player.PreparePlay(), masterBeforeSeek));
+                }
+                catch (Exception ex)
+                {
+                    MediaDiagnostics.LogError(ex, "ShowSession: group seek resume preparation failed");
+                    (errors ??= []).Add(ex);
+                    starters.Add((group, null, masterBeforeSeek));
+                }
+            }
+
+            // The start edge: every prepared voice's clock starts here, back to back, with nothing slow
+            // in between. What remains is the cost of the starts themselves (microseconds), not of the
+            // preparations.
+            foreach (var (group, start, masterBeforeSeek) in starters)
+            {
+                if (start is not null)
                 {
                     try
                     {
-                        player.Play();
+                        start();
                     }
                     catch (Exception ex)
                     {
@@ -422,6 +457,7 @@ public sealed partial class ShowSession
                         (errors ??= []).Add(ex);
                     }
                 }
+
                 group.Timeline.MarkDiscontinuity(masterBeforeSeek); // all masters preserve the shared pre-seek epoch
             }
 
