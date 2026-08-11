@@ -65,6 +65,14 @@ public partial class CuesViewModel : ObservableObject
 
         Timeline = new TimelineViewModel(Project, runtime, journal) { Owner = this };
 
+        // The sheet's lane highlight follows the ONE selection, wherever it was made — tree click,
+        // keyboard, or a lane label routed through SelectCue below.
+        PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(SelectedCue))
+                Timeline.SyncSelection(SelectedCue?.Id);
+        };
+
         Cues = [];
         ActiveCues = [.. runtime.ActiveCues];
 
@@ -219,6 +227,17 @@ public partial class CuesViewModel : ObservableObject
             else if (IndexOf(value) is { } path)
                 CueSource.RowSelection!.SelectedIndex = path;
         }
+    }
+
+    /// <summary>
+    /// Selects a cue by id — the timeline sheet's lane labels route here, so the tree, the inspector
+    /// and the sheet share ONE selection. A cue with no row under the current scope is left alone
+    /// rather than clearing what the operator had.
+    /// </summary>
+    public void SelectCue(Guid id)
+    {
+        if (AllRows.FirstOrDefault(row => row.Id == id) is { } row)
+            SelectedCue = row;
     }
 
     /// <summary>
@@ -2093,8 +2112,8 @@ public sealed record ScopeEntry(Guid Id, string Name, int Count, bool IsList, in
 /// <summary>Screen 05 — the timeline sheet over whichever group is open.</summary>
 public sealed partial class TimelineViewModel : ObservableObject
 {
-    /// <summary>The snap the sheet's own hint promises, in milliseconds.</summary>
-    private const int SnapMs = 500;
+    /// <summary>The shortest a trim drag may leave a clip, so an end-edge drag cannot zero it out.</summary>
+    private const int MinimumClipLengthMs = 100;
 
     private readonly HaCueProject _project;
     private readonly ShowRuntime _runtime;
@@ -2185,25 +2204,35 @@ public sealed partial class TimelineViewModel : ObservableObject
     [ObservableProperty]
     private IReadOnlyList<TimelineLane> _lanes = [];
 
-    /// <summary>The snap/free segment picker in the transport row.</summary>
-    public IReadOnlyList<string> SnapModes { get; } = ["snap", "free"];
+    /// <summary>The grid picker in the transport row: how fine a drag steps, or free.</summary>
+    public IReadOnlyList<string> SnapModes { get; } = ["1 s", "0.5 s", "0.1 s", "free"];
 
     /// <summary>
-    /// Whether drags land on the grid.
+    /// How fine drags step.
     /// </summary>
     /// <remarks>
     /// A VIEW setting, not a document one: it is how somebody is working right now, and carrying it to
     /// the next venue inside a show file would be carrying the wrong thing. Same reasoning as the
-    /// appearance pane, and the reason it is not journaled either — undoing back through "I turned
-    /// snapping off" would bury the edits the operator actually wants back.
+    /// appearance pane, and the reason it is not journaled either — undoing back through "I changed
+    /// the grid" would bury the edits the operator actually wants back. 0.1 s by default: fine enough
+    /// to land a stab, coarse enough that laid-out cues still line up.
     /// </remarks>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsSnapping))]
-    private string _snapMode = "snap";
+    private string _snapMode = "0.1 s";
 
     public bool IsSnapping => SnapMode != "free";
 
-    /// <summary>The sheet's hint reads what the grid is doing, so turning it off has to rewrite it.</summary>
+    /// <summary>The selected grid step in milliseconds; 1 ms (whole-millisecond rounding) when free.</summary>
+    private double SnapStepMs => SnapMode switch
+    {
+        "1 s" => 1000,
+        "0.5 s" => 500,
+        "0.1 s" => 100,
+        _ => 1,
+    };
+
+    /// <summary>The sheet's hint reads what the grid is doing, so changing it has to rewrite it.</summary>
     partial void OnSnapModeChanged(string value)
     {
         if (_group is { } group)
@@ -2212,7 +2241,7 @@ public sealed partial class TimelineViewModel : ObservableObject
 
     private string HintFor(GroupCueNode group) =>
         $"{group.Children.Count} cues · "
-        + (IsSnapping ? $"snap {SnapMs / 1000d:0.#} s" : "free") + " · zoom fit";
+        + (IsSnapping ? $"snap {SnapStepMs / 1000d:0.##} s" : "free") + " · zoom fit";
 
     /// <summary>
     /// A drag on a clip: moves it, or trims either end.
@@ -2259,7 +2288,7 @@ public sealed partial class TimelineViewModel : ObservableObject
 
             case ClipEdge.End when cue is MediaCueNode media2:
                 SetTrim(media2, "trimOut", () => media2.TrimOutMs, value => media2.TrimOutMs = value,
-                    (int)Math.Max(SnapMs, media2.TrimInMs + width), "trim clip end");
+                    media2.TrimInMs + (int)Math.Max(MinimumClipLengthMs, width), "trim clip end");
                 break;
 
             // A group or an action cue has no file to trim, so an edge drag on one moves it instead of
@@ -2415,10 +2444,33 @@ public sealed partial class TimelineViewModel : ObservableObject
         }
 
         Ruler = TimelinePresentation.Ruler(_group, _runtime, _view);
+        ApplySelection();
 
         OnPropertyChanged(nameof(Playhead));
         OnPropertyChanged(nameof(ZoomLabel));
         OnPropertyChanged(nameof(PlayheadLabel));
+        OnPropertyChanged(nameof(ViewStartMs));
+        OnPropertyChanged(nameof(ViewLengthMs));
+        OnPropertyChanged(nameof(ViewMaxStartMs));
+    }
+
+    /// <summary>The cue whose lane reads as selected — follows the tree's selection.</summary>
+    private Guid? _selectedCueId;
+
+    /// <summary>
+    /// Keeps the sheet's lane highlight on the tree's selected cue. Called by the owner whenever the
+    /// selection changes, and applied again on every refresh — the lanes are rebuilt objects.
+    /// </summary>
+    public void SyncSelection(Guid? cueId)
+    {
+        _selectedCueId = cueId;
+        ApplySelection();
+    }
+
+    private void ApplySelection()
+    {
+        foreach (var lane in Lanes)
+            lane.IsSelected = _selectedCueId is { } id && lane.SubjectId == id;
     }
 
     private static bool SameLaneStructure(
@@ -2429,7 +2481,8 @@ public sealed partial class TimelineViewModel : ObservableObject
 
         for (var i = 0; i < current.Count; i++)
         {
-            if (current[i].Name != fresh[i].Name
+            if (current[i].SubjectId != fresh[i].SubjectId
+                || current[i].Name != fresh[i].Name
                 || current[i].IsEffect != fresh[i].IsEffect
                 || current[i].IsGroup != fresh[i].IsGroup)
                 return false;
@@ -2463,6 +2516,33 @@ public sealed partial class TimelineViewModel : ObservableObject
 
     /// <summary>The whole group, edge to edge.</summary>
     public void ZoomFit() => Show(TimelineView.Whole(SpanMs));
+
+    /// <summary>Shifts the window sideways by a fraction of itself — the wheel-pan gesture.</summary>
+    public void Pan(double fractionOfWindow) =>
+        Show(new TimelineView(_view.StartMs + (fractionOfWindow * _view.LengthMs), _view.LengthMs));
+
+    /// <summary>
+    /// Where the window starts, for the horizontal scrollbar. Two-way: the scrollbar drags it, and
+    /// zoom/pan move the scrollbar.
+    /// </summary>
+    public double ViewStartMs
+    {
+        get => _view.StartMs;
+        set
+        {
+            // The refresh below re-raises this property, and the scrollbar writes the coerced value
+            // straight back — without the guard that is an infinite edit loop.
+            if (Math.Abs(value - _view.StartMs) < 0.5)
+                return;
+            Show(new TimelineView(value, _view.LengthMs));
+        }
+    }
+
+    /// <summary>The scrollbar's thumb size: how much of the group one window shows.</summary>
+    public double ViewLengthMs => _view.LengthMs;
+
+    /// <summary>The furthest the window can start, so the scrollbar's track ends at the group's end.</summary>
+    public double ViewMaxStartMs => Math.Max(0, SpanMs - _view.LengthMs);
 
     private void Show(TimelineView view)
     {
@@ -2510,15 +2590,17 @@ public sealed partial class TimelineViewModel : ObservableObject
         $"{(int)PlayheadAt.TotalMinutes}:{PlayheadAt.Seconds:00}.{PlayheadAt.Milliseconds / 100}";
 
     /// <summary>
-    /// Puts the playhead where the operator clicked the ruler.
+    /// Puts the playhead where the operator clicked — or is dragging on — the ruler.
     /// </summary>
     /// <remarks>
-    /// Snapped like a clip drag is, and by the same toggle: a playhead half a frame off a cue's start
-    /// would play the first few milliseconds of a clip the operator meant to skip.
+    /// Deliberately NOT snapped, unlike a clip drag: the playhead is a rehearsal cursor, and "start
+    /// from just before that hit" is exactly the kind of position the grid would round away. A drag
+    /// follows the pointer smoothly for the same reason.
     /// </remarks>
     public void PlacePlayhead(double fractionOfWindow)
     {
-        _playheadMs = Math.Clamp(Snap(_view.At(Math.Clamp(fractionOfWindow, 0, 1))), 0, SpanMs);
+        _playheadMs = Math.Clamp(
+            Math.Round(_view.At(Math.Clamp(fractionOfWindow, 0, 1))), 0, SpanMs);
 
         OnPropertyChanged(nameof(Playhead));
         OnPropertyChanged(nameof(PlayheadLabel));
@@ -2537,13 +2619,13 @@ public sealed partial class TimelineViewModel : ObservableObject
             media.Id, property, "cues", read, write, value, description));
 
     /// <summary>
-    /// Rounds to the snap grid, unless the operator has turned snapping off.
+    /// Rounds to the selected grid step, unless the operator has chosen free.
     /// </summary>
     /// <remarks>
-    /// Half a second is the right grid for laying a show out and the wrong one for landing a stab on a
-    /// frame, which is why the toggle exists rather than a smaller constant: a grid fine enough for the
-    /// second case does not help with the first.
+    /// A picker rather than one constant, because one grid cannot serve both jobs: a second is right
+    /// for laying a show out, a tenth for landing a stab, and free for the drag that has to hit a
+    /// frame.
     /// </remarks>
     private double Snap(double milliseconds) =>
-        IsSnapping ? Math.Round(milliseconds / SnapMs) * SnapMs : Math.Round(milliseconds);
+        IsSnapping ? Math.Round(milliseconds / SnapStepMs) * SnapStepMs : Math.Round(milliseconds);
 }

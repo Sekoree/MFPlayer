@@ -696,6 +696,14 @@ public sealed partial class TimelineLane : ObservableObject
 {
     public required string Name { get; init; }
 
+    /// <summary>The cue this lane belongs to — an effect lane carries its OWNER cue's id, so clicking
+    /// either row's label selects the same cue.</summary>
+    public Guid SubjectId { get; init; }
+
+    /// <summary>Whether this lane's cue is the tree's selected cue — the sheet's label highlight.</summary>
+    [ObservableProperty]
+    private bool _isSelected;
+
     [ObservableProperty]
     private IReadOnlyList<TimelineClip> _clips = [];
 

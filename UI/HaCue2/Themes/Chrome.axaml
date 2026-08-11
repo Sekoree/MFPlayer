@@ -654,6 +654,9 @@
   <Style Selector="Border.tllane.grp">
     <Setter Property="Background" Value="{DynamicResource LaneGroupWash}" />
   </Style>
+  <Style Selector="Border.tllane.sel">
+    <Setter Property="Background" Value="{DynamicResource CueSelectedWash}" />
+  </Style>
 
   <!-- ══ video canvases ═════════════════════════════════════════════════════════════════════ -->
   <Style Selector="Border.vidcanvas">

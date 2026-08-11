@@ -44,6 +44,7 @@ public static class TimelinePresentation
             {
                 Name = Prefix(child) + $"{CuePresentation.Number(child.Number)} · {child.Label}"
                      + (child.Enabled ? "" : " · disabled"),
+                SubjectId = child.Id,
                 IsGroup = child is GroupCueNode,
                 Clips =
                 [
@@ -66,6 +67,7 @@ public static class TimelinePresentation
                 lanes.Add(new TimelineLane
                 {
                     Name = $"fx · {Name(lane.Kind)}",
+                    SubjectId = child.Id,
                     IsEffect = true,
                     // Lane points are already fractions of the CUE; scale them into the group's span so
                     // an envelope sits over the clip it belongs to rather than across the whole row.

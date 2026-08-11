@@ -73,6 +73,8 @@
                  somebody reaches to say "start here". -->
             <ItemsControl Grid.Column="1" ItemsSource="{Binding Ruler}" Background="Transparent"
                           PointerPressed="OnRulerPressed"
+                          PointerMoved="OnRulerMoved"
+                          PointerReleased="OnRulerReleased"
                           BorderBrush="{DynamicResource BoothRule}">
               <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate><UniformGrid Rows="1" /></ItemsPanelTemplate>
@@ -88,6 +90,17 @@
             </ItemsControl>
           </Grid>
 
+          <!-- The window onto the group: drag to pan; the thumb's size is the zoom. Shift+wheel pans
+               and Ctrl+wheel zooms anywhere over the sheet (see OnWheel). -->
+          <Grid DockPanel.Dock="Bottom" ColumnDefinitions="168,*">
+            <Border Grid.Column="0" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,1,1,0" />
+            <ScrollBar Grid.Column="1" Orientation="Horizontal" AllowAutoHide="False"
+                       Minimum="0"
+                       Maximum="{Binding ViewMaxStartMs}"
+                       ViewportSize="{Binding ViewLengthMs}"
+                       Value="{Binding ViewStartMs, Mode=TwoWay}" />
+          </Grid>
+
           <ScrollViewer>
             <Panel>
               <ItemsControl ItemsSource="{Binding Lanes}">
@@ -95,10 +108,15 @@
                   <DataTemplate x:DataType="vm:TimelineLane">
                     <Border Classes="tllane"
                             Classes.fx="{Binding IsEffect}"
-                            Classes.grp="{Binding IsGroup}">
+                            Classes.grp="{Binding IsGroup}"
+                            Classes.sel="{Binding IsSelected}">
                       <Grid ColumnDefinitions="168,*">
+                        <!-- Clicking a lane's label selects its cue, the same selection the tree and
+                             the inspector act on — how "+ EFFECT LANE" and DUCK know which cue. -->
                         <Border Grid.Column="0" BorderBrush="{DynamicResource BoothRule}"
-                                BorderThickness="0,0,1,0" Padding="8,8,8,0">
+                                BorderThickness="0,0,1,0" Padding="8,8,8,0"
+                                Background="Transparent"
+                                PointerPressed="OnLaneLabelPressed">
                           <TextBlock Classes="mono dim2 small ellipsis" Text="{Binding Name}" />
                         </Border>
 

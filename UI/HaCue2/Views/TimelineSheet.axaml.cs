@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.VisualTree;
@@ -9,9 +10,44 @@ namespace HaCue2.Views;
 
 public partial class TimelineSheet : UserControl
 {
-    public TimelineSheet() => InitializeComponent();
+    public TimelineSheet()
+    {
+        InitializeComponent();
+
+        // Tunnelled, because the lane list's own ScrollViewer marks wheel events handled before they
+        // would bubble here. Plain wheel still scrolls the lanes; the MODIFIED gestures are the
+        // sheet's: Shift+wheel (or a touchpad's horizontal delta) pans the window, Ctrl+wheel zooms.
+        AddHandler(PointerWheelChangedEvent, OnWheel, RoutingStrategies.Tunnel);
+    }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
+
+    private void OnWheel(object? sender, PointerWheelEventArgs e)
+    {
+        if (Timeline is not { } timeline)
+            return;
+
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            if (e.Delta.Y > 0)
+                timeline.ZoomIn();
+            else if (e.Delta.Y < 0)
+                timeline.ZoomOut();
+            e.Handled = true;
+            return;
+        }
+
+        var sideways = e.Delta.X != 0
+            ? e.Delta.X
+            : e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? e.Delta.Y : 0;
+        if (sideways == 0)
+            return;
+
+        // A tenth of the window per notch: enough to travel, small enough to aim. Wheel-up/left pans
+        // toward the start, matching every horizontal scroll surface.
+        timeline.Pan(-sideways * 0.1);
+        e.Handled = true;
+    }
 
     /// <summary>Closing the sheet is the Cues view's state, not the sheet's — the sheet is only ever
     /// a projection of "is the timeline open".</summary>
@@ -86,12 +122,55 @@ public partial class TimelineSheet : UserControl
     /// the view-model gets is a fraction of the TRACKS, not of the whole sheet. Getting that wrong
     /// would put the playhead a fixed distance off, worst at the left where it matters most.
     /// </remarks>
-    private void OnRulerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
+    private void OnRulerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (Timeline is not { } timeline || sender is not Control ruler || ruler.Bounds.Width <= 0)
             return;
 
         timeline.PlacePlayhead(e.GetPosition(ruler).X / ruler.Bounds.Width);
+
+        // Captured so the press becomes a DRAG: the playhead follows the pointer smoothly until
+        // release, even when it leaves the ruler's strip.
+        e.Pointer.Capture(ruler);
+        _rulerDragging = true;
+        e.Handled = true;
+    }
+
+    private bool _rulerDragging;
+
+    private void OnRulerMoved(object? sender, PointerEventArgs e)
+    {
+        if (!_rulerDragging
+            || Timeline is not { } timeline
+            || sender is not Control ruler
+            || ruler.Bounds.Width <= 0)
+            return;
+
+        timeline.PlacePlayhead(e.GetPosition(ruler).X / ruler.Bounds.Width);
+        e.Handled = true;
+    }
+
+    private void OnRulerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_rulerDragging)
+            return;
+
+        _rulerDragging = false;
+        e.Pointer.Capture(null);
+        e.Handled = true;
+    }
+
+    /// <summary>A lane label click selects the lane's cue — the same selection the tree, the
+    /// inspector, "+ EFFECT LANE" and DUCK all act on.</summary>
+    private void OnLaneLabelPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (Timeline is not { Owner: { } cues } timeline
+            || (sender as Control)?.DataContext is not TimelineLane lane)
+            return;
+
+        cues.SelectCue(lane.SubjectId);
+        timeline.SyncSelection(lane.SubjectId);
+        e.Handled = true;
     }
 
     /// <summary>

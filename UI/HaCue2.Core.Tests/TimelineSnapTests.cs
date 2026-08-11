@@ -48,14 +48,31 @@ public class TimelineSnapTests
     {
         var (timeline, clip, _) = Sheet();
 
-        Assert.Equal("snap", timeline.SnapMode);
+        // A tenth of a second by default: fine enough to land a stab, coarse enough that laid-out
+        // cues still line up. The coarser grids stay available in the picker.
+        Assert.Equal("0.1 s", timeline.SnapMode);
+        Assert.True(timeline.IsSnapping);
+        Assert.Contains("snap 0.1 s", timeline.Hint, StringComparison.Ordinal);
+
+        timeline.ApplyClipGesture(Drag(clip.Id, 0.37));
+        timeline.EndGesture();
+
+        // Wherever the span put it, it landed on the grid. That is the whole promise the hint makes.
+        Assert.Equal(0, clip.TimelineOffsetMs % 100);
+    }
+
+    [Fact]
+    public void ACoarserGridCanBePicked()
+    {
+        var (timeline, clip, _) = Sheet();
+
+        timeline.SnapMode = "0.5 s";
         Assert.True(timeline.IsSnapping);
         Assert.Contains("snap 0.5 s", timeline.Hint, StringComparison.Ordinal);
 
         timeline.ApplyClipGesture(Drag(clip.Id, 0.37));
         timeline.EndGesture();
 
-        // Wherever the span put it, it landed on the grid. That is the whole promise the hint makes.
         Assert.Equal(0, clip.TimelineOffsetMs % 500);
     }
 
@@ -77,7 +94,7 @@ public class TimelineSnapTests
         timeline.EndGesture();
 
         Assert.NotEqual(snapped, clip.TimelineOffsetMs);
-        Assert.NotEqual(0, clip.TimelineOffsetMs % 500);
+        Assert.NotEqual(0, clip.TimelineOffsetMs % 100);
     }
 
     [Fact]
