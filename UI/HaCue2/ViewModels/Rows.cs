@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
@@ -173,10 +174,11 @@ public sealed record CueRow
 
 /// <summary>One row of the Active panel — everything sounding, in or out of the current scope.</summary>
 /// <remarks>
-/// The LIVE readouts (<see cref="Clock"/>, <see cref="Remaining"/>, <see cref="Progress"/>) are
-/// observable rather than init-only: the engine is polled at 4 Hz, but the panel's millisecond
-/// digits tick at UI rate — a smooth-clock timer extrapolates them between polls from
-/// <see cref="Position"/> and <see cref="PolledAtTicks"/>, and each poll's rebuild re-corrects.
+/// Fully observable, because the row object PERSISTS across engine polls: the panel reconciles rows
+/// in place rather than replacing them, so the seek bar an operator is dragging and the button under
+/// their pointer stay the same controls from poll to poll. The engine is polled at 4 Hz; a
+/// smooth-clock timer extrapolates the millisecond digits between polls from <see cref="Position"/>
+/// and <see cref="PolledAtTicks"/>, and each poll's <see cref="UpdateFrom"/> re-corrects.
 /// </remarks>
 public sealed partial class ActiveCueRow : ObservableObject
 {
@@ -201,33 +203,62 @@ public sealed partial class ActiveCueRow : ObservableObject
     private string _remaining = "";
 
     /// <summary>The clip's whole length, for the readout beside the bar.</summary>
-    public string Length { get; init; } = "";
+    [ObservableProperty]
+    private string _length = "";
 
     /// <summary>The playhead and the length as VALUES, which is what a seek is computed against.</summary>
-    public TimeSpan Position { get; init; }
+    public TimeSpan Position { get; set; }
 
     /// <summary><see cref="Stopwatch.GetTimestamp"/> when <see cref="Position"/> was read, so the
     /// smooth-clock timer can extrapolate the playhead between engine polls.</summary>
-    public long PolledAtTicks { get; init; }
-
-    public TimeSpan? Duration { get; init; }
+    public long PolledAtTicks { get; set; }
 
     /// <summary>Whether the bar can be dragged: a cue whose length nobody knows cannot be seeked.</summary>
     public bool CanSeek => Duration is { TotalMilliseconds: > 0 };
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSeek))]
+    private TimeSpan? _duration;
+
+    [ObservableProperty]
     private double _progress;
 
-    public string Destination { get; init; } = "—";
+    [ObservableProperty]
+    private string _destination = "—";
+
     public bool IsGroup { get; init; }
     public bool IsChild { get; init; }
-    public bool IsFading { get; init; }
+
+    [ObservableProperty]
+    private bool _isFading;
 
     /// <summary>Within seconds of the end — the clock turns red before it becomes a problem.</summary>
-    public bool IsNearEnd { get; init; }
+    [ObservableProperty]
+    private bool _isNearEnd;
 
     public bool HasQualifier => Qualifier.Length > 0;
     public Thickness NumberIndent => new(IsChild ? 18 : 8, 0, 0, 0);
+
+    /// <summary>Whether <paramref name="fresh"/> describes the same row shape, so an in-place update
+    /// is enough. A changed identity or indentation replaces the row instead.</summary>
+    public bool StructurallySame(ActiveCueRow fresh) =>
+        CueId == fresh.CueId && IsChild == fresh.IsChild && IsGroup == fresh.IsGroup
+        && Number == fresh.Number && Label == fresh.Label && Qualifier == fresh.Qualifier;
+
+    /// <summary>Adopts one poll's measurements without replacing the row object.</summary>
+    public void UpdateFrom(ActiveCueRow fresh)
+    {
+        Clock = fresh.Clock;
+        Remaining = fresh.Remaining;
+        Length = fresh.Length;
+        Position = fresh.Position;
+        PolledAtTicks = fresh.PolledAtTicks;
+        Duration = fresh.Duration;
+        Progress = fresh.Progress;
+        Destination = fresh.Destination;
+        IsFading = fresh.IsFading;
+        IsNearEnd = fresh.IsNearEnd;
+    }
 }
 
 /// <summary>
@@ -249,30 +280,35 @@ public sealed partial class ActiveGroupRow : ObservableObject
     /// <summary>"playlist", "timeline" or "together" — what firing it did.</summary>
     public required string Mode { get; init; }
 
-    /// <summary>The sounding children, in the order the flat panel would have listed them.</summary>
-    public List<ActiveCueRow> Children { get; } = [];
+    /// <summary>The sounding children, in the order the flat panel would have listed them.
+    /// Observable, because the header persists across polls and children join/leave under it.</summary>
+    public ObservableCollection<ActiveCueRow> Children { get; } = [];
 
     /// <summary>The rest of the chain, each with how long until it starts.</summary>
-    public List<UpcomingCueRow> Upcoming { get; } = [];
+    public ObservableCollection<UpcomingCueRow> Upcoming { get; } = [];
 
     /// <summary>The WHOLE group's remaining and total — what somebody waiting for the list wants.</summary>
     [ObservableProperty]
     private string _clock = "";
 
     /// <summary>"item 3/12", the position called out over talkback.</summary>
-    public string Position { get; set; } = "";
+    [ObservableProperty]
+    private string _position = "";
 
     [ObservableProperty]
     private double _progress;
 
-    public bool IsNearEnd { get; set; }
+    [ObservableProperty]
+    private bool _isNearEnd;
 
     /// <summary>Everything the group holds is ramping down — the header's feedback that its × took.</summary>
-    public bool IsFading { get; set; }
+    [ObservableProperty]
+    private bool _isFading;
 
     /// <summary>Whether the header's bar seeks. Only a together-group has one absolute time all its
     /// children can move to; a playlist's children play in sequence, so its header stays read-only.</summary>
-    public bool CanSeek { get; set; }
+    [ObservableProperty]
+    private bool _canSeek;
 
     /// <summary>The aggregate as VALUES plus their poll stamp, so the smooth-clock timer can tick the
     /// header's milliseconds between engine polls. Zero total = unknown, and the timer leaves it alone.</summary>
@@ -281,10 +317,26 @@ public sealed partial class ActiveGroupRow : ObservableObject
     public TimeSpan RemainingAtPoll { get; set; }
     public long PolledAtTicks { get; set; }
 
-    public bool HasUpcoming => Upcoming.Count > 0;
+    [ObservableProperty]
+    private bool _hasUpcoming;
 
     [ObservableProperty]
     private bool _isExpanded = true;
+
+    /// <summary>Adopts one poll's aggregates without replacing the header (the expander and every
+    /// control inside the row survive). Children/Upcoming are reconciled separately by the caller.</summary>
+    public void UpdateAggregatesFrom(ActiveGroupRow fresh)
+    {
+        Clock = fresh.Clock;
+        Position = fresh.Position;
+        Progress = fresh.Progress;
+        IsNearEnd = fresh.IsNearEnd;
+        IsFading = fresh.IsFading;
+        CanSeek = fresh.CanSeek;
+        TotalValue = fresh.TotalValue;
+        RemainingAtPoll = fresh.RemainingAtPoll;
+        PolledAtTicks = fresh.PolledAtTicks;
+    }
 }
 
 /// <summary>One cue the group has not reached yet, and the countdown to it.</summary>
@@ -297,15 +349,26 @@ public sealed partial class UpcomingCueRow : ObservableObject
 {
     public required string Number { get; init; }
     public required string Label { get; init; }
-    public required string Length { get; init; }
+
+    [ObservableProperty]
+    private string _length = "";
 
     [ObservableProperty]
     private string _countdown = "";
 
     /// <summary>How far away the start was at poll time, plus the stamp to extrapolate from.</summary>
-    public TimeSpan StartsInAtPoll { get; init; }
+    public TimeSpan StartsInAtPoll { get; set; }
 
-    public long PolledAtTicks { get; init; }
+    public long PolledAtTicks { get; set; }
+
+    /// <summary>Adopts one poll's countdown without replacing the row.</summary>
+    public void UpdateFrom(UpcomingCueRow fresh)
+    {
+        Length = fresh.Length;
+        Countdown = fresh.Countdown;
+        StartsInAtPoll = fresh.StartsInAtPoll;
+        PolledAtTicks = fresh.PolledAtTicks;
+    }
 }
 
 /// <summary>A generic status word plus its gel — used across every table's result column.</summary>

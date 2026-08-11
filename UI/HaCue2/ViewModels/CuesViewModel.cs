@@ -583,12 +583,16 @@ public partial class CuesViewModel : ObservableObject
             return;
 
         var target = lengths.Max() * Math.Clamp(fraction, 0, 1);
-        foreach (var row in rows)
-        {
-            var childTarget = row.Duration is { } length && length < target ? length : target;
-            if (await host.SeekCueAsync(row.CueId, childTarget).ConfigureAwait(true) is { } problem)
-                TransportProblem = problem;
-        }
+        // One barrier seek, not a loop: seeking the children in turn landed each at a different wall
+        // moment, and eleven stems that arrived milliseconds apart STAYED that far apart. The host
+        // batch goes through the session's seek barrier — pause all, seek with clocks frozen,
+        // resume together.
+        var batch = rows
+            .Select(row => (row.CueId,
+                row.Duration is { } length && length < target ? length : target))
+            .ToArray();
+        if (await host.SeekCuesAsync(batch).ConfigureAwait(true) is { } problem)
+            TransportProblem = problem;
     }
 
     /// <summary>The last refusal from a transport gesture, or nothing.</summary>
@@ -1803,33 +1807,131 @@ public partial class CuesViewModel : ObservableObject
     public bool FlatActiveList { get; set; }
 
     /// <summary>
-    /// Rebuilds the panel, keeping each group's expander where the operator left it.
+    /// Reconciles the panel against one poll's rows IN PLACE.
     /// </summary>
     /// <remarks>
-    /// The rows are rebuilt four times a second, so a header replaced wholesale would spring back open
-    /// — or shut — under the pointer every 250 ms. Only the EXPANDER is operator state; everything else
-    /// on the row is a measurement and is meant to be replaced.
+    /// The poll lands four times a second, and replacing the rows wholesale replaced the CONTROLS
+    /// four times a second: the seek bar died mid-drag, the expander and stop buttons lost their
+    /// hover the instant the pointer settled on them, and the group header's open/shut state had to
+    /// be smuggled across each rebuild. Rows persist now — matched by cue/group identity, their
+    /// observable measurements updated, and only genuinely new/gone/reshaped rows change objects.
     /// </remarks>
     private void RebuildActivePanel()
     {
-        var expansion = ActivePanelRows
-            .OfType<ActiveGroupRow>()
-            .ToDictionary(group => group.GroupId, group => group.IsExpanded);
-
-        IReadOnlyList<object> rebuilt = FlatActiveList
+        IReadOnlyList<object> fresh = FlatActiveList
             ? [.. ActiveCues.Cast<object>()]
             : CuePresentation.ActivePanel(Project, [.. ActiveCues], _runtime.MediaDurations);
 
-        foreach (var group in rebuilt.OfType<ActiveGroupRow>())
+        for (var i = 0; i < fresh.Count; i++)
         {
-            if (expansion.TryGetValue(group.GroupId, out var open))
-                group.IsExpanded = open;
+            var incoming = fresh[i];
+            var existingIndex = FindRow(ActivePanelRows, incoming, i);
+            if (existingIndex < 0)
+            {
+                ActivePanelRows.Insert(i, incoming);
+                continue;
+            }
+
+            if (existingIndex != i)
+                ActivePanelRows.Move(existingIndex, i);
+
+            switch (ActivePanelRows[i], incoming)
+            {
+                case (ActiveCueRow current, ActiveCueRow freshRow):
+                    current.UpdateFrom(freshRow);
+                    break;
+                case (ActiveGroupRow current, ActiveGroupRow freshGroup):
+                    current.UpdateAggregatesFrom(freshGroup);
+                    SyncChildren(current.Children, freshGroup.Children);
+                    SyncUpcoming(current.Upcoming, freshGroup.Upcoming);
+                    current.HasUpcoming = current.Upcoming.Count > 0;
+                    break;
+            }
         }
 
-        ActivePanelRows.Clear();
+        while (ActivePanelRows.Count > fresh.Count)
+            ActivePanelRows.RemoveAt(ActivePanelRows.Count - 1);
+    }
 
-        foreach (var row in rebuilt)
-            ActivePanelRows.Add(row);
+    /// <summary>An existing row matching <paramref name="incoming"/>'s identity and shape, at or
+    /// after <paramref name="from"/>, or −1 when the row is genuinely new (or reshaped — a changed
+    /// shape replaces the object, since indentation and labels are deliberately not observable).</summary>
+    private static int FindRow(ObservableCollection<object> rows, object incoming, int from)
+    {
+        for (var i = from; i < rows.Count; i++)
+        {
+            switch (rows[i], incoming)
+            {
+                case (ActiveCueRow current, ActiveCueRow fresh) when current.StructurallySame(fresh):
+                    return i;
+                case (ActiveGroupRow current, ActiveGroupRow fresh)
+                    when current.GroupId == fresh.GroupId
+                         && current.Number == fresh.Number
+                         && current.Label == fresh.Label
+                         && current.Mode == fresh.Mode:
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static void SyncChildren(
+        ObservableCollection<ActiveCueRow> current, ObservableCollection<ActiveCueRow> fresh)
+    {
+        for (var i = 0; i < fresh.Count; i++)
+        {
+            var found = -1;
+            for (var j = i; j < current.Count; j++)
+            {
+                if (current[j].StructurallySame(fresh[i]))
+                {
+                    found = j;
+                    break;
+                }
+            }
+
+            if (found < 0)
+                current.Insert(i, fresh[i]);
+            else
+            {
+                if (found != i)
+                    current.Move(found, i);
+                current[i].UpdateFrom(fresh[i]);
+            }
+        }
+
+        while (current.Count > fresh.Count)
+            current.RemoveAt(current.Count - 1);
+    }
+
+    private static void SyncUpcoming(
+        ObservableCollection<UpcomingCueRow> current, ObservableCollection<UpcomingCueRow> fresh)
+    {
+        for (var i = 0; i < fresh.Count; i++)
+        {
+            var found = -1;
+            for (var j = i; j < current.Count; j++)
+            {
+                if (current[j].Number == fresh[i].Number && current[j].Label == fresh[i].Label)
+                {
+                    found = j;
+                    break;
+                }
+            }
+
+            if (found < 0)
+                current.Insert(i, fresh[i]);
+            else
+            {
+                if (found != i)
+                    current.Move(found, i);
+                current[i].UpdateFrom(fresh[i]);
+            }
+        }
+
+        while (current.Count > fresh.Count)
+            current.RemoveAt(current.Count - 1);
     }
 
     public string ActivePanelHint => IsScoped

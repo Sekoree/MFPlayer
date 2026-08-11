@@ -366,6 +366,35 @@ public sealed partial class ShowHost
         return null;
     }
 
+    /// <summary>
+    /// Seeks several sounding cues as ONE transport operation — the group-header scrub.
+    /// </summary>
+    /// <remarks>
+    /// Through the session's seek barrier (<c>SeekManyAsync</c>: every group pauses, all seek with
+    /// clocks frozen, the running ones resume together), because seeking the cues one at a time
+    /// landed each at a different wall moment — eleven stems arrived milliseconds apart and stayed
+    /// that far out of sync for the rest of the song. Cues that are not sounding are skipped; the
+    /// refusal names them only when NOTHING in the batch could seek.
+    /// </remarks>
+    public async Task<string?> SeekCuesAsync(IReadOnlyList<(Guid CueId, TimeSpan Position)> seeks)
+    {
+        var batch = new List<(string GroupId, TimeSpan Position)>(seeks.Count);
+        lock (_gate)
+        {
+            foreach (var (cueId, position) in seeks)
+            {
+                if (_sounding.TryGetValue(cueId, out var entry) && entry.GroupId.Length > 0)
+                    batch.Add((entry.GroupId, position < TimeSpan.Zero ? TimeSpan.Zero : position));
+            }
+        }
+
+        if (batch.Count == 0)
+            return "nothing in that group is playing";
+
+        await _session.SeekManyAsync(batch).ConfigureAwait(false);
+        return null;
+    }
+
     private void MarkFading(Guid cueId)
     {
         lock (_gate)

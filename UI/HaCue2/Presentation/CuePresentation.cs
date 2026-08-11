@@ -386,6 +386,7 @@ public static class CuePresentation
         header.TotalValue = known ? total : TimeSpan.Zero;
         header.RemainingAtPoll = remaining;
         header.PolledAtTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        header.HasUpcoming = header.Upcoming.Count > 0;
 
         header.IsNearEnd = known && remaining > TimeSpan.Zero && remaining <= TimeSpan.FromSeconds(10);
 

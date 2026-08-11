@@ -58,6 +58,31 @@ public class SeekBar : ProgressBar
 
     private bool _dragging;
 
+    /// <summary>Where the drag currently points, restored whenever a poll writes over it.</summary>
+    private double _previewValue;
+
+    /// <summary>Re-entrancy guard: our own restore writes must not be "restored" again.</summary>
+    private bool _settingOwnValue;
+
+    /// <summary>
+    /// The other half of the "ignores incoming ticks" promise: the poll's binding writes at the same
+    /// priority as our local preview writes, so a tick landing mid-drag DID snap the bar back to the
+    /// show's position — on a long clip the whole control width away from the finger, and the release
+    /// then seeked to wherever the snap left it. While a drag is in progress, any Value write that is
+    /// not our own is immediately reverted to the preview.
+    /// </summary>
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+
+        if (change.Property != ValueProperty || !_dragging || _settingOwnValue)
+            return;
+
+        _settingOwnValue = true;
+        try { SetCurrentValue(ValueProperty, _previewValue); }
+        finally { _settingOwnValue = false; }
+    }
+
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
@@ -105,8 +130,13 @@ public class SeekBar : ProgressBar
     /// A seek per pointer-move would ask the engine to re-open and re-buffer the clip on every pixel of
     /// a drag. The bar follows the finger; the show follows on release.
     /// </remarks>
-    private void Preview(PointerEventArgs e) =>
-        Value = Minimum + (Fraction(e) * (Maximum - Minimum));
+    private void Preview(PointerEventArgs e)
+    {
+        _previewValue = Minimum + (Fraction(e) * (Maximum - Minimum));
+        _settingOwnValue = true;
+        try { SetCurrentValue(ValueProperty, _previewValue); }
+        finally { _settingOwnValue = false; }
+    }
 
     private double Fraction(PointerEventArgs e)
     {
