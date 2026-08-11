@@ -17,7 +17,7 @@ namespace S.Media.Routing;
 /// serialize on one internal gate; the hot path is allocation-free and exception-free. The
 /// <paramref name="measuredLeadTicks"/> callback runs on the clock hot path and must not throw.
 /// </remarks>
-internal sealed class AudibleClientClock : IPlaybackClock
+internal sealed class AudibleClientClock : IPipelineLeadClock
 {
     private readonly IPlaybackClock? _terminalClock;
     private readonly Func<long> _measuredLeadTicks;

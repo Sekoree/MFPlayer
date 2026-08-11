@@ -123,6 +123,7 @@ public static class ShowCompiler
             IEnumerable<CueNode> nodes,
             string groupId,
             TimeSpan preEndNotify,
+            bool playlistOwned = false,
             GroupCueNode? layering = null,
             IReadOnlyList<EffectLane>? inheritedLanes = null)
         {
@@ -155,6 +156,7 @@ public static class ShowCompiler
                             group is { FireMode: GroupFireMode.Playlist, CrossfadeMs: > 0 }
                                 ? TimeSpan.FromMilliseconds(group.CrossfadeMs)
                                 : TimeSpan.Zero,
+                            group.FireMode == GroupFireMode.Playlist,
                             LayersChildren(group) ? group : null,
                             MergeLanes(group.EffectLanes, inheritedLanes));
                         break;
@@ -169,6 +171,11 @@ public static class ShowCompiler
                         // validator reports it by name instead.
                         if (media.MediaPath.Length > 0)
                         {
+                            // A playlist child's notify window is EXACTLY the crossfade: the playlist
+                            // gets first refusal on the one-shot notification and starts the next item
+                            // the moment it fires, so widening it with the follow lead would turn an
+                            // authored 500 ms crossfade into a FollowLeadMs-long double-playback. The
+                            // child's own Follow/end target is swallowed by the run and needs no lead.
                             clips.Add(Clip(
                                 project,
                                 media,
@@ -176,7 +183,9 @@ public static class ShowCompiler
                                 context,
                                 inheritedLanes) with
                             {
-                                PreEndNotify = MaxNotify(preEndNotify, FollowLead(project, media)),
+                                PreEndNotify = playlistOwned
+                                    ? preEndNotify
+                                    : MaxNotify(preEndNotify, FollowLead(project, media)),
                             });
                         }
 

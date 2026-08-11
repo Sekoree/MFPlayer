@@ -199,7 +199,7 @@ public sealed class SharedAudioOutput : IDisposable
         IAudioSource,
         IClockedOutput,
         IFlushableOutput,
-        IPlaybackClock,
+        IPipelineLeadClock,
         IAudioOutputLatency,
         IDisposable
     {
@@ -271,6 +271,9 @@ public sealed class SharedAudioOutput : IDisposable
 
         /// <inheritdoc cref="AudibleClientClock.IsAdvancing" />
         public bool IsAdvancing => _clock.IsAdvancing;
+
+        /// <inheritdoc cref="AudibleClientClock.CurrentPipelineLead" />
+        public TimeSpan CurrentPipelineLead => _clock.CurrentPipelineLead;
 
         public void Submit(ReadOnlySpan<float> packedSamples)
         {

@@ -173,12 +173,27 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// starts is unchanged - the edge is still the outgoing clip's natural end - which is why this
     /// needs no new time source and can never fire early.
     /// </remarks>
-    private sealed record PreparedFollow(
-        Guid SuccessorId,
-        CueList SuccessorList,
-        TaskCompletionSource Edge,
-        CancellationTokenSource Cancellation,
-        Task Run);
+    private sealed class PreparedFollow(
+        Guid successorId,
+        CueList successorList,
+        TaskCompletionSource edge,
+        CancellationTokenSource cancellation)
+    {
+        public Guid SuccessorId { get; } = successorId;
+        public CueList SuccessorList { get; } = successorList;
+        public TaskCompletionSource Edge { get; } = edge;
+
+        /// <summary>Cancelled by stops/resets; DISPOSED only by <see cref="ObservePreparedFollowAsync"/>
+        /// (or the reservation rollback), so a racing Cancel never touches a disposed source.</summary>
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+
+        /// <summary>
+        /// Null while the entry is only a reservation. The entry is inserted BEFORE the open is
+        /// launched so a stop landing in that gap can find and cancel it; the run is attached the
+        /// moment it exists.
+        /// </summary>
+        public Task<IReadOnlyList<Guid>>? Run { get; set; }
+    }
 
     // Preparing five seconds ahead absorbs decoder/open jitter without holding every clip in a long show open
     // for the life of the timeline. A cue that explicitly disables pre-roll is prepared at its due point.
@@ -502,10 +517,9 @@ public sealed class CueExecutor(ICueExecutionHost host)
         if (await FinishArmedItemAsync(cueId).ConfigureAwait(false))
             return;
 
-        if (Project.FindCue(cueId) is MediaCueNode { EndTargetCueId: { } targetId } media)
+        if (Project.FindCue(cueId) is MediaCueNode { EndTargetCueId: not null } media)
         {
-            if (targetId == cueId || Project.FindCue(targetId) is not { Enabled: true } target
-                               || target is CommentCueNode || Project.ListOf(targetId) is not { } targetList)
+            if (ResolveEndTarget(media) is not ({ } target, { } targetList))
             {
                 host.Report($"“{media.Label}” has no live end target — the chain stopped");
                 return;
@@ -562,6 +576,12 @@ public sealed class CueExecutor(ICueExecutionHost host)
         if (cue.PostWaitMs > 0)
             return false;
 
+        // A sequence-owned cue's Follow/end target is swallowed by its group: the playlist or armed
+        // run advances the chain, not the cue. A successor prepared here would release at the
+        // out-point AHEAD of AdvancePlaylistAsync/FinishArmedItemAsync and hijack the run.
+        if (IsSequenceOwned(cueId))
+            return false;
+
         var successor = ResolveFollowSuccessor(cue, list);
         if (successor is null || successor.PreWaitMs > 0)
             return false;
@@ -571,33 +591,56 @@ public sealed class CueExecutor(ICueExecutionHost host)
         var successorList = Project.ListOf(successor.Id) ?? list;
         var edge = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellation = new CancellationTokenSource();
+        var prepared = new PreparedFollow(successor.Id, successorList, edge, cancellation);
+
+        // Reserve the entry BEFORE the open is launched. A stop landing between "approaching end"
+        // and the open used to find no entry to cancel and then watch the open commit a successor
+        // voice nothing would ever release; with the reservation in place first, that stop's
+        // CancelPreparedFollow always has something to cancel.
+        lock (_stateGate)
+        {
+            if (_preparedFollows.ContainsKey(cueId))
+            {
+                cancellation.Dispose();
+                return false;
+            }
+
+            _preparedFollows[cueId] = prepared;
+        }
+
+        // The stop path removes the cue from Sounding BEFORE it calls OnStopped, so after the
+        // reservation this read is decisive: a stop that beat the reservation is visible here (roll
+        // back, never open), and one that lands after it finds the reservation and cancels it.
+        if (!host.Sounding.Contains(cueId))
+        {
+            lock (_stateGate)
+            {
+                if (_preparedFollows.TryGetValue(cueId, out var current)
+                    && ReferenceEquals(current, prepared))
+                    _preparedFollows.Remove(cueId);
+            }
+
+            cancellation.Dispose();
+            return false;
+        }
 
         // PlayTimelineMediaAsync does the opening, committing, pre-rolling and sync-presenting, then
         // enters waitForStartEdge. Everything expensive is therefore behind us when the edge completes.
+        // A cancel that raced in since the reservation has already flagged the token, so the open
+        // unwinds instead of committing.
         var run = host.PlayTimelineMediaAsync(
             [new TimelineMediaStart(successor)],
             successorList,
             async ct => await edge.Task.WaitAsync(ct).ConfigureAwait(false),
             cancellation.Token);
-
         lock (_stateGate)
-        {
-            if (_preparedFollows.ContainsKey(cueId))
-            {
-                cancellation.Cancel();
-                cancellation.Dispose();
-                return false;
-            }
-
-            _preparedFollows[cueId] = new PreparedFollow(
-                successor.Id, successorList, edge, cancellation, run);
-        }
+            prepared.Run = run;
 
         // NOT AdvanceAsync here: the cursor marks what the show has moved on to, and during the lead
         // window it has not - the outgoing cue is still playing. Advancing at prepare time would make
         // the standby readout jump forward seconds early, and a stop inside the window would leave it
         // pointing at a cue that never started. It happens at the edge instead, as it always did.
-        _ = ObservePreparedFollowAsync(cueId, run);
+        _ = ObservePreparedFollowAsync(cueId, prepared);
         return true;
     }
 
@@ -612,33 +655,50 @@ public sealed class CueExecutor(ICueExecutionHost host)
             _preparedFollows.Remove(cueId);
         }
 
-        // If preparation already failed or was cancelled, the run is finished and setting the edge is a
-        // no-op - fall through to the ordinary path so the chain still advances, from cold.
-        if (!prepared.Edge.TrySetResult())
+        // Still only a reservation: the open never launched. Cancel it so a late launch unwinds, and
+        // let the ordinary path advance from cold.
+        if (prepared.Run is not { } run)
         {
-            prepared.Cancellation.Dispose();
+            try { prepared.Cancellation.Cancel(); }
+            catch (ObjectDisposedException) { }
             return false;
         }
 
-        prepared.Cancellation.Dispose();
-        await AdvanceAsync(prepared.SuccessorList, prepared.SuccessorId).ConfigureAwait(false);
+        // If preparation already failed or was cancelled, ObservePreparedFollowAsync has cancelled the
+        // edge and setting it is a no-op - fall through to the ordinary path so the chain still
+        // advances, from cold.
+        if (!prepared.Edge.TrySetResult())
+            return false;
 
         // Await the run itself, not just the edge: TrySetResult merely RELEASES the successor, and its
         // start then runs on whatever thread picks up the continuation. Callers of the natural-end
         // handler are entitled to treat its return as "the hop happened".
+        IReadOnlyList<Guid> started;
         try
         {
-            await prepared.Run.ConfigureAwait(false);
+            started = await run.ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             // Raced with a stop between the release and the start - the chain simply ends here.
+            return true;
         }
         catch (Exception failure)
         {
-            host.Report($"the prepared next cue failed to start — {failure.Message}");
+            host.Report($"the prepared next cue failed to start — {failure.Message}; opening it from cold");
+            return false;
         }
 
+        // The host swallows most open failures (a moved file, a decoder that refused) and completes
+        // the run with an empty voice list instead of faulting. A "successful" run that started
+        // nothing is still a failed preparation - fall back to the cold open.
+        if (started.Count == 0)
+        {
+            host.Report("the prepared next cue had nothing to start — opening it from cold instead");
+            return false;
+        }
+
+        await AdvanceAsync(prepared.SuccessorList, prepared.SuccessorId).ConfigureAwait(false);
         return true;
     }
 
@@ -658,7 +718,6 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         try { prepared.Cancellation.Cancel(); }
         catch (ObjectDisposedException) { }
-        prepared.Cancellation.Dispose();
     }
 
     /// <summary>Cancels every prepared follow and returns their rollbacks to await.</summary>
@@ -679,24 +738,39 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         // Swallow here rather than at the join: a cancelled preparation faulting its own task is the
         // EXPECTED outcome of this method, and ObservePreparedFollowAsync already reports real failures.
+        // A null Run is a reservation whose open never launched; its token is already cancelled, so
+        // the launch (if it still happens) unwinds on arrival and there is nothing to await.
         return [.. pending.Select(async prepared =>
         {
-            try { await prepared.Run.ConfigureAwait(false); }
+            try
+            {
+                if (prepared.Run is { } run)
+                    await run.ConfigureAwait(false);
+            }
             catch { /* rolled back */ }
-            finally { prepared.Cancellation.Dispose(); }
         })];
     }
 
     /// <summary>
     /// Reports a preparation that failed on its own (a missing file, a decoder that would not open) and
     /// clears its entry, so the out-point falls back to the ordinary cold path instead of releasing an
-    /// edge nothing is waiting on.
+    /// edge nothing is waiting on. Also owns the token source's disposal - it is the one continuation
+    /// guaranteed to run exactly once per launched preparation.
     /// </summary>
-    private async Task ObservePreparedFollowAsync(Guid cueId, Task run)
+    private async Task ObservePreparedFollowAsync(Guid cueId, PreparedFollow prepared)
     {
         try
         {
-            await run.ConfigureAwait(false);
+            var started = await prepared.Run!.ConfigureAwait(false);
+
+            // The host swallows most open failures (a moved file, a decoder that refused) and completes
+            // the run with an empty voice list instead of faulting - without ever entering the edge
+            // wait. Cancelling the edge FIRST decides the race with a concurrent release: whichever
+            // side wins, the loser sees the completed edge and stands down, so the out-point either
+            // handles the fallback itself or finds no entry and advances from cold.
+            if (started.Count == 0 && prepared.Edge.TrySetCanceled())
+                DropDeadPreparation(cueId, prepared,
+                    "follow pre-open started nothing — the next cue will open at its edge instead");
         }
         catch (OperationCanceledException)
         {
@@ -704,37 +778,77 @@ public sealed class CueExecutor(ICueExecutionHost host)
         }
         catch (Exception failure)
         {
-            lock (_stateGate)
-                _preparedFollows.Remove(cueId);
-            host.Report($"follow pre-open failed — the next cue will open at its edge instead ({failure.Message})");
+            if (prepared.Edge.TrySetCanceled())
+                DropDeadPreparation(cueId, prepared,
+                    $"follow pre-open failed — the next cue will open at its edge instead ({failure.Message})");
         }
+        finally
+        {
+            prepared.Cancellation.Dispose();
+        }
+    }
+
+    /// <summary>Removes a dead preparation's entry - only if it is still THIS preparation, not a
+    /// re-armed successor from a later fire - and tells the operator.</summary>
+    private void DropDeadPreparation(Guid cueId, PreparedFollow prepared, string report)
+    {
+        lock (_stateGate)
+        {
+            if (_preparedFollows.TryGetValue(cueId, out var current) && ReferenceEquals(current, prepared))
+                _preparedFollows.Remove(cueId);
+        }
+
+        host.Report(report);
     }
 
     /// <summary>
     /// Where this cue hands on to: its explicit end target if it has one, otherwise the next enabled cue
-    /// in the list. Deliberately the SAME resolution <see cref="OnNaturalEndAsync"/> and
-    /// <see cref="ContinueFromAsync"/> use, including the disabled-cue policy - a lead that prepared a
-    /// different successor from the one the chain would pick is worse than no lead.
+    /// in the list. GUARANTEED to be the same resolution <see cref="OnNaturalEndAsync"/> and
+    /// <see cref="ContinueFromAsync"/> use - all three consume <see cref="ResolveEndTarget"/> and
+    /// <see cref="ResolveFollowNext"/> rather than restating the policy - because a lead that prepared
+    /// a different successor from the one the chain would pick is worse than no lead.
     /// </summary>
     private CueNode? ResolveFollowSuccessor(CueNode cue, CueList list)
     {
-        if (cue is MediaCueNode { EndTargetCueId: { } targetId } && targetId != cue.Id)
-        {
-            return Project.FindCue(targetId) is { Enabled: true } target && target is not CommentCueNode
-                ? target
-                : null;
-        }
+        if (cue is MediaCueNode { EndTargetCueId: not null } media)
+            return ResolveEndTarget(media) is ({ } target, _) ? target : null;
 
         if (cue.Trigger != CueTrigger.Follow)
             return null;
 
+        return ResolveFollowNext(list, cue.Id, out _);
+    }
+
+    /// <summary>
+    /// The live cue a media cue's end target points at, with the list its cursor moves in - or null
+    /// when the target is the cue itself, missing, disabled, a comment, or in no list. Null means the
+    /// chain STOPS: a dead end target never falls back to the Follow rule.
+    /// </summary>
+    private (CueNode Target, CueList List)? ResolveEndTarget(MediaCueNode media)
+    {
+        if (media.EndTargetCueId is not { } targetId || targetId == media.Id)
+            return null;
+        if (Project.FindCue(targetId) is not { Enabled: true } target || target is CommentCueNode)
+            return null;
+        return Project.ListOf(targetId) is { } targetList ? (target, targetList) : null;
+    }
+
+    /// <summary>
+    /// The next cue a Follow hands to within its list, honouring the disabled-cue policy.
+    /// <paramref name="stopChain"/> distinguishes "the policy stops the chain at a disabled successor"
+    /// from "walked off the end of the list", where the list-end policy applies instead.
+    /// </summary>
+    private CueNode? ResolveFollowNext(CueList list, Guid cueId, out bool stopChain)
+    {
         if (Project.Settings.DisabledCueFollow == DisabledCueFollow.StopTheChain)
         {
-            var next = NextAfterSubtree(list, cue.Id);
-            return next is { Enabled: false } ? null : next;
+            var next = NextAfterSubtree(list, cueId);
+            stopChain = next is { Enabled: false };
+            return stopChain ? null : next;
         }
 
-        return CueOrder.NextEnabled(list, cue.Id);
+        stopChain = false;
+        return CueOrder.NextEnabled(list, cueId);
     }
 
     /// <summary>
@@ -1076,10 +1190,10 @@ public sealed class CueExecutor(ICueExecutionHost host)
     {
         CueNode? next;
 
-        if (follow && Project.Settings.DisabledCueFollow == DisabledCueFollow.StopTheChain)
+        if (follow)
         {
-            next = NextAfterSubtree(list, cue.Id);
-            if (next is { Enabled: false })
+            next = ResolveFollowNext(list, cue.Id, out var stopChain);
+            if (stopChain)
                 return;
         }
         else
@@ -1440,10 +1554,10 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
                 due = playhead;
                 if (child is MediaCueNode or TextCueNode)
-                {
-                    var trimIn = child is MediaCueNode media ? media.TrimInMs : 0;
-                    initialPosition = into + TimeSpan.FromMilliseconds(trimIn);
-                }
+                    // The model's own cue→media mapping, never hand-rolled trim arithmetic: the two
+                    // halves of this mapping being written independently is exactly what made trimmed
+                    // cues seek wrong (see MediaCueNode.MediaTimeAt).
+                    initialPosition = child is MediaCueNode media ? media.MediaTimeAt(into) : into;
             }
 
             var timelineEvent = EventAt(due);

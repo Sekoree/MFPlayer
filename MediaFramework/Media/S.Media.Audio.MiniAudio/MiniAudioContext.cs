@@ -14,25 +14,37 @@ internal sealed unsafe class MiniAudioContext : IDisposable
     public static MiniAudioContext Create()
     {
         MiniAudioException.ThrowIfError(
-            MiniAudioNative.ContextCreate(out var handle, out var jackFallback), "ma_context_init");
+            MiniAudioNative.ContextCreate(out var handle, out var fallback), "ma_context_init");
 
-        if (jackFallback)
+        switch (fallback)
         {
-            // Not fatal, and deliberately loud. On JACK, miniaudio runs its data callback on the
-            // SERVER's graph thread, so a GC pause in this process stalls the graph and the server
-            // xruns - every client on the box glitches, and none of this app's own counters will show
-            // why. Every other backend runs it on miniaudio's own thread, where a pause costs only this
-            // app's audio and the ring absorbs it. Reaching here means no other backend would start,
-            // so the honest answer is "this works, and here is the failure mode to expect".
-            MediaDiagnostics.LogWarning(
-                "MiniAudio: no backend but JACK could be initialised on this machine. JACK runs the " +
-                "audio callback on the server's graph thread, where a garbage collection in this " +
-                "process can cause a server-wide xrun (heard as dropouts in EVERY JACK client, not " +
-                "just this one). Prefer the PortAudio backend on this box - it uses blocking writes " +
-                "and has no such hazard.");
+            case MiniAudioFallbackBackend.Jack:
+                // Not fatal, and deliberately loud. On JACK, miniaudio runs its data callback on the
+                // SERVER's graph thread, so a GC pause in this process stalls the graph and the server
+                // xruns - every client on the box glitches, and none of this app's own counters will
+                // show why. Every other backend runs it on miniaudio's own thread, where a pause costs
+                // only this app's audio and the ring absorbs it. Reaching here means no other backend
+                // would start, so the honest answer is "this works, and here is the failure mode to
+                // expect".
+                MediaDiagnostics.LogWarning(
+                    "MiniAudio: no backend but JACK could be initialised on this machine. JACK runs the " +
+                    "audio callback on the server's graph thread, where a garbage collection in this " +
+                    "process can cause a server-wide xrun (heard as dropouts in EVERY JACK client, not " +
+                    "just this one). Prefer the PortAudio backend on this box - it uses blocking writes " +
+                    "and has no such hazard.");
+                break;
+
+            case MiniAudioFallbackBackend.Null:
+                // Distinct from the JACK case on purpose: this box is playing NOTHING. Devices still
+                // enumerate and playback appears to run, so without this line the only symptom is
+                // silence.
+                MediaDiagnostics.LogWarning(
+                    "MiniAudio: no working audio backend on this machine - running on miniaudio's " +
+                    "silent null device. Playback will appear to run but nothing is audible.");
+                break;
         }
 
-        return new MiniAudioContext(handle) { UsesJackBackend = jackFallback };
+        return new MiniAudioContext(handle) { UsesJackBackend = fallback == MiniAudioFallbackBackend.Jack };
     }
 
     public IReadOnlyList<AudioDeviceInfo> Enumerate(MiniAudioDeviceType deviceType)

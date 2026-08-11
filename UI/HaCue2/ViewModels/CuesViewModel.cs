@@ -675,8 +675,15 @@ public partial class CuesViewModel : ObservableObject
     private async Task RunSeekAsync(Func<Task<string?>> seek)
     {
         var work = seek();
-        if (await Task.WhenAny(work, Task.Delay(SeekBusyDelay)).ConfigureAwait(true) != work)
+
+        // The busy timer is cancelled once the race resolves: WhenAny does not cancel the loser, and
+        // a scrub gesture stream would otherwise leave one orphaned 150 ms timer per event running to
+        // expiry.
+        using var busyCancel = new CancellationTokenSource();
+        if (await Task.WhenAny(work, Task.Delay(SeekBusyDelay, busyCancel.Token)).ConfigureAwait(true) != work)
             IsSeeking = true;
+        else
+            busyCancel.Cancel();
 
         try
         {

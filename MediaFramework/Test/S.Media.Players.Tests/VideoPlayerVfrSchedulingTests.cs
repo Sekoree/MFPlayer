@@ -107,7 +107,6 @@ public sealed class VideoPlayerVfrSchedulingTests
         public double PlaybackRate => 1d;
 
         public event EventHandler<TimeSpan>? PositionChanged;
-        public event EventHandler? AudioTick { add { } remove { } }
         public event EventHandler? VideoTick;
 
         public void FireVideoTick() => VideoTick?.Invoke(this, EventArgs.Empty);

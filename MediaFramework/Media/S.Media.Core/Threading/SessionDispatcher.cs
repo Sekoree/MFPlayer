@@ -50,6 +50,7 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _disposeState;
     private int _queueDisposed;
+    private int _pumpStopped;
     private int _queuedWorkCount;
     private int _highWaterMark;
     private long _rejectedWorkCount;
@@ -202,6 +203,10 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
                 if (_queuedWorkCount > _highWaterMark)
                     _highWaterMark = _queuedWorkCount;
             }
+
+            // The pump's idle wait is the SAME event the in-command wait uses; every producer -
+            // work, continuation, shutdown - sets it after publishing.
+            _pumpWake.Set();
             return EnqueueResult.Accepted;
         }
         catch (ObjectDisposedException)
@@ -221,24 +226,44 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(this));
         try
         {
-            foreach (var work in _queue.GetConsumingEnumerable())
+            // NOT GetConsumingEnumerable: that blocks inside the collection where only new COMMANDS can
+            // wake it, so a continuation posted to this context while the pump was idle (the tail of a
+            // fire-and-forget command that awaited without ConfigureAwait(false)) would sit unexecuted -
+            // a fade completion stalling until unrelated work happened to arrive. The idle wait below
+            // watches the one event every producer sets.
+            while (true)
             {
-                lock (_metricsGate)
-                    _queuedWorkCount--;
-                var previous = Current.Value;
-                Current.Value = this;
-                try
+                DrainContinuations();
+
+                if (_queue.TryTake(out var work))
                 {
-                    RunToCompletion(work);
-                }
-                finally
-                {
-                    Current.Value = previous;
+                    lock (_metricsGate)
+                        _queuedWorkCount--;
+                    var previous = Current.Value;
+                    Current.Value = this;
+                    try
+                    {
+                        RunToCompletion(work);
+                    }
+                    finally
+                    {
+                        Current.Value = previous;
+                    }
+
+                    // Anything the command left posted to this context after it completed (a
+                    // fire-and-forget continuation) runs here rather than waiting for the next command.
+                    DrainContinuations();
+                    continue;
                 }
 
-                // Anything the command left posted to this context after it completed (a
-                // fire-and-forget continuation) runs here rather than waiting for the next command.
-                DrainContinuations();
+                if (_queue.IsCompleted)
+                    break;
+
+                // Reset AFTER the wait, never before the checks above: every producer sets the event
+                // after publishing, so anything that arrived in the gap is found by the next pass and
+                // no wake-up is lost.
+                _pumpWake.Wait();
+                _pumpWake.Reset();
             }
 
             DrainContinuations();
@@ -246,6 +271,12 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
         finally
         {
             SynchronizationContext.SetSynchronizationContext(previousContext);
+
+            // Nothing drains on this thread again. Hand stragglers - and anything posted from now on -
+            // to the pool so their awaiters complete instead of hanging on a dead pump.
+            Volatile.Write(ref _pumpStopped, 1);
+            DrainContinuationsToPool();
+
             DisposeQueueOnce();
             _pumpExited.TrySetResult();
         }
@@ -309,6 +340,19 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
             InvokeContinuation(pending);
     }
 
+    /// <summary>Shutdown fallback: the dispatcher thread is gone, so posted continuations run on the
+    /// pool - the pre-dedicated-thread behavior - rather than being dropped with live awaiters.</summary>
+    private void DrainContinuationsToPool()
+    {
+        while (_continuations.TryDequeue(out var pending))
+        {
+            ThreadPool.UnsafeQueueUserWorkItem(
+                static state => state.Self.InvokeContinuation(state.Pending),
+                (Self: this, Pending: pending),
+                preferLocal: false);
+        }
+    }
+
     private void InvokeContinuation((SendOrPostCallback Callback, object? State) pending)
     {
         try
@@ -326,6 +370,11 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
     {
         _continuations.Enqueue((callback, state));
         _pumpWake.Set();
+
+        // Racing the pump's exit: if it has already done its last drain, nothing will ever run this
+        // continuation - drain to the pool ourselves. Both sides may drain; each item runs once.
+        if (Volatile.Read(ref _pumpStopped) != 0)
+            DrainContinuationsToPool();
     }
 
     /// <summary>
@@ -377,6 +426,7 @@ public sealed class SessionDispatcher : IDisposable, IAsyncDisposable
         if (Interlocked.Exchange(ref _disposeState, 1) != 0)
             return;
         _queue.CompleteAdding();
+        _pumpWake.Set(); // an idle pump is waiting on the event, not inside the collection
     }
 
     private void DisposeQueueOnce()

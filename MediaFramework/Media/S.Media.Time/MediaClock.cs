@@ -687,8 +687,6 @@ public sealed class MediaClock : IMediaClock, IDisposable
     private long _masterRegressions;
     private TimeSpan _worstMasterRegression;
 
-    private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
-
     private void ThrowIfDisposed()
     {
         if (_disposed) throw new ObjectDisposedException(nameof(MediaClock));

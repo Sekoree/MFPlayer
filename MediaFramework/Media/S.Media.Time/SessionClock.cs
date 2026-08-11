@@ -1,3 +1,5 @@
+using S.Media.Core.Diagnostics;
+
 namespace S.Media.Time;
 
 /// <summary>
@@ -70,7 +72,10 @@ public sealed class SessionClock
                 var anchor = Volatile.Read(ref _anchor);
                 var reading = anchor.Reference.Read();
                 if (reading.EpochId == anchor.ReferenceEpochId)
+                {
+                    NoteIfReferenceRegressed(anchor, reading.Elapsed);
                     return RaiseFloor(reading.Elapsed + anchor.Shift);
+                }
 
                 // The reference re-anchored and nobody told us. Its source coordinate may have jumped
                 // anywhere (a seek target, zero after a flush); the master coordinate must not follow, so
@@ -124,23 +129,52 @@ public sealed class SessionClock
     }
 
     /// <summary>
-    /// How many times the reference went backwards inside one epoch and was held at the floor, and the
-    /// worst single regression. Inside an epoch the reference is monotonic BY CONTRACT, so a non-zero
-    /// count means the clock below this one is faulty (or a read tore across its re-anchor) - it is not
+    /// How many times ONE READER saw the reference go backwards between two of its own consecutive
+    /// reads inside one epoch, and the worst single regression. Inside an epoch the reference is
+    /// monotonic BY CONTRACT, so a non-zero count means the clock below this one is faulty - it is not
     /// a normal event and it is not this clock's fault.
     /// </summary>
     /// <remarks>
-    /// The clamp itself stays: holding at the floor is the only safe response, and group time must never
-    /// rewind. What changes is that it is no longer silent. Group time passes through several layers that
-    /// each enforce this same contract, so a breach at the bottom gets absorbed by the first clamp above
-    /// it and the symptom surfaces somewhere unrelated. Counting each clamp where it fires is what makes
-    /// the actual culprit nameable instead of inferred.
+    /// Judged per reader, never against the shared floor: two threads reading concurrently can raise
+    /// the floor in either order, so "my sample is below the floor" only proves my read was scheduled
+    /// out for a moment. Only consecutive samples taken by the same thread against the same anchor can
+    /// witness the reference itself rewinding; the floor clamp handles the interleavings silently, as
+    /// the safe response it always was.
     /// </remarks>
-    public (long Count, TimeSpan Worst) ReferenceRegressions =>
-        (Interlocked.Read(ref _referenceRegressions), new TimeSpan(Interlocked.Read(ref _worstRegressionTicks)));
+    public (long Count, TimeSpan Worst) ReferenceRegressions
+    {
+        get
+        {
+            var snapshot = _referenceRegressions.Snapshot();
+            return (snapshot.Count, TimeSpan.FromMilliseconds(snapshot.MaxMs));
+        }
+    }
 
-    private long _referenceRegressions;
-    private long _worstRegressionTicks;
+    private readonly TimingAccumulator _referenceRegressions = new();
+
+    /// <summary>One reader's last raw reference sample. Thread-static single slot: a thread alternating
+    /// between clocks merely reseeds and misses a detection, it can never count a false one.</summary>
+    [ThreadStatic]
+    private static RegressionProbe? _probe;
+
+    private sealed class RegressionProbe
+    {
+        public Anchor? Anchor;
+        public long LastRawTicks;
+    }
+
+    private void NoteIfReferenceRegressed(Anchor anchor, TimeSpan rawElapsed)
+    {
+        var probe = _probe ??= new RegressionProbe();
+
+        // Same anchor object ⇒ same reference AND same epoch: raw elapsed values are comparable, and
+        // this thread's previous sample provably preceded this one.
+        if (ReferenceEquals(probe.Anchor, anchor) && rawElapsed.Ticks < probe.LastRawTicks)
+            _referenceRegressions.Record(new TimeSpan(probe.LastRawTicks - rawElapsed.Ticks));
+
+        probe.Anchor = anchor;
+        probe.LastRawTicks = rawElapsed.Ticks;
+    }
 
     /// <summary>CAS high-water on <see cref="_nowFloorTicks"/>; returns the resulting master time.</summary>
     private TimeSpan RaiseFloor(TimeSpan now)
@@ -155,21 +189,9 @@ public sealed class SessionClock
             seen = previous;
         }
 
-        if (ticks < seen)
-            NoteRegression(seen - ticks);
+        // Below the floor: a stale-but-honest read from a thread that was scheduled out while another
+        // reader advanced the floor. Hold at the floor, silently - whether the REFERENCE regressed is
+        // decided in NoteIfReferenceRegressed, where samples share a reader.
         return new TimeSpan(seen);
-    }
-
-    private void NoteRegression(long backwardsTicks)
-    {
-        Interlocked.Increment(ref _referenceRegressions);
-        var worst = Interlocked.Read(ref _worstRegressionTicks);
-        while (backwardsTicks > worst)
-        {
-            var previous = Interlocked.CompareExchange(ref _worstRegressionTicks, backwardsTicks, worst);
-            if (previous == worst)
-                return;
-            worst = previous;
-        }
     }
 }

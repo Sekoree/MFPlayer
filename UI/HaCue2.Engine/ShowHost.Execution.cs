@@ -189,8 +189,10 @@ public sealed partial class ShowHost
             ConfirmSounding(cue.Id, list?.Id ?? Guid.Empty, group);
             if (PlayedLength(cue) is { } fullDuration)
             {
+                // The model's media→cue mapping (MediaCueNode.CueTimeAt), not hand-rolled trim
+                // arithmetic - asymmetric copies of this mapping are the trimmed-cue bug class.
                 var elapsed = start.StartPosition is { } position
-                    ? position - TimeSpan.FromMilliseconds(cue is MediaCueNode media ? media.TrimInMs : 0)
+                    ? cue is MediaCueNode media ? media.CueTimeAt(position) : position
                     : TimeSpan.Zero;
                 var remaining = fullDuration - (elapsed > TimeSpan.Zero ? elapsed : TimeSpan.Zero);
                 if (remaining > TimeSpan.Zero)

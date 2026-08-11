@@ -286,7 +286,14 @@ public static class HaPlayShowMapper
             VolumeEnvelope = MapVolumeEnvelope(media.VolumeEnvelope),
             Loop = media.Loop || media.EndBehavior == CueEndBehavior.Loop,
             LoopCrossfade = TimeSpan.FromMilliseconds(Math.Max(0, media.LoopCrossfadeMs)),
-            EndBehavior = MapEndBehavior(media.EndBehavior),
+            // A held image has no meaningful "play to the end and stop": it displays until the next
+            // GO. Most image containers report no duration and simply idle, but a duration-reporting
+            // one (a GIF probes as ~40 ms) would reach that end and RELEASE under the always-armed end
+            // monitor - flashing the image for one poll tick and auto-advancing - so the default Stop
+            // maps to a freeze. An authored loop or fade-out still wins.
+            EndBehavior = media.Source is ImagePlaylistItem && media.EndBehavior == CueEndBehavior.Stop
+                ? ClipEndBehavior.FreezeLastFrame
+                : MapEndBehavior(media.EndBehavior),
             // A text cue plays a held frame that never signals EOF, so end it at its duration via the time-based
             // monitor (EndAtDuration) rather than by source exhaustion - otherwise a resize/live-edit re-read ends
             // it early. Only when a positive duration is set; a 0-duration text cue holds until the next cue.

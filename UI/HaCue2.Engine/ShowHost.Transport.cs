@@ -265,7 +265,7 @@ public sealed partial class ShowHost
     {
         await _session.SetPausedAsync(paused).ConfigureAwait(false);
 
-        lock (_gate)
+        lock (_pausedGate)
         {
             if (_paused == paused)
                 return;
@@ -277,11 +277,16 @@ public sealed partial class ShowHost
             // exactly, once, at the edge: the timeline's read becomes a pure lock-free subtraction.
             var now = TimelineMasterNow();
             if (paused)
+            {
                 _pausedSince = now;
-            else if (_pausedSince is { } since && now > since)
-                _pausedElapsed += now - since;
-            if (!paused)
+            }
+            else
+            {
+                if (_pausedSince is { } since && now > since)
+                    _pausedElapsed += now - since;
                 _pausedSince = null;
+            }
+
             _paused = paused;
         }
     }
@@ -295,7 +300,7 @@ public sealed partial class ShowHost
     {
         get
         {
-            lock (_gate)
+            lock (_pausedGate)
             {
                 if (_pausedSince is not { } since)
                     return _pausedElapsed;
@@ -312,6 +317,14 @@ public sealed partial class ShowHost
         catch { return _pausedSince ?? _pausedElapsed; } // torn down mid-read: freeze the interval
     }
 
+    /// <summary>
+    /// Pause accounting has its OWN gate: <see cref="TimelinePausedElapsed"/> is read by every
+    /// timeline position poll (the scheduler loop plus dispatch-lateness sampling, at millisecond
+    /// cadence), and putting those reads on the host-wide <see cref="_gate"/> made the "lock-free"
+    /// timeline coordinate contend with the entire transport control plane. Nothing takes
+    /// <see cref="_gate"/> while holding this one.
+    /// </summary>
+    private readonly object _pausedGate = new();
     private TimeSpan _pausedElapsed;
     private TimeSpan? _pausedSince;
 
@@ -319,7 +332,7 @@ public sealed partial class ShowHost
     {
         get
         {
-            lock (_gate)
+            lock (_pausedGate)
                 return _paused;
         }
     }
@@ -421,7 +434,10 @@ public sealed partial class ShowHost
     /// halves is precisely what made a trimmed cue seek to the wrong place.
     /// </remarks>
     private TimeSpan MediaTimeFor(Guid cueId, TimeSpan cueTime) =>
-        _project.FindCue(cueId) is MediaCueNode media
+        MediaTimeFor(_project.FindCue(cueId), cueTime);
+
+    private static TimeSpan MediaTimeFor(CueNode? cue, TimeSpan cueTime) =>
+        cue is MediaCueNode media
             ? media.MediaTimeAt(cueTime)
             : cueTime > TimeSpan.Zero ? cueTime : TimeSpan.Zero;
 
@@ -437,6 +453,12 @@ public sealed partial class ShowHost
     /// </remarks>
     public async Task<string?> SeekCuesAsync(IReadOnlyList<(Guid CueId, TimeSpan Position)> seeks)
     {
+        // One document walk for the whole batch: FindCue is a linear scan, and this runs once per
+        // scrub EVENT for every stem in the group - per-cue lookups made a drag O(cues × stems).
+        var cuesById = new Dictionary<Guid, CueNode>();
+        foreach (var cue in _project.AllCues())
+            cuesById.TryAdd(cue.Id, cue);
+
         var batch = new List<(string GroupId, TimeSpan Position)>(seeks.Count);
         lock (_gate)
         {
@@ -447,7 +469,7 @@ public sealed partial class ShowHost
                 // That is exactly what a together-group seek means - land every child on the same bar
                 // of the song - and it is why the conversion cannot be hoisted out of this loop.
                 if (_sounding.TryGetValue(cueId, out var entry) && entry.GroupId.Length > 0)
-                    batch.Add((entry.GroupId, MediaTimeFor(cueId, position)));
+                    batch.Add((entry.GroupId, MediaTimeFor(cuesById.GetValueOrDefault(cueId), position)));
             }
         }
 
@@ -506,10 +528,10 @@ public sealed partial class ShowHost
         var playheads = _session.Snapshot()
             .ToDictionary(snapshot => snapshot.GroupId, StringComparer.Ordinal);
 
+        paused = IsPaused;
         lock (_gate)
         {
             sounding = [.. _sounding.Keys];
-            paused = _paused;
             active =
             [
                 .. _sounding.Select(entry =>

@@ -92,6 +92,12 @@ public partial class App : Application
     /// The watchdog hard-exits 2 rather than hanging, so a wedged launch fails the gate instead of
     /// burning the runner's timeout. Exit 0 means a frame really rendered and teardown really ran.
     /// </para>
+    /// <para>
+    /// A hand-kept mirror of HaPlay's <c>WireSmokeSelfExit</c> - the apps deliberately share no
+    /// Avalonia assembly to extract it into. Keep the two in lockstep, INCLUDING the two log lines:
+    /// CI greps for the "first frame rendered" breadcrumb, and the watchdog line is the only
+    /// diagnosis a wedged launch leaves behind (a bare exit 2 says nothing).
+    /// </para>
     /// </remarks>
     private static void WireSmokeSelfExit(IClassicDesktopStyleApplicationLifetime desktop)
     {
@@ -109,6 +115,8 @@ public partial class App : Application
                 {
                     if (Interlocked.Exchange(ref exited, 1) != 0)
                         return;
+                    MediaDiagnostics.LogInformation(
+                        "HACUE2_SMOKE: first frame rendered - shutting down (exit 0)");
                     // TryShutdown, NOT Shutdown: the forced path skips ShutdownRequested, and the smoke
                     // has to exercise the app's real teardown.
                     desktop.TryShutdown(0);
@@ -118,6 +126,7 @@ public partial class App : Application
         {
             if (Interlocked.Exchange(ref exited, 1) != 0)
                 return;
+            MediaDiagnostics.LogWarning("HACUE2_SMOKE: no frame rendered within 45s - hard exit 2");
             Environment.Exit(2);
         });
     }

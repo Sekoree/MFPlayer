@@ -175,7 +175,15 @@ internal sealed class VoiceStartPolicy
             "Prepare: audio router has no pacing primary - mastering this voice's clock to the show clock ({ClockType}) so its video cannot drift against the audio device",
             showClock.GetType().Name);
 
-        var deferAgainstProgramme = showClock as AudibleClientClock;
+        // The CAPABILITY, not the concrete clock: MasterClock may be a decorator (a proxy, a shared
+        // output's client input), and a type-sniff on the concrete class silently dropped the
+        // deferral for anything that wrapped it - reintroducing the picture-leads-audio defect with
+        // nothing logged. Wrappers forward IPipelineLeadClock; one that does not is now named here.
+        var deferAgainstProgramme = showClock as IPipelineLeadClock;
+        if (deferAgainstProgramme is null)
+            Trace.LogDebug(
+                "Prepare: show clock ({ClockType}) does not expose IPipelineLeadClock - the genlock start deferral is unavailable; if it wraps a clock that does, it must forward the capability",
+                showClock.GetType().Name);
         return () =>
         {
             // Rate alone is not enough: the show clock is already ADVANCING, so an anchor taken at Start

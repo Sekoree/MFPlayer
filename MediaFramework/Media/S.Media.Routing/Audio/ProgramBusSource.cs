@@ -312,7 +312,7 @@ public sealed class ProgramBusProducer :
     IFlushableOutput,
     IGrantPacedOutput,
     IPreRollableOutput,
-    IPlaybackClock,
+    IPipelineLeadClock,
     IAudioOutputLatency,
     IDisposable
 {
@@ -498,6 +498,9 @@ public sealed class ProgramBusProducer :
 
     /// <inheritdoc cref="AudibleClientClock.IsAdvancing" />
     public bool IsAdvancing => _clock.IsAdvancing;
+
+    /// <inheritdoc cref="AudibleClientClock.CurrentPipelineLead" />
+    public TimeSpan CurrentPipelineLead => _clock.CurrentPipelineLead;
 
     /// <summary>
     /// Blocks until a chunk fits in the producer ring (the upstream router's backpressure hook).

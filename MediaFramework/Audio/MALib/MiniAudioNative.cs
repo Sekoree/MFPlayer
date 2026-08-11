@@ -12,6 +12,19 @@ public enum MiniAudioDeviceType
     Capture = 2,
 }
 
+/// <summary>Which last-resort backend a context fell back to when no ordinary backend would start.</summary>
+public enum MiniAudioFallbackBackend
+{
+    /// <summary>An ordinary (non-JACK, non-null) backend initialised.</summary>
+    None,
+
+    /// <summary>Real audio via the JACK server - carries the graph-thread GC hazard.</summary>
+    Jack,
+
+    /// <summary>miniaudio's silent dummy device: the box has no working audio backend at all.</summary>
+    Null,
+}
+
 /// <summary>
 /// Direct P/Invoke binding for <b>vanilla miniaudio</b> (<c>ma_*</c>) - the analogue of <c>PALib</c> for
 /// PortAudio. There is NO custom C wrapper: it binds the upstream <c>libminiaudio</c> ABI and does the
@@ -165,6 +178,7 @@ public static unsafe partial class MiniAudioNative
     /// `Reference/miniaudio-0.11.25`). Only the two that matter here are named.
     /// </summary>
     private const int BackendJack = 9;
+    private const int BackendNull = 14;
 
     /// <summary>
     /// Every backend EXCEPT <c>ma_backend_jack</c>, in miniaudio's own priority order.
@@ -192,15 +206,17 @@ public static unsafe partial class MiniAudioNative
         12, // webaudio
     ];
 
-    /// <inheritdoc cref="ContextCreate(out nint, out bool)"/>
+    /// <inheritdoc cref="ContextCreate(out nint, out MiniAudioFallbackBackend)"/>
     public static int ContextCreate(out nint context) => ContextCreate(out context, out _);
 
     /// <summary>
     /// Initialises a miniaudio context, preferring any backend over JACK.
     /// </summary>
-    /// <param name="usedJackFallback">
-    /// True when NO other backend could initialise and the context fell back to miniaudio's default
-    /// priority, which may have selected JACK.
+    /// <param name="fallback">
+    /// Which last-resort backend answered when NO ordinary backend could initialise:
+    /// <see cref="MiniAudioFallbackBackend.Jack"/> (real audio, with the graph-thread GC hazard) or
+    /// <see cref="MiniAudioFallbackBackend.Null"/> (the silent dummy - the box has no working audio at
+    /// all). <see cref="MiniAudioFallbackBackend.None"/> when an ordinary backend started.
     /// </param>
     /// <remarks>
     /// <para>
@@ -219,10 +235,10 @@ public static unsafe partial class MiniAudioNative
     /// the point. When it IS the last resort, the caller says so out loud.
     /// </para>
     /// </remarks>
-    public static int ContextCreate(out nint context, out bool usedJackFallback)
+    public static int ContextCreate(out nint context, out MiniAudioFallbackBackend fallback)
     {
         context = nint.Zero;
-        usedJackFallback = false;
+        fallback = MiniAudioFallbackBackend.None;
         var size = (int)ma_context_sizeof();
         if (size <= 0)
             return -1;
@@ -240,16 +256,30 @@ public static unsafe partial class MiniAudioNative
             }
         }
 
-        // Nothing else on this machine. Fall back to miniaudio's own priority, which includes JACK.
+        // Nothing else on this machine. Try the genuine last resorts ONE AT A TIME, so the caller
+        // learns which one actually answered. Falling back to miniaudio's default priority and calling
+        // any success "JACK" also captured ma_backend_null - the silent dummy that always initialises -
+        // and reported an audio-less box as a JACK box, steering the operator toward a JACK mitigation
+        // while hiding that nothing was audible.
+        var jack = BackendJack;
         new Span<byte>((void*)ctx, size).Clear();
-        var result = ma_context_init(nint.Zero, 0, nint.Zero, ctx);
+        if (ma_context_init((nint)(&jack), 1, nint.Zero, ctx) == Success)
+        {
+            fallback = MiniAudioFallbackBackend.Jack;
+            context = ctx;
+            return Success;
+        }
+
+        var nullBackend = BackendNull;
+        new Span<byte>((void*)ctx, size).Clear();
+        var result = ma_context_init((nint)(&nullBackend), 1, nint.Zero, ctx);
         if (result != Success)
         {
             Marshal.FreeHGlobal(ctx);
             return result;
         }
 
-        usedJackFallback = true;
+        fallback = MiniAudioFallbackBackend.Null;
         context = ctx;
         return Success;
     }
