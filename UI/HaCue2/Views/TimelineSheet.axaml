@@ -3,7 +3,8 @@
              xmlns:c="using:HaCue2.Controls"
              xmlns:vm="using:HaCue2.ViewModels"
              x:Class="HaCue2.Views.TimelineSheet"
-             x:DataType="vm:TimelineViewModel">
+             x:DataType="vm:TimelineViewModel"
+             x:CompileBindings="True">
 
   <!-- Screen 05. A bottom sheet by default, undockable to its own window (mode remembered per
        machine). Envelopes are not a fixed overlay: volume, opacity and outbound OSC/MIDI ramps are

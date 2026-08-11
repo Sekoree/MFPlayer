@@ -302,6 +302,41 @@ jobs:
           dotnet publish UI/HaCue2.Desktop/HaCue2.Desktop.csproj
           -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o hacue2-publish
 
+      # The HaCue2 launch gate, mirroring HaPlay's (NXT-15). The AOT publish above proves the app
+      # COMPILES and links AOT-clean; it says nothing about whether it STARTS. A missing native, a
+      # composition-root failure, or a GL context that will not create all ship green through a publish
+      # gate — so the flagship app had no check that it can open a window at all. HACUE2_SMOKE renders
+      # one real frame and then shuts down through the app's normal teardown, so this covers startup
+      # wiring AND clean exit. HACUE2_START=main opens the SHELL rather than the launcher, which would
+      # prove very little. The in-app watchdog hard-exits 2 if no frame appears, so a wedged launch
+      # fails instead of hanging the runner.
+      #
+      # Best-effort for the same reason HaPlay's is: this job publishes without the staged native libs,
+      # so audio backends cannot load here. EXIT CRITERION: promote to gating alongside HaPlay's, once
+      # a launch runs against the native-bundled publish in the `artifacts` job.
+      - name: HaCue2 launch smoke (xvfb, HACUE2_SMOKE self-exit)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          HACUE2_SMOKE: '1'
+          HACUE2_START: main
+          LIBGL_ALWAYS_SOFTWARE: 1
+          HACUE2_SETTINGS_PATH: ${{ runner.temp }}/hacue2-linux-settings.json
+          HACUE2_DATA_ROOT: ${{ runner.temp }}/hacue2-linux-data
+        run: xvfb-run -a ./hacue2-publish/HaCue2Desktop
+
+      - name: HaCue2 launch smoke (Windows, best-effort)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          HACUE2_SMOKE: '1'
+          HACUE2_START: main
+          HACUE2_SETTINGS_PATH: ${{ runner.temp }}/hacue2-windows-settings.json
+          HACUE2_DATA_ROOT: ${{ runner.temp }}/hacue2-windows-data
+        run: ./hacue2-publish/HaCue2Desktop.exe
+
       # Proves the fixture generator and the headless status pass agree, end to end, against files that
       # exist — without committing anybody's media paths. A fixture holding absolute paths into one
       # person's home directory works on exactly one machine, so CI makes its own.

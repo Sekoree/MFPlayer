@@ -26,6 +26,12 @@ public partial class App : Application
     /// </remarks>
     public const string StartVariable = "HACUE2_START";
 
+    /// <summary>
+    /// Set <c>HACUE2_SMOKE=1</c> to render one real frame and then shut down through the app's NORMAL
+    /// teardown. The CI launch gate; see <see cref="WireSmokeSelfExit"/>.
+    /// </summary>
+    public const string SmokeVariable = "HACUE2_SMOKE";
+
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
     public override void OnFrameworkInitializationCompleted()
@@ -60,9 +66,60 @@ public partial class App : Application
                 YouTubeRuntime.Shutdown();
                 AppLogging.Current?.Dispose();
             };
+            WireSmokeSelfExit(desktop);
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    /// <summary>
+    /// CI launch gate: with <c>HACUE2_SMOKE=1</c> the app renders its first real frame and then shuts
+    /// itself down through the NORMAL teardown path (ShutdownRequested → the Exit handler above), so the
+    /// gate covers startup wiring AND clean exit rather than "a process ran".
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The AOT publish alone could never catch this class of fault: it proves the app COMPILES and
+    /// links AOT-clean, and says nothing about whether it starts. A missing native, a composition-root
+    /// failure or a GL context that will not create all ship green through a publish gate. HaPlay has
+    /// had this gate since NXT-15; the flagship did not.
+    /// </para>
+    /// <para>
+    /// Pair it with <c>HACUE2_START=main</c> in CI so the smoke opens the SHELL rather than the
+    /// launcher - the launcher is a small window that would prove very little.
+    /// </para>
+    /// <para>
+    /// The watchdog hard-exits 2 rather than hanging, so a wedged launch fails the gate instead of
+    /// burning the runner's timeout. Exit 0 means a frame really rendered and teardown really ran.
+    /// </para>
+    /// </remarks>
+    private static void WireSmokeSelfExit(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        if (Environment.GetEnvironmentVariable(SmokeVariable) is not ("1" or "true"))
+            return;
+        if (desktop.MainWindow is not { } window)
+            return;
+
+        var exited = 0;
+        window.Opened += (_, _) =>
+            // RequestAnimationFrame fires after a compositor frame actually renders - "a window opened"
+            // is not the same claim, and it is the weaker one.
+            Avalonia.Controls.TopLevel.GetTopLevel(window)?.RequestAnimationFrame(_ =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (Interlocked.Exchange(ref exited, 1) != 0)
+                        return;
+                    // TryShutdown, NOT Shutdown: the forced path skips ShutdownRequested, and the smoke
+                    // has to exercise the app's real teardown.
+                    desktop.TryShutdown(0);
+                }));
+
+        _ = Task.Delay(TimeSpan.FromSeconds(45)).ContinueWith(_ =>
+        {
+            if (Interlocked.Exchange(ref exited, 1) != 0)
+                return;
+            Environment.Exit(2);
+        });
     }
 
     /// <summary>

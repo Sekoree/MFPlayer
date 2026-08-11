@@ -4,6 +4,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.ClipEditorWindow"
         x:DataType="vm:ClipEditorViewModel"
+        x:CompileBindings="True"
         Title="Clip"
         Width="940" Height="520"
         WindowStartupLocation="CenterOwner"

@@ -4,6 +4,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.SubtitlePickerWindow"
         x:DataType="vm:SubtitlePickerViewModel"
+        x:CompileBindings="True"
         Title="Subtitles"
         Width="520" Height="360"
         WindowStartupLocation="CenterOwner"

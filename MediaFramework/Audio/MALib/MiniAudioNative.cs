@@ -160,13 +160,87 @@ public static unsafe partial class MiniAudioNative
 
     // --- public operations (same surface S.Media.MiniAudio consumes) -----------------------------
 
-    public static int ContextCreate(out nint context)
+    /// <summary>
+    /// <c>ma_backend</c> values, verbatim from miniaudio 0.11.25 (`miniaudio.h`, the vendored copy in
+    /// `Reference/miniaudio-0.11.25`). Only the two that matter here are named.
+    /// </summary>
+    private const int BackendJack = 9;
+
+    /// <summary>
+    /// Every backend EXCEPT <c>ma_backend_jack</c>, in miniaudio's own priority order.
+    /// </summary>
+    /// <remarks>
+    /// <c>ma_backend_null</c> (14) is deliberately absent as well as jack: it is a silent dummy device
+    /// that ALWAYS initialises, so including it would make this list succeed on every machine and the
+    /// JACK detection below could never trigger - while handing the operator a device that plays
+    /// nothing. <c>ma_backend_custom</c> (13) is absent because it requires config callbacks we do not
+    /// supply.
+    /// </remarks>
+    private static ReadOnlySpan<int> BackendsExceptJack =>
+    [
+        0,  // wasapi
+        1,  // dsound
+        2,  // winmm
+        3,  // coreaudio
+        4,  // sndio
+        5,  // audio4
+        6,  // oss
+        7,  // pulseaudio
+        8,  // alsa
+        10, // aaudio
+        11, // opensl
+        12, // webaudio
+    ];
+
+    /// <inheritdoc cref="ContextCreate(out nint, out bool)"/>
+    public static int ContextCreate(out nint context) => ContextCreate(out context, out _);
+
+    /// <summary>
+    /// Initialises a miniaudio context, preferring any backend over JACK.
+    /// </summary>
+    /// <param name="usedJackFallback">
+    /// True when NO other backend could initialise and the context fell back to miniaudio's default
+    /// priority, which may have selected JACK.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// <strong>Why JACK is treated differently.</strong> miniaudio's data callback enters MANAGED code
+    /// (<see cref="DataProc"/> is <c>[UnmanagedCallersOnly]</c>), and on most backends it runs on
+    /// miniaudio's own device thread - app-owned, so a GC suspension there costs this app's audio and
+    /// the ring absorbs it. The JACK backend instead runs it on the JACK server's GRAPH thread, where a
+    /// GC pause stalls the whole graph cycle and the server xruns: every client on the box glitches,
+    /// and nothing in this app's own numbers accounts for it. That is precisely the fault that was
+    /// found and fixed on the PortAudio side by moving to blocking-write mode.
+    /// </para>
+    /// <para>
+    /// Asking for the non-JACK list first keeps the hazard off every machine that has any alternative,
+    /// without removing JACK as a genuine last resort - this backend exists to be the answer when a
+    /// box's PortAudio build is the broken thing, so failing outright on a JACK-only box would defeat
+    /// the point. When it IS the last resort, the caller says so out loud.
+    /// </para>
+    /// </remarks>
+    public static int ContextCreate(out nint context, out bool usedJackFallback)
     {
         context = nint.Zero;
+        usedJackFallback = false;
         var size = (int)ma_context_sizeof();
         if (size <= 0)
             return -1;
+
         var ctx = Marshal.AllocHGlobal(size);
+
+        var backends = BackendsExceptJack;
+        fixed (int* pBackends = backends)
+        {
+            new Span<byte>((void*)ctx, size).Clear();
+            if (ma_context_init((nint)pBackends, (uint)backends.Length, nint.Zero, ctx) == Success)
+            {
+                context = ctx;
+                return Success;
+            }
+        }
+
+        // Nothing else on this machine. Fall back to miniaudio's own priority, which includes JACK.
         new Span<byte>((void*)ctx, size).Clear();
         var result = ma_context_init(nint.Zero, 0, nint.Zero, ctx);
         if (result != Success)
@@ -174,6 +248,8 @@ public static unsafe partial class MiniAudioNative
             Marshal.FreeHGlobal(ctx);
             return result;
         }
+
+        usedJackFallback = true;
         context = ctx;
         return Success;
     }

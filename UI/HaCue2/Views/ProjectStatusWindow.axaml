@@ -4,6 +4,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.ProjectStatusWindow"
         x:DataType="vm:ProjectStatusViewModel"
+        x:CompileBindings="True"
         Title="HaCue2 — Project status"
         Width="1060" Height="560"
         MinWidth="900" MinHeight="460"

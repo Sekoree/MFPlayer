@@ -4,6 +4,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.LauncherWindow"
         x:DataType="vm:LauncherViewModel"
+        x:CompileBindings="True"
         Title="HaCue2"
         Width="900" Height="560"
         MinWidth="820" MinHeight="480"

@@ -4,6 +4,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.DiagnosticsWindow"
         x:DataType="vm:DiagnosticsViewModel"
+        x:CompileBindings="True"
         Title="HaCue2 — Diagnostics"
         Width="1140" Height="700"
         MinWidth="960" MinHeight="560"

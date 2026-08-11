@@ -4,6 +4,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.PromptWindow"
         x:DataType="vm:PromptViewModel"
+        x:CompileBindings="True"
         Title="{Binding Title}"
         Width="460" SizeToContent="Height"
         CanResize="False"

@@ -5,7 +5,8 @@
              xmlns:vm="using:HaCue2.ViewModels"
              xmlns:v="using:HaCue2.Views"
              x:Class="HaCue2.Views.InspectorPane"
-             x:DataType="vm:InspectorViewModel">
+             x:DataType="vm:InspectorViewModel"
+             x:CompileBindings="True">
 
   <!-- Screens 02 and 04. The tab SET follows the cue kind and the chosen tab is remembered per kind;
        "Note" (singular) is on every kind. Selecting a cue never flips the right panel to this pane,

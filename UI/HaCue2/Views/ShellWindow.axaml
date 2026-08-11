@@ -5,6 +5,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.ShellWindow"
         x:DataType="vm:ShellViewModel"
+        x:CompileBindings="True"
         Title="{Binding WindowTitle}"
         Width="1440" Height="900"
         MinWidth="900" MinHeight="640"

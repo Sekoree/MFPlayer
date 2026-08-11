@@ -4,6 +4,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.CurveEditorWindow"
         x:DataType="vm:CurveEditorViewModel"
+        x:CompileBindings="True"
         Title="Fade curve"
         Width="700" Height="340"
         CanResize="False"

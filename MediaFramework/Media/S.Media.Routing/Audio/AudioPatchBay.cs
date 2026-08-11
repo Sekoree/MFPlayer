@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using System.Diagnostics.CodeAnalysis;
 
 namespace S.Media.Routing;
 
@@ -41,11 +42,65 @@ public sealed class AudioPatchBay : IDisposable
     private volatile string? _masterTerminalId;
     private bool _disposed;
 
+    /// <summary>
+    /// Lock-free view of terminalId → its routed output's clock, for <see cref="TerminalClockProxy"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The proxy used to resolve its terminal by taking <see cref="_gate"/> and looking the entry up in
+    /// <see cref="_terminals"/> - on EVERY clock read, and separately in each of its three property
+    /// members. Every sounding voice's clock chain runs through one of these, so a control-plane
+    /// operation that takes the same gate (a live patch edit, a terminal add or remove) briefly blocked
+    /// every voice's position read. Nothing about a clock read needs the control plane's lock: it needs
+    /// one reference, which never changes except when the control plane says so.
+    /// </para>
+    /// <para>
+    /// Same shape as <see cref="_masterTerminalClock"/> right below (already volatile, already
+    /// documented as "written on terminal add/remove, read from every clock read") and as
+    /// <c>ClipCompositionRuntime._acquiredSnapshot</c>. Replaced wholesale rather than mutated, so a
+    /// reader always sees one coherent map.
+    /// </para>
+    /// </remarks>
+    private volatile Dictionary<string, IPlaybackClock> _terminalClocks = new(StringComparer.Ordinal);
+
     private sealed record TerminalEntry(
         IAudioOutput Terminal,
         IAudioOutput Routed,
         bool IsClockMaster,
         float[,] Patch);
+
+    /// <summary>
+    /// The ONE way <see cref="_terminals"/> is written. Republishing the lock-free clock snapshot from
+    /// here - rather than at each of the nine call sites that used to assign the dictionary directly -
+    /// is what makes it impossible for a later write to forget.
+    /// </summary>
+    private void SetTerminalLocked(string terminalId, TerminalEntry entry)
+    {
+        _terminals[terminalId] = entry;
+        RepublishTerminalClocksLocked();
+    }
+
+    private bool RemoveTerminalLocked(
+        string terminalId, [NotNullWhen(true)] out TerminalEntry? entry)
+    {
+        if (!_terminals.Remove(terminalId, out entry))
+            return false;
+        RepublishTerminalClocksLocked();
+        return true;
+    }
+
+    /// <summary>Rebuilds the clock snapshot. Must be called under <see cref="_gate"/>.</summary>
+    private void RepublishTerminalClocksLocked()
+    {
+        var next = new Dictionary<string, IPlaybackClock>(_terminals.Count, StringComparer.Ordinal);
+        foreach (var (id, entry) in _terminals)
+        {
+            if (entry.Routed is IPlaybackClock clock)
+                next[id] = clock;
+        }
+
+        _terminalClocks = next;
+    }
 
     private sealed record PreparedTerminal(IAudioOutput Routed, IDisposable? Cleanup);
 
@@ -285,8 +340,8 @@ public sealed class AudioPatchBay : IDisposable
             }
 
             _router.ApplyMatrix(_busId, terminalId, newPatch);
-            _terminals[terminalId] = new TerminalEntry(
-                newTerminal, prepared.Routed, old.IsClockMaster, (float[,])newPatch.Clone());
+            SetTerminalLocked(terminalId, new TerminalEntry(
+                newTerminal, prepared.Routed, old.IsClockMaster, (float[,])newPatch.Clone()));
             if (old.IsClockMaster)
             {
                 _masterTerminal = prepared.Routed;
@@ -391,11 +446,11 @@ public sealed class AudioPatchBay : IDisposable
                 demotedPrepared?.Cleanup?.Dispose();
                 throw;
             }
-            _terminals[terminalId] = promoted with
+            SetTerminalLocked(terminalId, promoted with
             {
                 Routed = promotedPrepared.Routed,
                 IsClockMaster = true,
-            };
+            });
 
             _router.RetargetSlaveClock(terminalId);
 
@@ -405,11 +460,11 @@ public sealed class AudioPatchBay : IDisposable
                 {
                     _router.ReplaceOutputKeepingRoutes(
                         oldMasterId, demotedPrepared.Routed, demotedPrepared.Cleanup);
-                    _terminals[oldMasterId] = oldMaster with
+                    SetTerminalLocked(oldMasterId, oldMaster with
                     {
                         Routed = demotedPrepared.Routed,
                         IsClockMaster = false,
-                    };
+                    });
                 }
                 catch
                 {
@@ -428,9 +483,9 @@ public sealed class AudioPatchBay : IDisposable
         _router.RetargetSlaveClock(terminalId);
 
         if (_masterTerminalId is { } oldId && _terminals.TryGetValue(oldId, out var old))
-            _terminals[oldId] = old with { IsClockMaster = false };
+            SetTerminalLocked(oldId, old with { IsClockMaster = false });
 
-        _terminals[terminalId] = promoted with { IsClockMaster = true };
+        SetTerminalLocked(terminalId, promoted with { IsClockMaster = true });
         _masterTerminal = promoted.Routed;
         _masterTerminalClock = promoted.Routed as IPlaybackClock;
         _masterTerminalId = terminalId;
@@ -595,8 +650,8 @@ public sealed class AudioPatchBay : IDisposable
             throw;
         }
 
-        _terminals[terminalId] = new TerminalEntry(
-            terminal, prepared.Routed, isClockMaster, (float[,])patch.Clone());
+        SetTerminalLocked(terminalId, new TerminalEntry(
+            terminal, prepared.Routed, isClockMaster, (float[,])patch.Clone()));
         if (isClockMaster)
         {
             // The master is never wrapped, so routed == terminal here; producer clocks follow it.
@@ -621,7 +676,7 @@ public sealed class AudioPatchBay : IDisposable
             ValidatePatch(patch, entry.Routed.Format.Channels);
             _router.ApplyMatrix(_busId, terminalId, patch);
             // Remember the live patch so a later ReplaceTerminal re-applies what is audible now.
-            _terminals[terminalId] = entry with { Patch = (float[,])patch.Clone() };
+            SetTerminalLocked(terminalId, entry with { Patch = (float[,])patch.Clone() });
         }
     }
 
@@ -632,7 +687,7 @@ public sealed class AudioPatchBay : IDisposable
         TerminalEntry? entry;
         lock (_gate)
         {
-            if (!_terminals.Remove(terminalId, out entry))
+            if (!RemoveTerminalLocked(terminalId, out entry))
                 return false;
             if (entry.IsClockMaster)
             {
@@ -763,24 +818,25 @@ public sealed class AudioPatchBay : IDisposable
         return ticks + (terminal is null ? 0 : AudioOutputLatency.Of(terminal).Ticks);
     }
 
+    /// <summary>
+    /// A producer lease's view of its terminal's device clock. Lock-free: resolves through
+    /// <see cref="_terminalClocks"/>, so a clock read never contends with the control plane.
+    /// </summary>
     private sealed class TerminalClockProxy(AudioPatchBay bay, string terminalId) : IPlaybackClock
     {
-        private IPlaybackClock Inner
-        {
-            get
-            {
-                lock (bay._gate)
-                    return bay._terminals.TryGetValue(terminalId, out var entry)
-                           && entry.Routed is IPlaybackClock clock
-                        ? clock
-                        : throw new InvalidOperationException(
-                            $"terminal '{terminalId}' exposes no playback clock");
-            }
-        }
+        private IPlaybackClock Inner =>
+            bay._terminalClocks.TryGetValue(terminalId, out var clock)
+                ? clock
+                : throw new InvalidOperationException(
+                    $"terminal '{terminalId}' exposes no playback clock");
 
         public TimeSpan ElapsedSinceStart => Inner.ElapsedSinceStart;
         public long EpochId => Inner.EpochId;
         public bool IsAdvancing => Inner.IsAdvancing;
+
+        /// <summary>The sanctioned accessor: ONE resolve, then one atomic sample off the terminal. The
+        /// three members above each resolve separately, which is fine now that resolving is a lock-free
+        /// dictionary read - it was three lock acquisitions per composed reading before.</summary>
         public ClockReading Read() => Inner.Read();
     }
 
@@ -818,6 +874,7 @@ public sealed class AudioPatchBay : IDisposable
                 return;
             _disposed = true;
             _terminals.Clear();
+            RepublishTerminalClocksLocked();
             monitors = _monitorBuses.Values.ToList();
             _monitorBuses.Clear();
         }

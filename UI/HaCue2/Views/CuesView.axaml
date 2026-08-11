@@ -4,7 +4,8 @@
              xmlns:v="using:HaCue2.Views"
              xmlns:vm="using:HaCue2.ViewModels"
              x:Class="HaCue2.Views.CuesView"
-             x:DataType="vm:CuesViewModel">
+             x:DataType="vm:CuesViewModel"
+             x:CompileBindings="True">
 
   <!-- Screens 02, 03, 05. The launch state: editing, unlocked, everything live. -->
 

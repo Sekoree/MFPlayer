@@ -2,7 +2,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:HaCue2.ViewModels"
              x:Class="HaCue2.Views.ScopePane"
-             x:DataType="vm:CuesViewModel">
+             x:DataType="vm:CuesViewModel"
+             x:CompileBindings="True">
 
   <!-- Screen 03. A song-per-group show is 400–600 rows flat, so the tree scopes: pick a list or a
        group here and the main view narrows to that subtree, with the breadcrumb as the way out.

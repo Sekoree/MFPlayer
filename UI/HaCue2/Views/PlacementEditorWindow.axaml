@@ -4,6 +4,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.PlacementEditorWindow"
         x:DataType="vm:InspectorViewModel"
+        x:CompileBindings="True"
         Title="HaCue2 · precise video placement"
         Width="1180" Height="790" MinWidth="640" MinHeight="440"
         WindowStartupLocation="CenterOwner">

@@ -65,19 +65,91 @@ that document is stale rather than authoritative** and re-audit before planning 
 
 ## 3. What is genuinely still open
 
-Six things, and only two are features:
+Six things — but an owner decision on 2026-08-11 closes two of them outright.
 
-| # | Item | Kind | Source |
+### Owner decision (2026-08-11): HaPlay's cue player STAYS
+
+> HaPlay's cue player is kept deliberately, as a simpler variant beside HaCue2. It is a product, not
+> a migration leftover.
+
+That is not a deferral, it resolves two items:
+
+| # | Item | Resolution |
+|---|---|---|
+| 1 | **Phase 6 of the extraction** — 46 cue-named files still in `UI/HaPlay` | **CLOSED.** Phase 6 existed to dismantle HaPlay's cue player after extracting it. If that player is a shipped product, those files are the product and there is nothing to dismantle. |
+| 2 | **`HaOutput` extraction** — the 8 couplings | **CLOSED.** The 2026-08-03 note deferred this at a stated cost: "a merge later **if both apps are to share one engine**". They are not. HaCue2.Engine's own 450-line `ProjectVideoOutputs` and HaPlay's `OutputManagement` stay separate on purpose. |
+
+The one consequence worth writing down: the two apps' output paths are now permanently divergent by
+choice, so an output-layer fix has two homes. That is acceptable only while HaPlay's player stays the
+*simpler* one — the moment it starts chasing HaCue2's output features, revisit this.
+
+### Still open (4)
+
+| # | Item | Kind | Worth doing? |
 |---|---|---|---|
-| 1 | **Phase 6 of the extraction** — 46 cue-named files still in `UI/HaPlay` (the doc said 41; it grew) | structural | gap analysis |
-| 2 | **`HaOutput` extraction** — the 8 couplings; deliberately deferred to Phase 6 by owner decision 2026-08-03, since HaCue2.Engine opened its own `SDL3GLVideoOutput` path instead | structural | gap analysis §7.1 |
-| 3 | **HaCue2 launch smoke in CI** | build | gap analysis |
-| 4 | **Multi-output genlock not wired** — `OutputSyncGroup` + `VideoPresentSyncGroup` + `SyncPresentVideoOutput` are built and tested; nothing constructs them | feature | `Doc/HaPlay-MultiOutput-Sync.md`, now labelled in `Unwired/` |
-| 5 | **P7 live-ingest model not wired** — `SourceTimeline`, `LiveTimelineDriver`, `SourceSyncGroup`; demonstrated end to end by `Tools/LiveReceiveProbe`, used by no product path | feature | now labelled in `Unwired/` |
-| 6 | **MiniAudio JACK backend runs managed code on the JACK graph thread** — the PortAudio-class GC hazard, still open for that one backend | defect | `Timing-Simplification-Review-2026-08-11.md` §9c |
+| 3 | **HaCue2 launch smoke in CI** — the AOT gate publishes the binary but never starts it; HaPlay has a launch gate, the flagship does not | build | **yes, cheap** |
+| 4 | **Multi-output genlock not wired** (`OutputSyncGroup`, `VideoPresentSyncGroup`, `SyncPresentVideoOutput`) | feature | **not yet** — speculative until a venue actually needs a stitched wall; `Doc/HaPlay-MultiOutput-Sync.md` itself concludes Option A suffices for every current case |
+| 5 | **P7 live-ingest not wired** (`SourceTimeline`, `LiveTimelineDriver`, `SourceSyncGroup`) | feature | **not yet** — same shape; wire it when a real NDI A/V desync is observed, not before |
+| 6 | **MiniAudio JACK GC hazard** | defect | **a warning, not a rewrite** — see below |
 
-Plus two measurements that would need re-taking rather than trusting: the gap analysis's "21 inert
-controls, 56 hardcoded fields" UI count (as of 08-03), and the parity doc's remaining 18 rows.
+### On item 6, corrected
+
+I first rated this higher than the evidence supports. Checking properly:
+
+- miniaudio **is** a first-class user-selectable backend (`AppSettings.AudioBackend`), documented as
+  "the answer when a box's PortAudio build is the thing that is broken" — so it is reachable by a real
+  operator on a real machine, and reached exactly when they are already troubleshooting.
+- **But** MALib builds no native code (`MALib.csproj`: "no native build step … hosts deploy the vanilla
+  miniaudio shared library"), and vanilla miniaudio on Linux tries PulseAudio, then ALSA, then JACK. On
+  a PipeWire box `pipewire-pulse` answers first, so the JACK backend — the only one with the hazard — is
+  a last resort that is unlikely to be selected.
+
+So: low probability, invisible failure mode. The proportionate fix is to **detect the JACK backend at
+device open and warn** (~15 lines), turning a mysterious xrun into a message. The blocking-write rework
+is disproportionate, and the C shim from §9c of the timing review is definitely not warranted without a
+measurement showing the hazard actually firing.
+
+### Not on the original list, but ahead of items 4–6 for anyone who cares about cue timing
+
+`AudioPatchBay.TerminalClockProxy` takes the shared bay gate on **every clock read**, and its three
+property members each take it separately (`AudioPatchBay.cs:766-785`). Every sounding voice's clock
+chain runs through one of these. The throughput cost is probably small and is **unmeasured** — the
+argument for fixing it is not speed but coupling: a patch edit, which takes the same gate, can briefly
+block every voice's clock read. `MasterClockProxy` next to it is already lock-free over a volatile
+field, and `ClipCompositionRuntime`'s `_acquiredSnapshot` is the immutable-snapshot pattern to copy.
+
+Plus, from `Timing-Simplification-Review-2026-08-11.md` §8/§9d and never actioned:
+`CpuVideoCompositor` clears 8.3 MB per frame unconditionally (CPU fallback path only); `MediaClock.Stop`
+is still literally `Pause`.
+
+### `CueRunner._fireLock` — examined 2026-08-11, deliberately NOT changed
+
+The complaint is real: one process-global semaphore serialises fires across all cue lists, so a GO on
+list A holds it through A's media open (hundreds of milliseconds for a cold file) while a GO on list B
+waits. Scoping it per list would decouple them.
+
+It is not landing with the other three items, for two reasons:
+
+1. **`FireCuesAsync` legitimately spans authored groups** — its own doc says it fires each cue on that
+   cue's `CueDefinition.GroupId`. Per-list scoping therefore needs ordered multi-acquire (sort the keys,
+   take them in order) to stay deadlock-free. That is correct-able but it is not a small change.
+2. **It changes when two things may happen at once, on the fire path.** The other three items in this
+   round were contained and independently verifiable; this one alters the concurrency model of the most
+   safety-critical path in a live show, and a subtle regression means two cues firing together that
+   should not have, mid-performance.
+
+Landing it in the same batch as a large body of timing work that has only ever been verified against
+test suites is the wrong sequencing. Do it as its own change, with its own validation, after the
+real-show run.
+
+Note also that the worst case is already smaller than it looks: `FireCuesIndependentScheduledAsync`
+releases the lock as soon as its batch is prepared, so timeline events do not hold it while waiting for
+their edge.
+
+### Two numbers that need re-taking rather than trusting
+
+The gap analysis's "21 inert controls, 56 hardcoded fields" (as of 08-03), and the parity doc's
+remaining 18 "no" rows.
 
 ---
 

@@ -4,6 +4,7 @@
              xmlns:vm="using:HaCue2.ViewModels"
              x:Class="HaCue2.Views.PlacementEditorPane"
              x:DataType="vm:InspectorViewModel"
+             x:CompileBindings="True"
              AutomationProperties.Name="Video placement editor">
 
   <!-- One placement's complete editor. InspectorPane places this inside each placement expander;

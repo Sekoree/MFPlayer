@@ -3,7 +3,8 @@
              xmlns:c="using:HaCue2.Controls"
              xmlns:vm="using:HaCue2.ViewModels"
              x:Class="HaCue2.Views.TargetsView"
-             x:DataType="vm:TargetsViewModel">
+             x:DataType="vm:TargetsViewModel"
+             x:CompileBindings="True">
 
   <!-- Screen 11. One crowded screen split into three focused tabs, each keeping the wire monitor
        filtered to its own direction. -->

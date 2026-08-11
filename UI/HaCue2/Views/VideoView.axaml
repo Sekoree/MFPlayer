@@ -6,7 +6,8 @@
              xmlns:vm="using:HaCue2.ViewModels"
              xmlns:m="using:HaCue2.Core.Model"
              x:Class="HaCue2.Views.VideoView"
-             x:DataType="vm:VideoViewModel">
+             x:DataType="vm:VideoViewModel"
+             x:CompileBindings="True">
 
   <!-- Screens 09–10: Outputs · Compositions · Mapping · Audition.
 

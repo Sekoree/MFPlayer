@@ -1,3 +1,4 @@
+using S.Media.Core.Diagnostics;
 
 namespace S.Media.Audio.MiniAudio;
 
@@ -7,10 +8,31 @@ internal sealed unsafe class MiniAudioContext : IDisposable
 
     private MiniAudioContext(nint handle) => _handle = handle;
 
+    /// <summary>True when this context could only start on JACK - see <see cref="Create"/>.</summary>
+    public bool UsesJackBackend { get; private init; }
+
     public static MiniAudioContext Create()
     {
-        MiniAudioException.ThrowIfError(MiniAudioNative.ContextCreate(out var handle), "ma_context_init");
-        return new MiniAudioContext(handle);
+        MiniAudioException.ThrowIfError(
+            MiniAudioNative.ContextCreate(out var handle, out var jackFallback), "ma_context_init");
+
+        if (jackFallback)
+        {
+            // Not fatal, and deliberately loud. On JACK, miniaudio runs its data callback on the
+            // SERVER's graph thread, so a GC pause in this process stalls the graph and the server
+            // xruns - every client on the box glitches, and none of this app's own counters will show
+            // why. Every other backend runs it on miniaudio's own thread, where a pause costs only this
+            // app's audio and the ring absorbs it. Reaching here means no other backend would start,
+            // so the honest answer is "this works, and here is the failure mode to expect".
+            MediaDiagnostics.LogWarning(
+                "MiniAudio: no backend but JACK could be initialised on this machine. JACK runs the " +
+                "audio callback on the server's graph thread, where a garbage collection in this " +
+                "process can cause a server-wide xrun (heard as dropouts in EVERY JACK client, not " +
+                "just this one). Prefer the PortAudio backend on this box - it uses blocking writes " +
+                "and has no such hazard.");
+        }
+
+        return new MiniAudioContext(handle) { UsesJackBackend = jackFallback };
     }
 
     public IReadOnlyList<AudioDeviceInfo> Enumerate(MiniAudioDeviceType deviceType)

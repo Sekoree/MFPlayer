@@ -4,6 +4,7 @@
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.YouTubeCueWindow"
         x:DataType="vm:YouTubeCueViewModel"
+        x:CompileBindings="True"
         Title="{Binding Title}"
         Width="560" SizeToContent="Height"
         CanResize="False"

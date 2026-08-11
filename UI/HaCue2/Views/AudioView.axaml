@@ -6,7 +6,8 @@
              xmlns:vm="using:HaCue2.ViewModels"
              xmlns:m="using:HaCue2.Core.Model"
              x:Class="HaCue2.Views.AudioView"
-             x:DataType="vm:AudioViewModel">
+             x:DataType="vm:AudioViewModel"
+             x:CompileBindings="True">
 
   <!-- Screens 06–08b: Logical outputs · Patch · Devices · Audition.
 
