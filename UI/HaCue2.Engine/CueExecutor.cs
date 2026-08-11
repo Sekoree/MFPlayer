@@ -94,37 +94,42 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         private readonly ICueExecutionHost _host;
         private readonly SessionClock _master;
-        // Position accumulates on READ (delta since the last look), so a second concurrent reader would
-        // race the accumulator and corrupt the coordinate. The scheduler loop was the only reader for a
-        // long time; dispatch-lateness sampling added another, hence the gate. Contention is trivial - a
-        // few hundred sub-microsecond reads per second.
-        private readonly Lock _positionGate = new();
-        private TimeSpan _lastMaster;
-        private TimeSpan _position;
+        private readonly TimeSpan _masterAnchor;
+        private readonly TimeSpan _pausedAnchor;
+        private readonly TimeSpan _positionAnchor;
 
         public TimelineRunClock(ICueExecutionHost host, TimeSpan initialPosition)
         {
             _host = host;
             _master = new SessionClock(host.TimelineClock);
-            _lastMaster = _master.Now;
-            _position = initialPosition;
+            _masterAnchor = _master.Now;
+            _pausedAnchor = host.TimelinePausedElapsed;
+            _positionAnchor = initialPosition;
         }
 
-        public TimeSpan Position
-        {
-            get
-            {
-                lock (_positionGate)
-                {
-                    var now = _master.Now;
-                    var delta = now - _lastMaster;
-                    _lastMaster = now;
-                    if (!_host.TimelinePaused && _master.IsAdvancing && delta > TimeSpan.Zero)
-                        _position += delta;
-                    return _position;
-                }
-            }
-        }
+        /// <summary>
+        /// Timeline time: master time since this run began, less the master time the show spent paused
+        /// since then.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// A pure, lock-free read over three immutable anchors. It used to ACCUMULATE on read - take the
+        /// delta since the last look and add it if the show was not paused at that instant - which made
+        /// the value depend on who read last, required a gate around every read, and quantized the
+        /// coordinate to the sampling interval at each pause edge. The scheduler loop was the only
+        /// reader for a long time and it worked; adding dispatch-lateness sampling as a second reader is
+        /// what forced the gate, and a third would have kept working only by accident.
+        /// </para>
+        /// <para>
+        /// Monotonic without a clamp, by construction: master time is monotonic within an epoch (and
+        /// <see cref="SessionClock"/> rebases across epochs), and paused time is monotonic and can never
+        /// grow faster than master time - the host records it at the transitions, from the same clock.
+        /// </para>
+        /// </remarks>
+        public TimeSpan Position =>
+            _positionAnchor
+            + (_master.Now - _masterAnchor)
+            - (_host.TimelinePausedElapsed - _pausedAnchor);
 
         public async Task WaitUntilAsync(TimeSpan target, CancellationToken cancellationToken)
         {

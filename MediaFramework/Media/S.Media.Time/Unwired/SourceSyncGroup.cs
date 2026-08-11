@@ -1,3 +1,14 @@
+// ─── UNWIRED ──────────────────────────────────────────────────────────────────────────────────────
+// Built, tested, and reached by NO production code path. This is not dead code and must not be deleted
+// as such: it is the foundation of a planned feature, recorded in the design doc named below. It lives
+// in Unwired/ so a reader can tell "planned, built, not yet connected" from "load-bearing" without
+// grepping for callers - which is the only cost it currently imposes.
+//
+// Design doc: S.Media.NDI/NDIModule.cs design note - the recurring NDI A/V desync
+// Wires up when: correlated live streams (NDI video + its embedded audio) need ONE sender-to-session anchor instead
+//              of being treated as two unrelated clocks
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+
 namespace S.Media.Time;
 
 /// <summary>

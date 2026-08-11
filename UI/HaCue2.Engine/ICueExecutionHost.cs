@@ -121,6 +121,20 @@ public interface ICueExecutionHost
     bool TimelinePaused { get; }
 
     /// <summary>
+    /// Master time spent paused so far, in <see cref="TimelineClock"/>'s domain. A timeline's coordinate
+    /// is <c>master elapsed − this</c>, which is why it must be monotonic and must never grow faster
+    /// than master time.
+    /// </summary>
+    /// <remarks>
+    /// Recorded by the host AT THE PAUSE TRANSITION rather than derived by sampling
+    /// <see cref="TimelinePaused"/>. Sampling a polled flag quantizes the coordinate to the sampling
+    /// interval and forces the timeline position to be ACCUMULATED on read - shared state mutated by
+    /// every reader, needing a gate, and giving a different answer depending on who looked last. With
+    /// the paused total supplied here the timeline's read is a pure lock-free subtraction.
+    /// </remarks>
+    TimeSpan TimelinePausedElapsed { get; }
+
+    /// <summary>
     /// Cancellable scheduler wait. Kept on the host seam so tests can advance a virtual master clock
     /// without sleeping for the authored duration.
     /// </summary>

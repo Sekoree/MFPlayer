@@ -1,5 +1,11 @@
 # HaCue2 vs HaPlay's cue player — parity audit
 
+> **STATUS SUPERSEDED (2026-08-11).** Its headline gap - "video placement, 6 model fields HaCue2
+> cannot express" - is closed: all six now exist on `LayerPlacement`, and `LayerFit` carries all six
+> fit modes. The remaining rows were not re-verified individually and should be treated as stale. See
+> `Plans/Open-Items-Survey-2026-08-11.md`.
+
+
 **2026-08-04.** Asked for after a first real run of HaCue2 on `~/Documents/HaCueProj/TestCue.hacue2proj`
 turned up four defects in ten minutes. The question behind it: *is the standalone app at least as
 capable as the cue player it was extracted from, and where is it not?*

@@ -1,3 +1,13 @@
+// ─── UNWIRED ──────────────────────────────────────────────────────────────────────────────────────
+// Built, tested, and reached by NO production code path. This is not dead code and must not be deleted
+// as such: it is the foundation of a planned feature, recorded in the design doc named below. It lives
+// in Unwired/ so a reader can tell "planned, built, not yet connected" from "load-bearing" without
+// grepping for callers - which is the only cost it currently imposes.
+//
+// Design doc: the P7 live-ingest model; demonstrated by Tools/LiveReceiveProbe
+// Wires up when: SourceTimeline is wired; this is its per-frame driver
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+
 namespace S.Media.Time;
 
 /// <summary>Result of placing one live frame onto the master timeline.</summary>

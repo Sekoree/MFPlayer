@@ -357,6 +357,8 @@ public sealed partial class ShowHost
 
     bool ICueExecutionHost.TimelinePaused => IsPaused;
 
+    TimeSpan ICueExecutionHost.TimelinePausedElapsed => TimelinePausedElapsed;
+
     async Task ICueExecutionHost.DelayTimelineAsync(
         TimeSpan duration, CancellationToken cancellationToken)
     {

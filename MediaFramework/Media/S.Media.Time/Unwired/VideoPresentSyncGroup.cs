@@ -1,3 +1,14 @@
+// ─── UNWIRED ──────────────────────────────────────────────────────────────────────────────────────
+// Built, tested, and reached by NO production code path. This is not dead code and must not be deleted
+// as such: it is the foundation of a planned feature, recorded in the design doc named below. It lives
+// in Unwired/ so a reader can tell "planned, built, not yet connected" from "load-bearing" without
+// grepping for callers - which is the only cost it currently imposes.
+//
+// Design doc: Doc/HaPlay-MultiOutput-Sync.md (Option B, Phase 2b - the present scheduler)
+// Wires up when: the same stitched-canvas case: this is the half that makes two outputs show the frame for one
+//              master timestamp on the SAME tick, which rate discipline alone cannot do
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+
 using System.Diagnostics;
 using S.Media.Core.Video;
 

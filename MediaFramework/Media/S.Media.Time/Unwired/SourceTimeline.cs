@@ -1,3 +1,14 @@
+// ─── UNWIRED ──────────────────────────────────────────────────────────────────────────────────────
+// Built, tested, and reached by NO production code path. This is not dead code and must not be deleted
+// as such: it is the foundation of a planned feature, recorded in the design doc named below. It lives
+// in Unwired/ so a reader can tell "planned, built, not yet connected" from "load-bearing" without
+// grepping for callers - which is the only cost it currently imposes.
+//
+// Design doc: the P7 live-ingest model; demonstrated by Tools/LiveReceiveProbe
+// Wires up when: live ingest (NDI/capture) is scheduled AGAINST the session master rather than being treated as its
+//              own master - the probe already runs this shape end to end
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+
 namespace S.Media.Time;
 
 /// <summary>How a source's PTS is mapped onto the session master timeline (D4 / Doc 03).</summary>

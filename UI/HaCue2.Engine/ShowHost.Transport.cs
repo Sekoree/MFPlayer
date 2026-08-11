@@ -266,8 +266,54 @@ public sealed partial class ShowHost
         await _session.SetPausedAsync(paused).ConfigureAwait(false);
 
         lock (_gate)
+        {
+            if (_paused == paused)
+                return;
+            // Close or open the paused interval AT THE TRANSITION. A timeline's coordinate has to
+            // exclude paused time, and the only alternative to recording it here is for the timeline to
+            // sample a polled flag and attribute whole poll intervals to whichever state it happened to
+            // observe - which both quantizes the coordinate to the poll and forces the position to be
+            // ACCUMULATED on read (mutating shared state, so every reader needs a gate). Measured
+            // exactly, once, at the edge: the timeline's read becomes a pure lock-free subtraction.
+            var now = TimelineMasterNow();
+            if (paused)
+                _pausedSince = now;
+            else if (_pausedSince is { } since && now > since)
+                _pausedElapsed += now - since;
+            if (!paused)
+                _pausedSince = null;
             _paused = paused;
+        }
     }
+
+    /// <summary>
+    /// Master time this show has spent paused, in the <see cref="ICueExecutionHost.TimelineClock"/>
+    /// domain. Monotonic and never faster than master time itself, which is what lets a timeline
+    /// subtract it without needing a monotonic clamp of its own.
+    /// </summary>
+    internal TimeSpan TimelinePausedElapsed
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_pausedSince is not { } since)
+                    return _pausedElapsed;
+                var now = TimelineMasterNow();
+                return now > since ? _pausedElapsed + (now - since) : _pausedElapsed;
+            }
+        }
+    }
+
+    /// <summary>The bay master's current elapsed, or zero when there is no bay clock to read.</summary>
+    private TimeSpan TimelineMasterNow()
+    {
+        try { return _bay.Bay.MasterClock.ElapsedSinceStart; }
+        catch { return _pausedSince ?? _pausedElapsed; } // torn down mid-read: freeze the interval
+    }
+
+    private TimeSpan _pausedElapsed;
+    private TimeSpan? _pausedSince;
 
     public bool IsPaused
     {

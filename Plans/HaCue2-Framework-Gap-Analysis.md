@@ -1,5 +1,12 @@
 # HaCue2 — framework gap analysis
 
+> **STATUS SUPERSEDED (2026-08-11).** The *analysis* below is still good; its **verdicts are not**.
+> A code survey on 2026-08-11 found that 13 of the 13 subsystems this document lists as open, and 3 of
+> its 4 build items, have since landed without the document being updated. See
+> `Plans/Open-Items-Survey-2026-08-11.md` for what is actually open. Read this one for its reasoning,
+> not for its status columns.
+
+
 Status: audit of `MediaFramework/` (and the HaPlay-side pieces the split must relocate) against the
 approved rev-3 UI design and the 30-item decision register in
 `Plans/HaCue-Extraction-And-Project-Audio-Patch-Plan.md`

@@ -188,11 +188,29 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
 
     public bool TimelinePaused { get; set; }
 
+    /// <summary>Master time the fake show has "spent paused". Settable, so a test can pause a timeline
+    /// without a clock that really stops.</summary>
+    public TimeSpan TimelinePausedElapsed { get; set; }
+
     public Func<TimeSpan, CancellationToken, Task>? TimelineDelayOverride { get; set; }
 
     public TimeSpan TotalTimelineAdvanced => _timelineClock.TotalAdvanced;
 
-    public void AdvanceTimeline(TimeSpan duration) => _timelineClock.Advance(duration);
+    /// <summary>
+    /// Advances the virtual master, accruing paused time while <see cref="TimelinePaused"/> is set.
+    /// </summary>
+    /// <remarks>
+    /// Mirrors what the real host does at its pause TRANSITIONS: paused time is master time the show
+    /// spent stopped, and a timeline's coordinate is master-elapsed minus it. A fake that moved the
+    /// clock without accruing it would let a timeline advance through a pause - which is precisely the
+    /// behaviour <c>PauseFreezesTimelineEvenWhileTheDeviceClockKeepsAdvancing</c> exists to forbid.
+    /// </remarks>
+    public void AdvanceTimeline(TimeSpan duration)
+    {
+        if (TimelinePaused && duration > TimeSpan.Zero)
+            TimelinePausedElapsed += duration;
+        _timelineClock.Advance(duration);
+    }
 
     public void ReanchorTimeline(TimeSpan elapsed) => _timelineClock.Reanchor(elapsed);
 

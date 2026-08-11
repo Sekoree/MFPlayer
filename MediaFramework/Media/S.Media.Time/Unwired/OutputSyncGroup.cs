@@ -1,3 +1,14 @@
+// ─── UNWIRED ──────────────────────────────────────────────────────────────────────────────────────
+// Built, tested, and reached by NO production code path. This is not dead code and must not be deleted
+// as such: it is the foundation of a planned feature, recorded in the design doc named below. It lives
+// in Unwired/ so a reader can tell "planned, built, not yet connected" from "load-bearing" without
+// grepping for callers - which is the only cost it currently imposes.
+//
+// Design doc: Doc/HaPlay-MultiOutput-Sync.md (Option B, Phase 1 - "built 2026-06-15")
+// Wires up when: a show stitches one canvas across several physical outputs and needs them rate-disciplined to one
+//              reference rather than merely drift-corrected per output
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+
 using System.Diagnostics;
 
 namespace S.Media.Time;

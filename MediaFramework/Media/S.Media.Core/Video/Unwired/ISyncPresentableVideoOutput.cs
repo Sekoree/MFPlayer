@@ -1,3 +1,13 @@
+// ─── UNWIRED ──────────────────────────────────────────────────────────────────────────────────────
+// Built, tested, and reached by NO production code path. This is not dead code and must not be deleted
+// as such: it is the foundation of a planned feature, recorded in the design doc named below. It lives
+// in Unwired/ so a reader can tell "planned, built, not yet connected" from "load-bearing" without
+// grepping for callers - which is the only cost it currently imposes.
+//
+// Design doc: Doc/HaPlay-MultiOutput-Sync.md (Option B, Phase 2b - the member contract)
+// Wires up when: VideoPresentSyncGroup is wired; this is what its members implement
+// ──────────────────────────────────────────────────────────────────────────────────────────────────
+
 namespace S.Media.Core.Video;
 
 /// <summary>What a single coordinated present on an <see cref="ISyncPresentableVideoOutput"/> did.</summary>
