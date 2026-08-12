@@ -94,7 +94,9 @@ public sealed record VideoPlacementSpec(
     // Optional chroma key ("green screen") applied to the placed layer; null = disabled.
     Compositor.ChromaKeySettings? ChromaKey = null,
     // Optional brightness/contrast applied to the placed layer; null = disabled.
-    Compositor.Effects.BrightnessContrastSettings? ColorAdjust = null);
+    Compositor.Effects.BrightnessContrastSettings? ColorAdjust = null,
+    string? ChromaKeyInstanceId = null,
+    string? ColorAdjustInstanceId = null);
 
 /// <summary>
 /// What to open and how the host intends to route it. The standby engine owns the open/seek/hold

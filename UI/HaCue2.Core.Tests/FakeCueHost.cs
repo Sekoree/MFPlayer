@@ -32,9 +32,11 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
     public List<(Guid Cue, double LevelDb)> Levels { get; } = [];
     public List<(Guid Cue, double LevelDb, TimeSpan Duration, FadeShape Curve, bool Stop)> CueFades { get; } = [];
     public List<(Guid Cue, TimeSpan? StartPosition, TimeSpan MasterTime)> TimelineStarts { get; } = [];
+    public List<(Guid Cue, TimeSpan StartPosition, TimeSpan MasterTime)> VisualizerStarts { get; } = [];
     public List<(Guid Cue, TimeSpan MasterTime)> ControlStarts { get; } = [];
     public List<(ActionCueNode Cue, ActionEndpoint? Endpoint)> Actions { get; } = [];
     public List<Guid> Automations { get; } = [];
+    public List<(Guid Cue, TimeSpan Position)> AutomationStarts { get; } = [];
     public List<TimeSpan> Waits { get; } = [];
     public List<string> Problems { get; } = [];
     public List<Guid> Faded { get; } = [];
@@ -101,7 +103,7 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
     }
 
     public async Task<IReadOnlyList<Guid>> PlayTimelineVisualizersAsync(
-        IReadOnlyList<VisualizerCueNode> cues,
+        IReadOnlyList<TimelineVisualizerStart> cues,
         CueList? list,
         Func<CancellationToken, Task> waitForStartEdge,
         CancellationToken cancellationToken)
@@ -110,15 +112,17 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
         if (PlayFails)
             return [];
 
-        foreach (var cue in cues)
+        foreach (var start in cues)
         {
-            Played.Add(cue.Id);
-            ControlStarts.Add((cue.Id, _timelineClock.ElapsedSinceStart));
-            Transitions.Add((cue.Id, null, default));
-            SoundingCues.Add(cue.Id);
+            Played.Add(start.Cue.Id);
+            ControlStarts.Add((start.Cue.Id, _timelineClock.ElapsedSinceStart));
+            VisualizerStarts.Add((
+                start.Cue.Id, start.StartPosition, _timelineClock.ElapsedSinceStart));
+            Transitions.Add((start.Cue.Id, null, default));
+            SoundingCues.Add(start.Cue.Id);
         }
 
-        return [.. cues.Select(cue => cue.Id)];
+        return [.. cues.Select(start => start.Cue.Id)];
     }
 
     public Task SetStandbyAsync(CueList list, Guid? cueId)
@@ -171,9 +175,14 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
         return Task.FromResult(ActionFailure);
     }
 
-    public Task<bool> RunAutomationAsync(AutomationCueNode automation, CueList? list)
+    public Task<bool> RunAutomationAsync(
+        AutomationCueNode automation,
+        CueList? list,
+        TimeSpan initialPosition,
+        CancellationToken cancellationToken = default)
     {
         Automations.Add(automation.Id);
+        AutomationStarts.Add((automation.Id, initialPosition));
         ControlStarts.Add((automation.Id, _timelineClock.ElapsedSinceStart));
         return Task.FromResult(true);
     }

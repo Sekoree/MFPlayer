@@ -591,6 +591,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         if (!Guid.TryParse(cueId, out var id))
             return;
 
+        _outbound.Complete(id);
         _ = ObserveLifecycleAsync(Executor.OnNaturalEndAsync(id), "natural-end follow");
     }
 
@@ -991,6 +992,8 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         {
             if (project.FindCue(cueId) is not VisualizerCueNode)
             {
+                _outbound.Interrupt(cueId);
+                await StopVisualizerAutomationRunAsync(cueId).ConfigureAwait(false);
                 await _visualizers.StopAsync(cueId).ConfigureAwait(false);
                 Forget(cueId.ToString());
             }
@@ -1034,6 +1037,8 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         if (_executor is { } executor)
             await executor.CancelTimelineRunsAsync().ConfigureAwait(false);
         await _life.CancelAsync().ConfigureAwait(false);
+        await StopAllAutomationRunsAsync().ConfigureAwait(false);
+        await StopAllVisualizerAutomationRunsAsync().ConfigureAwait(false);
 
         // Before the session goes: the window is attached to it, and detaching afterwards would be
         // asking a disposed session to release something.

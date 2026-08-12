@@ -119,6 +119,18 @@
                        Value="{Binding ChromaSpill}"
                        ToolTip.Tip="How much of the key colour is pulled out of what remains — the green fringe." />
       </HeaderedContentControl>
+      <Button Classes="block" Content="AUTOMATE CHROMA ▾">
+        <Button.Flyout>
+          <MenuFlyout>
+            <MenuItem Header="Similarity" Click="OnAddAutomation" Tag="9"
+                      IsEnabled="{Binding CanAddChromaSimilarityLane}" />
+            <MenuItem Header="Smoothness" Click="OnAddAutomation" Tag="10"
+                      IsEnabled="{Binding CanAddChromaSmoothnessLane}" />
+            <MenuItem Header="Spill reduction" Click="OnAddAutomation" Tag="11"
+                      IsEnabled="{Binding CanAddChromaSpillLane}" />
+          </MenuFlyout>
+        </Button.Flyout>
+      </Button>
     </StackPanel>
 
     <ContentControl Theme="{StaticResource Subhead}" Content="Colour" />
@@ -134,6 +146,16 @@
                        FormatString="0.##" Value="{Binding LayerContrast}" />
       </Grid>
     </HeaderedContentControl>
+    <Button Classes="block" Content="AUTOMATE COLOUR ▾" IsVisible="{Binding HasColorAdjust}">
+      <Button.Flyout>
+        <MenuFlyout>
+          <MenuItem Header="Brightness" Click="OnAddAutomation" Tag="12"
+                    IsEnabled="{Binding CanAddColorBrightnessLane}" />
+          <MenuItem Header="Contrast" Click="OnAddAutomation" Tag="13"
+                    IsEnabled="{Binding CanAddColorContrastLane}" />
+        </MenuFlyout>
+      </Button.Flyout>
+    </Button>
 
     <!-- The guides are seams between the screens dividing this placement's canvas. -->
     <c:AspectBox Margin="10,6" VerticalAlignment="Top" Ratio="{Binding PlacementAspect}">

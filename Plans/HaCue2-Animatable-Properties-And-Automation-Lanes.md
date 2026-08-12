@@ -1,17 +1,30 @@
 # HaCue2 animatable properties and automation lanes
 
-Status: adopted; schema-2 foundation and primary editor implemented
+Status: adopted; phases 1-3 and the built-in video portion of phase 4 implemented
 
 Date: 2026-08-12
 
 Code inspected: `d72ef7e7` (`next-experiment`)
 
+Implementation baseline: `37174447` (`Better effects part 1`)
+
 Implementation update (2026-08-12): phase 1's model, migration, runtime lowering, and primary editor
-are implemented with absolute-time/native-unit tracks, volume and placement-opacity lowering, and a
-scrollable single-cue lane. The schema and runtime foundations for automation cues and multiple
-OSC/MIDI targets are also present. Waveform context, shared pause/seek timing for host-run automation
-cues, group modifiers, placement transforms, and effect-instance parameter racks remain the later
-work described below.
+are implemented with absolute-time/native-unit tracks, volume and placement-opacity lowering, a
+scrollable single-cue lane, and lazy cached waveform context trimmed into cue time. Automation cues
+and OSC/MIDI tracks now use a shared pause-aware, seekable cue clock, including rehearsal offsets,
+refire handover, normal-completion final values, and explicit freeze-versus-land-final interruption
+policy. Group audio trim and video opacity are exposed as automation-cue targets and compose through
+dedicated modifier slots rather than overwriting child automation or fades. Placement transforms and
+stable-instance chroma-key/colour-adjust parameters now use the same catalog and composition slots for
+media, text, and visualizer cues. Visualizer lanes run against their surface layers on the shared clock,
+including seek and timeline-rehearsal offsets. The remaining phase-4 work is the general extensible rack,
+especially the real-time audio/plugin parameter contract described below.
+
+Focused coverage now pins long-cue viewport/waveform projection, pause/seek/stop and rehearsal timing,
+automation-cue natural completion, outbound reposition/coalescing, group modifier composition,
+group-target authoring, placement transforms, stable effect-instance duplication/lowering, and
+visualizer surface automation. The broader editor, engine, session, and control suites plus a real
+first-frame desktop launch smoke pass with these changes.
 
 This supersedes the `EffectLaneKind`/shared whole-curve-editor direction in
 `Plans/HaCue-Feature-Ideas.md` and the automation-lane portions of
@@ -632,6 +645,11 @@ This phase directly addresses the reported problem and is the recommended first 
 - allow multiple endpoints/controllers per cue.
 
 ### Phase 4 — effect rack and parameter automation
+
+Built-in video parameter automation is implemented for chroma-key similarity/smoothness/spill and
+colour-adjust brightness/contrast. Stable effect IDs, duplication retargeting, compiler/session
+lowering, live surface/frame updates, and placement-editor entry points are in place. The remaining
+items in this phase are the extensible rack and audio/plugin contract:
 
 - model stable effect instances and parameter values;
 - enrich managed video effect descriptors with authoring metadata and a live-update path;

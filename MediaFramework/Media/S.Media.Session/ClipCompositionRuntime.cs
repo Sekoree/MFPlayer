@@ -2499,7 +2499,8 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// </para>
     /// <para>
     /// Each component has exactly one writer - placement applies own <see cref="Base"/>, fade paths own
-    /// <see cref="Fade"/>, the automation track owns <see cref="Automation"/> - so they compose by
+    /// <see cref="Fade"/>, the automation track owns <see cref="Automation"/>, and controllers own
+    /// <see cref="Modifier"/> - so they compose by
     /// construction. Writes race only in the sense that two owners can recompute the product in either
     /// order; both land on the same value once both have written, and the worst case is one frame at a
     /// stale product.
@@ -2521,8 +2522,109 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// <summary>When true, automation is the authored opacity rather than a multiplier over Base.</summary>
         public bool AutomationIsAbsolute { get; set; }
 
+        /// <summary>A group/controller multiplier over authored and cue-owned automation.</summary>
+        public float Modifier { get; set; } = 1f;
+
         /// <summary>What actually renders.</summary>
-        public float Effective => Math.Clamp((AutomationIsAbsolute ? Automation : Base * Automation) * Fade, 0f, 1f);
+        public float Effective => Math.Clamp(
+            (AutomationIsAbsolute ? Automation : Base * Automation) * Modifier * Fade,
+            0f,
+            1f);
+    }
+
+    /// <summary>Absolute automation overrides for the independently animatable destination fields.</summary>
+    internal sealed class PlacementAutomation
+    {
+        private double? _x;
+        private double? _y;
+        private double? _width;
+        private double? _height;
+        private double? _rotation;
+
+        public void Set(ShowPlacementProperty property, double value)
+        {
+            if (!double.IsFinite(value))
+                return;
+            switch (property)
+            {
+                case ShowPlacementProperty.DestX: _x = Math.Clamp(value, -1, 2); break;
+                case ShowPlacementProperty.DestY: _y = Math.Clamp(value, -1, 2); break;
+                case ShowPlacementProperty.DestWidth: _width = Math.Clamp(value, 0.001, 2); break;
+                case ShowPlacementProperty.DestHeight: _height = Math.Clamp(value, 0.001, 2); break;
+                case ShowPlacementProperty.RotationDegrees: _rotation = Math.Clamp(value, -360, 360); break;
+            }
+        }
+
+        public void Clear(ShowPlacementProperty property)
+        {
+            switch (property)
+            {
+                case ShowPlacementProperty.DestX: _x = null; break;
+                case ShowPlacementProperty.DestY: _y = null; break;
+                case ShowPlacementProperty.DestWidth: _width = null; break;
+                case ShowPlacementProperty.DestHeight: _height = null; break;
+                case ShowPlacementProperty.RotationDegrees: _rotation = null; break;
+            }
+        }
+
+        public VideoPlacementSpec Apply(VideoPlacementSpec authored) => authored with
+        {
+            DestX = _x ?? authored.DestX,
+            DestY = _y ?? authored.DestY,
+            DestWidth = _width ?? authored.DestWidth,
+            DestHeight = _height ?? authored.DestHeight,
+            RotationDegrees = _rotation ?? authored.RotationDegrees,
+        };
+    }
+
+    /// <summary>Parameter overrides keyed by stable effect instance and property.</summary>
+    internal sealed class PlacementEffectAutomation
+    {
+        private readonly Dictionary<(string InstanceId, ShowPlacementEffectProperty Property), double> _values = [];
+
+        public void Set(string instanceId, ShowPlacementEffectProperty property, double value)
+        {
+            if (instanceId.Length == 0 || !double.IsFinite(value))
+                return;
+            _values[(instanceId, property)] = property switch
+            {
+                ShowPlacementEffectProperty.ChromaSimilarity => Math.Clamp(value, 0, 1),
+                ShowPlacementEffectProperty.ChromaSmoothness => Math.Clamp(value, 0, 1),
+                ShowPlacementEffectProperty.ChromaSpillReduction => Math.Clamp(value, 0, 1),
+                ShowPlacementEffectProperty.ColorBrightness => Math.Clamp(value, -1, 1),
+                ShowPlacementEffectProperty.ColorContrast => Math.Clamp(value, 0, 4),
+                _ => value,
+            };
+        }
+
+        public void Clear(string instanceId, ShowPlacementEffectProperty property) =>
+            _values.Remove((instanceId, property));
+
+        public VideoPlacementSpec Apply(VideoPlacementSpec authored)
+        {
+            var chroma = authored.ChromaKey;
+            if (chroma is { } key && authored.ChromaKeyInstanceId is { Length: > 0 } chromaId)
+                chroma = key with
+                {
+                    Similarity = (float)Read(chromaId, ShowPlacementEffectProperty.ChromaSimilarity, key.Similarity),
+                    Smoothness = (float)Read(chromaId, ShowPlacementEffectProperty.ChromaSmoothness, key.Smoothness),
+                    SpillSuppression = (float)Read(
+                        chromaId, ShowPlacementEffectProperty.ChromaSpillReduction, key.SpillSuppression),
+                };
+            var color = authored.ColorAdjust;
+            if (color is { } adjust && authored.ColorAdjustInstanceId is { Length: > 0 } colorId)
+                color = adjust with
+                {
+                    Brightness = (float)Read(
+                        colorId, ShowPlacementEffectProperty.ColorBrightness, adjust.Brightness),
+                    Contrast = (float)Read(
+                        colorId, ShowPlacementEffectProperty.ColorContrast, adjust.Contrast),
+                };
+            return authored with { ChromaKey = chroma, ColorAdjust = color };
+        }
+
+        private double Read(string instanceId, ShowPlacementEffectProperty property, double fallback) =>
+            _values.GetValueOrDefault((instanceId, property), fallback);
     }
 
     public interface IPlacedClipLayer : IDisposable
@@ -2540,8 +2642,19 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// <summary>The opacity-automation component, driven by an automation track. 1 = no automation.</summary>
         float AutomationLevel { get; set; }
 
+        /// <summary>The group/controller opacity factor. 1 = no modifier.</summary>
+        float ModifierLevel { get; set; }
+
         /// <summary>Sets either legacy multiplicative automation or an absolute authored opacity.</summary>
         void SetAutomationLevel(float level, bool absolute);
+
+        /// <summary>The current authored placement with independent automation overrides applied.</summary>
+        VideoPlacementSpec EffectivePlacement { get; }
+
+        void SetPlacementAutomation(ShowPlacementProperty property, double value);
+        void ClearPlacementAutomation(ShowPlacementProperty property);
+        void SetEffectAutomation(string instanceId, ShowPlacementEffectProperty property, double value);
+        void ClearEffectAutomation(string instanceId, ShowPlacementEffectProperty property);
 
         /// <summary>The composed opacity actually handed to the compositor.</summary>
         float EffectiveOpacity { get; }
@@ -2589,7 +2702,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         private readonly ClipCompositionRuntime _owner;
         private readonly bool _ownsSurface;
         internal VideoCompositorSource.SurfaceSlot RawSlot { get; }
+        private VideoPlacementSpec _authoredPlacement;
         private VideoPlacementSpec _placement;
+        private readonly PlacementAutomation _placementAutomation = new();
+        private readonly PlacementEffectAutomation _effectAutomation = new();
         private int _disposed;
 
         internal SurfaceLayerSlot(
@@ -2600,6 +2716,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             _owner = owner;
             RawSlot = slot;
+            _authoredPlacement = placement;
             _placement = placement;
             _ownsSurface = ownsSurface;
             Sequence = Interlocked.Increment(ref owner._nextLayerSequence);
@@ -2635,6 +2752,16 @@ public sealed class ClipCompositionRuntime : IDisposable
             }
         }
 
+        public float ModifierLevel
+        {
+            get => _level.Modifier;
+            set
+            {
+                _level.Modifier = Math.Clamp(value, 0f, 1f);
+                RawSlot.Opacity = _level.Effective;
+            }
+        }
+
         public void SetAutomationLevel(float level, bool absolute)
         {
             _level.Automation = Math.Clamp(level, 0f, 1f);
@@ -2643,6 +2770,55 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         public float EffectiveOpacity => _level.Effective;
+
+        public VideoPlacementSpec EffectivePlacement => _placement;
+
+        public void SetPlacementAutomation(ShowPlacementProperty property, double value)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                _placementAutomation.Set(property, value);
+                _placement = _placementAutomation.Apply(_authoredPlacement);
+                ApplyPlacement(refreshAppearance: false);
+            }
+        }
+
+        public void ClearPlacementAutomation(ShowPlacementProperty property)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                _placementAutomation.Clear(property);
+                _placement = _placementAutomation.Apply(_authoredPlacement);
+                ApplyPlacement(refreshAppearance: false);
+            }
+        }
+
+        public void SetEffectAutomation(
+            string instanceId, ShowPlacementEffectProperty property, double value)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                _effectAutomation.Set(instanceId, property, value);
+                RawSlot.Effects = LayerSlot.BuildLayerEffects(_effectAutomation.Apply(_placement));
+            }
+        }
+
+        public void ClearEffectAutomation(string instanceId, ShowPlacementEffectProperty property)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                _effectAutomation.Clear(instanceId, property);
+                RawSlot.Effects = LayerSlot.BuildLayerEffects(_effectAutomation.Apply(_placement));
+            }
+        }
 
         public TimeSpan TimeSelectionOffset
         {
@@ -2657,8 +2833,9 @@ public sealed class ClipCompositionRuntime : IDisposable
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                var resort = placement.LayerIndex != _placement.LayerIndex;
-                _placement = placement;
+                var resort = placement.LayerIndex != _authoredPlacement.LayerIndex;
+                _authoredPlacement = placement;
+                _placement = _placementAutomation.Apply(placement);
                 ApplyPlacement();
                 if (resort)
                     _owner.SortSurfaceLayersLocked();
@@ -2679,7 +2856,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// <see cref="PlacementResolver"/> math a frame layer uses, with the canvas as the source size
         /// (surfaces render canvas-resolution content; a full-canvas stretch is the identity). A
         /// placement with VideoFx takes the mapping/warp section path, media-layer parity.</summary>
-        internal void ApplyPlacement()
+        internal void ApplyPlacement(bool refreshAppearance = true)
         {
             var destRect = new RectNormalized(
                 (float)_placement.DestX,
@@ -2689,7 +2866,7 @@ public sealed class ClipCompositionRuntime : IDisposable
 
             if (_placement.VideoFx is { } videoFx)
             {
-                ApplyMappedPlacement(destRect, new OutputMappingGeometryEffect(videoFx));
+                ApplyMappedPlacement(destRect, new OutputMappingGeometryEffect(videoFx), refreshAppearance);
                 return;
             }
 
@@ -2703,17 +2880,23 @@ public sealed class ClipCompositionRuntime : IDisposable
 
             RawSlot.MappingSections = null;
             RawSlot.Transform = transform;
-            _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
-            RawSlot.Opacity = _level.Effective;
-            // Same color-stage chain as frame layers (chroma key first, then brightness/contrast) -
-            // a visualizer placement's Effects-tab settings apply to the surface like any clip layer.
-            RawSlot.Effects = LayerSlot.BuildLayerEffects(_placement);
+            if (refreshAppearance)
+            {
+                _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+                RawSlot.Opacity = _level.Effective;
+                // Same color-stage chain as frame layers (chroma key first, then brightness/contrast) -
+                // a visualizer placement's Effects-tab settings apply to the surface like any clip layer.
+                RawSlot.Effects = LayerSlot.BuildLayerEffects(_effectAutomation.Apply(_placement));
+            }
         }
 
         /// <summary>Mirror of <see cref="LayerSlot.ApplyGeometryPlacement"/> with the canvas as the
         /// source: the mapping's sections sample the surface's full-canvas render, so section crops,
         /// transforms and meshes mean the same thing they do on a media layer.</summary>
-        private void ApplyMappedPlacement(RectNormalized destRect, IVideoLayerGeometryEffect geometry)
+        private void ApplyMappedPlacement(
+            RectNormalized destRect,
+            IVideoLayerGeometryEffect geometry,
+            bool refreshAppearance)
         {
             var canvas = _owner._canvasFormat;
             var effectFormat = geometry.ResolveOutputFormat(canvas);
@@ -2745,9 +2928,12 @@ public sealed class ClipCompositionRuntime : IDisposable
 
             RawSlot.MappingSections = sections;
             RawSlot.Transform = LayerTransform2D.Identity;
-            _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
-            RawSlot.Opacity = _level.Effective;
-            RawSlot.Effects = LayerSlot.BuildLayerEffects(_placement);
+            if (refreshAppearance)
+            {
+                _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+                RawSlot.Opacity = _level.Effective;
+                RawSlot.Effects = LayerSlot.BuildLayerEffects(_effectAutomation.Apply(_placement));
+            }
         }
 
         private LayerTransform2D ApplyPlacementRotation(LayerTransform2D transform)
@@ -2788,7 +2974,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// the clock judges its one frame permanently stale.</summary>
         internal SlotKeepPolicy RequestedKeepPolicy { get; set; } = SlotKeepPolicy.MasterAligned;
         private readonly VideoFormat _source;
+        private VideoPlacementSpec _authoredPlacement;
         private VideoPlacementSpec _placement;
+        private readonly PlacementAutomation _placementAutomation = new();
+        private readonly PlacementEffectAutomation _effectAutomation = new();
         private int _disposed;
 
         internal LayerSlot(
@@ -2801,6 +2990,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             _owner = owner;
             RawSlot = slot;
             _source = source;
+            _authoredPlacement = placement;
             _placement = placement;
             Sequence = sequence;
         }
@@ -2833,6 +3023,16 @@ public sealed class ClipCompositionRuntime : IDisposable
             }
         }
 
+        public float ModifierLevel
+        {
+            get => _level.Modifier;
+            set
+            {
+                _level.Modifier = Math.Clamp(value, 0f, 1f);
+                RawSlot.Opacity = _level.Effective;
+            }
+        }
+
         public void SetAutomationLevel(float level, bool absolute)
         {
             _level.Automation = Math.Clamp(level, 0f, 1f);
@@ -2841,6 +3041,55 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         public float EffectiveOpacity => _level.Effective;
+
+        public VideoPlacementSpec EffectivePlacement => _placement;
+
+        public void SetPlacementAutomation(ShowPlacementProperty property, double value)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                _placementAutomation.Set(property, value);
+                _placement = _placementAutomation.Apply(_authoredPlacement);
+                ApplyPlacement(refreshAppearance: false);
+            }
+        }
+
+        public void ClearPlacementAutomation(ShowPlacementProperty property)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                _placementAutomation.Clear(property);
+                _placement = _placementAutomation.Apply(_authoredPlacement);
+                ApplyPlacement(refreshAppearance: false);
+            }
+        }
+
+        public void SetEffectAutomation(
+            string instanceId, ShowPlacementEffectProperty property, double value)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                _effectAutomation.Set(instanceId, property, value);
+                RawSlot.Effects = BuildLayerEffects(_effectAutomation.Apply(_placement));
+            }
+        }
+
+        public void ClearEffectAutomation(string instanceId, ShowPlacementEffectProperty property)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                _effectAutomation.Clear(instanceId, property);
+                RawSlot.Effects = BuildLayerEffects(_effectAutomation.Apply(_placement));
+            }
+        }
 
         public TimeSpan TimeSelectionOffset
         {
@@ -2859,8 +3108,9 @@ public sealed class ClipCompositionRuntime : IDisposable
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                resort = placement.LayerIndex != _placement.LayerIndex;
-                _placement = placement;
+                resort = placement.LayerIndex != _authoredPlacement.LayerIndex;
+                _authoredPlacement = placement;
+                _placement = _placementAutomation.Apply(placement);
                 ApplyPlacement();
                 if (resort)
                     _owner.SortLayersLocked();
@@ -2874,7 +3124,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         public void DetachFromMasterAlignment(Func<TimeSpan>? ownClipTime = null) =>
             RawSlot.KeepPolicy = SlotKeepPolicy.Latest;
 
-        public void ApplyPlacement()
+        public void ApplyPlacement(bool refreshAppearance = true)
         {
             var destRect = new RectNormalized(
                 (float)_placement.DestX,
@@ -2883,7 +3133,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                 (float)(_placement.DestY + _placement.DestHeight));
             if (_placement.VideoFx is { } videoFx)
             {
-                ApplyMappedPlacement(destRect, videoFx);
+                ApplyMappedPlacement(destRect, videoFx, refreshAppearance);
                 return;
             }
 
@@ -2914,10 +3164,13 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.MappingSections = null;
             RawSlot.Transform = transform;
             RawSlot.SourceCrop = crop;
-            _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
-            RawSlot.Opacity = _level.Effective;
-            RawSlot.BlendMode = BlendMode.SourceOver;
-            RawSlot.Effects = BuildLayerEffects(_placement);
+            if (refreshAppearance)
+            {
+                _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+                RawSlot.Opacity = _level.Effective;
+                RawSlot.BlendMode = BlendMode.SourceOver;
+                RawSlot.Effects = BuildLayerEffects(_effectAutomation.Apply(_placement));
+            }
         }
 
         /// <summary>Color-stage effect chain for this placement. Chroma key runs FIRST (keying must
@@ -2936,8 +3189,9 @@ public sealed class ClipCompositionRuntime : IDisposable
             return effects;
         }
 
-        private void ApplyMappedPlacement(RectNormalized destRect, ClipOutputMappingSpec videoFx) =>
-            ApplyGeometryPlacement(destRect, new OutputMappingGeometryEffect(videoFx));
+        private void ApplyMappedPlacement(
+            RectNormalized destRect, ClipOutputMappingSpec videoFx, bool refreshAppearance) =>
+            ApplyGeometryPlacement(destRect, new OutputMappingGeometryEffect(videoFx), refreshAppearance);
 
         /// <summary>
         /// Places a layer through a geometry-stage effect (<see cref="IVideoLayerGeometryEffect"/>):
@@ -2945,7 +3199,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// transform is then composed onto every section (and its mesh) so the existing layout
         /// controls keep their meaning. The mapping/warp "VideoFx" is the built-in implementation.
         /// </summary>
-        private void ApplyGeometryPlacement(RectNormalized destRect, IVideoLayerGeometryEffect geometry)
+        private void ApplyGeometryPlacement(
+            RectNormalized destRect,
+            IVideoLayerGeometryEffect geometry,
+            bool refreshAppearance)
         {
             var effectFormat = geometry.ResolveOutputFormat(_source);
             var (effectTransform, _) = PlacementResolver.Resolve(
@@ -2983,10 +3240,13 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.MappingSections = sections;
             RawSlot.Transform = LayerTransform2D.Identity;
             RawSlot.SourceCrop = RectNormalized.Full;
-            _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
-            RawSlot.Opacity = _level.Effective;
-            RawSlot.BlendMode = BlendMode.SourceOver;
-            RawSlot.Effects = BuildLayerEffects(_placement);
+            if (refreshAppearance)
+            {
+                _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+                RawSlot.Opacity = _level.Effective;
+                RawSlot.BlendMode = BlendMode.SourceOver;
+                RawSlot.Effects = BuildLayerEffects(_effectAutomation.Apply(_placement));
+            }
         }
 
         private LayerTransform2D ApplyPlacementRotation(LayerTransform2D transform)

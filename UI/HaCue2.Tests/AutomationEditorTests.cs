@@ -5,6 +5,7 @@ using Avalonia.VisualTree;
 using HaCue2.Controls;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
+using HaCue2.Machine;
 using HaCue2.ViewModels;
 using HaCue2.Views;
 using Xunit;
@@ -94,6 +95,58 @@ public sealed class AutomationEditorTests
         editor.Extend();
 
         Assert.Equal(initial + (long)TimeSpan.FromMinutes(30).TotalMilliseconds, editor.DurationMs);
+    }
+
+    [Fact]
+    public void WaveformIsTrimmedToCueTimeAndThenProjectedThroughTheViewport()
+    {
+        var directory = Directory.CreateTempSubdirectory("hacue2-automation-waveform");
+        var mediaPath = Path.Combine(directory.FullName, "long.wav");
+        try
+        {
+            File.WriteAllBytes(mediaPath, [1, 2, 3, 4]);
+            var raw = Enumerable.Range(0, 100).Select(index => index / 100f).ToArray();
+            WaveformCache.Write(directory.FullName, mediaPath, raw);
+
+            var track = new AutomationTrack
+            {
+                Target = new AutomationTargetRef { PropertyId = AutomationPropertyIds.CueVolume },
+            };
+            var media = new MediaCueNode
+            {
+                Number = "14",
+                MediaPath = mediaPath,
+                TrimInMs = 25_000,
+                TrimOutMs = 75_000,
+                AutomationTracks = [track],
+            };
+            var project = new HaCueProject { CueLists = [new CueList { Cues = [media] }] };
+            var editor = new AutomationEditorViewModel(
+                new ProjectJournal(project),
+                media,
+                track,
+                TimeSpan.FromSeconds(50),
+                waveformCue: media,
+                waveformPath: mediaPath,
+                waveformSourceDuration: TimeSpan.FromSeconds(100),
+                cacheRoot: directory.FullName);
+
+            editor.BeginWaveform();
+
+            Assert.Equal(30, editor.WaveformPeaks?.Count);
+            Assert.Equal(.25f, editor.WaveformPeaks![0], 3);
+
+            editor.ViewStartMs = 20_000;
+            editor.ViewLengthMs = 10_000;
+
+            Assert.Equal(10, editor.WaveformPeaks?.Count);
+            Assert.Equal(.45f, editor.WaveformPeaks![0], 3);
+            editor.EndWaveform();
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
     }
 
     private static (AutomationEditorViewModel Editor, AutomationTrack Track, ProjectJournal Journal) Editor(

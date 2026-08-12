@@ -201,6 +201,53 @@ public sealed partial class ShowSession
             compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
             placement, placementIndex)));
 
+    /// <summary>Applies absolute opacity automation to one running visualizer placement.</summary>
+    public Task<bool> ApplyCompositionVisualizerOpacityAutomationAsync(
+        string compositionId, int placementIndex, float level, string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ApplyOpacityAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, level)));
+
+    public Task<bool> ApplyCompositionVisualizerPlacementAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        ShowPlacementProperty property,
+        double value,
+        string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ApplyPlacementAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, property, value)));
+
+    public Task<bool> ClearCompositionVisualizerPlacementAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        ShowPlacementProperty property,
+        string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ClearPlacementAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, property)));
+
+    public Task<bool> ApplyCompositionVisualizerEffectAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        double value,
+        string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ApplyEffectAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, effectInstanceId, property, value)));
+
+    public Task<bool> ClearCompositionVisualizerEffectAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ClearEffectAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, effectInstanceId, property)));
+
     /// <summary>Creates + registers a visualizer's audio tap and feeds it from already-playing clips
     /// (dispatcher). The service owns WHEN this happens; the tap list itself stays session-owned.</summary>
     private Guid RegisterVisualizerTap(S.Media.Core.Buses.IAudioVisualSource source, Func<string, bool>? audioFeedFilter)

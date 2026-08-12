@@ -35,7 +35,10 @@ public sealed record ShowVideoPlacement(
     // Optional chroma key ("green screen") for this placement's layer; null = disabled.
     Compositor.ChromaKeySettings? ChromaKey = null,
     // Optional brightness/contrast for this placement's layer; null = disabled.
-    Compositor.Effects.BrightnessContrastSettings? ColorAdjust = null);
+    Compositor.Effects.BrightnessContrastSettings? ColorAdjust = null,
+    // Stable authoring identities used by effect-parameter automation; settings remain null when bypassed.
+    string? ChromaKeyInstanceId = null,
+    string? ColorAdjustInstanceId = null);
 
 /// <summary>One composition placement of a clip's video: which composition canvas (<paramref name="CompositionId"/>),
 /// which layer (<paramref name="LayerIndex"/>), and where/how the frame sits on it (<paramref name="Placement"/>).
@@ -54,6 +57,40 @@ public sealed record ShowPlacementEnvelope(
     int LayerIndex,
     IReadOnlyList<ShowEnvelopePoint> Points,
     bool Absolute = false);
+
+/// <summary>A numeric destination-geometry property which can be driven independently for one placement.</summary>
+public enum ShowPlacementProperty
+{
+    DestX,
+    DestY,
+    DestWidth,
+    DestHeight,
+    RotationDegrees,
+}
+
+/// <summary>Absolute cue-time automation for one destination-geometry property on one placement.</summary>
+public sealed record ShowPlacementPropertyEnvelope(
+    string CompositionId,
+    int LayerIndex,
+    ShowPlacementProperty Property,
+    IReadOnlyList<ShowEnvelopePoint> Points);
+
+public enum ShowPlacementEffectProperty
+{
+    ChromaSimilarity,
+    ChromaSmoothness,
+    ChromaSpillReduction,
+    ColorBrightness,
+    ColorContrast,
+}
+
+/// <summary>Absolute automation for one parameter of one stable placement-effect instance.</summary>
+public sealed record ShowPlacementEffectEnvelope(
+    string CompositionId,
+    int LayerIndex,
+    string EffectInstanceId,
+    ShowPlacementEffectProperty Property,
+    IReadOnlyList<ShowEnvelopePoint> Points);
 
 /// <summary>One audio output a clip plays on (GUI per-cue audio routing - a group of <c>CueAudioRoute</c>s to
 /// the same output line). Unlike a per-group <see cref="ShowAudioOutput"/>, this is carried on the clip so a
@@ -300,6 +337,12 @@ public sealed record ShowClipBinding(
     /// is the absolute authored opacity or a legacy multiplier. This supersedes <see cref="OpacityEnvelope"/>,
     /// which remains readable for version-1 documents and applies its one factor to every placement.</summary>
     public IReadOnlyList<ShowPlacementEnvelope>? PlacementOpacityEnvelopes { get; init; }
+
+    /// <summary>Placement-addressed destination geometry. Each property has an independent slot, so
+    /// animating X cannot reset an authored/live-edited Y, size, rotation, opacity, crop, or effect.</summary>
+    public IReadOnlyList<ShowPlacementPropertyEnvelope>? PlacementTransformEnvelopes { get; init; }
+
+    public IReadOnlyList<ShowPlacementEffectEnvelope>? PlacementEffectEnvelopes { get; init; }
 }
 
 /// <summary>One volume-envelope keyframe: the clip-relative <paramref name="Time"/>, the LINEAR gain

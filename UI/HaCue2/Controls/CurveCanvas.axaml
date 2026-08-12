@@ -12,6 +12,9 @@
 
   <Border Classes="vidcanvas">
     <Panel Margin="6">
+      <c:WaveformGraph Peaks="{Binding WaveformPeaks, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}"
+                       ShowMarkers="False" IsHitTestVisible="False" Opacity="0.28"
+                       WaveBrush="{DynamicResource GelGreen}" />
       <c:CanvasGrid Columns="10" Rows="4" />
 
       <!-- A polyline over the fractions, not a stretched geometry: Stretch="Fill" maps the geometry's

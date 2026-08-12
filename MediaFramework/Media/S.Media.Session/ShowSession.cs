@@ -1241,6 +1241,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             : crossfade?.Curve ?? FadeCurve.Linear;
         cueElapsed = cueElapsed < TimeSpan.Zero ? TimeSpan.Zero : cueElapsed;
         var opacityEnvelopes = PlacementOpacityEnvelopes(binding);
+        var transformEnvelopes = binding.PlacementTransformEnvelopes ?? [];
+        var effectEnvelopes = binding.PlacementEffectEnvelopes ?? [];
         var fadeInStartLevel = fadeIn
             ? FadeCurves.LevelUp(cueElapsed, fadeInDuration, fadeInCurve)
             : 1f;
@@ -1306,6 +1308,18 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                             surfaceSlot.SetAutomationLevel(
                                 Math.Clamp(VolumeEnvelopes.Sample(surfaceLane.Points, cueElapsed), 0f, 1f),
                                 surfaceLane.Absolute);
+                        SeedPlacementTransformEnvelopes(
+                            surfaceSlot,
+                            placement.CompositionId,
+                            placement.LayerIndex,
+                            transformEnvelopes,
+                            cueElapsed);
+                        SeedPlacementEffectEnvelopes(
+                            surfaceSlot,
+                            placement.CompositionId,
+                            placement.LayerIndex,
+                            effectEnvelopes,
+                            cueElapsed);
                         MediaDiagnostics.LogInformation(
                             "clip {CueId}: video composites as a GPU layer surface on {Composition} (NXT-10)",
                             binding.ClipId, placement.CompositionId);
@@ -1361,6 +1375,22 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                             Math.Clamp(VolumeEnvelopes.Sample(seedLane.Points, cueElapsed), 0f, 1f),
                             seedLane.Absolute);
             }
+            if (transformEnvelopes.Count > 0 && layers.Count > 0)
+                foreach (var placed in layers)
+                    SeedPlacementTransformEnvelopes(
+                        placed.Slot,
+                        placed.CompositionId,
+                        placed.LayerIndex,
+                        transformEnvelopes,
+                        cueElapsed);
+            if (effectEnvelopes.Count > 0 && layers.Count > 0)
+                foreach (var placed in layers)
+                    SeedPlacementEffectEnvelopes(
+                        placed.Slot,
+                        placed.CompositionId,
+                        placed.LayerIndex,
+                        effectEnvelopes,
+                        cueElapsed);
 
             IReadOnlyList<float>? fadeInFullLevels = null;
             if ((fadeIn || deferStart) && layers.Count > 0)
@@ -1500,7 +1530,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 // layers is the LIVE voice list, read at run time rather than captured as a count: a
                 // GPU-surface layer attaches in the finalize turn, after this closure was built.
                 var hasOpacityLane = opacityEnvelopes.Count > 0 && layers.Count > 0;
-                if (!fadeIn && !endHandling && !hasEnvelope && !hasOpacityLane)
+                var hasTransformLane = transformEnvelopes.Count > 0 && layers.Count > 0;
+                var hasEffectLane = effectEnvelopes.Count > 0 && layers.Count > 0;
+                if (!fadeIn && !endHandling && !hasEnvelope && !hasOpacityLane
+                    && !hasTransformLane && !hasEffectLane)
                     return;
 
                 var clipCts = new CancellationTokenSource();
@@ -1513,6 +1546,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                     StartEnvelopeRunner(groupId, voice, binding.VolumeEnvelope!, clipCts.Token);
                 if (hasOpacityLane)
                     StartOpacityLaneRunner(groupId, voice, opacityEnvelopes, clipCts.Token);
+                if (hasTransformLane)
+                    StartPlacementTransformRunner(groupId, voice, transformEnvelopes, clipCts.Token);
+                if (hasEffectLane)
+                    StartPlacementEffectRunner(groupId, voice, effectEnvelopes, clipCts.Token);
                 if (endHandling)
                     StartEndMonitor(groupId, voice, end, clipCts.Token);
             }
@@ -1705,7 +1742,40 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 RotationDegrees: p.RotationDegrees,
                 VideoFx: p.VideoFx,
                 ChromaKey: p.ChromaKey,
-                ColorAdjust: p.ColorAdjust);
+                ColorAdjust: p.ColorAdjust,
+                ChromaKeyInstanceId: p.ChromaKeyInstanceId,
+                ColorAdjustInstanceId: p.ColorAdjustInstanceId);
+
+    private static void SeedPlacementTransformEnvelopes(
+        ClipCompositionRuntime.IPlacedClipLayer slot,
+        string compositionId,
+        int layerIndex,
+        IReadOnlyList<ShowPlacementPropertyEnvelope> lanes,
+        TimeSpan cueTime)
+    {
+        foreach (var lane in lanes)
+            if (string.Equals(lane.CompositionId, compositionId, StringComparison.Ordinal)
+                && lane.LayerIndex == layerIndex)
+                slot.SetPlacementAutomation(
+                    lane.Property,
+                    VolumeEnvelopes.Sample(lane.Points, cueTime));
+    }
+
+    private static void SeedPlacementEffectEnvelopes(
+        ClipCompositionRuntime.IPlacedClipLayer slot,
+        string compositionId,
+        int layerIndex,
+        IReadOnlyList<ShowPlacementEffectEnvelope> lanes,
+        TimeSpan cueTime)
+    {
+        foreach (var lane in lanes)
+            if (string.Equals(lane.CompositionId, compositionId, StringComparison.Ordinal)
+                && lane.LayerIndex == layerIndex)
+                slot.SetEffectAutomation(
+                    lane.EffectInstanceId,
+                    lane.Property,
+                    VolumeEnvelopes.Sample(lane.Points, cueTime));
+    }
     /// <see cref="StopPreviewAsync"/> / a replacing preview cancels it mid-open.</summary>
     public Task<bool> PreviewCueAsync(
         string cueId, string? previewDeviceId = null, float gain = 1f)
@@ -1960,10 +2030,14 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
 }
 
 /// <summary>An active clip's live audio levels (<see cref="ShowSession.GetClipAudioLevelsAsync"/>):
-/// the persistent fade level (what fade cues compose from), the volume-envelope factor, and the
-/// effective level the route gains are actually written with - fade × envelope × the session-wide
-/// <see cref="ShowSession.MasterTrim"/>.</summary>
-public sealed record ClipAudioLevels(float FadeLevel, float EnvelopeLevel, float EffectiveLevel);
+/// the persistent fade level (what fade cues compose from), the cue-owned volume-envelope factor,
+/// the controller/group modifier, and the effective level the route gains are actually written with -
+/// fade × envelope × modifier × the session-wide <see cref="ShowSession.MasterTrim"/>.</summary>
+public sealed record ClipAudioLevels(
+    float FadeLevel,
+    float EnvelopeLevel,
+    float ModifierLevel,
+    float EffectiveLevel);
 
 /// <summary>A mid-show audio-path failure surfaced by <see cref="ShowSession.PlaybackAlert"/>: the cue
 /// whose clip hit it, the router output id when one specific output errored (null = the clip's whole

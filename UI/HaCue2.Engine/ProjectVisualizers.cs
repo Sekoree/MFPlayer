@@ -1,3 +1,4 @@
+using HaCue2.Core.Compile;
 using HaCue2.Core.Model;
 using S.Media.Session;
 using S.Media.Visualizer.ProjectM;
@@ -36,13 +37,17 @@ public sealed class ProjectVisualizers : IAsyncDisposable
     private static readonly Lazy<string?> DefaultPresetPack = new(ProjectMAssetPaths.DefaultPresetDirectory);
 
     private sealed record RunningAttachment(
-        string CompositionId, string VisualizerId, ProjectMVisualSource Source);
+        string CompositionId,
+        string VisualizerId,
+        ProjectMVisualSource Source,
+        IReadOnlyDictionary<Guid, int> PlacementIndexes);
 
     private sealed record PreparedAttachment(
         string CompositionId,
         string VisualizerId,
         ProjectMVisualSource Source,
-        IReadOnlyList<VideoPlacementSpec> VisiblePlacements);
+        IReadOnlyList<VideoPlacementSpec> VisiblePlacements,
+        IReadOnlyDictionary<Guid, int> PlacementIndexes);
 
     private sealed record PreparedCue(
         VisualizerCueNode Cue, List<PreparedAttachment> Attachments, string? Problem);
@@ -123,9 +128,11 @@ public sealed class ProjectVisualizers : IAsyncDisposable
             var compositionId = composition.Id.ToString();
             var source = Renderer(cue, composition);
 
-            var placements = group
+            var orderedPlacements = group
                 .OrderBy(placement => placement.LayerIndex)
-                .Select(placement => Spec(compositionId, placement))
+                .ToList();
+            var placements = orderedPlacements
+                .Select(placement => Spec(project, cue, compositionId, placement, 0))
                 .ToList();
 
             bool ok;
@@ -159,7 +166,13 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 continue;
             }
 
-            attached.Add(new RunningAttachment(compositionId, cue.Id.ToString(), source));
+            attached.Add(new RunningAttachment(
+                compositionId,
+                cue.Id.ToString(),
+                source,
+                orderedPlacements
+                    .Select((placement, index) => (placement.Id, index))
+                    .ToDictionary(item => item.Id, item => item.index)));
         }
 
         if (attached.Count == 0)
@@ -179,7 +192,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
     /// </summary>
     public async Task<(IReadOnlyList<Guid> Started, IReadOnlyList<string> Problems)> FireScheduledAsync(
         HaCueProject project,
-        IReadOnlyList<VisualizerCueNode> cues,
+        IReadOnlyList<TimelineVisualizerStart> cues,
         Func<CancellationToken, Task> waitForStartEdge,
         CancellationToken cancellationToken)
     {
@@ -191,10 +204,12 @@ public sealed class ProjectVisualizers : IAsyncDisposable
         var adopted = new HashSet<Guid>();
         try
         {
-            foreach (var cue in cues)
+            foreach (var start in cues)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                prepared.Add(await PrepareHiddenAsync(project, cue, cancellationToken).ConfigureAwait(false));
+                prepared.Add(await PrepareHiddenAsync(
+                        project, start.Cue, start.StartPosition, cancellationToken)
+                    .ConfigureAwait(false));
             }
 
             await waitForStartEdge(cancellationToken).ConfigureAwait(false);
@@ -244,7 +259,10 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 lock (_gate)
                     _running[item.Cue.Id] = [.. item.Attachments.Select(attachment =>
                         new RunningAttachment(
-                            attachment.CompositionId, attachment.VisualizerId, attachment.Source))];
+                            attachment.CompositionId,
+                            attachment.VisualizerId,
+                            attachment.Source,
+                            attachment.PlacementIndexes))];
                 adopted.Add(item.Cue.Id);
                 started.Add(item.Cue.Id);
             }
@@ -261,6 +279,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
     private async Task<PreparedCue> PrepareHiddenAsync(
         HaCueProject project,
         VisualizerCueNode cue,
+        TimeSpan startPosition,
         CancellationToken cancellationToken)
     {
         if (!IsAvailable)
@@ -297,9 +316,16 @@ public sealed class ProjectVisualizers : IAsyncDisposable
 
                 var compositionId = composition.Id.ToString();
                 var source = Renderer(cue, composition);
-                var visible = group
+                var orderedPlacements = group
                     .OrderBy(placement => placement.LayerIndex)
-                    .Select(placement => Spec(compositionId, placement))
+                    .ToList();
+                var visible = orderedPlacements
+                    .Select(placement => Spec(
+                        project,
+                        cue,
+                        compositionId,
+                        placement,
+                        Math.Clamp((long)startPosition.TotalMilliseconds, 0, Math.Max(1, cue.HoldMs))))
                     .ToList();
                 var hidden = visible.Select(placement => placement with { Opacity = 0f }).ToList();
 
@@ -328,7 +354,14 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                     continue;
                 }
 
-                attached.Add(new PreparedAttachment(compositionId, preparedId, source, visible));
+                attached.Add(new PreparedAttachment(
+                    compositionId,
+                    preparedId,
+                    source,
+                    visible,
+                    orderedPlacements
+                        .Select((placement, index) => (placement.Id, index))
+                        .ToDictionary(item => item.Id, item => item.index)));
             }
         }
         catch
@@ -403,6 +436,100 @@ public sealed class ProjectVisualizers : IAsyncDisposable
             await StopAsync(cueId).ConfigureAwait(false);
     }
 
+    /// <summary>Samples one cue-owned visualizer lane against the already-running surface layer.</summary>
+    public async Task<bool> ApplyAutomationAsync(
+        VisualizerCueNode cue, AutomationTrack track, double value)
+    {
+        if (!TryResolvePlacement(cue, track, out var placement))
+            return false;
+
+        RunningAttachment? attachment;
+        int placementIndex;
+        lock (_gate)
+        {
+            attachment = _running.GetValueOrDefault(cue.Id)?.FirstOrDefault(candidate =>
+                string.Equals(
+                    candidate.CompositionId,
+                    placement.CompositionId.ToString(),
+                    StringComparison.Ordinal));
+            if (attachment is null
+                || !attachment.PlacementIndexes.TryGetValue(placement.Id, out placementIndex))
+                return false;
+        }
+
+        if (track.Target.PropertyId == AutomationPropertyIds.PlacementOpacity)
+            return await _session.ApplyCompositionVisualizerOpacityAutomationAsync(
+                    attachment.CompositionId,
+                    placementIndex,
+                    (float)Math.Clamp(value, 0, 1),
+                    attachment.VisualizerId)
+                .ConfigureAwait(false);
+
+        if (TryPlacementProperty(track.Target.PropertyId, out var placementProperty))
+            return await _session.ApplyCompositionVisualizerPlacementAutomationAsync(
+                    attachment.CompositionId,
+                    placementIndex,
+                    placementProperty,
+                    value,
+                    attachment.VisualizerId)
+                .ConfigureAwait(false);
+
+        if (track.Target.ObjectId is { } effectId
+            && TryEffectProperty(track.Target.PropertyId, out var effectProperty))
+            return await _session.ApplyCompositionVisualizerEffectAutomationAsync(
+                    attachment.CompositionId,
+                    placementIndex,
+                    effectId.ToString(),
+                    effectProperty,
+                    value,
+                    attachment.VisualizerId)
+                .ConfigureAwait(false);
+
+        return false;
+    }
+
+    private static bool TryResolvePlacement(
+        VisualizerCueNode cue, AutomationTrack track, out LayerPlacement placement)
+    {
+        placement = null!;
+        if (track.Target.ObjectId is not { } objectId)
+            return false;
+
+        placement = CuePlacements.Of(cue).FirstOrDefault(candidate =>
+            candidate.Id == objectId
+            || candidate.ChromaKey?.Id == objectId
+            || candidate.ColorAdjust?.Id == objectId)!;
+        return placement is not null;
+    }
+
+    private static bool TryPlacementProperty(string propertyId, out ShowPlacementProperty property)
+    {
+        property = propertyId switch
+        {
+            AutomationPropertyIds.PlacementX => ShowPlacementProperty.DestX,
+            AutomationPropertyIds.PlacementY => ShowPlacementProperty.DestY,
+            AutomationPropertyIds.PlacementWidth => ShowPlacementProperty.DestWidth,
+            AutomationPropertyIds.PlacementHeight => ShowPlacementProperty.DestHeight,
+            AutomationPropertyIds.PlacementRotation => ShowPlacementProperty.RotationDegrees,
+            _ => (ShowPlacementProperty)(-1),
+        };
+        return (int)property >= 0;
+    }
+
+    private static bool TryEffectProperty(string propertyId, out ShowPlacementEffectProperty property)
+    {
+        property = propertyId switch
+        {
+            AutomationPropertyIds.ChromaSimilarity => ShowPlacementEffectProperty.ChromaSimilarity,
+            AutomationPropertyIds.ChromaSmoothness => ShowPlacementEffectProperty.ChromaSmoothness,
+            AutomationPropertyIds.ChromaSpillReduction => ShowPlacementEffectProperty.ChromaSpillReduction,
+            AutomationPropertyIds.ColorBrightness => ShowPlacementEffectProperty.ColorBrightness,
+            AutomationPropertyIds.ColorContrast => ShowPlacementEffectProperty.ColorContrast,
+            _ => (ShowPlacementEffectProperty)(-1),
+        };
+        return (int)property >= 0;
+    }
+
     /// <summary>
     /// The renderer for one cue on one composition.
     /// </summary>
@@ -446,21 +573,82 @@ public sealed class ProjectVisualizers : IAsyncDisposable
     }
 
     /// <summary>One placement as the session's spec. The same fractions the media placements use.</summary>
-    private static VideoPlacementSpec Spec(string compositionId, LayerPlacement placement) =>
-        new(
+    private static VideoPlacementSpec Spec(
+        HaCueProject project,
+        VisualizerCueNode cue,
+        string compositionId,
+        LayerPlacement placement,
+        long timeMs)
+    {
+        var appearance = ShowCompiler.VideoPlacement(placement);
+        foreach (var track in cue.AutomationTracks.Where(track =>
+                     track.Enabled
+                     && AutomationPropertyCatalog.Get(track.Target.PropertyId)
+                         is { Domain: not AutomationDomain.External }
+                     && (track.Target.ObjectId == placement.Id
+                         || track.Target.ObjectId == placement.ChromaKey?.Id
+                         || track.Target.ObjectId == placement.ColorAdjust?.Id)))
+        {
+            var value = AutomationEvaluator.Sample(
+                track, project, timeMs, AuthoredValue(placement, track.Target.PropertyId));
+            appearance = track.Target.PropertyId switch
+            {
+                AutomationPropertyIds.PlacementOpacity => appearance with { Opacity = value },
+                AutomationPropertyIds.PlacementX => appearance with { DestX = value },
+                AutomationPropertyIds.PlacementY => appearance with { DestY = value },
+                AutomationPropertyIds.PlacementWidth => appearance with { DestWidth = value },
+                AutomationPropertyIds.PlacementHeight => appearance with { DestHeight = value },
+                AutomationPropertyIds.PlacementRotation => appearance with { RotationDegrees = value },
+                AutomationPropertyIds.ChromaSimilarity when appearance.ChromaKey is { } chroma =>
+                    appearance with { ChromaKey = chroma with { Similarity = (float)value } },
+                AutomationPropertyIds.ChromaSmoothness when appearance.ChromaKey is { } chroma =>
+                    appearance with { ChromaKey = chroma with { Smoothness = (float)value } },
+                AutomationPropertyIds.ChromaSpillReduction when appearance.ChromaKey is { } chroma =>
+                    appearance with { ChromaKey = chroma with { SpillSuppression = (float)value } },
+                AutomationPropertyIds.ColorBrightness when appearance.ColorAdjust is { } color =>
+                    appearance with { ColorAdjust = color with { Brightness = (float)value } },
+                AutomationPropertyIds.ColorContrast when appearance.ColorAdjust is { } color =>
+                    appearance with { ColorAdjust = color with { Contrast = (float)value } },
+                _ => appearance,
+            };
+        }
+
+        return new VideoPlacementSpec(
             compositionId,
             placement.LayerIndex,
-            Opacity: placement.Opacity,
-            Placement: placement.Fit switch
-            {
-                LayerFit.Cover => "Cover",
-                LayerFit.Stretch => "Stretch",
-                _ => "Contain",
-            },
-            DestX: placement.X,
-            DestY: placement.Y,
-            DestWidth: placement.Width,
-            DestHeight: placement.Height);
+            Opacity: appearance.Opacity,
+            Placement: appearance.Fit,
+            DestX: appearance.DestX,
+            DestY: appearance.DestY,
+            DestWidth: appearance.DestWidth,
+            DestHeight: appearance.DestHeight,
+            CropLeft: appearance.CropLeft,
+            CropTop: appearance.CropTop,
+            CropRight: appearance.CropRight,
+            CropBottom: appearance.CropBottom,
+            RotationDegrees: appearance.RotationDegrees,
+            VideoFx: appearance.VideoFx,
+            ChromaKey: appearance.ChromaKey,
+            ColorAdjust: appearance.ColorAdjust,
+            ChromaKeyInstanceId: appearance.ChromaKeyInstanceId,
+            ColorAdjustInstanceId: appearance.ColorAdjustInstanceId);
+    }
+
+    private static double AuthoredValue(LayerPlacement placement, string propertyId) => propertyId switch
+    {
+        AutomationPropertyIds.PlacementOpacity => placement.Opacity,
+        AutomationPropertyIds.PlacementX => placement.X,
+        AutomationPropertyIds.PlacementY => placement.Y,
+        AutomationPropertyIds.PlacementWidth => placement.Width,
+        AutomationPropertyIds.PlacementHeight => placement.Height,
+        AutomationPropertyIds.PlacementRotation => placement.RotationDegrees,
+        AutomationPropertyIds.ChromaSimilarity => placement.ChromaKey?.Similarity ?? .4,
+        AutomationPropertyIds.ChromaSmoothness => placement.ChromaKey?.Smoothness ?? .1,
+        AutomationPropertyIds.ChromaSpillReduction => placement.ChromaKey?.SpillReduction ?? .1,
+        AutomationPropertyIds.ColorBrightness => placement.ColorAdjust?.Brightness ?? 0,
+        AutomationPropertyIds.ColorContrast => placement.ColorAdjust?.Contrast ?? 1,
+        _ => 0,
+    };
 
     public async ValueTask DisposeAsync() => await StopAllAsync().ConfigureAwait(false);
 }

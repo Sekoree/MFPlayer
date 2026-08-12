@@ -168,6 +168,12 @@ public static class AutomationMigration
         {
             Id = tracks.Count == 0 ? lane.Id : Guid.NewGuid(),
             Target = target,
+            // Schema 1 always landed outbound lanes on their terminal value when stopped. Preserve
+            // that observable behavior while new schema-2 tracks use the safer Freeze default.
+            Interruption = target.PropertyId is AutomationPropertyIds.OscValue
+                or AutomationPropertyIds.MidiControlValue
+                    ? AutomationInterruption.LandFinal
+                    : AutomationInterruption.Freeze,
             Keyframes = HasBezier(points)
                 ? SampleBezier(points, duration, valueMap)
                 : [.. points.Select(point => new AutomationKeyframe

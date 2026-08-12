@@ -12,6 +12,13 @@ namespace HaCue2.Engine;
 /// </param>
 public readonly record struct TimelineMediaStart(CueNode Cue, TimeSpan? StartPosition = null);
 
+/// <summary>A visualizer prepared for a timeline edge plus its cue-time rehearsal position.</summary>
+public readonly record struct TimelineVisualizerStart(
+    VisualizerCueNode Cue, TimeSpan StartPosition = default);
+
+/// <summary>A non-media timeline child plus the authored position it must begin at.</summary>
+public readonly record struct TimelineControlStart(CueNode Cue, TimeSpan StartPosition);
+
 /// <summary>
 /// Everything firing a cue needs from a running show.
 /// </summary>
@@ -61,7 +68,7 @@ public interface ICueExecutionHost
 
     /// <summary>Prepares visualizer renderers hidden, then reveals them at a caller-owned edge.</summary>
     Task<IReadOnlyList<Guid>> PlayTimelineVisualizersAsync(
-        IReadOnlyList<VisualizerCueNode> cues,
+        IReadOnlyList<TimelineVisualizerStart> cues,
         CueList? list,
         Func<CancellationToken, Task> waitForStartEdge,
         CancellationToken cancellationToken);
@@ -93,8 +100,12 @@ public interface ICueExecutionHost
     /// <summary>Sends an action cue. Returns null on success, or the reason it could not.</summary>
     Task<string?> SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint);
 
-    /// <summary>Runs a controller cue against currently sounding target cues.</summary>
-    Task<bool> RunAutomationAsync(AutomationCueNode automation, CueList? list);
+    /// <summary>Runs a controller cue against currently sounding targets from an authored position.</summary>
+    Task<bool> RunAutomationAsync(
+        AutomationCueNode automation,
+        CueList? list,
+        TimeSpan initialPosition,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Cue ids currently holding a voice — what "fade everything sounding" means.</summary>
     IReadOnlyList<Guid> Sounding { get; }

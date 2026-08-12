@@ -38,13 +38,13 @@ public readonly record struct SoundingStopRequest(TimeSpan FadeDuration, FadeSha
 /// <param name="IsSounding">Whether the source is making sound right now. A registered transport group with
 /// no clip is idle but still registered - it must learn a trim set while it is idle, or its next fire would
 /// start at a stale level.</param>
-/// <param name="Level">The composed <c>master × source × fade × envelope</c> the source's routes carry.</param>
+/// <param name="Level">The composed <c>master × source × fade × envelope × modifier</c> the source's routes carry.</param>
 public readonly record struct SoundingSourceInfo(
     string Label, SoundingSourceRole Role, bool IsSounding, float Level);
 
 /// <summary>
-/// The ONE level composition in the session: <c>master × source × fade × envelope</c>. Every sounding source
-/// owns one of these and every routed gain write goes through <see cref="Effective"/>, so the four mechanisms
+/// The ONE level composition in the session: <c>master × source × fade × envelope × modifier</c>. Every sounding source
+/// owns one of these and every routed gain write goes through <see cref="Effective"/>, so the five mechanisms
 /// compose by construction instead of overwriting each other (the defect this replaces: a soundboard voice's
 /// fade-out wrote the ramp level straight onto the route, discarding the tile's own volume, and neither knew
 /// about the master trim at all).
@@ -67,12 +67,15 @@ internal sealed class SoundingLevel
     /// <summary>The volume-envelope factor (1 = no automation).</summary>
     public float Envelope { get; set; } = 1f;
 
+    /// <summary>A controller/group modifier over the cue-owned envelope (1 = no modifier).</summary>
+    public float Modifier { get; set; } = 1f;
+
     /// <summary>The session-wide master trim as this source last saw it. Held SEPARATE from the rest so
     /// fades always compose from the operator-authored level, never from a trimmed product.</summary>
     public float Master { get; set; } = 1f;
 
     /// <summary>The gain actually written to the routes.</summary>
-    public float Effective => Source * Fade * Envelope * Master;
+    public float Effective => Source * Fade * Envelope * Modifier * Master;
 }
 
 /// <summary>One registered sounding source. <see cref="SoundingSourceRole.Program"/> sources MUST supply the

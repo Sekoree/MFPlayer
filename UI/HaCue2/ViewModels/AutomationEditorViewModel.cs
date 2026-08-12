@@ -5,6 +5,7 @@ using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Core.Timeline;
 using HaCue2.Engine;
+using HaCue2.Machine;
 using HaCue2.Presentation;
 using S.Media.Session;
 
@@ -18,6 +19,13 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
     private readonly AutomationTrack? _track;
     private readonly AutomationPropertyDescriptor _descriptor;
     private readonly ShowHost? _host;
+    private readonly MediaCueNode? _waveformCue;
+    private readonly string _waveformPath = "";
+    private readonly string _cacheRoot = "";
+    private readonly long? _waveformCacheBytes;
+    private readonly TimeSpan? _waveformSourceDuration;
+    private CancellationTokenSource? _waveformScan;
+    private IReadOnlyList<float>? _cuePeaks;
     private readonly HashSet<Guid> _selection = [];
     private List<AutomationKeyframe> _visibleKeys = [];
     private IDisposable? _drag;
@@ -37,12 +45,22 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         CueNode cue,
         AutomationTrack track,
         TimeSpan? duration,
-        ShowHost? host = null)
+        ShowHost? host = null,
+        MediaCueNode? waveformCue = null,
+        string? waveformPath = null,
+        TimeSpan? waveformSourceDuration = null,
+        string cacheRoot = "",
+        long? waveformCacheBytes = null)
     {
         _journal = journal;
         _cue = cue;
         _track = track;
         _host = host;
+        _waveformCue = waveformCue;
+        _waveformPath = waveformPath ?? "";
+        _waveformSourceDuration = waveformSourceDuration;
+        _cacheRoot = cacheRoot;
+        _waveformCacheBytes = waveformCacheBytes;
         _descriptor = AutomationPropertyCatalog.Get(track.Target.PropertyId)
                       ?? throw new ArgumentException($"unknown automation property '{track.Target.PropertyId}'", nameof(track));
         CanExtend = duration is null;
@@ -64,6 +82,20 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
     public string Unit => _descriptor.Value.Unit;
     public string Hint =>
         $"{DurationLabel} · absolute cue time · double-click to add · drag keys; scroll or zoom for long media";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasWaveform))]
+    [NotifyPropertyChangedFor(nameof(WaveformStatus))]
+    private IReadOnlyList<float>? _waveformPeaks;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(WaveformStatus))]
+    private bool _isScanningWaveform;
+
+    public bool HasWaveform => WaveformPeaks is { Count: > 0 };
+    public string WaveformStatus => IsScanningWaveform
+        ? "reading waveform…"
+        : _waveformPath.Length > 0 && !HasWaveform ? "no audio waveform" : "";
 
     [ObservableProperty]
     private IReadOnlyList<CurvePoint> _points = [];
@@ -98,6 +130,7 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             return;
         }
         OnPropertyChanged(nameof(ViewStartLabel));
+        RefreshWaveformViewport();
         Reload();
     }
 
@@ -110,6 +143,7 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             return;
         }
         ViewStartMs = Math.Clamp(ViewStartMs, 0, ViewMaxStartMs);
+        RefreshWaveformViewport();
         Reload();
     }
 
@@ -437,8 +471,51 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             Problem = "the cue is not attached to a playback host";
             return;
         }
-        var targetCueId = _track?.Target.CueId ?? _cue.Id;
+        var targetCueId = _cue is AutomationCueNode
+            ? _cue.Id
+            : _track?.Target.CueId ?? _cue.Id;
         Problem = await _host.SeekCueAsync(targetCueId, TimeSpan.FromMilliseconds(CursorMs)).ConfigureAwait(true) ?? "";
+    }
+
+    /// <summary>Loads audio context lazily when the editor window becomes visible.</summary>
+    public async void BeginWaveform()
+    {
+        if (_waveformPath.Length == 0 || _waveformCue is null || _waveformScan is not null)
+            return;
+
+        _waveformScan = new CancellationTokenSource();
+        var token = _waveformScan.Token;
+        IsScanningWaveform = true;
+        try
+        {
+            var peaks = WaveformCache.Read(_cacheRoot, _waveformPath)
+                        ?? await MediaScan.WaveformAsync(_waveformPath, cancellationToken: token)
+                            .ConfigureAwait(true);
+            if (token.IsCancellationRequested || peaks is not { Length: > 0 })
+                return;
+            WaveformCache.Write(_cacheRoot, _waveformPath, peaks, _waveformCacheBytes);
+            _cuePeaks = TrimToCue(peaks);
+            RefreshWaveformViewport();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            // A waveform is context, never a prerequisite for editing automation.
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+                IsScanningWaveform = false;
+        }
+    }
+
+    public void EndWaveform()
+    {
+        _waveformScan?.Cancel();
+        _waveformScan?.Dispose();
+        _waveformScan = null;
     }
 
     private void Select(CurveGesture gesture)
@@ -598,6 +675,41 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectionCount));
         OnPropertyChanged(nameof(HasMultipleSelected));
         OnPropertyChanged(nameof(ViewStartLabel));
+    }
+
+    private IReadOnlyList<float> TrimToCue(float[] peaks)
+    {
+        if (_waveformCue is not { } media
+            || _waveformSourceDuration is not { TotalMilliseconds: > 0 } source)
+            return peaks;
+        var from = Math.Clamp(
+            (int)Math.Floor(media.TrimInMs / source.TotalMilliseconds * peaks.Length),
+            0,
+            peaks.Length - 1);
+        var outMs = media.TrimOutMs > media.TrimInMs
+            ? media.TrimOutMs
+            : source.TotalMilliseconds;
+        var to = Math.Clamp(
+            (int)Math.Ceiling(outMs / source.TotalMilliseconds * peaks.Length),
+            from + 1,
+            peaks.Length);
+        return peaks[from..to];
+    }
+
+    private void RefreshWaveformViewport()
+    {
+        if (_cuePeaks is not { Count: > 0 } peaks || DurationMs <= 0)
+        {
+            WaveformPeaks = null;
+            return;
+        }
+        var from = Math.Clamp(
+            (int)Math.Floor(ViewStartMs / DurationMs * peaks.Count), 0, peaks.Count - 1);
+        var to = Math.Clamp(
+            (int)Math.Ceiling((ViewStartMs + ViewLengthMs) / DurationMs * peaks.Count),
+            from + 1,
+            peaks.Count);
+        WaveformPeaks = peaks.Skip(from).Take(to - from).ToArray();
     }
 
     private void ReloadFields()

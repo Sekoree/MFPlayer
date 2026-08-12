@@ -29,6 +29,26 @@ public sealed partial class ShowSession
             return Task.FromResult(true);
         });
 
+    /// <summary>Applies a controller/group audio factor without disturbing cue-owned automation.</summary>
+    public Task<bool> ApplyActiveAudioModifierAsync(string cueId, float level) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(cueId) is not { } voice)
+                return Task.FromResult(false);
+            voice.ApplyModifierLevel(level);
+            return Task.FromResult(true);
+        });
+
+    /// <summary>Applies a controller/group opacity factor to all placements of an active cue.</summary>
+    public Task<bool> ApplyActiveVideoModifierAsync(string cueId, float level) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(cueId) is not { } voice)
+                return Task.FromResult(false);
+            voice.ApplyOpacityModifier(level);
+            return Task.FromResult(true);
+        });
+
     /// <summary>Live automation for one exact placement. Unlike a placement edit, this changes only
     /// the automation component and leaves the authored geometry/opacity intact.</summary>
     public Task<bool> ApplyActivePlacementAutomationAsync(
@@ -38,6 +58,66 @@ public sealed partial class ShowSession
             if (ActiveVoiceOf(cueId) is not { } voice)
                 return Task.FromResult(false);
             voice.ApplyOpacityAutomation(compositionId, layerIndex, level, absolute);
+            return Task.FromResult(true);
+        });
+
+    /// <summary>Live automation for one destination-geometry property on one exact placement.</summary>
+    public Task<bool> ApplyActivePlacementTransformAutomationAsync(
+        string cueId,
+        string compositionId,
+        int layerIndex,
+        ShowPlacementProperty property,
+        double value) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(cueId) is not { } voice)
+                return Task.FromResult(false);
+            voice.ApplyPlacementAutomation(compositionId, layerIndex, property, value);
+            return Task.FromResult(true);
+        });
+
+    /// <summary>Returns one live transform property to the placement's current authored value.</summary>
+    public Task<bool> ClearActivePlacementTransformAutomationAsync(
+        string cueId,
+        string compositionId,
+        int layerIndex,
+        ShowPlacementProperty property) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(cueId) is not { } voice)
+                return Task.FromResult(false);
+            voice.ClearPlacementAutomation(compositionId, layerIndex, property);
+            return Task.FromResult(true);
+        });
+
+    public Task<bool> ApplyActivePlacementEffectAutomationAsync(
+        string cueId,
+        string compositionId,
+        int layerIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        double value) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(cueId) is not { } voice)
+                return Task.FromResult(false);
+            voice.ApplyPlacementEffectAutomation(
+                compositionId, layerIndex, effectInstanceId, property, value);
+            return Task.FromResult(true);
+        });
+
+    public Task<bool> ClearActivePlacementEffectAutomationAsync(
+        string cueId,
+        string compositionId,
+        int layerIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(cueId) is not { } voice)
+                return Task.FromResult(false);
+            voice.ClearPlacementEffectAutomation(
+                compositionId, layerIndex, effectInstanceId, property);
             return Task.FromResult(true);
         });
 

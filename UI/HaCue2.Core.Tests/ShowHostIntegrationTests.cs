@@ -85,4 +85,39 @@ public sealed class ShowHostIntegrationTests
         Assert.Contains(state.Problems, problem => problem.Contains("Second-list jump", StringComparison.Ordinal));
         Assert.DoesNotContain(state.Problems, problem => problem.Contains("Preshow bed", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task AutomationCueUsesTheShowPauseSeekAndStopTransport()
+    {
+        var automation = new AutomationCueNode
+        {
+            Number = "1",
+            Label = "Long controller run",
+            DurationMs = 10_000,
+        };
+        var project = new TestProject().Project;
+        project.CueLists = [new CueList { Name = "Act", Cues = [automation] }];
+
+        await using var host = await ShowHost.StartAsync(project, backend: null, headless: true);
+
+        Assert.True(await host.FireAsync(automation.Id));
+        Assert.Contains(automation.Id, (await host.SnapshotAsync()).Sounding);
+
+        await host.SetPausedAsync(true);
+        var pausedAt = (await host.SnapshotAsync()).Active.Single().Elapsed;
+        await Task.Delay(100);
+        var stillPausedAt = (await host.SnapshotAsync()).Active.Single().Elapsed;
+        Assert.InRange(Math.Abs((stillPausedAt - pausedAt).TotalMilliseconds), 0, 5);
+
+        Assert.Null(await host.SeekCueAsync(automation.Id, TimeSpan.FromSeconds(4)));
+        var sought = (await host.SnapshotAsync()).Active.Single().Elapsed;
+        Assert.InRange(sought.TotalMilliseconds, 3_995, 4_005);
+
+        await host.SetPausedAsync(false);
+        await Task.Delay(75);
+        Assert.True((await host.SnapshotAsync()).Active.Single().Elapsed > sought);
+
+        await host.StopCueAsync(automation.Id, TimeSpan.Zero);
+        Assert.DoesNotContain(automation.Id, (await host.SnapshotAsync()).Sounding);
+    }
 }

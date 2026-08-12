@@ -103,7 +103,10 @@ public sealed partial class ShowSession
         /// fade level so the envelope multiplies fades instead of polluting the level fades compose from.</summary>
         public float EnvelopeLevel => Level.Envelope;
 
-        /// <summary>The audio level actually written to the routes: master × fade × envelope - the product
+        /// <summary>The live controller/group modifier, independent of cue-owned automation.</summary>
+        public float ModifierLevel => Level.Modifier;
+
+        /// <summary>The audio level actually written to the routes: master × fade × envelope × modifier - the product
         /// <see cref="ApplyAudioScale"/> computes in the ONE place route gains are set.</summary>
         public float EffectiveAudioLevel => Level.Effective;
 
@@ -374,6 +377,64 @@ public sealed partial class ShowSession
                     placed.Slot.SetAutomationLevel(level, absolute);
         }
 
+        /// <summary>Applies one absolute placement-geometry property without disturbing the authored
+        /// placement or any other automated property.</summary>
+        public void ApplyPlacementAutomation(
+            string compositionId,
+            int layerIndex,
+            ShowPlacementProperty property,
+            double value)
+        {
+            if (State == VoiceState.Retired)
+                return;
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.SetPlacementAutomation(property, value);
+        }
+
+        public void ClearPlacementAutomation(
+            string compositionId,
+            int layerIndex,
+            ShowPlacementProperty property)
+        {
+            if (State == VoiceState.Retired)
+                return;
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.ClearPlacementAutomation(property);
+        }
+
+        public void ApplyPlacementEffectAutomation(
+            string compositionId,
+            int layerIndex,
+            string effectInstanceId,
+            ShowPlacementEffectProperty property,
+            double value)
+        {
+            if (State == VoiceState.Retired)
+                return;
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.SetEffectAutomation(effectInstanceId, property, value);
+        }
+
+        public void ClearPlacementEffectAutomation(
+            string compositionId,
+            int layerIndex,
+            string effectInstanceId,
+            ShowPlacementEffectProperty property)
+        {
+            if (State == VoiceState.Retired)
+                return;
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.ClearEffectAutomation(effectInstanceId, property);
+        }
+
         /// <summary>Applies one envelope-automation step: stores the factor and rewrites the route gains
         /// through <see cref="ApplyAudioScale"/> so the fade × envelope product stays in that one place. An
         /// unchanged factor (flat segment) skips the router writes entirely. Audio-only - layer opacities
@@ -387,6 +448,28 @@ public sealed partial class ShowSession
                 return;
             Level.Envelope = level;
             ApplyAudioScale(RouteTargets, Level.Fade);
+        }
+
+        /// <summary>Applies a group/controller modifier without overwriting the cue-owned envelope.</summary>
+        public void ApplyModifierLevel(float level)
+        {
+            if (State == VoiceState.Retired)
+                return;
+            level = Math.Clamp(level, 0f, VolumeEnvelopes.MaxLevel);
+            if (level == Level.Modifier)
+                return;
+            Level.Modifier = level;
+            ApplyAudioScale(RouteTargets, Level.Fade);
+        }
+
+        /// <summary>Applies a video group modifier beneath placement automation and fades.</summary>
+        public void ApplyOpacityModifier(float level)
+        {
+            if (State == VoiceState.Retired)
+                return;
+            level = Math.Clamp(level, 0f, 1f);
+            foreach (var placed in Layers)
+                placed.Slot.ModifierLevel = level;
         }
 
         /// <summary>This voice's level/stop-bus trim hook: stores the new session trim and rewrites whatever

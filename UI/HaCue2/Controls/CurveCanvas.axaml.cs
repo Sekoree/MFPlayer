@@ -68,6 +68,10 @@ public partial class CurveCanvas : UserControl
     public static readonly StyledProperty<bool> RemoveWhenDraggedOffCanvasProperty =
         AvaloniaProperty.Register<CurveCanvas, bool>(nameof(RemoveWhenDraggedOffCanvas), true);
 
+    /// <summary>Optional read-only audio context drawn behind an automation curve.</summary>
+    public static readonly StyledProperty<IReadOnlyList<float>?> WaveformPeaksProperty =
+        AvaloniaProperty.Register<CurveCanvas, IReadOnlyList<float>?>(nameof(WaveformPeaks));
+
     public CurveCanvas()
     {
         InitializeComponent();
@@ -104,6 +108,12 @@ public partial class CurveCanvas : UserControl
     {
         get => GetValue(TangentsProperty);
         set => SetValue(TangentsProperty, value);
+    }
+
+    public IReadOnlyList<float>? WaveformPeaks
+    {
+        get => GetValue(WaveformPeaksProperty);
+        set => SetValue(WaveformPeaksProperty, value);
     }
 
     /// <summary>

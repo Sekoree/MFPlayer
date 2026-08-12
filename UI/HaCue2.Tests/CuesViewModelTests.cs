@@ -170,6 +170,27 @@ public class CuesViewModelTests
             {
                 CompositionId = composition.Id,
                 VideoFx = [new MappingSection { Name = "crop" }],
+                ChromaKey = new ChromaKeySpec(),
+                ColorAdjust = new ColorAdjustSpec(),
+            },
+        ];
+        original.AutomationTracks =
+        [
+            new AutomationTrack
+            {
+                Target = new AutomationTargetRef
+                {
+                    PropertyId = AutomationPropertyIds.ChromaSimilarity,
+                    ObjectId = original.Placements[0].ChromaKey!.Id,
+                },
+            },
+            new AutomationTrack
+            {
+                Target = new AutomationTargetRef
+                {
+                    PropertyId = AutomationPropertyIds.ColorContrast,
+                    ObjectId = original.Placements[0].ColorAdjust!.Id,
+                },
             },
         ];
         ShellFixture.Select(shell.Cues, original.Id);
@@ -190,6 +211,10 @@ public class CuesViewModelTests
         Assert.Equal("crop", original.Placements[0].VideoFx[0].Name);
         Assert.NotEqual(copy.EffectLanes[0].Id, original.EffectLanes[0].Id);
         Assert.NotEqual(copy.Placements[0].VideoFx[0].Id, original.Placements[0].VideoFx[0].Id);
+        Assert.NotEqual(copy.Placements[0].ChromaKey!.Id, original.Placements[0].ChromaKey!.Id);
+        Assert.NotEqual(copy.Placements[0].ColorAdjust!.Id, original.Placements[0].ColorAdjust!.Id);
+        Assert.Equal(copy.Placements[0].ChromaKey!.Id, copy.AutomationTracks[0].Target.ObjectId);
+        Assert.Equal(copy.Placements[0].ColorAdjust!.Id, copy.AutomationTracks[1].Target.ObjectId);
     });
 
     [Fact]

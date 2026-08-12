@@ -29,6 +29,30 @@
                           IsEnabled="{Binding CanAddVolumeLane}" />
                 <MenuItem Header="Opacity" Click="OnAddLane" Tag="1"
                           IsEnabled="{Binding CanAddOpacityLane}" />
+                <MenuItem Header="Position X" Click="OnAddLane" Tag="4"
+                          IsEnabled="{Binding CanAddPlacementXLane}" />
+                <MenuItem Header="Position Y" Click="OnAddLane" Tag="5"
+                          IsEnabled="{Binding CanAddPlacementYLane}" />
+                <MenuItem Header="Width" Click="OnAddLane" Tag="6"
+                          IsEnabled="{Binding CanAddPlacementWidthLane}" />
+                <MenuItem Header="Height" Click="OnAddLane" Tag="7"
+                          IsEnabled="{Binding CanAddPlacementHeightLane}" />
+                <MenuItem Header="Rotation" Click="OnAddLane" Tag="8"
+                          IsEnabled="{Binding CanAddPlacementRotationLane}" />
+                <MenuItem Header="Chroma key" IsVisible="{Binding HasAutomationChromaKey}">
+                  <MenuItem Header="Similarity" Click="OnAddLane" Tag="9"
+                            IsEnabled="{Binding CanAddChromaSimilarityLane}" />
+                  <MenuItem Header="Smoothness" Click="OnAddLane" Tag="10"
+                            IsEnabled="{Binding CanAddChromaSmoothnessLane}" />
+                  <MenuItem Header="Spill reduction" Click="OnAddLane" Tag="11"
+                            IsEnabled="{Binding CanAddChromaSpillLane}" />
+                </MenuItem>
+                <MenuItem Header="Colour adjust" IsVisible="{Binding HasAutomationColorAdjust}">
+                  <MenuItem Header="Brightness" Click="OnAddLane" Tag="12"
+                            IsEnabled="{Binding CanAddColorBrightnessLane}" />
+                  <MenuItem Header="Contrast" Click="OnAddLane" Tag="13"
+                            IsEnabled="{Binding CanAddColorContrastLane}" />
+                </MenuItem>
                 <Separator />
                 <MenuItem Header="OSC value" Click="OnAddLane" Tag="2"
                           IsEnabled="{Binding CanAddOscLane}" />

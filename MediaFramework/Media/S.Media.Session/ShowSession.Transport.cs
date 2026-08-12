@@ -482,13 +482,15 @@ public sealed partial class ShowSession
 
     /// <summary>The live audio levels of the active clip playing <paramref name="cueId"/>, or null when
     /// that cue is not an active clip. <see cref="ClipAudioLevels.EffectiveLevel"/> is the exact product
-    /// the route gains are written with (fade × envelope × master trim), read from the same group state.</summary>
+    /// the route gains are written with (fade × envelope × modifier × master trim), read from the
+    /// same group state.</summary>
     public Task<ClipAudioLevels?> GetClipAudioLevelsAsync(string cueId)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         return InvokeAsync(() => Task.FromResult(
             ActiveVoiceOf(cueId) is { } voice
-                ? new ClipAudioLevels(voice.ClipLevel, voice.EnvelopeLevel, voice.EffectiveAudioLevel)
+                ? new ClipAudioLevels(
+                    voice.ClipLevel, voice.EnvelopeLevel, voice.ModifierLevel, voice.EffectiveAudioLevel)
                 : null));
     }
 

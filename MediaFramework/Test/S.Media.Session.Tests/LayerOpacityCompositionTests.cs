@@ -7,8 +7,8 @@ using PixelFormat = S.Media.Core.Video.PixelFormat;
 namespace S.Media.Session.Tests;
 
 /// <summary>
-/// The video level composition: <c>authored x fade x automation</c>, the mirror of the audio side's
-/// <c>source x fade x envelope x master</c>.
+/// The video level composition: <c>authored x fade x automation x modifier</c>, the mirror of the
+/// audio side's <c>source x fade x envelope x modifier x master</c>.
 /// </summary>
 /// <remarks>
 /// Before this chain existed, all three mechanisms wrote the slot's opacity directly and the last writer
@@ -112,6 +112,123 @@ public sealed class LayerOpacityCompositionTests
     }
 
     [Fact]
+    public void GroupModifier_ComposesWithoutReplacingPlacementAutomationOrFade()
+    {
+        using var runtime = Runtime();
+        using var layer = runtime.AddSurfaceLayer(new StubSurface(), Placement(0.5));
+
+        layer.AutomationLevel = 0.8f;
+        layer.FadeLevel = 0.5f;
+        layer.ModifierLevel = 0.5f;
+
+        Assert.Equal(0.5f, layer.BaseOpacity, 4);
+        Assert.Equal(0.8f, layer.AutomationLevel, 4);
+        Assert.Equal(0.5f, layer.FadeLevel, 4);
+        Assert.Equal(0.5f, layer.ModifierLevel, 4);
+        Assert.Equal(0.1f, layer.EffectiveOpacity, 4);
+
+        layer.ModifierLevel = 1f;
+        Assert.Equal(0.8f, layer.AutomationLevel, 4);
+        Assert.Equal(0.5f, layer.FadeLevel, 4);
+        Assert.Equal(0.2f, layer.EffectiveOpacity, 4);
+    }
+
+    [Fact]
+    public void TransformPropertiesComposeIndependentlyOverLiveAuthoredPlacement()
+    {
+        using var runtime = Runtime();
+        using var layer = runtime.AddSurfaceLayer(
+            new StubSurface(),
+            new VideoPlacementSpec("screen", 0, Opacity: 0.5, DestX: 0.2, DestY: 0.1,
+                DestWidth: 0.75, DestHeight: 0.8, RotationDegrees: 10));
+
+        layer.SetPlacementAutomation(ShowPlacementProperty.DestX, 0.8);
+        layer.SetPlacementAutomation(ShowPlacementProperty.DestWidth, 0.4);
+
+        Assert.Equal(0.8, layer.EffectivePlacement.DestX, 6);
+        Assert.Equal(0.1, layer.EffectivePlacement.DestY, 6);
+        Assert.Equal(0.4, layer.EffectivePlacement.DestWidth, 6);
+        Assert.Equal(10, layer.EffectivePlacement.RotationDegrees, 6);
+        Assert.Equal(0.5f, layer.BaseOpacity, 4);
+
+        // A live authoring edit changes every non-automated field but leaves X/width under their own lanes.
+        layer.UpdatePlacement(new VideoPlacementSpec(
+            "screen", 0, Opacity: 0.6, DestX: 0.3, DestY: 0.35,
+            DestWidth: 0.9, DestHeight: 0.7, RotationDegrees: 25));
+        Assert.Equal(0.8, layer.EffectivePlacement.DestX, 6);
+        Assert.Equal(0.35, layer.EffectivePlacement.DestY, 6);
+        Assert.Equal(0.4, layer.EffectivePlacement.DestWidth, 6);
+        Assert.Equal(0.7, layer.EffectivePlacement.DestHeight, 6);
+        Assert.Equal(25, layer.EffectivePlacement.RotationDegrees, 6);
+        Assert.Equal(0.6f, layer.BaseOpacity, 4);
+
+        layer.ClearPlacementAutomation(ShowPlacementProperty.DestX);
+        Assert.Equal(0.3, layer.EffectivePlacement.DestX, 6);
+        Assert.Equal(0.4, layer.EffectivePlacement.DestWidth, 6);
+    }
+
+    [Fact]
+    public void FrameAndSurfaceLayersUseTheSameTransformSlots()
+    {
+        using var runtime = Runtime();
+        var source = new VideoFormat(64, 48, PixelFormat.Bgra32, new Rational(25, 1));
+        using var frame = runtime.AddLayer(source, Placement(1));
+        using var surface = runtime.AddSurfaceLayer(new StubSurface(), Placement(1));
+
+        foreach (var layer in new ClipCompositionRuntime.IPlacedClipLayer[] { frame, surface })
+        {
+            layer.SetPlacementAutomation(ShowPlacementProperty.DestY, -0.25);
+            layer.SetPlacementAutomation(ShowPlacementProperty.DestHeight, 1.5);
+            layer.SetPlacementAutomation(ShowPlacementProperty.RotationDegrees, -45);
+            Assert.Equal(-0.25, layer.EffectivePlacement.DestY, 6);
+            Assert.Equal(1.5, layer.EffectivePlacement.DestHeight, 6);
+            Assert.Equal(-45, layer.EffectivePlacement.RotationDegrees, 6);
+        }
+    }
+
+    [Fact]
+    public void EffectParametersKeepStableInstanceIdentityAndComposeOverLiveAuthoring()
+    {
+        using var runtime = Runtime();
+        var chromaId = Guid.NewGuid().ToString();
+        var colorId = Guid.NewGuid().ToString();
+        using var layer = runtime.AddLayer(
+            new VideoFormat(64, 48, PixelFormat.Bgra32, new Rational(25, 1)),
+            new VideoPlacementSpec(
+                "screen", 0,
+                ChromaKey: new S.Media.Compositor.ChromaKeySettings(
+                    0, 1, 0, Similarity: 0.4f, Smoothness: 0.1f, SpillSuppression: 0.2f),
+                ColorAdjust: new S.Media.Compositor.Effects.BrightnessContrastSettings(0.1f, 1.2f),
+                ChromaKeyInstanceId: chromaId,
+                ColorAdjustInstanceId: colorId));
+
+        layer.SetEffectAutomation(chromaId, ShowPlacementEffectProperty.ChromaSimilarity, 0.8);
+        layer.SetEffectAutomation(colorId, ShowPlacementEffectProperty.ColorContrast, 2.5);
+
+        var effects = layer.RawSlot.Effects!;
+        Assert.Equal(0.8f, effects[0].Values[3], 5);
+        Assert.Equal(0.1f, effects[0].Values[4], 5);
+        Assert.Equal(0.1f, effects[1].Values[0], 5);
+        Assert.Equal(2.5f, effects[1].Values[1], 5);
+
+        // Editing the authored settings preserves only the parameters owned by automation.
+        layer.UpdatePlacement(layer.EffectivePlacement with
+        {
+            ChromaKey = new S.Media.Compositor.ChromaKeySettings(
+                0, 0, 1, Similarity: 0.5f, Smoothness: 0.3f, SpillSuppression: 0.4f),
+            ColorAdjust = new S.Media.Compositor.Effects.BrightnessContrastSettings(-0.2f, 1.5f),
+        });
+        effects = layer.RawSlot.Effects!;
+        Assert.Equal(0.8f, effects[0].Values[3], 5);
+        Assert.Equal(0.3f, effects[0].Values[4], 5);
+        Assert.Equal(-0.2f, effects[1].Values[0], 5);
+        Assert.Equal(2.5f, effects[1].Values[1], 5);
+
+        layer.ClearEffectAutomation(chromaId, ShowPlacementEffectProperty.ChromaSimilarity);
+        Assert.Equal(0.5f, layer.RawSlot.Effects![0].Values[3], 5);
+    }
+
+    [Fact]
     public void EveryComponentIsClamped_SoNoCombinationExceedsFull()
     {
         using var runtime = Runtime();
@@ -119,6 +236,7 @@ public sealed class LayerOpacityCompositionTests
 
         layer.FadeLevel = 4f;
         layer.AutomationLevel = 4f;
+        layer.ModifierLevel = 4f;
 
         // Opacity has no headroom above full the way gain does, so out-of-range is a clamp, not a boost.
         Assert.Equal(1f, layer.EffectiveOpacity, 4);

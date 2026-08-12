@@ -780,6 +780,77 @@ public class CueExecutorTests
     }
 
     [Fact]
+    public async Task TimelineRehearsalStartsAStraddlingAutomationCueAtItsElapsedPosition()
+    {
+        var automation = new AutomationCueNode
+        {
+            Number = "1.1",
+            DurationMs = 20_000,
+            TimelineOffsetMs = 8_000,
+        };
+        var group = new GroupCueNode
+        {
+            Number = "1",
+            FireMode = GroupFireMode.Timeline,
+            Children = [automation],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(13));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
+
+        Assert.Equal([(automation.Id, TimeSpan.FromSeconds(5))], host.AutomationStarts);
+    }
+
+    [Fact]
+    public async Task TimelineRehearsalStartsAStraddlingVisualizerAtItsElapsedPosition()
+    {
+        var visualizer = new VisualizerCueNode
+        {
+            Number = "1.1",
+            HoldMs = 20_000,
+            TimelineOffsetMs = 8_000,
+        };
+        var group = new GroupCueNode
+        {
+            Number = "1",
+            FireMode = GroupFireMode.Timeline,
+            Children = [visualizer],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(13));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
+
+        Assert.Equal(
+            [(visualizer.Id, TimeSpan.FromSeconds(5))],
+            host.VisualizerStarts.Select(start => (start.Cue, start.StartPosition)));
+    }
+
+    [Fact]
+    public async Task TimelineRehearsalSkipsAnAutomationCueWhoseRunAlreadyEnded()
+    {
+        var automation = new AutomationCueNode
+        {
+            Number = "1.1",
+            DurationMs = 2_000,
+            TimelineOffsetMs = 3_000,
+        };
+        var group = new GroupCueNode
+        {
+            Number = "1",
+            FireMode = GroupFireMode.Timeline,
+            Children = [automation],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireTimelineAsync(group, TimeSpan.FromSeconds(8));
+        await executor.WaitForTimelineCompletionAsync(group.Id);
+
+        Assert.Empty(host.AutomationStarts);
+    }
+
+    [Fact]
     public async Task ADisabledChildIsSkipped()
     {
         var group = new GroupCueNode { Number = new CueNumber("1") };
@@ -1061,5 +1132,25 @@ public class CueExecutorTests
         Assert.True(await executor.FireAsync(automation.Id));
         Assert.Equal([automation.Id], host.Automations);
         Assert.Empty(host.Played);
+    }
+
+    [Fact]
+    public async Task AutomationFollowAdvancesOnItsNaturalEndRatherThanItsStart()
+    {
+        var automation = new AutomationCueNode
+        {
+            Number = "1",
+            DurationMs = 2_000,
+            Trigger = CueTrigger.Follow,
+        };
+        var next = Media("2");
+        var (executor, host, _) = Show(automation, next);
+
+        Assert.True(await executor.FireAsync(automation.Id));
+        Assert.Empty(host.Played);
+
+        await executor.OnNaturalEndAsync(automation.Id);
+
+        Assert.Equal([next.Id], host.Played);
     }
 }

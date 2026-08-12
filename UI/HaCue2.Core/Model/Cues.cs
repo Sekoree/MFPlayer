@@ -672,6 +672,9 @@ public sealed record LayerPlacement
 /// </remarks>
 public sealed record ChromaKeySpec
 {
+    /// <summary>Stable target identity for parameter automation.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+
     /// <summary>The key colour, as 0–1 red/green/blue. Default is a broadcast green.</summary>
     public double Red { get; set; }
 
@@ -691,6 +694,9 @@ public sealed record ChromaKeySpec
 /// <summary>Brightness and contrast for one layer. Brightness is an offset, contrast a multiplier.</summary>
 public sealed record ColorAdjustSpec
 {
+    /// <summary>Stable target identity for parameter automation.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+
     public double Brightness { get; set; }
 
     public double Contrast { get; set; } = 1;

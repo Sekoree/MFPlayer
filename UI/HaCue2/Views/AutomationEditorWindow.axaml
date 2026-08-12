@@ -64,6 +64,7 @@
           <c:CurveCanvas AutomationProperties.Name="Absolute-time automation editor"
                          AutomationProperties.HelpText="Double-click to add. Drag a key to change its cue time and property value."
                          RemoveWhenDraggedOffCanvas="False"
+                         WaveformPeaks="{Binding WaveformPeaks}"
                          Points="{Binding Points}" Shape="{Binding Shape}" Tangents="{Binding Tangents}"
                          Gesture="OnGesture" GestureCompleted="OnGestureCompleted"
                          CopyRequested="OnCopyPoints" PasteRequested="OnPastePoints"
@@ -94,6 +95,7 @@
                   IsEnabled="{Binding HasSelection}" />
           <TextBlock Classes="mono dim3 small" Margin="10,8" TextWrapping="Wrap"
                      Text="Values before the first key and after the last key hold. A disabled track falls back to the cue's authored property." />
+          <TextBlock Classes="mono dim3 micro" Margin="10,0" Text="{Binding WaveformStatus}" />
         </StackPanel>
       </Grid>
     </DockPanel>

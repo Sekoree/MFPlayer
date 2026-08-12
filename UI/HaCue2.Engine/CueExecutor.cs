@@ -51,8 +51,8 @@ public sealed class CueExecutor(ICueExecutionHost host)
     {
         public TimeSpan Due { get; } = due;
         public List<TimelineMediaStart> Media { get; } = [];
-        public List<VisualizerCueNode> Visualizers { get; } = [];
-        public List<CueNode> Controls { get; } = [];
+        public List<TimelineVisualizerStart> Visualizers { get; } = [];
+        public List<TimelineControlStart> Controls { get; } = [];
         public TimelineStartGate MediaGate { get; } = new();
         public TimelineStartGate VisualizerGate { get; } = new();
         public Task<IReadOnlyList<Guid>>? MediaTask { get; set; }
@@ -79,73 +79,6 @@ public sealed class CueExecutor(ICueExecutionHost host)
         public void Release() => _release.TrySetResult();
         public void Cancel(CancellationToken cancellationToken) =>
             _release.TrySetCanceled(cancellationToken);
-    }
-
-    /// <summary>
-    /// A pause-aware, continuity-preserving coordinate over the bay's late-bound audio clock. Device-clock
-    /// epochs may change underneath it; <see cref="SessionClock"/> splices those changes without a jump.
-    /// </summary>
-    private sealed class TimelineRunClock
-    {
-        // Five milliseconds keeps pause/resume quantisation comfortably below one 60 Hz frame while still
-        // using one lightweight scheduler loop per active timeline (not one timer per cue/output).
-        private static readonly TimeSpan MaxPoll = TimeSpan.FromMilliseconds(5);
-        private static readonly TimeSpan MinimumPoll = TimeSpan.FromMilliseconds(1);
-
-        private readonly ICueExecutionHost _host;
-        private readonly SessionClock _master;
-        private readonly TimeSpan _masterAnchor;
-        private readonly TimeSpan _pausedAnchor;
-        private readonly TimeSpan _positionAnchor;
-
-        public TimelineRunClock(ICueExecutionHost host, TimeSpan initialPosition)
-        {
-            _host = host;
-            _master = new SessionClock(host.TimelineClock);
-            _masterAnchor = _master.Now;
-            _pausedAnchor = host.TimelinePausedElapsed;
-            _positionAnchor = initialPosition;
-        }
-
-        /// <summary>
-        /// Timeline time: master time since this run began, less the master time the show spent paused
-        /// since then.
-        /// </summary>
-        /// <remarks>
-        /// <para>
-        /// A pure, lock-free read over three immutable anchors. It used to ACCUMULATE on read - take the
-        /// delta since the last look and add it if the show was not paused at that instant - which made
-        /// the value depend on who read last, required a gate around every read, and quantized the
-        /// coordinate to the sampling interval at each pause edge. The scheduler loop was the only
-        /// reader for a long time and it worked; adding dispatch-lateness sampling as a second reader is
-        /// what forced the gate, and a third would have kept working only by accident.
-        /// </para>
-        /// <para>
-        /// Monotonic without a clamp, by construction: master time is monotonic within an epoch (and
-        /// <see cref="SessionClock"/> rebases across epochs), and paused time is monotonic and can never
-        /// grow faster than master time - the host records it at the transitions, from the same clock.
-        /// </para>
-        /// </remarks>
-        public TimeSpan Position =>
-            _positionAnchor
-            + (_master.Now - _masterAnchor)
-            - (_host.TimelinePausedElapsed - _pausedAnchor);
-
-        public async Task WaitUntilAsync(TimeSpan target, CancellationToken cancellationToken)
-        {
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var remaining = target - Position;
-                if (remaining <= TimeSpan.Zero)
-                    return;
-
-                var wait = remaining > MaxPoll ? MaxPoll : remaining;
-                if (wait < MinimumPoll)
-                    wait = MinimumPoll;
-                await _host.DelayTimelineAsync(wait, cancellationToken).ConfigureAwait(false);
-            }
-        }
     }
 
     private readonly Lock _stateGate = new();
@@ -268,7 +201,9 @@ public sealed class CueExecutor(ICueExecutionHost host)
         int depth,
         TimeSpan? crossfade = null,
         FadeShape crossfadeCurve = default,
-        bool skipPreWait = false)
+        bool skipPreWait = false,
+        TimeSpan? automationStartPosition = null,
+        CancellationToken cancellationToken = default)
     {
         if (depth > MaxChainDepth)
         {
@@ -303,7 +238,9 @@ public sealed class CueExecutor(ICueExecutionHost host)
             PatchCueNode patch => await PatchAsync(patch).ConfigureAwait(false),
             FadeCueNode fade => await FadeAsync(fade).ConfigureAwait(false),
             ActionCueNode action => await ActAsync(action).ConfigureAwait(false),
-            AutomationCueNode automation => await host.RunAutomationAsync(automation, list).ConfigureAwait(false),
+            AutomationCueNode automation => await host.RunAutomationAsync(
+                automation, list, automationStartPosition ?? TimeSpan.Zero, cancellationToken)
+                .ConfigureAwait(false),
             // A comment cue is its note. Firing one is a no-op that still SUCCEEDS, so an
             // auto-continue chain runs straight through it rather than stopping on a marker.
             _ => true,
@@ -323,6 +260,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
                  && cue is not MediaCueNode
                  && cue is not TextCueNode
                  && cue is not VisualizerCueNode
+                 && cue is not AutomationCueNode
                  && list is not null)
         {
             // Instant cues have no natural-end event. Their successful completion is their end.
@@ -458,7 +396,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
             try
             {
                 return await host.PlayTimelineVisualizersAsync(
-                        visualizers,
+                        [.. visualizers.Select(cue => new TimelineVisualizerStart(cue))],
                         Project.ListOf(visualizers[0].Id),
                         visualizerGate.WaitAsync,
                         CancellationToken.None)
@@ -1527,7 +1465,8 @@ public sealed class CueExecutor(ICueExecutionHost host)
                 // Media/text and a still-held visualizer can reconstruct the state at a rehearsal playhead.
                 // Instant controls before the playhead are history: replaying an old patch, OSC action or jump
                 // while rehearsing later in the scene would be both surprising and potentially destructive.
-                var canStraddle = child is MediaCueNode or TextCueNode or VisualizerCueNode;
+                var canStraddle = child is MediaCueNode or TextCueNode or VisualizerCueNode
+                    or AutomationCueNode;
                 if (!canStraddle)
                     continue;
 
@@ -1559,15 +1498,19 @@ public sealed class CueExecutor(ICueExecutionHost host)
                     // halves of this mapping being written independently is exactly what made trimmed
                     // cues seek wrong (see MediaCueNode.MediaTimeAt).
                     initialPosition = child is MediaCueNode media ? media.MediaTimeAt(into) : into;
+                else if (child is AutomationCueNode or VisualizerCueNode)
+                    initialPosition = into;
             }
 
             var timelineEvent = EventAt(due);
             if (child is MediaCueNode or TextCueNode)
                 timelineEvent.Media.Add(new TimelineMediaStart(child, initialPosition));
             else if (child is VisualizerCueNode visualizer)
-                timelineEvent.Visualizers.Add(visualizer);
+                timelineEvent.Visualizers.Add(new TimelineVisualizerStart(
+                    visualizer, initialPosition ?? TimeSpan.Zero));
             else
-                timelineEvent.Controls.Add(child);
+                timelineEvent.Controls.Add(new TimelineControlStart(
+                    child, initialPosition ?? TimeSpan.Zero));
         }
 
         return [.. byDue.Values];
@@ -1585,7 +1528,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         try
         {
             var initial = events.FirstOrDefault(item => item.Due <= playhead);
-            TimelineRunClock clock;
+            AutomationRunClock clock;
 
             if (initial is not null)
             {
@@ -1599,12 +1542,12 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
                 // Decoder/open latency is paid before the timeline epoch exists. Position zero (or the
                 // rehearsal playhead) is therefore the release edge, not the time opening happened to begin.
-                clock = new TimelineRunClock(host, playhead);
+                clock = new AutomationRunClock(host, playhead);
                 await DispatchTimelineEventAsync(initial, depth, cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                clock = new TimelineRunClock(host, playhead);
+                clock = new AutomationRunClock(host, playhead);
             }
 
             run.Started.TrySetResult();
@@ -1731,7 +1674,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         {
             return await host.PlayTimelineVisualizersAsync(
                     timelineEvent.Visualizers,
-                    Project.ListOf(timelineEvent.Visualizers[0].Id),
+                    Project.ListOf(timelineEvent.Visualizers[0].Cue.Id),
                     timelineEvent.VisualizerGate.WaitAsync,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -1746,7 +1689,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         TimelineEvent timelineEvent,
         int depth,
         CancellationToken cancellationToken,
-        TimelineRunClock? clock = null)
+        AutomationRunClock? clock = null)
     {
         try
         {
@@ -1770,8 +1713,10 @@ public sealed class CueExecutor(ICueExecutionHost host)
             timelineEvent.MediaGate.Release();
             timelineEvent.VisualizerGate.Release();
             var controls = timelineEvent.Controls
-                .Select(cue => FireAsync(
-                    cue.Id, depth + 1, skipPreWait: true))
+                .Select(start => FireAsync(
+                    start.Cue.Id, depth + 1, skipPreWait: true,
+                    automationStartPosition: start.StartPosition,
+                    cancellationToken: cancellationToken))
                 .ToArray();
 
             IReadOnlyList<Guid> started = [];
@@ -1824,6 +1769,9 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         if (cue is VisualizerCueNode { HoldMs: > 0 } visualizer)
             return TimeSpan.FromMilliseconds(visualizer.HoldMs);
+
+        if (cue is AutomationCueNode { DurationMs: > 0 } automation)
+            return TimeSpan.FromMilliseconds(automation.DurationMs);
 
         var probed = host.MediaLength(cue.Id);
 

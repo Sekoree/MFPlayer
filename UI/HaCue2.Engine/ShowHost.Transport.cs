@@ -200,6 +200,15 @@ public sealed partial class ShowHost
     public async Task StopCueAsync(Guid cueId, TimeSpan? fadeDuration)
     {
         MarkFading(cueId);
+        _outbound.Interrupt(cueId);
+
+        if (await StopAutomationRunAsync(cueId).ConfigureAwait(false))
+        {
+            Executor.OnStopped(cueId);
+            return;
+        }
+
+        await StopVisualizerAutomationRunAsync(cueId).ConfigureAwait(false);
 
         // A visualizer holds a renderer rather than a voice, so the session has nothing to stop for it
         // — asking anyway would silently do nothing and leave the canvas lit.
@@ -234,6 +243,11 @@ public sealed partial class ShowHost
         // hidden behind a timeline gate could cross that gate while the already-active set was fading out.
         if (_executor is { } executor)
             await executor.CancelTimelineRunsAsync().ConfigureAwait(false);
+
+        // Controller cues have no session voice. Cancel and await them before taking the stop snapshot
+        // so none can write a level back into a voice while the session is fading it down.
+        await StopAllAutomationRunsAsync().ConfigureAwait(false);
+        await StopAllVisualizerAutomationRunsAsync().ConfigureAwait(false);
 
         List<Guid> active;
         lock (_gate)
@@ -407,6 +421,11 @@ public sealed partial class ShowHost
     /// </remarks>
     public async Task<string?> SeekCueAsync(Guid cueId, TimeSpan position)
     {
+        if (await SeekAutomationRunAsync(cueId, position).ConfigureAwait(false))
+            return null;
+        if (await SeekVisualizerAutomationRunAsync(cueId, position).ConfigureAwait(false))
+            return null;
+
         string group;
 
         lock (_gate)
@@ -527,6 +546,7 @@ public sealed partial class ShowHost
         // paused, seeked, trimmed or looped, and it is the number the panel used to show.
         var playheads = _session.Snapshot()
             .ToDictionary(snapshot => snapshot.GroupId, StringComparer.Ordinal);
+        var automationPlayheads = AutomationRunSnapshots();
 
         paused = IsPaused;
         lock (_gate)
@@ -552,10 +572,14 @@ public sealed partial class ShowHost
                         ? playhead.ClipPosition > playhead.AudibleLatency
                             ? playhead.ClipPosition - playhead.AudibleLatency
                             : TimeSpan.Zero
-                        : wall;
+                        : automationPlayheads.TryGetValue(entry.Key, out var automation)
+                            ? automation.Position
+                            : wall;
                     var length = playhead is { ClipDuration.Ticks: > 0 }
                         ? (TimeSpan?)playhead.ClipDuration
-                        : null;
+                        : automationPlayheads.TryGetValue(entry.Key, out automation)
+                            ? automation.Duration
+                            : null;
 
                     // The transport reports MEDIA time; the operator reads CUE time. A trimmed cue's
                     // playhead therefore starts at its trim-in and its transport duration is the whole

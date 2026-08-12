@@ -19,7 +19,57 @@ namespace HaCue2.Engine;
 public sealed partial class ShowHost
 {
     private readonly Lock _automationRunGate = new();
-    private readonly Dictionary<Guid, CancellationTokenSource> _automationRuns = [];
+    private readonly Dictionary<Guid, AutomationRun> _automationRuns = [];
+    private readonly Dictionary<Guid, VisualizerAutomationRun> _visualizerAutomationRuns = [];
+
+    private sealed class AutomationRun(
+        AutomationCueNode cue,
+        AutomationRunClock clock,
+        CancellationTokenSource cancellation,
+        IReadOnlyDictionary<Guid, IReadOnlyList<Guid>> capturedTargets)
+    {
+        public AutomationCueNode Cue { get; } = cue;
+        public AutomationRunClock Clock { get; } = clock;
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+        /// <summary>The sounding cue IDs each track resolved when this run fired. In particular, a
+        /// group controller does not begin affecting a descendant which starts later.</summary>
+        public IReadOnlyDictionary<Guid, IReadOnlyList<Guid>> CapturedTargets { get; } = capturedTargets;
+        public SemaphoreSlim ApplyGate { get; } = new(1, 1);
+        public TaskCompletionSource<bool> Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Complete { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Cancel()
+        {
+            try { Cancellation.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+    }
+
+    /// <summary>A visualizer has no session transport, so its cue-owned lanes retain this show-clock
+    /// coordinate for as long as the renderer remains on air. It deliberately survives its last key:
+    /// the operator can seek backwards while the visualizer is still active.</summary>
+    private sealed class VisualizerAutomationRun(
+        VisualizerCueNode cue,
+        AutomationRunClock clock,
+        CancellationTokenSource cancellation)
+    {
+        public VisualizerCueNode Cue { get; } = cue;
+        public AutomationRunClock Clock { get; } = clock;
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+        public SemaphoreSlim ApplyGate { get; } = new(1, 1);
+        public TaskCompletionSource<bool> Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Complete { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Cancel()
+        {
+            try { Cancellation.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+    }
     /// <summary>
     /// What firing a cue means, for every kind — extracted so it can be tested without devices.
     /// </summary>
@@ -56,9 +106,8 @@ public sealed partial class ShowHost
     async Task ICueExecutionHost.StopCueAsync(Guid cueId)
     {
         _outbound.Interrupt(cueId);
-        lock (_automationRunGate)
-            if (_automationRuns.TryGetValue(cueId, out var automation))
-                automation.Cancel();
+        await StopAutomationRunAsync(cueId).ConfigureAwait(false);
+        await StopVisualizerAutomationRunAsync(cueId).ConfigureAwait(false);
         await _visualizers.StopAsync(cueId).ConfigureAwait(false);
         await _session.StopCueAsync(cueId.ToString()).ConfigureAwait(false);
         Executor.OnStopped(cueId);
@@ -67,78 +116,399 @@ public sealed partial class ShowHost
     Task<string?> ICueExecutionHost.SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint) =>
         _actions.SendAsync(action, endpoint);
 
-    async Task<bool> ICueExecutionHost.RunAutomationAsync(AutomationCueNode automation, CueList? list)
+    async Task<bool> ICueExecutionHost.RunAutomationAsync(
+        AutomationCueNode automation,
+        CueList? list,
+        TimeSpan initialPosition,
+        CancellationToken cancellationToken)
     {
         var duration = TimeSpan.FromMilliseconds(Math.Max(1, automation.DurationMs));
-        CancellationTokenSource cancellation;
+        var start = initialPosition < TimeSpan.Zero
+            ? TimeSpan.Zero
+            : initialPosition > duration ? duration : initialPosition;
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _life.Token, cancellationToken);
+        var clock = new AutomationRunClock((ICueExecutionHost)this, start);
+        var run = new AutomationRun(
+            automation, clock, cancellation, CaptureAutomationTargets(automation));
+        AutomationRun? previous;
         lock (_automationRunGate)
         {
-            if (_automationRuns.Remove(automation.Id, out var previous))
-            {
-                previous.Cancel();
-                previous.Dispose();
-            }
-            cancellation = CancellationTokenSource.CreateLinkedTokenSource(_life.Token);
-            _automationRuns[automation.Id] = cancellation;
+            _automationRuns.TryGetValue(automation.Id, out previous);
+            _automationRuns[automation.Id] = run;
         }
 
+        // Refire is a handover, not two competing writers. Let an explicit RestoreBase from the old
+        // run land before the new run samples its authored start.
+        if (previous is not null)
+        {
+            previous.Cancel();
+            await previous.Complete.Task.ConfigureAwait(false);
+        }
         Remember(automation.Id, list?.Id ?? Guid.Empty, groupId: "");
-        _outbound.Start(automation, duration);
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        // Keep the outbound drivers alive for the whole controller run. A track may place its final
+        // key long before the cue ends; seeking back across that key must still reposition the target.
+        _outbound.Start(automation, duration, clock.Read, keepAliveAfterEnd: true);
+        _ = DriveAutomationAsync(run, duration);
+        return await run.Started.Task.ConfigureAwait(false);
+    }
+
+    private async Task DriveAutomationAsync(AutomationRun run, TimeSpan duration)
+    {
+        var completedNaturally = false;
         try
         {
+            run.Cancellation.Token.ThrowIfCancellationRequested();
             while (true)
             {
-                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started);
-                var at = Math.Min((long)elapsed.TotalMilliseconds, automation.DurationMs);
-                await ApplyAutomationAsync(automation, at).ConfigureAwait(false);
+                var elapsed = run.Clock.Position;
+                await SampleAutomationAsync(run, elapsed).ConfigureAwait(false);
+                run.Started.TrySetResult(true);
                 if (elapsed >= duration)
                     break;
-                await Task.Delay(TimeSpan.FromMilliseconds(25), cancellation.Token).ConfigureAwait(false);
+                await ((ICueExecutionHost)this).DelayTimelineAsync(
+                    TimeSpan.FromMilliseconds(25), run.Cancellation.Token).ConfigureAwait(false);
             }
 
-            if (automation.Completion == AutomationCompletion.RestoreBase)
-                await RestoreAutomationAsync(automation).ConfigureAwait(false);
-            return true;
+            if (run.Cue.Completion == AutomationCompletion.RestoreBase)
+                await RestoreAutomationAsync(run).ConfigureAwait(false);
+            _outbound.Complete(run.Cue.Id);
+            completedNaturally = true;
         }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested)
         {
-            if (automation.Completion == AutomationCompletion.RestoreBase)
-                await RestoreAutomationAsync(automation).ConfigureAwait(false);
-            return false;
+            run.Started.TrySetResult(false);
+            if (run.Cue.Completion == AutomationCompletion.RestoreBase)
+                await RestoreAutomationAsync(run).ConfigureAwait(false);
         }
         finally
         {
             lock (_automationRunGate)
-                if (_automationRuns.GetValueOrDefault(automation.Id) == cancellation)
-                    _automationRuns.Remove(automation.Id);
-            cancellation.Dispose();
-            Forget(automation.Id.ToString());
+                if (ReferenceEquals(_automationRuns.GetValueOrDefault(run.Cue.Id), run))
+                    _automationRuns.Remove(run.Cue.Id);
+            run.Cancellation.Dispose();
+            run.ApplyGate.Dispose();
+            run.Started.TrySetResult(false);
+            run.Complete.TrySetResult();
+            Forget(run.Cue.Id.ToString());
+        }
+
+        if (completedNaturally)
+            _ = ObserveLifecycleAsync(
+                Executor.OnNaturalEndAsync(run.Cue.Id),
+                "automation natural-end follow");
+    }
+
+    private async Task SampleAutomationAsync(AutomationRun run, TimeSpan position)
+    {
+        await run.ApplyGate.WaitAsync(run.Cancellation.Token).ConfigureAwait(false);
+        try
+        {
+            var timeMs = Math.Clamp(
+                (long)position.TotalMilliseconds, 0, Math.Max(1, run.Cue.DurationMs));
+            foreach (var track in run.Cue.AutomationTracks.Where(track => track.Enabled))
+            {
+                if (AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External)
+                    continue; // OutboundEffects owns rate limiting and coalescing on this same clock.
+                if (!run.CapturedTargets.TryGetValue(track.Id, out var capturedTargets)
+                    || track.Target.CueId is not { } targetId
+                    || _project.FindCue(targetId) is not { } target)
+                    continue;
+                var value = AutomationEvaluator.Sample(track, _project, timeMs, AuthoredValue(target, track));
+                await ApplyAutomationValueAsync(target, track, value, capturedTargets).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            run.ApplyGate.Release();
         }
     }
 
-    private async Task ApplyAutomationAsync(AutomationCueNode automation, long timeMs)
+    private async Task RestoreAutomationAsync(AutomationRun run)
     {
+        await run.ApplyGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            foreach (var track in run.Cue.AutomationTracks.Where(track => track.Enabled))
+                if (run.CapturedTargets.TryGetValue(track.Id, out var capturedTargets)
+                    && track.Target.CueId is { } targetId
+                    && _project.FindCue(targetId) is { } target)
+                    await RestoreAutomationValueAsync(target, track, capturedTargets).ConfigureAwait(false);
+        }
+        finally
+        {
+            run.ApplyGate.Release();
+        }
+    }
+
+    private IReadOnlyDictionary<Guid, IReadOnlyList<Guid>> CaptureAutomationTargets(
+        AutomationCueNode automation)
+    {
+        var sounding = SoundingIds().ToHashSet();
+        var captured = new Dictionary<Guid, IReadOnlyList<Guid>>();
         foreach (var track in automation.AutomationTracks.Where(track => track.Enabled))
         {
             if (AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External)
-                continue; // OutboundEffects owns rate limiting, coalescing and terminal delivery.
-            if (track.Target.CueId is not { } targetId || _project.FindCue(targetId) is not { } target)
                 continue;
-            var value = AutomationEvaluator.Sample(track, _project, timeMs, AuthoredValue(target, track));
-            await ApplyAutomationValueAsync(target, track, value).ConfigureAwait(false);
+            if (track.Target.CueId is not { } targetId || _project.FindCue(targetId) is not { } target)
+            {
+                Report($"“{automation.Label}” has an automation track with no target cue");
+                continue;
+            }
+
+            IEnumerable<CueNode> candidates = (track.Target.PropertyId, target) switch
+            {
+                (AutomationPropertyIds.GroupAudioTrim, GroupCueNode group) =>
+                    Descendants(group).OfType<MediaCueNode>(),
+                (AutomationPropertyIds.GroupVideoOpacity, GroupCueNode group) =>
+                    Descendants(group).Where(child => CuePlacements.Of(child).Any()),
+                _ => [target],
+            };
+            var active = candidates
+                .Where(candidate => sounding.Contains(candidate.Id))
+                .Select(candidate => candidate.Id)
+                .Distinct()
+                .ToArray();
+            if (active.Length == 0)
+            {
+                Report($"“{automation.Label}” skipped “{target.Label}” because it is not sounding");
+                continue;
+            }
+            captured[track.Id] = active;
+        }
+        return captured;
+    }
+
+    private async Task<bool> StopAutomationRunAsync(Guid cueId)
+    {
+        AutomationRun? run;
+        lock (_automationRunGate)
+            _automationRuns.TryGetValue(cueId, out run);
+        if (run is null)
+            return false;
+        run.Cancel();
+        await run.Complete.Task.ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task StopAllAutomationRunsAsync()
+    {
+        AutomationRun[] runs;
+        lock (_automationRunGate)
+            runs = [.. _automationRuns.Values];
+        foreach (var run in runs)
+            run.Cancel();
+        await Task.WhenAll(runs.Select(run => run.Complete.Task)).ConfigureAwait(false);
+    }
+
+    private async Task StartVisualizerAutomationAsync(
+        VisualizerCueNode cue, TimeSpan initialPosition)
+    {
+        if (!cue.AutomationTracks.Any(track => track.Enabled))
+            return;
+
+        var duration = TimeSpan.FromMilliseconds(Math.Max(1, cue.HoldMs));
+        var start = initialPosition < TimeSpan.Zero
+            ? TimeSpan.Zero
+            : initialPosition > duration ? duration : initialPosition;
+        var run = new VisualizerAutomationRun(
+            cue,
+            new AutomationRunClock((ICueExecutionHost)this, start),
+            CancellationTokenSource.CreateLinkedTokenSource(_life.Token));
+        VisualizerAutomationRun? previous;
+        lock (_automationRunGate)
+        {
+            _visualizerAutomationRuns.TryGetValue(cue.Id, out previous);
+            _visualizerAutomationRuns[cue.Id] = run;
+        }
+
+        if (previous is not null)
+        {
+            previous.Cancel();
+            await previous.Complete.Task.ConfigureAwait(false);
+        }
+
+        _ = DriveVisualizerAutomationAsync(run, duration);
+        await run.Started.Task.ConfigureAwait(false);
+    }
+
+    private async Task DriveVisualizerAutomationAsync(
+        VisualizerAutomationRun run, TimeSpan duration)
+    {
+        var landedAtEnd = false;
+        var lastGeneration = -1L;
+        try
+        {
+            while (true)
+            {
+                run.Cancellation.Token.ThrowIfCancellationRequested();
+                var reading = run.Clock.Read();
+                if (!landedAtEnd || reading.Generation != lastGeneration)
+                {
+                    var position = reading.Position > duration ? duration : reading.Position;
+                    await SampleVisualizerAutomationAsync(run, position).ConfigureAwait(false);
+                    run.Started.TrySetResult(true);
+                    landedAtEnd = reading.Position >= duration;
+                    lastGeneration = reading.Generation;
+                }
+
+                await ((ICueExecutionHost)this).DelayTimelineAsync(
+                        landedAtEnd ? TimeSpan.FromMilliseconds(100) : TimeSpan.FromMilliseconds(25),
+                        run.Cancellation.Token)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested)
+        {
+            run.Started.TrySetResult(false);
+        }
+        finally
+        {
+            lock (_automationRunGate)
+                if (ReferenceEquals(_visualizerAutomationRuns.GetValueOrDefault(run.Cue.Id), run))
+                    _visualizerAutomationRuns.Remove(run.Cue.Id);
+            run.Cancellation.Dispose();
+            run.ApplyGate.Dispose();
+            run.Started.TrySetResult(false);
+            run.Complete.TrySetResult();
         }
     }
 
-    private async Task RestoreAutomationAsync(AutomationCueNode automation)
+    private async Task SampleVisualizerAutomationAsync(
+        VisualizerAutomationRun run, TimeSpan position)
     {
-        foreach (var track in automation.AutomationTracks.Where(track => track.Enabled))
-            if (track.Target.CueId is { } targetId && _project.FindCue(targetId) is { } target)
-                await ApplyAutomationValueAsync(target, track, AuthoredValue(target, track)).ConfigureAwait(false);
+        await run.ApplyGate.WaitAsync(run.Cancellation.Token).ConfigureAwait(false);
+        try
+        {
+            var timeMs = Math.Clamp(
+                (long)position.TotalMilliseconds, 0, Math.Max(1, run.Cue.HoldMs));
+            foreach (var track in run.Cue.AutomationTracks.Where(track => track.Enabled))
+            {
+                if (AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External)
+                    continue;
+                var value = AutomationEvaluator.Sample(
+                    track, _project, timeMs, AuthoredValue(run.Cue, track));
+                await _visualizers.ApplyAutomationAsync(run.Cue, track, value).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            run.ApplyGate.Release();
+        }
     }
 
-    private async Task ApplyAutomationValueAsync(CueNode target, AutomationTrack track, double value)
+    private async Task<bool> StopVisualizerAutomationRunAsync(Guid cueId)
     {
+        VisualizerAutomationRun? run;
+        lock (_automationRunGate)
+            _visualizerAutomationRuns.TryGetValue(cueId, out run);
+        if (run is null)
+            return false;
+        run.Cancel();
+        await run.Complete.Task.ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task StopAllVisualizerAutomationRunsAsync()
+    {
+        VisualizerAutomationRun[] runs;
+        lock (_automationRunGate)
+            runs = [.. _visualizerAutomationRuns.Values];
+        foreach (var run in runs)
+            run.Cancel();
+        await Task.WhenAll(runs.Select(run => run.Complete.Task)).ConfigureAwait(false);
+    }
+
+    private async Task<bool> SeekVisualizerAutomationRunAsync(Guid cueId, TimeSpan position)
+    {
+        VisualizerAutomationRun? run;
+        lock (_automationRunGate)
+            _visualizerAutomationRuns.TryGetValue(cueId, out run);
+        if (run is null || !await run.Started.Task.ConfigureAwait(false))
+            return false;
+
+        var duration = TimeSpan.FromMilliseconds(Math.Max(1, run.Cue.HoldMs));
+        var sought = position < TimeSpan.Zero ? TimeSpan.Zero : position > duration ? duration : position;
+        var reading = run.Clock.Seek(sought);
+        _outbound.Seek(cueId, reading);
+        await SampleVisualizerAutomationAsync(run, reading.Position).ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task<bool> SeekAutomationRunAsync(Guid cueId, TimeSpan position)
+    {
+        AutomationRun? run;
+        lock (_automationRunGate)
+            _automationRuns.TryGetValue(cueId, out run);
+        if (run is null)
+            return false;
+
+        if (!await run.Started.Task.ConfigureAwait(false)
+            || run.Cancellation.IsCancellationRequested)
+            return false;
+        var duration = TimeSpan.FromMilliseconds(Math.Max(1, run.Cue.DurationMs));
+        var sought = position < TimeSpan.Zero ? TimeSpan.Zero : position > duration ? duration : position;
+        var reading = run.Clock.Seek(sought);
+        _outbound.Seek(cueId, reading);
+        await SampleAutomationAsync(run, reading.Position).ConfigureAwait(false);
+        return true;
+    }
+
+    private IReadOnlyDictionary<Guid, (TimeSpan Position, TimeSpan Duration)> AutomationRunSnapshots()
+    {
+        AutomationRun[] runs;
+        VisualizerAutomationRun[] visualizers;
+        lock (_automationRunGate)
+        {
+            runs = [.. _automationRuns.Values];
+            visualizers = [.. _visualizerAutomationRuns.Values];
+        }
+        var snapshots = runs.ToDictionary(
+            run => run.Cue.Id,
+            run => (
+                run.Clock.Position,
+                TimeSpan.FromMilliseconds(Math.Max(1, run.Cue.DurationMs))));
+        foreach (var run in visualizers)
+            snapshots[run.Cue.Id] = (
+                run.Clock.Position,
+                TimeSpan.FromMilliseconds(Math.Max(1, run.Cue.HoldMs)));
+        return snapshots;
+    }
+
+    private async Task ApplyAutomationValueAsync(
+        CueNode target,
+        AutomationTrack track,
+        double value,
+        IReadOnlyList<Guid> capturedTargets)
+    {
+        if (TryPlacementProperty(track.Target.PropertyId, out var transform)
+            && track.Target.ObjectId is { } transformPlacementId
+            && CuePlacements.Of(target).FirstOrDefault(placement => placement.Id == transformPlacementId)
+                is { } transformPlacement)
+        {
+            await _session.ApplyActivePlacementTransformAutomationAsync(
+                target.Id.ToString(),
+                transformPlacement.CompositionId.ToString(),
+                transformPlacement.LayerIndex,
+                transform,
+                value).ConfigureAwait(false);
+            return;
+        }
+        if (TryEffectProperty(track.Target.PropertyId, out var effectProperty)
+            && track.Target.ObjectId is { } effectId
+            && CuePlacements.Of(target).FirstOrDefault(placement =>
+                placement.ChromaKey?.Id == effectId || placement.ColorAdjust?.Id == effectId) is { } effectPlacement)
+        {
+            await _session.ApplyActivePlacementEffectAutomationAsync(
+                target.Id.ToString(),
+                effectPlacement.CompositionId.ToString(),
+                effectPlacement.LayerIndex,
+                effectId.ToString(),
+                effectProperty,
+                value).ConfigureAwait(false);
+            return;
+        }
+
         switch (track.Target.PropertyId)
         {
             case AutomationPropertyIds.CueVolume when target is MediaCueNode media:
@@ -152,29 +522,115 @@ public sealed partial class ShowHost
                     (float)Math.Clamp(value, 0, 1)).ConfigureAwait(false);
                 break;
             case AutomationPropertyIds.GroupAudioTrim when target is GroupCueNode group:
-                foreach (var mediaChild in Descendants(group).OfType<MediaCueNode>())
-                    await _session.ApplyActiveVolumeAsync(
-                        mediaChild.Id.ToString(), Linear(mediaChild.LevelDb + value)).ConfigureAwait(false);
+                foreach (var mediaChild in Descendants(group).OfType<MediaCueNode>()
+                             .Where(child => capturedTargets.Contains(child.Id)))
+                    await _session.ApplyActiveAudioModifierAsync(
+                        mediaChild.Id.ToString(), Linear(value)).ConfigureAwait(false);
                 break;
             case AutomationPropertyIds.GroupVideoOpacity when target is GroupCueNode videoGroup:
-                foreach (var child in Descendants(videoGroup))
-                    foreach (var placement in CuePlacements.Of(child))
-                        await _session.ApplyActivePlacementAutomationAsync(
-                            child.Id.ToString(), placement.CompositionId.ToString(), placement.LayerIndex,
-                            (float)Math.Clamp(placement.Opacity * value, 0, 1)).ConfigureAwait(false);
+                foreach (var child in Descendants(videoGroup)
+                             .Where(child => capturedTargets.Contains(child.Id)))
+                    await _session.ApplyActiveVideoModifierAsync(
+                        child.Id.ToString(), (float)Math.Clamp(value, 0, 1)).ConfigureAwait(false);
                 break;
         }
     }
 
-    private static double AuthoredValue(CueNode target, AutomationTrack track) => track.Target.PropertyId switch
+    private async Task RestoreAutomationValueAsync(
+        CueNode target,
+        AutomationTrack track,
+        IReadOnlyList<Guid> capturedTargets)
     {
-        AutomationPropertyIds.CueVolume when target is MediaCueNode media => media.LevelDb,
-        AutomationPropertyIds.PlacementOpacity when track.Target.ObjectId is { } placementId =>
-            CuePlacements.Of(target).FirstOrDefault(placement => placement.Id == placementId)?.Opacity ?? 1,
-        AutomationPropertyIds.GroupAudioTrim => 0,
-        AutomationPropertyIds.GroupVideoOpacity => 1,
-        _ => AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Value.Default ?? 0,
-    };
+        if (TryPlacementProperty(track.Target.PropertyId, out var transform)
+            && track.Target.ObjectId is { } placementId
+            && CuePlacements.Of(target).FirstOrDefault(placement => placement.Id == placementId) is { } placement)
+        {
+            await _session.ClearActivePlacementTransformAutomationAsync(
+                target.Id.ToString(),
+                placement.CompositionId.ToString(),
+                placement.LayerIndex,
+                transform).ConfigureAwait(false);
+            return;
+        }
+        if (TryEffectProperty(track.Target.PropertyId, out var effectProperty)
+            && track.Target.ObjectId is { } effectId
+            && CuePlacements.Of(target).FirstOrDefault(placement =>
+                placement.ChromaKey?.Id == effectId || placement.ColorAdjust?.Id == effectId) is { } effectPlacement)
+        {
+            await _session.ClearActivePlacementEffectAutomationAsync(
+                target.Id.ToString(),
+                effectPlacement.CompositionId.ToString(),
+                effectPlacement.LayerIndex,
+                effectId.ToString(),
+                effectProperty).ConfigureAwait(false);
+            return;
+        }
+        await ApplyAutomationValueAsync(
+            target, track, AuthoredValue(target, track), capturedTargets).ConfigureAwait(false);
+    }
+
+    private static double AuthoredValue(CueNode target, AutomationTrack track)
+    {
+        if (track.Target.ObjectId is { } placementId
+            && CuePlacements.Of(target).FirstOrDefault(placement => placement.Id == placementId) is { } placement)
+            return track.Target.PropertyId switch
+            {
+                AutomationPropertyIds.PlacementOpacity => placement.Opacity,
+                AutomationPropertyIds.PlacementX => placement.X,
+                AutomationPropertyIds.PlacementY => placement.Y,
+                AutomationPropertyIds.PlacementWidth => placement.Width,
+                AutomationPropertyIds.PlacementHeight => placement.Height,
+                AutomationPropertyIds.PlacementRotation => placement.RotationDegrees,
+                _ => AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Value.Default ?? 0,
+            };
+        if (track.Target.ObjectId is { } effectId
+            && CuePlacements.Of(target).FirstOrDefault(candidate =>
+                candidate.ChromaKey?.Id == effectId || candidate.ColorAdjust?.Id == effectId) is { } effectPlacement)
+            return track.Target.PropertyId switch
+            {
+                AutomationPropertyIds.ChromaSimilarity => effectPlacement.ChromaKey?.Similarity ?? .4,
+                AutomationPropertyIds.ChromaSmoothness => effectPlacement.ChromaKey?.Smoothness ?? .1,
+                AutomationPropertyIds.ChromaSpillReduction => effectPlacement.ChromaKey?.SpillReduction ?? .1,
+                AutomationPropertyIds.ColorBrightness => effectPlacement.ColorAdjust?.Brightness ?? 0,
+                AutomationPropertyIds.ColorContrast => effectPlacement.ColorAdjust?.Contrast ?? 1,
+                _ => AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Value.Default ?? 0,
+            };
+        return track.Target.PropertyId switch
+        {
+            AutomationPropertyIds.CueVolume when target is MediaCueNode media => media.LevelDb,
+            AutomationPropertyIds.GroupAudioTrim => 0,
+            AutomationPropertyIds.GroupVideoOpacity => 1,
+            _ => AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Value.Default ?? 0,
+        };
+    }
+
+    private static bool TryPlacementProperty(string propertyId, out ShowPlacementProperty property)
+    {
+        property = propertyId switch
+        {
+            AutomationPropertyIds.PlacementX => ShowPlacementProperty.DestX,
+            AutomationPropertyIds.PlacementY => ShowPlacementProperty.DestY,
+            AutomationPropertyIds.PlacementWidth => ShowPlacementProperty.DestWidth,
+            AutomationPropertyIds.PlacementHeight => ShowPlacementProperty.DestHeight,
+            AutomationPropertyIds.PlacementRotation => ShowPlacementProperty.RotationDegrees,
+            _ => (ShowPlacementProperty)(-1),
+        };
+        return (int)property >= 0;
+    }
+
+    private static bool TryEffectProperty(string propertyId, out ShowPlacementEffectProperty property)
+    {
+        property = propertyId switch
+        {
+            AutomationPropertyIds.ChromaSimilarity => ShowPlacementEffectProperty.ChromaSimilarity,
+            AutomationPropertyIds.ChromaSmoothness => ShowPlacementEffectProperty.ChromaSmoothness,
+            AutomationPropertyIds.ChromaSpillReduction => ShowPlacementEffectProperty.ChromaSpillReduction,
+            AutomationPropertyIds.ColorBrightness => ShowPlacementEffectProperty.ColorBrightness,
+            AutomationPropertyIds.ColorContrast => ShowPlacementEffectProperty.ColorContrast,
+            _ => (ShowPlacementEffectProperty)(-1),
+        };
+        return (int)property >= 0;
+    }
 
     private static IEnumerable<CueNode> Descendants(GroupCueNode group)
     {
@@ -221,6 +677,7 @@ public sealed partial class ShowHost
     {
         if (cue is VisualizerCueNode visualizer)
         {
+            await StopVisualizerAutomationRunAsync(cue.Id).ConfigureAwait(false);
             var problem = await _visualizers.FireAsync(_project, visualizer).ConfigureAwait(false);
 
             if (problem is not null)
@@ -233,7 +690,11 @@ public sealed partial class ShowHost
 
             // A visualizer holds a renderer rather than a transport, so it has no group to seek.
             Remember(cue.Id, list?.Id ?? Guid.Empty, groupId: "");
-            _outbound.Start(cue, TimeSpan.FromMilliseconds(Math.Max(1, visualizer.HoldMs)));
+            await StartVisualizerAutomationAsync(visualizer, TimeSpan.Zero).ConfigureAwait(false);
+            StartClockedOutbound(
+                cue,
+                TimeSpan.FromMilliseconds(Math.Max(1, visualizer.HoldMs)),
+                groupId: "");
             return true;
         }
 
@@ -258,8 +719,7 @@ public sealed partial class ShowHost
         // A re-fire's displaced voice tears down DURING the fire and its Forget can race the entry
         // away; this reasserts it without touching a surviving fire-start stamp.
         ConfirmSounding(cue.Id, list?.Id ?? Guid.Empty, group);
-        if (PlayedLength(cue) is { } duration)
-            _outbound.Start(cue, duration);
+        StartClockedOutbound(cue, PlayedLength(cue), group);
         return true;
     }
 
@@ -316,17 +776,9 @@ public sealed partial class ShowHost
             // Unlike an operator GO, timeline preparation is not a visible/sounding state. Stamp the Active
             // entry only after the master edge has released the clock and the hidden/silent hold is gone.
             ConfirmSounding(cue.Id, list?.Id ?? Guid.Empty, group);
-            if (PlayedLength(cue) is { } fullDuration)
-            {
-                // The model's media→cue mapping (MediaCueNode.CueTimeAt), not hand-rolled trim
-                // arithmetic - asymmetric copies of this mapping are the trimmed-cue bug class.
-                var elapsed = start.StartPosition is { } position
-                    ? cue is MediaCueNode media ? media.CueTimeAt(position) : position
-                    : TimeSpan.Zero;
-                var remaining = fullDuration - (elapsed > TimeSpan.Zero ? elapsed : TimeSpan.Zero);
-                if (remaining > TimeSpan.Zero)
-                    _outbound.Start(cue, remaining);
-            }
+            // The session timeline already began at StartPosition. Sampling that authoritative cue
+            // coordinate keeps outbound values aligned with volume/opacity during rehearsal.
+            StartClockedOutbound(cue, PlayedLength(cue), group);
             started.Add(cue.Id);
         }
 
@@ -334,7 +786,7 @@ public sealed partial class ShowHost
     }
 
     async Task<IReadOnlyList<Guid>> ICueExecutionHost.PlayTimelineVisualizersAsync(
-        IReadOnlyList<VisualizerCueNode> cues,
+        IReadOnlyList<TimelineVisualizerStart> cues,
         CueList? list,
         Func<CancellationToken, Task> waitForStartEdge,
         CancellationToken cancellationToken)
@@ -365,10 +817,17 @@ public sealed partial class ShowHost
         foreach (var problem in problems)
             Report(problem);
 
-        foreach (var cue in cues.Where(cue => started.Contains(cue.Id)))
+        foreach (var start in cues.Where(start => started.Contains(start.Cue.Id)))
         {
+            var cue = start.Cue;
             Remember(cue.Id, list?.Id ?? Guid.Empty, groupId: "");
-            _outbound.Start(cue, TimeSpan.FromMilliseconds(Math.Max(1, cue.HoldMs)));
+            await StartVisualizerAutomationAsync(cue, start.StartPosition)
+                .ConfigureAwait(false);
+            StartClockedOutbound(
+                cue,
+                TimeSpan.FromMilliseconds(Math.Max(1, cue.HoldMs)),
+                groupId: "",
+                initialPosition: start.StartPosition);
         }
 
         return started;
@@ -386,6 +845,49 @@ public sealed partial class ShowHost
                 ? duration : null;
 
         return null;
+    }
+
+    private void StartClockedOutbound(
+        CueNode cue,
+        TimeSpan? duration,
+        string groupId,
+        TimeSpan initialPosition = default)
+    {
+        var outboundKeys = CueAutomation.Of(cue)
+            .Where(track => track.Enabled
+                && AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External)
+            .SelectMany(track => track.Keyframes)
+            .Where(key => key.TimeMs >= 0)
+            .ToList();
+        if (outboundKeys.Count == 0)
+            return;
+
+        var runDuration = duration is { Ticks: > 0 }
+            ? duration.Value
+            : TimeSpan.FromMilliseconds(Math.Max(1, outboundKeys.Max(key => key.TimeMs)));
+        if (groupId.Length > 0)
+        {
+            _outbound.Start(
+                cue,
+                runDuration,
+                () => TransportAutomationClock(groupId),
+                // The media transport, not the track's last key, owns this lifetime. Keeping the
+                // driver registered lets a later backward seek reopen an already-completed ramp.
+                keepAliveAfterEnd: true);
+            return;
+        }
+
+        var clock = new AutomationRunClock((ICueExecutionHost)this, initialPosition);
+        _outbound.Start(cue, runDuration, clock.Read, duration is null);
+    }
+
+    private RunClockSnapshot TransportAutomationClock(string groupId)
+    {
+        var snapshot = _session.Snapshot()
+            .FirstOrDefault(candidate => string.Equals(candidate.GroupId, groupId, StringComparison.Ordinal));
+        return snapshot is null
+            ? default
+            : new RunClockSnapshot(snapshot.Timeline.CueTime, snapshot.TimelineGeneration);
     }
 
     /// <summary>

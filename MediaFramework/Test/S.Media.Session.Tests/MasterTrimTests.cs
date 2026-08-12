@@ -60,6 +60,30 @@ public sealed class MasterTrimTests
         Assert.Equal(0.25f, levels.EffectiveLevel, 3);
     }
 
+    [Fact]
+    public async Task GroupModifier_ComposesWithoutReplacingCueAutomationOrMasterTrim()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(OneCue("fake://x"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+
+        await session.ApplyActiveVolumeAsync("c", 0.5f);
+        await session.ApplyActiveAudioModifierAsync("c", 0.25f);
+        await session.SetMasterTrimAsync(0.8f);
+
+        var levels = Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c"));
+        Assert.Equal(1f, levels.FadeLevel, 3);
+        Assert.Equal(0.5f, levels.EnvelopeLevel, 3);
+        Assert.Equal(0.25f, levels.ModifierLevel, 3);
+        Assert.Equal(0.1f, levels.EffectiveLevel, 3);
+
+        // Moving the controller slot leaves the cue-owned envelope intact.
+        await session.ApplyActiveAudioModifierAsync("c", 0.5f);
+        levels = Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c"));
+        Assert.Equal(0.5f, levels.EnvelopeLevel, 3);
+        Assert.Equal(0.2f, levels.EffectiveLevel, 3);
+    }
+
     /// <summary>A two-tone-cue session, each cue on its own peak-reading device - the crossfade tests read
     /// the outgoing tail's gain on <c>dev-c1</c> while <c>c2</c> fades in on <c>dev-c2</c>.</summary>
     private static (ShowSession Session, ConcurrentDictionary<string, PeakAudioOutput> Outputs)

@@ -169,6 +169,33 @@ public sealed class OutboundRampRunner
     }
 
     /// <summary>
+    /// Samples a discontinuous position immediately. Used for transport seeks and loop wraps: the
+    /// receiving system must land at the sought value before ordinary rate-limited progression resumes.
+    /// </summary>
+    public void Reposition(TimeSpan elapsed)
+    {
+        var at = elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed > _duration ? _duration : elapsed;
+        _finishRequested = false;
+        _finished = false;
+        _lastSentAt = at;
+        Emit(ValueAt(at), isFinal: false);
+    }
+
+    /// <summary>
+    /// Ends early at the value sampled at <paramref name="elapsed"/>. Unlike <see cref="Interrupt"/>,
+    /// this never jumps an external controller to the authored terminal key.
+    /// </summary>
+    public void Freeze(TimeSpan elapsed)
+    {
+        if (_finished)
+            return;
+        var at = elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed > _duration ? _duration : elapsed;
+        _finishRequested = true;
+        if (Emit(ValueAt(at), isFinal: true) && _send is not null)
+            _finished = true;
+    }
+
+    /// <summary>
     /// Ends the ramp early - the cue stopped, or the show panicked. The terminal value is still sent:
     /// the receiving system owns that value, and leaving it stranded mid-fade is precisely the failure
     /// this class exists to prevent.
@@ -273,7 +300,15 @@ public sealed class OutboundRampRunner
             {
                 await _sendAsync!(value, CancellationToken.None).ConfigureAwait(false);
                 if (isFinal)
-                    _finished = true;
+                {
+                    lock (_sendGate)
+                    {
+                        // A seek/loop can coalesce a newer non-terminal value while the old terminal
+                        // send is in flight. That newer position re-opened the runner and must win.
+                        if (!_hasPending)
+                            _finished = true;
+                    }
+                }
             }
             catch (Exception ex)
             {

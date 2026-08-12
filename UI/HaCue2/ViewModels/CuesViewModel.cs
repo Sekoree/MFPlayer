@@ -1508,6 +1508,20 @@ public partial class CuesViewModel : ObservableObject
                 placement.Id = Guid.NewGuid();
                 foreach (var track in CueAutomation.Of(node).Where(track => track.Target.ObjectId == oldPlacementId))
                     track.Target.ObjectId = placement.Id;
+                if (placement.ChromaKey is { } chroma)
+                {
+                    var oldEffectId = chroma.Id;
+                    chroma.Id = Guid.NewGuid();
+                    foreach (var track in CueAutomation.Of(node).Where(track => track.Target.ObjectId == oldEffectId))
+                        track.Target.ObjectId = chroma.Id;
+                }
+                if (placement.ColorAdjust is { } color)
+                {
+                    var oldEffectId = color.Id;
+                    color.Id = Guid.NewGuid();
+                    foreach (var track in CueAutomation.Of(node).Where(track => track.Target.ObjectId == oldEffectId))
+                        track.Target.ObjectId = color.Id;
+                }
                 foreach (var section in placement.VideoFx)
                     section.Id = Guid.NewGuid();
             }
@@ -2243,7 +2257,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     private string _keyframeStatus = KeyframeHelp;
 
     private const string KeyframeHelp =
-        "volume · opacity · OSC ramp · MIDI ramp — Ctrl/Shift-click keyframes · Ctrl+wheel zooms, Shift+wheel pans";
+        "volume · opacity · placement · OSC/MIDI — Ctrl/Shift-click keyframes · Ctrl+wheel zooms, Shift+wheel pans";
 
     /// <summary>
     /// Which automation properties the footer's picker may offer for the CURRENT selection.
@@ -2257,6 +2271,18 @@ public sealed partial class TimelineViewModel : ObservableObject
     public bool CanAddOpacityLane => CanAddLane(1);
     public bool CanAddOscLane => CanAddLane(2);
     public bool CanAddMidiLane => CanAddLane(3);
+    public bool CanAddPlacementXLane => CanAddLane(4);
+    public bool CanAddPlacementYLane => CanAddLane(5);
+    public bool CanAddPlacementWidthLane => CanAddLane(6);
+    public bool CanAddPlacementHeightLane => CanAddLane(7);
+    public bool CanAddPlacementRotationLane => CanAddLane(8);
+    public bool CanAddChromaSimilarityLane => CanAddLane(9);
+    public bool CanAddChromaSmoothnessLane => CanAddLane(10);
+    public bool CanAddChromaSpillLane => CanAddLane(11);
+    public bool CanAddColorBrightnessLane => CanAddLane(12);
+    public bool CanAddColorContrastLane => CanAddLane(13);
+    public bool HasAutomationChromaKey => Owner?.Inspector.HasAutomationChromaKey ?? false;
+    public bool HasAutomationColorAdjust => Owner?.Inspector.HasAutomationColorAdjust ?? false;
 
     private bool CanAddLane(int kind) => Owner?.Inspector.CanAddLane(kind) ?? false;
 
@@ -2530,8 +2556,24 @@ public sealed partial class TimelineViewModel : ObservableObject
 
         var span = Span(cue);
         var duration = TimeSpan.FromMilliseconds(Math.Max(0, span.EndMs - span.StartMs));
+        var waveformCue = cue as MediaCueNode;
+        TimeSpan? sourceDuration = waveformCue is not null
+                                   && _runtime.MediaDurations.TryGetValue(waveformCue.Id, out var probed)
+            ? probed
+            : waveformCue is { SourceDurationMs: > 0 }
+                ? TimeSpan.FromMilliseconds(waveformCue.SourceDurationMs)
+                : null;
         return new AutomationEditorViewModel(
-            _journal, cue, track, duration > TimeSpan.Zero ? duration : null, Owner?.Engine);
+            _journal,
+            cue,
+            track,
+            duration > TimeSpan.Zero ? duration : null,
+            Owner?.Engine,
+            waveformCue,
+            waveformCue is null ? null : ResolveMediaPath(waveformCue),
+            sourceDuration,
+            CacheRoot,
+            WaveformCacheBytes);
     }
 
     public void SelectAllKeyframes(TimelineLane row)
@@ -2832,6 +2874,18 @@ public sealed partial class TimelineViewModel : ObservableObject
         OnPropertyChanged(nameof(CanAddOpacityLane));
         OnPropertyChanged(nameof(CanAddOscLane));
         OnPropertyChanged(nameof(CanAddMidiLane));
+        OnPropertyChanged(nameof(CanAddPlacementXLane));
+        OnPropertyChanged(nameof(CanAddPlacementYLane));
+        OnPropertyChanged(nameof(CanAddPlacementWidthLane));
+        OnPropertyChanged(nameof(CanAddPlacementHeightLane));
+        OnPropertyChanged(nameof(CanAddPlacementRotationLane));
+        OnPropertyChanged(nameof(CanAddChromaSimilarityLane));
+        OnPropertyChanged(nameof(CanAddChromaSmoothnessLane));
+        OnPropertyChanged(nameof(CanAddChromaSpillLane));
+        OnPropertyChanged(nameof(CanAddColorBrightnessLane));
+        OnPropertyChanged(nameof(CanAddColorContrastLane));
+        OnPropertyChanged(nameof(HasAutomationChromaKey));
+        OnPropertyChanged(nameof(HasAutomationColorAdjust));
     }
 
     /// <summary>The cue whose lane reads as selected — follows the tree's selection.</summary>

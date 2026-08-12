@@ -28,7 +28,11 @@ internal sealed class OutboundEffects : IAsyncDisposable
         _lifetime = lifetime;
     }
 
-    public void Start(CueNode cue, TimeSpan duration)
+    public void Start(
+        CueNode cue,
+        TimeSpan duration,
+        Func<RunClockSnapshot>? clock = null,
+        bool keepAliveAfterEnd = false)
     {
         Interrupt(cue.Id);
         if (duration <= TimeSpan.Zero)
@@ -71,7 +75,13 @@ internal sealed class OutboundEffects : IAsyncDisposable
                 (value, _) => SendAsync(cue, track, endpoint, value),
                 Math.Clamp(track.Target.SendRateHz, 1, 120));
             var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
-            var run = new Run(runner, cancellation);
+            var started = Stopwatch.GetTimestamp();
+            var run = new Run(
+                runner,
+                cancellation,
+                clock ?? (() => new RunClockSnapshot(Stopwatch.GetElapsedTime(started), 0)),
+                keepAliveAfterEnd,
+                track.Interruption);
             run.Task = DriveAsync(cue.Id, run);
             runs.Add(run);
         }
@@ -94,22 +104,75 @@ internal sealed class OutboundEffects : IAsyncDisposable
             run.Cancellation.Cancel();
     }
 
+    /// <summary>Normal media completion always lands the authored final value.</summary>
+    public void Complete(Guid cueId)
+    {
+        List<Run>? runs;
+        lock (_gate)
+            _running.TryGetValue(cueId, out runs);
+        if (runs is null)
+            return;
+        foreach (var run in runs)
+        {
+            run.CompleteNaturally = true;
+            run.Cancellation.Cancel();
+        }
+    }
+
+    /// <summary>Seeds every outbound target at a discontinuous transport position immediately.</summary>
+    public void Seek(Guid cueId, RunClockSnapshot reading)
+    {
+        List<Run>? runs;
+        lock (_gate)
+            _running.TryGetValue(cueId, out runs);
+        if (runs is null)
+            return;
+
+        foreach (var run in runs)
+        {
+            lock (run.Gate)
+            {
+                run.LastReading = reading;
+                run.LastGeneration = reading.Generation;
+                run.Runner.Reposition(reading.Position);
+            }
+        }
+    }
+
     private async Task DriveAsync(Guid cueId, Run run)
     {
-        var started = Stopwatch.GetTimestamp();
         try
         {
-            while (!run.Runner.IsFinished)
+            while (run.KeepAliveAfterEnd || !run.Runner.IsFinished)
             {
-                run.Runner.Advance(Stopwatch.GetElapsedTime(started));
-                if (run.Runner.IsFinished)
+                var reading = run.Clock();
+                lock (run.Gate)
+                {
+                    run.LastReading = reading;
+                    if (reading.Generation != run.LastGeneration)
+                    {
+                        run.LastGeneration = reading.Generation;
+                        run.Runner.Reposition(reading.Position);
+                    }
+                    else
+                    {
+                        run.Runner.Advance(reading.Position);
+                    }
+                }
+                if (run.Runner.IsFinished && !run.KeepAliveAfterEnd)
                     break;
                 await Task.Delay(TimeSpan.FromMilliseconds(10), run.Cancellation.Token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
         {
-            run.Runner.Interrupt();
+            lock (run.Gate)
+            {
+                if (run.CompleteNaturally || run.Interruption == AutomationInterruption.LandFinal)
+                    run.Runner.Interrupt();
+                else
+                    run.Runner.Freeze(run.Clock().Position);
+            }
         }
         finally
         {
@@ -207,10 +270,22 @@ internal sealed class OutboundEffects : IAsyncDisposable
         await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
-    private sealed class Run(OutboundRampRunner runner, CancellationTokenSource cancellation)
+    private sealed class Run(
+        OutboundRampRunner runner,
+        CancellationTokenSource cancellation,
+        Func<RunClockSnapshot> clock,
+        bool keepAliveAfterEnd,
+        AutomationInterruption interruption)
     {
         public OutboundRampRunner Runner { get; } = runner;
         public CancellationTokenSource Cancellation { get; } = cancellation;
+        public Func<RunClockSnapshot> Clock { get; } = clock;
+        public bool KeepAliveAfterEnd { get; } = keepAliveAfterEnd;
+        public AutomationInterruption Interruption { get; } = interruption;
+        public bool CompleteNaturally { get; set; }
+        public object Gate { get; } = new();
+        public RunClockSnapshot LastReading { get; set; }
+        public long LastGeneration { get; set; } = long.MinValue;
         public Task Task { get; set; } = Task.CompletedTask;
     }
 }

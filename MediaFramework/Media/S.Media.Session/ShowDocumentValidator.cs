@@ -67,7 +67,8 @@ public static class ShowDocumentValidator
         string cueId,
         string which,
         IReadOnlyList<ShowEnvelopePoint>? points,
-        bool opacity)
+        bool opacity,
+        bool unrestricted = false)
     {
         if (points is null)
             return;
@@ -84,7 +85,7 @@ public static class ShowDocumentValidator
             if (!float.IsFinite(point.Level))
                 errors.Add("clip", cueId,
                     $"the clip for cue '{cueId}' has a non-finite {which} envelope level at point {i}.");
-            else if (!opacity && (point.Level < 0f || point.Level > VolumeEnvelopes.MaxLevel))
+            else if (!unrestricted && !opacity && (point.Level < 0f || point.Level > VolumeEnvelopes.MaxLevel))
                 errors.Add("clip", cueId,
                     $"the clip for cue '{cueId}' has a volume envelope level outside 0..+12 dB at point {i}.");
             if (!Enum.IsDefined(point.CurveToNext))
@@ -220,6 +221,49 @@ public static class ShowDocumentValidator
                     errors.Add("clip", clip.ClipId,
                         $"the clip for cue '{clip.ClipId}' has opacity automation for a placement it does not use.");
                 ValidateEnvelope(errors, clip.ClipId, "placement opacity", placementEnvelope.Points, opacity: true);
+            }
+            foreach (var placementEnvelope in clip.PlacementTransformEnvelopes ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(placementEnvelope.CompositionId) || placementEnvelope.LayerIndex < 0)
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has an invalid placement transform target.");
+                if (!Enum.IsDefined(placementEnvelope.Property))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has an unknown placement transform property.");
+                if (!clip.GetPlacements().Any(placement =>
+                        string.Equals(placement.CompositionId, placementEnvelope.CompositionId, StringComparison.Ordinal)
+                        && placement.LayerIndex == placementEnvelope.LayerIndex))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has transform automation for a placement it does not use.");
+                ValidateEnvelope(
+                    errors, clip.ClipId, "placement transform", placementEnvelope.Points,
+                    opacity: false, unrestricted: true);
+                if (placementEnvelope.Property is ShowPlacementProperty.DestWidth or ShowPlacementProperty.DestHeight
+                    && placementEnvelope.Points.Any(point => point.Level <= 0))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has non-positive placement size automation.");
+            }
+            foreach (var effectEnvelope in clip.PlacementEffectEnvelopes ?? [])
+            {
+                var effectTargetPlacement = clip.GetPlacements().FirstOrDefault(candidate =>
+                    string.Equals(candidate.CompositionId, effectEnvelope.CompositionId, StringComparison.Ordinal)
+                    && candidate.LayerIndex == effectEnvelope.LayerIndex);
+                if (effectTargetPlacement is null || string.IsNullOrWhiteSpace(effectEnvelope.EffectInstanceId))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has an invalid placement effect target.");
+                if (!Enum.IsDefined(effectEnvelope.Property))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has an unknown placement effect property.");
+                if (effectTargetPlacement?.Placement is { } effectPlacement
+                    && !string.Equals(effectPlacement.ChromaKeyInstanceId, effectEnvelope.EffectInstanceId,
+                        StringComparison.Ordinal)
+                    && !string.Equals(effectPlacement.ColorAdjustInstanceId, effectEnvelope.EffectInstanceId,
+                        StringComparison.Ordinal))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has parameter automation for an effect it does not use.");
+                ValidateEnvelope(
+                    errors, clip.ClipId, "placement effect", effectEnvelope.Points,
+                    opacity: false, unrestricted: true);
             }
 
             // Logical sends (HaCue two-matrix model): cell sanity only - whether a LogicalChannelId

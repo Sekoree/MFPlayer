@@ -239,6 +239,7 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(ChromaSimilarity));
         OnPropertyChanged(nameof(ChromaSmoothness));
         OnPropertyChanged(nameof(ChromaSpill));
+        OnPropertyChanged(nameof(HasColorAdjust));
         OnPropertyChanged(nameof(ColorAdjustOn));
         OnPropertyChanged(nameof(LayerBrightness));
         OnPropertyChanged(nameof(LayerContrast));
@@ -247,7 +248,21 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(CanCarryLanes));
         OnPropertyChanged(nameof(CanAddVolumeLane));
         OnPropertyChanged(nameof(CanAddOpacityLane));
+        OnPropertyChanged(nameof(CanAddPlacementXLane));
+        OnPropertyChanged(nameof(CanAddPlacementYLane));
+        OnPropertyChanged(nameof(CanAddPlacementWidthLane));
+        OnPropertyChanged(nameof(CanAddPlacementHeightLane));
+        OnPropertyChanged(nameof(CanAddPlacementRotationLane));
+        OnPropertyChanged(nameof(CanAddChromaSimilarityLane));
+        OnPropertyChanged(nameof(CanAddChromaSmoothnessLane));
+        OnPropertyChanged(nameof(CanAddChromaSpillLane));
+        OnPropertyChanged(nameof(CanAddColorBrightnessLane));
+        OnPropertyChanged(nameof(CanAddColorContrastLane));
+        OnPropertyChanged(nameof(HasAutomationChromaKey));
+        OnPropertyChanged(nameof(HasAutomationColorAdjust));
         OnPropertyChanged(nameof(CanAddOutboundLane));
+        OnPropertyChanged(nameof(VolumeLaneLabel));
+        OnPropertyChanged(nameof(OpacityLaneLabel));
         OnPropertyChanged(nameof(IsAutomationCue));
         OnPropertyChanged(nameof(AutomationTargetCues));
         OnPropertyChanged(nameof(AutomationDuration));
@@ -1166,9 +1181,23 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(ChromaSimilarity));
         OnPropertyChanged(nameof(ChromaSmoothness));
         OnPropertyChanged(nameof(ChromaSpill));
+        OnPropertyChanged(nameof(HasColorAdjust));
         OnPropertyChanged(nameof(ColorAdjustOn));
         OnPropertyChanged(nameof(LayerBrightness));
         OnPropertyChanged(nameof(LayerContrast));
+        OnPropertyChanged(nameof(CanAddOpacityLane));
+        OnPropertyChanged(nameof(CanAddPlacementXLane));
+        OnPropertyChanged(nameof(CanAddPlacementYLane));
+        OnPropertyChanged(nameof(CanAddPlacementWidthLane));
+        OnPropertyChanged(nameof(CanAddPlacementHeightLane));
+        OnPropertyChanged(nameof(CanAddPlacementRotationLane));
+        OnPropertyChanged(nameof(CanAddChromaSimilarityLane));
+        OnPropertyChanged(nameof(CanAddChromaSmoothnessLane));
+        OnPropertyChanged(nameof(CanAddChromaSpillLane));
+        OnPropertyChanged(nameof(CanAddColorBrightnessLane));
+        OnPropertyChanged(nameof(CanAddColorContrastLane));
+        OnPropertyChanged(nameof(HasAutomationChromaKey));
+        OnPropertyChanged(nameof(HasAutomationColorAdjust));
     }
 
     private LayerPlacement? Placement =>
@@ -1547,6 +1576,8 @@ public partial class InspectorViewModel : ObservableObject
 
         Edit(property, "video", () => read(key), number => write(key, number), clamped, "adjust key");
     }
+
+    public bool HasColorAdjust => Placement?.ColorAdjust is not null;
 
     public bool ColorAdjustOn
     {
@@ -3140,11 +3171,27 @@ public partial class InspectorViewModel : ObservableObject
         return name;
     }
 
-    public IReadOnlyList<string> LaneKinds => ["volume", "opacity", "osc value", "midi control"];
+    public IReadOnlyList<string> LaneKinds =>
+        ["volume", "opacity", "osc value", "midi control", "position X", "position Y", "width", "height", "rotation",
+            "chroma similarity", "chroma smoothness", "spill reduction", "brightness", "contrast"];
 
     public bool CanAddVolumeLane => CanAddLane(0);
     public bool CanAddOpacityLane => CanAddLane(1);
+    public bool CanAddPlacementXLane => CanAddLane(4);
+    public bool CanAddPlacementYLane => CanAddLane(5);
+    public bool CanAddPlacementWidthLane => CanAddLane(6);
+    public bool CanAddPlacementHeightLane => CanAddLane(7);
+    public bool CanAddPlacementRotationLane => CanAddLane(8);
+    public bool CanAddChromaSimilarityLane => CanAddLane(9);
+    public bool CanAddChromaSmoothnessLane => CanAddLane(10);
+    public bool CanAddChromaSpillLane => CanAddLane(11);
+    public bool CanAddColorBrightnessLane => CanAddLane(12);
+    public bool CanAddColorContrastLane => CanAddLane(13);
+    public bool HasAutomationChromaKey => AutomationPlacement?.ChromaKey is not null;
+    public bool HasAutomationColorAdjust => AutomationPlacement?.ColorAdjust is not null;
     public bool CanAddOutboundLane => CanCarryLanes;
+    public string VolumeLaneLabel => AutomationTargetCue is GroupCueNode ? "Group audio trim" : "Volume";
+    public string OpacityLaneLabel => AutomationTargetCue is GroupCueNode ? "Group video opacity" : "Opacity";
 
     public bool IsAutomationCue => Cue is AutomationCueNode;
 
@@ -3193,6 +3240,20 @@ public partial class InspectorViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanAddVolumeLane))]
     [NotifyPropertyChangedFor(nameof(CanAddOpacityLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddPlacementXLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddPlacementYLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddPlacementWidthLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddPlacementHeightLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddPlacementRotationLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddChromaSimilarityLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddChromaSmoothnessLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddChromaSpillLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddColorBrightnessLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddColorContrastLane))]
+    [NotifyPropertyChangedFor(nameof(HasAutomationChromaKey))]
+    [NotifyPropertyChangedFor(nameof(HasAutomationColorAdjust))]
+    [NotifyPropertyChangedFor(nameof(VolumeLaneLabel))]
+    [NotifyPropertyChangedFor(nameof(OpacityLaneLabel))]
     private int _automationTargetCueIndex;
 
     private CueNode? AutomationTargetCue => AutomationTargetCueIndex >= 0
@@ -3200,18 +3261,29 @@ public partial class InspectorViewModel : ObservableObject
             ? AutomationTargets[AutomationTargetCueIndex]
             : null;
 
+    private LayerPlacement? AutomationPlacement => Cue switch
+    {
+        AutomationCueNode when AutomationTargetCue is { } target => CuePlacements.Of(target).FirstOrDefault(),
+        not null => Placement,
+        _ => null,
+    };
+
     private AutomationTargetRef? TargetAt(int index)
     {
         if (Cue is not { } cue)
             return null;
         var targetCue = cue is AutomationCueNode ? AutomationTargetCue : cue;
         var targetCueId = cue is AutomationCueNode ? targetCue?.Id : null;
+        var placement = AutomationPlacement;
         return index switch
         {
             0 when targetCue is MediaCueNode => new AutomationTargetRef
                 { CueId = targetCueId, PropertyId = AutomationPropertyIds.CueVolume },
-            1 when (cue is not AutomationCueNode ? Placement : null
-                    ?? (targetCue is null ? null : CuePlacements.Of(targetCue).FirstOrDefault())) is { } placement =>
+            0 when cue is AutomationCueNode && targetCue is GroupCueNode => new AutomationTargetRef
+                { CueId = targetCueId, PropertyId = AutomationPropertyIds.GroupAudioTrim },
+            1 when cue is AutomationCueNode && targetCue is GroupCueNode => new AutomationTargetRef
+                { CueId = targetCueId, PropertyId = AutomationPropertyIds.GroupVideoOpacity },
+            1 when placement is not null =>
                 new AutomationTargetRef
                 {
                     CueId = targetCueId,
@@ -3220,9 +3292,32 @@ public partial class InspectorViewModel : ObservableObject
                 },
             2 => new AutomationTargetRef { PropertyId = AutomationPropertyIds.OscValue },
             3 => new AutomationTargetRef { PropertyId = AutomationPropertyIds.MidiControlValue },
+            4 when placement is not null => NewPlacementTarget(
+                targetCueId, placement.Id, AutomationPropertyIds.PlacementX),
+            5 when placement is not null => NewPlacementTarget(
+                targetCueId, placement.Id, AutomationPropertyIds.PlacementY),
+            6 when placement is not null => NewPlacementTarget(
+                targetCueId, placement.Id, AutomationPropertyIds.PlacementWidth),
+            7 when placement is not null => NewPlacementTarget(
+                targetCueId, placement.Id, AutomationPropertyIds.PlacementHeight),
+            8 when placement is not null => NewPlacementTarget(
+                targetCueId, placement.Id, AutomationPropertyIds.PlacementRotation),
+            9 when placement?.ChromaKey is { } chroma => NewPlacementTarget(
+                targetCueId, chroma.Id, AutomationPropertyIds.ChromaSimilarity),
+            10 when placement?.ChromaKey is { } chroma => NewPlacementTarget(
+                targetCueId, chroma.Id, AutomationPropertyIds.ChromaSmoothness),
+            11 when placement?.ChromaKey is { } chroma => NewPlacementTarget(
+                targetCueId, chroma.Id, AutomationPropertyIds.ChromaSpillReduction),
+            12 when placement?.ColorAdjust is { } color => NewPlacementTarget(
+                targetCueId, color.Id, AutomationPropertyIds.ColorBrightness),
+            13 when placement?.ColorAdjust is { } color => NewPlacementTarget(
+                targetCueId, color.Id, AutomationPropertyIds.ColorContrast),
             _ => null,
         };
     }
+
+    private static AutomationTargetRef NewPlacementTarget(Guid? cueId, Guid placementId, string propertyId) =>
+        new() { CueId = cueId, ObjectId = placementId, PropertyId = propertyId };
 
     public void AddLane(int kindIndex)
     {
@@ -3273,13 +3368,35 @@ public partial class InspectorViewModel : ObservableObject
     {
         if (Lanes is not { } tracks || Cue is not { } cue || index < 0 || index >= tracks.Count)
             return null;
+        var track = tracks[index];
+        // A controller cue owns its own time coordinate; the targeted clip may already be minutes
+        // into playback, so stretching that clip's waveform across the controller duration would be
+        // actively misleading. Waveform context is exact only for a media cue's own track.
+        var waveformCue = cue as MediaCueNode;
+        var sourceDuration = waveformCue is null
+            ? null
+            : waveformCue.Id == Cue?.Id
+                ? ClipDuration
+                : MediaFacts?.Invoke(waveformCue)?.Duration
+                  ?? (waveformCue.SourceDurationMs > 0
+                      ? TimeSpan.FromMilliseconds(waveformCue.SourceDurationMs)
+                      : null);
         return new AutomationEditorViewModel(
-            _journal, cue, tracks[index], LaneDuration(cue), Host);
+            _journal,
+            cue,
+            track,
+            LaneDuration(cue),
+            Host,
+            waveformCue,
+            waveformCue is null ? null : ClipPath(waveformCue),
+            sourceDuration,
+            CacheRoot,
+            WaveformCacheBytes);
     }
 
     private TimeSpan? LaneDuration(CueNode cue) => cue switch
     {
-        MediaCueNode => ClipDuration,
+        MediaCueNode media => media.TrimmedLength(ClipDuration),
         TextCueNode { DurationMs: > 0 } text => TimeSpan.FromMilliseconds(text.DurationMs),
         VisualizerCueNode { HoldMs: > 0 } visualizer => TimeSpan.FromMilliseconds(visualizer.HoldMs),
         AutomationCueNode { DurationMs: > 0 } automation => TimeSpan.FromMilliseconds(automation.DurationMs),
@@ -3328,6 +3445,14 @@ public partial class InspectorViewModel : ObservableObject
                     Value = track.Target.SendRateHz.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     Hint = "1–120; 25 is a good default",
                 },
+                new PromptField
+                {
+                    Label = "On STOP / PANIC",
+                    Kind = PromptFieldKind.Choice,
+                    Options = ["Freeze at current value", "Land on final key"],
+                    SelectedIndex = track.Interruption == AutomationInterruption.LandFinal ? 1 : 0,
+                    Hint = "Freeze is safer for lights, machinery and external faders.",
+                },
             ],
             prompt =>
             {
@@ -3351,6 +3476,13 @@ public partial class InspectorViewModel : ObservableObject
                         cue.Id, $"automation:{track.Id}:rate", "cues",
                         () => track.Target.SendRateHz, value => track.Target.SendRateHz = value,
                         rate, "set automation send rate"));
+                    var interruption = prompt["On STOP / PANIC"].SelectedIndex == 1
+                        ? AutomationInterruption.LandFinal
+                        : AutomationInterruption.Freeze;
+                    _journal.Do(new SetValueCommand<AutomationInterruption>(
+                        cue.Id, $"automation:{track.Id}:interruption", "cues",
+                        () => track.Interruption, value => track.Interruption = value,
+                        interruption, "set automation interruption policy"));
                 }
                 Reload();
             },

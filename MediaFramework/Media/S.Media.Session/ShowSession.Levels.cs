@@ -126,6 +126,56 @@ public sealed partial class ShowSession
         }));
     }
 
+    /// <summary>Samples all independently-addressed destination geometry lanes from the same clip
+    /// coordinate as opacity and volume. Each setter only recomputes geometry; authored appearance and
+    /// expensive effect instances remain untouched.</summary>
+    private void StartPlacementTransformRunner(
+        string groupId,
+        TransportVoice voice,
+        IReadOnlyList<ShowPlacementPropertyEnvelope> lanes,
+        CancellationToken ct)
+    {
+        FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
+        {
+            if (ct.IsCancellationRequested
+                || _groups.GetValueOrDefault(groupId) is not { } group
+                || !ReferenceEquals(group.ActiveVoice, voice))
+                return Task.FromResult(true);
+            var clipPosition = group.Timeline.GetSnapshot().CueTime;
+            foreach (var lane in lanes)
+                voice.ApplyPlacementAutomation(
+                    lane.CompositionId,
+                    lane.LayerIndex,
+                    lane.Property,
+                    VolumeEnvelopes.Sample(lane.Points, clipPosition));
+            return Task.FromResult(false);
+        }));
+    }
+
+    private void StartPlacementEffectRunner(
+        string groupId,
+        TransportVoice voice,
+        IReadOnlyList<ShowPlacementEffectEnvelope> lanes,
+        CancellationToken ct)
+    {
+        FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
+        {
+            if (ct.IsCancellationRequested
+                || _groups.GetValueOrDefault(groupId) is not { } group
+                || !ReferenceEquals(group.ActiveVoice, voice))
+                return Task.FromResult(true);
+            var clipPosition = group.Timeline.GetSnapshot().CueTime;
+            foreach (var lane in lanes)
+                voice.ApplyPlacementEffectAutomation(
+                    lane.CompositionId,
+                    lane.LayerIndex,
+                    lane.EffectInstanceId,
+                    lane.Property,
+                    VolumeEnvelopes.Sample(lane.Points, clipPosition));
+            return Task.FromResult(false);
+        }));
+    }
+
 
 
     // --- master trim --------------------------------------------------------------------------------

@@ -74,6 +74,34 @@ public class OutboundRampRunnerTests
     }
 
     [Fact]
+    public void Freeze_EndsAtTheSampledInterruptionValue()
+    {
+        var sent = new List<double>();
+        var runner = new OutboundRampRunner(Ramp(0, 1, 10), sent.Add, sendRateHz: 25);
+
+        runner.Freeze(TimeSpan.FromSeconds(2.5));
+
+        Assert.True(runner.IsFinished);
+        Assert.Equal(0.25d, sent[^1], 10);
+    }
+
+    [Fact]
+    public void Reposition_SeedsTheSoughtValueAndAllowsACompletedRampToRunAgain()
+    {
+        var sent = new List<double>();
+        var runner = new OutboundRampRunner(Ramp(0, 1, 10), sent.Add, sendRateHz: 25);
+        runner.Advance(TimeSpan.FromSeconds(10));
+        Assert.True(runner.IsFinished);
+
+        runner.Reposition(TimeSpan.FromSeconds(4));
+
+        Assert.False(runner.IsFinished);
+        Assert.Equal(0.4d, sent[^1], 10);
+        runner.Advance(TimeSpan.FromSeconds(5));
+        Assert.Equal(0.5d, sent[^1], 10);
+    }
+
+    [Fact]
     public void Interrupt_IsIdempotent()
     {
         var sent = new List<double>();

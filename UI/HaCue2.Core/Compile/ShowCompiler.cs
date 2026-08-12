@@ -355,6 +355,8 @@ public static class ShowCompiler
             // static one-point case), leaving send gains as independent route trims.
             VolumeEnvelope = VolumeEnvelope(project, media),
             PlacementOpacityEnvelopes = PlacementOpacityEnvelopes(project, media, placements),
+            PlacementTransformEnvelopes = PlacementTransformEnvelopes(project, media, placements),
+            PlacementEffectEnvelopes = PlacementEffectEnvelopes(project, media, placements),
         };
     }
 
@@ -486,6 +488,8 @@ public static class ShowCompiler
                     extra.LayerIndex,
                     VideoPlacement(extra)))],
             PlacementOpacityEnvelopes = PlacementOpacityEnvelopes(project, text, placements),
+            PlacementTransformEnvelopes = PlacementTransformEnvelopes(project, text, placements),
+            PlacementEffectEnvelopes = PlacementEffectEnvelopes(project, text, placements),
         };
     }
 
@@ -582,7 +586,9 @@ public static class ShowCompiler
             ColorAdjust: placement is { ColorAdjustEnabled: true, ColorAdjust: { } colour }
                 ? new S.Media.Compositor.Effects.BrightnessContrastSettings(
                     (float)colour.Brightness, (float)colour.Contrast)
-                : null);
+                : null,
+            ChromaKeyInstanceId: placement.ChromaKey?.Id.ToString(),
+            ColorAdjustInstanceId: placement.ColorAdjust?.Id.ToString());
 
     /// <summary>A crop inset, clamped so opposite edges can never cross and erase the picture.</summary>
     private static double Fraction(double value) => Math.Clamp(value, 0, 0.49);
@@ -674,6 +680,81 @@ public static class ShowCompiler
                 placement.LayerIndex,
                 Envelope(project, track, placement.Opacity, value => (float)Math.Clamp(value, 0, 1)),
                 Absolute: true));
+        }
+        return result.Count == 0 ? null : result;
+    }
+
+    /// <summary>Independently lowers each authored placement geometry property into its session slot.</summary>
+    private static IReadOnlyList<ShowPlacementPropertyEnvelope>? PlacementTransformEnvelopes(
+        HaCueProject project,
+        CueNode cue,
+        IReadOnlyList<LayerPlacement> placements)
+    {
+        var properties = new (string Id, ShowPlacementProperty Property, Func<LayerPlacement, double> Base)[]
+        {
+            (AutomationPropertyIds.PlacementX, ShowPlacementProperty.DestX, placement => placement.X),
+            (AutomationPropertyIds.PlacementY, ShowPlacementProperty.DestY, placement => placement.Y),
+            (AutomationPropertyIds.PlacementWidth, ShowPlacementProperty.DestWidth, placement => placement.Width),
+            (AutomationPropertyIds.PlacementHeight, ShowPlacementProperty.DestHeight, placement => placement.Height),
+            (AutomationPropertyIds.PlacementRotation, ShowPlacementProperty.RotationDegrees,
+                placement => placement.RotationDegrees),
+        };
+        var result = new List<ShowPlacementPropertyEnvelope>();
+        foreach (var placement in placements)
+        foreach (var property in properties)
+        {
+            var track = CueAutomation.Of(cue).FirstOrDefault(candidate =>
+                candidate.Target.PropertyId == property.Id
+                && candidate.Target.ObjectId == placement.Id);
+            if (track is not { Enabled: true, Keyframes.Count: > 0 })
+                continue;
+            result.Add(new ShowPlacementPropertyEnvelope(
+                placement.CompositionId.ToString(),
+                placement.LayerIndex,
+                property.Property,
+                Envelope(project, track, property.Base(placement), value => (float)value)));
+        }
+        return result.Count == 0 ? null : result;
+    }
+
+    private static IReadOnlyList<ShowPlacementEffectEnvelope>? PlacementEffectEnvelopes(
+        HaCueProject project,
+        CueNode cue,
+        IReadOnlyList<LayerPlacement> placements)
+    {
+        var result = new List<ShowPlacementEffectEnvelope>();
+        foreach (var placement in placements)
+        {
+            if (placement.ChromaKey is { } chroma)
+            {
+                Add(chroma.Id, AutomationPropertyIds.ChromaSimilarity,
+                    ShowPlacementEffectProperty.ChromaSimilarity, chroma.Similarity);
+                Add(chroma.Id, AutomationPropertyIds.ChromaSmoothness,
+                    ShowPlacementEffectProperty.ChromaSmoothness, chroma.Smoothness);
+                Add(chroma.Id, AutomationPropertyIds.ChromaSpillReduction,
+                    ShowPlacementEffectProperty.ChromaSpillReduction, chroma.SpillReduction);
+            }
+            if (placement.ColorAdjust is { } color)
+            {
+                Add(color.Id, AutomationPropertyIds.ColorBrightness,
+                    ShowPlacementEffectProperty.ColorBrightness, color.Brightness);
+                Add(color.Id, AutomationPropertyIds.ColorContrast,
+                    ShowPlacementEffectProperty.ColorContrast, color.Contrast);
+            }
+
+            void Add(Guid effectId, string propertyId, ShowPlacementEffectProperty property, double authored)
+            {
+                var track = CueAutomation.Of(cue).FirstOrDefault(candidate =>
+                    candidate.Target.PropertyId == propertyId && candidate.Target.ObjectId == effectId);
+                if (track is not { Enabled: true, Keyframes.Count: > 0 })
+                    return;
+                result.Add(new ShowPlacementEffectEnvelope(
+                    placement.CompositionId.ToString(),
+                    placement.LayerIndex,
+                    effectId.ToString(),
+                    property,
+                    Envelope(project, track, authored, value => (float)value)));
+            }
         }
         return result.Count == 0 ? null : result;
     }

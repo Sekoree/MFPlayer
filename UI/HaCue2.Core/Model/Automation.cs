@@ -8,6 +8,16 @@ public static class AutomationPropertyIds
 {
     public const string CueVolume = "cue.audio.volume";
     public const string PlacementOpacity = "video.placement.opacity";
+    public const string PlacementX = "video.placement.x";
+    public const string PlacementY = "video.placement.y";
+    public const string PlacementWidth = "video.placement.width";
+    public const string PlacementHeight = "video.placement.height";
+    public const string PlacementRotation = "video.placement.rotation";
+    public const string ChromaSimilarity = "video.effect.chroma-key.similarity";
+    public const string ChromaSmoothness = "video.effect.chroma-key.smoothness";
+    public const string ChromaSpillReduction = "video.effect.chroma-key.spill-reduction";
+    public const string ColorBrightness = "video.effect.color-adjust.brightness";
+    public const string ColorContrast = "video.effect.color-adjust.contrast";
     public const string GroupAudioTrim = "group.audio.trim";
     public const string GroupVideoOpacity = "group.video.opacity";
     public const string OscValue = "external.osc.value";
@@ -20,7 +30,17 @@ public sealed record AutomationTrack
     public Guid Id { get; set; } = Guid.NewGuid();
     public AutomationTargetRef Target { get; set; } = new();
     public bool Enabled { get; set; } = true;
+    public AutomationInterruption Interruption { get; set; } = AutomationInterruption.Freeze;
     public List<AutomationKeyframe> Keyframes { get; set; } = [];
+}
+
+public enum AutomationInterruption
+{
+    /// <summary>Leave the target at the value sampled when STOP/PANIC interrupted the track.</summary>
+    Freeze,
+
+    /// <summary>Explicitly send the track's final key when interrupted.</summary>
+    LandFinal,
 }
 
 /// <summary>
@@ -135,6 +155,36 @@ public static class AutomationPropertyCatalog
                 AutomationDomain.SessionVideo,
                 AutomationComposition.ReplaceAuthored,
                 "Video"),
+            [AutomationPropertyIds.PlacementX] = PlacementDescriptor(
+                AutomationPropertyIds.PlacementX, "Position X",
+                new AutomationValueSpec(-1, 2, 0, "%", AutomationScale.Percentage)),
+            [AutomationPropertyIds.PlacementY] = PlacementDescriptor(
+                AutomationPropertyIds.PlacementY, "Position Y",
+                new AutomationValueSpec(-1, 2, 0, "%", AutomationScale.Percentage)),
+            [AutomationPropertyIds.PlacementWidth] = PlacementDescriptor(
+                AutomationPropertyIds.PlacementWidth, "Width",
+                new AutomationValueSpec(0.001, 2, 1, "%", AutomationScale.Percentage)),
+            [AutomationPropertyIds.PlacementHeight] = PlacementDescriptor(
+                AutomationPropertyIds.PlacementHeight, "Height",
+                new AutomationValueSpec(0.001, 2, 1, "%", AutomationScale.Percentage)),
+            [AutomationPropertyIds.PlacementRotation] = PlacementDescriptor(
+                AutomationPropertyIds.PlacementRotation, "Rotation",
+                new AutomationValueSpec(-360, 360, 0, "°", AutomationScale.Linear)),
+            [AutomationPropertyIds.ChromaSimilarity] = EffectDescriptor(
+                AutomationPropertyIds.ChromaSimilarity, "Chroma similarity",
+                new AutomationValueSpec(0, 1, .4, "%", AutomationScale.Percentage), "Chroma key"),
+            [AutomationPropertyIds.ChromaSmoothness] = EffectDescriptor(
+                AutomationPropertyIds.ChromaSmoothness, "Chroma smoothness",
+                new AutomationValueSpec(0, 1, .1, "%", AutomationScale.Percentage), "Chroma key"),
+            [AutomationPropertyIds.ChromaSpillReduction] = EffectDescriptor(
+                AutomationPropertyIds.ChromaSpillReduction, "Spill reduction",
+                new AutomationValueSpec(0, 1, .1, "%", AutomationScale.Percentage), "Chroma key"),
+            [AutomationPropertyIds.ColorBrightness] = EffectDescriptor(
+                AutomationPropertyIds.ColorBrightness, "Brightness",
+                new AutomationValueSpec(-1, 1, 0, "%", AutomationScale.Percentage), "Colour adjust"),
+            [AutomationPropertyIds.ColorContrast] = EffectDescriptor(
+                AutomationPropertyIds.ColorContrast, "Contrast",
+                new AutomationValueSpec(0, 4, 1, "×", AutomationScale.Linear), "Colour adjust"),
             [AutomationPropertyIds.GroupAudioTrim] = new(
                 AutomationPropertyIds.GroupAudioTrim,
                 "Group audio trim",
@@ -171,6 +221,28 @@ public static class AutomationPropertyCatalog
                 "External"),
         };
 
+    private static AutomationPropertyDescriptor PlacementDescriptor(
+        string id, string name, AutomationValueSpec value) =>
+        new(
+            id,
+            name,
+            value,
+            AutomationTargetKind.Placement,
+            AutomationDomain.SessionVideo,
+            AutomationComposition.ReplaceAuthored,
+            "Transform");
+
+    private static AutomationPropertyDescriptor EffectDescriptor(
+        string id, string name, AutomationValueSpec value, string group) =>
+        new(
+            id,
+            name,
+            value,
+            AutomationTargetKind.EffectInstance,
+            AutomationDomain.SessionVideo,
+            AutomationComposition.ReplaceAuthored,
+            group);
+
     public static IReadOnlyCollection<AutomationPropertyDescriptor> All => [.. Descriptors.Values];
 
     public static bool TryGet(string propertyId, out AutomationPropertyDescriptor descriptor) =>
@@ -203,6 +275,37 @@ public static class AutomationPropertyCatalog
                 Descriptors[AutomationPropertyIds.PlacementOpacity],
                 $"Opacity · layer {placement.LayerIndex}",
                 placement.Opacity));
+            targets.Add(PlacementOption(
+                placement, AutomationPropertyIds.PlacementX, "Position X", placement.X));
+            targets.Add(PlacementOption(
+                placement, AutomationPropertyIds.PlacementY, "Position Y", placement.Y));
+            targets.Add(PlacementOption(
+                placement, AutomationPropertyIds.PlacementWidth, "Width", placement.Width));
+            targets.Add(PlacementOption(
+                placement, AutomationPropertyIds.PlacementHeight, "Height", placement.Height));
+            targets.Add(PlacementOption(
+                placement, AutomationPropertyIds.PlacementRotation, "Rotation", placement.RotationDegrees));
+            if (placement.ChromaKey is { } chroma)
+            {
+                targets.Add(EffectOption(
+                    placement, chroma.Id, AutomationPropertyIds.ChromaSimilarity,
+                    "Chroma similarity", chroma.Similarity));
+                targets.Add(EffectOption(
+                    placement, chroma.Id, AutomationPropertyIds.ChromaSmoothness,
+                    "Chroma smoothness", chroma.Smoothness));
+                targets.Add(EffectOption(
+                    placement, chroma.Id, AutomationPropertyIds.ChromaSpillReduction,
+                    "Spill reduction", chroma.SpillReduction));
+            }
+            if (placement.ColorAdjust is { } color)
+            {
+                targets.Add(EffectOption(
+                    placement, color.Id, AutomationPropertyIds.ColorBrightness,
+                    "Brightness", color.Brightness));
+                targets.Add(EffectOption(
+                    placement, color.Id, AutomationPropertyIds.ColorContrast,
+                    "Contrast", color.Contrast));
+            }
         }
 
         if (cue is GroupCueNode)
@@ -221,6 +324,22 @@ public static class AutomationPropertyCatalog
 
         return targets;
     }
+
+    private static AutomationTargetOption PlacementOption(
+        LayerPlacement placement, string propertyId, string name, double authoredValue) =>
+        new(
+            new AutomationTargetRef { PropertyId = propertyId, ObjectId = placement.Id },
+            Descriptors[propertyId],
+            $"{name} · layer {placement.LayerIndex}",
+            authoredValue);
+
+    private static AutomationTargetOption EffectOption(
+        LayerPlacement placement, Guid effectId, string propertyId, string name, double authoredValue) =>
+        new(
+            new AutomationTargetRef { PropertyId = propertyId, ObjectId = effectId },
+            Descriptors[propertyId],
+            $"{name} · layer {placement.LayerIndex}",
+            authoredValue);
 }
 
 /// <summary>Model helpers shared by compiler, validation, journal, and presentation.</summary>

@@ -1,6 +1,7 @@
 using HaCue2.Core.Compile;
 using HaCue2.Core.Model;
 using HaCue2.Core.Serialization;
+using HaCue2.Core.Validation;
 using S.Media.Session;
 using Xunit;
 
@@ -8,6 +9,43 @@ namespace HaCue2.Core.Tests;
 
 public sealed class AutomationTests
 {
+    [Fact]
+    public void ValidatorRejectsAmbiguousPlacementAndEffectInstanceIds()
+    {
+        var composition = new CompositionDefinition();
+        var placementId = Guid.NewGuid();
+        var effectId = Guid.NewGuid();
+        var media = new MediaCueNode
+        {
+            MediaPath = "picture.mp4",
+            Placements =
+            [
+                new LayerPlacement
+                {
+                    Id = placementId,
+                    CompositionId = composition.Id,
+                    ChromaKey = new ChromaKeySpec { Id = effectId },
+                },
+                new LayerPlacement
+                {
+                    Id = placementId,
+                    CompositionId = composition.Id,
+                    ColorAdjust = new ColorAdjustSpec { Id = effectId },
+                },
+            ],
+        };
+        var project = new HaCueProject
+        {
+            Compositions = [composition],
+            CueLists = [new CueList { Cues = [media] }],
+        };
+
+        var issues = ProjectValidator.Validate(project);
+
+        Assert.Contains(issues, issue => issue.Message.Contains("duplicate placement ids"));
+        Assert.Contains(issues, issue => issue.Message.Contains("duplicate effect instance ids"));
+    }
+
     [Fact]
     public void EvaluatorUsesAbsoluteCueTimeNativeValuesAndHolds()
     {
@@ -148,5 +186,118 @@ public sealed class AutomationTests
         Assert.Equal(2, envelope.LayerIndex);
         Assert.True(envelope.Absolute);
         Assert.Equal(.2f, envelope.Points[^1].Level, 6);
+    }
+
+    [Fact]
+    public void CompilerLowersIndependentPlacementTransformProperties()
+    {
+        var composition = new CompositionDefinition();
+        var placement = new LayerPlacement
+        {
+            CompositionId = composition.Id,
+            LayerIndex = 3,
+            X = .2,
+            Y = .1,
+            Width = .75,
+            RotationDegrees = 10,
+        };
+        var media = new MediaCueNode
+        {
+            MediaPath = "picture.mp4",
+            Placements = [placement],
+            AutomationTracks =
+            [
+                Track(AutomationPropertyIds.PlacementX, placement.Id, .2, .8),
+                Track(AutomationPropertyIds.PlacementRotation, placement.Id, 10, 90),
+            ],
+        };
+        var project = new HaCueProject
+        {
+            Compositions = [composition],
+            CueLists = [new CueList { Cues = [media] }],
+        };
+
+        var clip = Assert.Single(ShowCompiler.Compile(project).Clips);
+        Assert.Collection(
+            clip.PlacementTransformEnvelopes!.OrderBy(lane => lane.Property),
+            lane =>
+            {
+                Assert.Equal(ShowPlacementProperty.DestX, lane.Property);
+                Assert.Equal(.8f, lane.Points[^1].Level, 5);
+            },
+            lane =>
+            {
+                Assert.Equal(ShowPlacementProperty.RotationDegrees, lane.Property);
+                Assert.Equal(90f, lane.Points[^1].Level, 5);
+            });
+        ShowDocumentValidator.ThrowIfInvalid(ShowCompiler.Compile(project));
+
+        static AutomationTrack Track(string propertyId, Guid placementId, double from, double to) => new()
+        {
+            Target = new AutomationTargetRef { PropertyId = propertyId, ObjectId = placementId },
+            Keyframes =
+            [
+                new AutomationKeyframe { TimeMs = 0, Value = from },
+                new AutomationKeyframe { TimeMs = 500, Value = to },
+            ],
+        };
+    }
+
+    [Fact]
+    public void CompilerTargetsStableEffectInstancesAndNativeParameterValues()
+    {
+        var composition = new CompositionDefinition();
+        var chroma = new ChromaKeySpec { Similarity = .35, Smoothness = .12 };
+        var color = new ColorAdjustSpec { Brightness = -.1, Contrast = 1.4 };
+        var placement = new LayerPlacement
+        {
+            CompositionId = composition.Id,
+            ChromaKey = chroma,
+            ColorAdjust = color,
+        };
+        var media = new MediaCueNode
+        {
+            MediaPath = "picture.mp4",
+            Placements = [placement],
+            AutomationTracks =
+            [
+                Track(AutomationPropertyIds.ChromaSimilarity, chroma.Id, .35, .8),
+                Track(AutomationPropertyIds.ColorContrast, color.Id, 1.4, 2.2),
+            ],
+        };
+        var project = new HaCueProject
+        {
+            Compositions = [composition],
+            CueLists = [new CueList { Cues = [media] }],
+        };
+
+        var clip = Assert.Single(ShowCompiler.Compile(project).Clips);
+        Assert.Equal(chroma.Id.ToString(), clip.Placement!.ChromaKeyInstanceId);
+        Assert.Equal(color.Id.ToString(), clip.Placement.ColorAdjustInstanceId);
+        Assert.Collection(
+            clip.PlacementEffectEnvelopes!.OrderBy(lane => lane.Property),
+            lane =>
+            {
+                Assert.Equal(chroma.Id.ToString(), lane.EffectInstanceId);
+                Assert.Equal(ShowPlacementEffectProperty.ChromaSimilarity, lane.Property);
+                Assert.Equal(.8f, lane.Points[^1].Level, 5);
+            },
+            lane =>
+            {
+                Assert.Equal(color.Id.ToString(), lane.EffectInstanceId);
+                Assert.Equal(ShowPlacementEffectProperty.ColorContrast, lane.Property);
+                Assert.Equal(2.2f, lane.Points[^1].Level, 5);
+            });
+        ShowDocumentValidator.ThrowIfInvalid(ShowCompiler.Compile(project));
+
+        static AutomationTrack Track(string propertyId, Guid effectId, double from, double to) => new()
+        {
+            Target = new AutomationTargetRef { PropertyId = propertyId, ObjectId = effectId },
+            Keyframes =
+            [
+                new AutomationKeyframe { TimeMs = 0, Value = from },
+                new AutomationKeyframe { TimeMs = 500, Value = to },
+            ],
+        };
     }
 }

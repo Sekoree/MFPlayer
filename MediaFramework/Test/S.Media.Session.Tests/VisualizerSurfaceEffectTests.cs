@@ -33,6 +33,7 @@ public sealed class VisualizerSurfaceEffectTests
         private readonly CpuVideoCompositor _inner = new(output);
         public readonly ConcurrentQueue<IReadOnlyList<VideoLayerEffect>?> EffectSnapshots = new();
         public readonly ConcurrentQueue<IReadOnlyList<WarpSection>?> MappingSnapshots = new();
+        public readonly ConcurrentQueue<float> OpacitySnapshots = new();
         public VideoFormat OutputFormat => _inner.OutputFormat;
         public IReadOnlyList<PixelFormat> AcceptedLayerPixelFormats => _inner.AcceptedLayerPixelFormats;
         public void Configure(VideoFormat output) => _inner.Configure(output);
@@ -47,6 +48,7 @@ public sealed class VisualizerSurfaceEffectTests
             {
                 EffectSnapshots.Enqueue(layer.Effects);
                 MappingSnapshots.Enqueue(layer.MappingSections);
+                OpacitySnapshots.Enqueue(layer.Opacity);
             }
             return _inner.Composite(frameLayers, presentationTime);
         }
@@ -168,6 +170,43 @@ public sealed class VisualizerSurfaceEffectTests
             "screen", new VideoPlacementSpec("screen", 1)));
         host.MappingSnapshots.Clear();
         await WaitUntilAsync(() => host.MappingSnapshots.Any(s => s is null), TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task VisualizerPlacementAutomation_ReachesTheAddressedSurfaceAndEffectInstance()
+    {
+        var host = default(EffectRecordingSurfaceHost);
+        await using var session = new ShowSession(
+            MediaRegistry.Build(_ => { }),
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                host = new EffectRecordingSurfaceHost(fmt), RequiresBgraLayerConversion: true, "TEST-SURFACE-HOST"));
+        await session.LoadDocumentAsync(CanvasDoc());
+
+        var colorId = Guid.NewGuid().ToString();
+        Assert.True(await session.SetCompositionVisualizerAsync(
+            "screen", new FakeVisualizer(), visualizerId: "cue-a",
+            placement: new VideoPlacementSpec(
+                "screen", 1,
+                Opacity: 0.8,
+                ColorAdjust: new Compositor.Effects.BrightnessContrastSettings(0.1f, 1.2f),
+                ColorAdjustInstanceId: colorId)));
+
+        Assert.True(await session.ApplyCompositionVisualizerOpacityAutomationAsync(
+            "screen", 0, 0.25f, visualizerId: "cue-a"));
+        Assert.True(await session.ApplyCompositionVisualizerPlacementAutomationAsync(
+            "screen", 0, ShowPlacementProperty.DestX, 0.5, visualizerId: "cue-a"));
+        Assert.True(await session.ApplyCompositionVisualizerEffectAutomationAsync(
+            "screen", 0, colorId, ShowPlacementEffectProperty.ColorContrast, 2.2,
+            visualizerId: "cue-a"));
+        Assert.False(await session.ApplyCompositionVisualizerEffectAutomationAsync(
+            "screen", 0, colorId, ShowPlacementEffectProperty.ColorContrast, 2.2,
+            visualizerId: "missing"));
+
+        await WaitUntilAsync(
+            () => host!.OpacitySnapshots.Any(opacity => Math.Abs(opacity - 0.25f) < 0.0001f)
+                  && host.EffectSnapshots.Any(effects =>
+                      effects is { Count: 1 } && Math.Abs(effects[0].Values[1] - 2.2f) < 0.0001f),
+            TimeSpan.FromSeconds(2));
     }
 
     private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)

@@ -13,12 +13,20 @@ public partial class AutomationEditorWindow : Window
     {
         InitializeComponent();
         DataContext = new AutomationEditorViewModel();
+        WireLifetime();
     }
 
     public AutomationEditorWindow(AutomationEditorViewModel editor)
     {
         InitializeComponent();
         DataContext = editor;
+        WireLifetime();
+    }
+
+    private void WireLifetime()
+    {
+        Opened += (_, _) => Editor?.BeginWaveform();
+        Closed += (_, _) => Editor?.EndWaveform();
     }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);

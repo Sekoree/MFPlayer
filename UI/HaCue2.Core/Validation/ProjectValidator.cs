@@ -412,6 +412,24 @@ public static class ProjectValidator
         HaCueProject project, CueNode cue, HashSet<Guid> cueIds, List<ShowValidationIssue> issues)
     {
         var id = cue.Id.ToString();
+        var placements = CuePlacements.Of(cue);
+        if (placements.Any(placement => placement.Id == Guid.Empty))
+            issues.Add(Error("cue", id, $"Q{cue.Number} has a placement with no stable id."));
+        foreach (var duplicate in placements.GroupBy(placement => placement.Id)
+                     .Where(group => group.Key != Guid.Empty && group.Count() > 1))
+            issues.Add(Error("cue", id, $"Q{cue.Number} has duplicate placement ids."));
+
+        var effectIds = placements
+            .SelectMany(placement => new Guid?[]
+                { placement.ChromaKey?.Id, placement.ColorAdjust?.Id })
+            .Where(effectId => effectId is not null)
+            .Select(effectId => effectId!.Value)
+            .ToList();
+        if (effectIds.Contains(Guid.Empty))
+            issues.Add(Error("cue", id, $"Q{cue.Number} has an effect with no stable id."));
+        if (effectIds.Where(effectId => effectId != Guid.Empty)
+            .GroupBy(effectId => effectId).Any(group => group.Count() > 1))
+            issues.Add(Error("cue", id, $"Q{cue.Number} has duplicate effect instance ids."));
 
         switch (cue)
         {
@@ -622,6 +640,9 @@ public static class ProjectValidator
 
             if (track.Keyframes.Count == 0)
                 issues.Add(Warn("cue", id, $"Q{cue.Number} has an empty {descriptor.DisplayName} track."));
+            if (!Enum.IsDefined(track.Interruption))
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} has an invalid automation interruption policy."));
             var propertyOwner = track.Target.CueId is { } targetCueId ? project.FindCue(targetCueId) : cue;
             if (track.Target.CueId is { } missingTarget && propertyOwner is null)
                 issues.Add(Error("cue", id,
@@ -632,6 +653,13 @@ public static class ProjectValidator
                     || CuePlacements.Of(propertyOwner).All(placement => placement.Id != objectId)))
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} has {descriptor.DisplayName} automation for a placement that no longer exists."));
+            if (descriptor.TargetKind == AutomationTargetKind.EffectInstance
+                && (track.Target.ObjectId is not { } effectId
+                    || propertyOwner is null
+                    || CuePlacements.Of(propertyOwner).All(placement =>
+                        placement.ChromaKey?.Id != effectId && placement.ColorAdjust?.Id != effectId)))
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} has {descriptor.DisplayName} automation for an effect that no longer exists."));
             if (track.Target.PropertyId == AutomationPropertyIds.CueVolume && propertyOwner is not MediaCueNode)
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} targets volume on a cue that has no cue-volume property."));

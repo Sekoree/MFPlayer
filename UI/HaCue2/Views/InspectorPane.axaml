@@ -424,10 +424,34 @@
                   <MenuFlyout>
                     <!-- Only what this cue can carry. A volume lane over a visualizer and an opacity
                          lane over a WAV both compile to automation the engine has nowhere to apply. -->
-                    <MenuItem Header="Volume" Click="OnAddLane" Tag="0"
+                    <MenuItem Header="{Binding VolumeLaneLabel}" Click="OnAddLane" Tag="0"
                               IsVisible="{Binding CanAddVolumeLane}" />
-                    <MenuItem Header="Opacity" Click="OnAddLane" Tag="1"
+                    <MenuItem Header="{Binding OpacityLaneLabel}" Click="OnAddLane" Tag="1"
                               IsVisible="{Binding CanAddOpacityLane}" />
+                    <MenuItem Header="Position X" Click="OnAddLane" Tag="4"
+                              IsVisible="{Binding CanAddPlacementXLane}" />
+                    <MenuItem Header="Position Y" Click="OnAddLane" Tag="5"
+                              IsVisible="{Binding CanAddPlacementYLane}" />
+                    <MenuItem Header="Width" Click="OnAddLane" Tag="6"
+                              IsVisible="{Binding CanAddPlacementWidthLane}" />
+                    <MenuItem Header="Height" Click="OnAddLane" Tag="7"
+                              IsVisible="{Binding CanAddPlacementHeightLane}" />
+                    <MenuItem Header="Rotation" Click="OnAddLane" Tag="8"
+                              IsVisible="{Binding CanAddPlacementRotationLane}" />
+                    <MenuItem Header="Chroma key" IsVisible="{Binding HasAutomationChromaKey}">
+                      <MenuItem Header="Similarity" Click="OnAddLane" Tag="9"
+                                IsVisible="{Binding CanAddChromaSimilarityLane}" />
+                      <MenuItem Header="Smoothness" Click="OnAddLane" Tag="10"
+                                IsVisible="{Binding CanAddChromaSmoothnessLane}" />
+                      <MenuItem Header="Spill reduction" Click="OnAddLane" Tag="11"
+                                IsVisible="{Binding CanAddChromaSpillLane}" />
+                    </MenuItem>
+                    <MenuItem Header="Colour adjust" IsVisible="{Binding HasAutomationColorAdjust}">
+                      <MenuItem Header="Brightness" Click="OnAddLane" Tag="12"
+                                IsVisible="{Binding CanAddColorBrightnessLane}" />
+                      <MenuItem Header="Contrast" Click="OnAddLane" Tag="13"
+                                IsVisible="{Binding CanAddColorContrastLane}" />
+                    </MenuItem>
                     <Separator IsVisible="{Binding CanAddOutboundLane}" />
                     <MenuItem Header="OSC value" Click="OnAddLane" Tag="2"
                               IsVisible="{Binding CanAddOutboundLane}" />

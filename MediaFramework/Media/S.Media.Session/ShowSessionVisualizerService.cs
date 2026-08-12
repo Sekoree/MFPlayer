@@ -194,6 +194,87 @@ internal sealed class ShowSessionVisualizerService
         return true;
     }
 
+    /// <summary>Applies absolute opacity automation to one visualizer placement without changing its
+    /// authored opacity or either of the independent fade/modifier components.</summary>
+    public bool ApplyOpacityAutomation(
+        string compositionId, string visualizerId, int placementIndex, float level)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.SetAutomationLevel(level, absolute: true);
+        return true;
+    }
+
+    public bool ApplyPlacementAutomation(
+        string compositionId,
+        string visualizerId,
+        int placementIndex,
+        ShowPlacementProperty property,
+        double value)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.SetPlacementAutomation(property, value);
+        return true;
+    }
+
+    public bool ClearPlacementAutomation(
+        string compositionId,
+        string visualizerId,
+        int placementIndex,
+        ShowPlacementProperty property)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.ClearPlacementAutomation(property);
+        return true;
+    }
+
+    public bool ApplyEffectAutomation(
+        string compositionId,
+        string visualizerId,
+        int placementIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        double value)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.SetEffectAutomation(effectInstanceId, property, value);
+        return true;
+    }
+
+    public bool ClearEffectAutomation(
+        string compositionId,
+        string visualizerId,
+        int placementIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.ClearEffectAutomation(effectInstanceId, property);
+        return true;
+    }
+
+    private bool TryLayer(
+        string compositionId,
+        string visualizerId,
+        int placementIndex,
+        out ClipCompositionRuntime.IPlacedClipLayer layer)
+    {
+        if (_slots.TryGetValue(new SlotKey(compositionId, visualizerId), out var slot)
+            && placementIndex >= 0
+            && placementIndex < slot.Layers.Count)
+        {
+            layer = slot.Layers[placementIndex].Slot;
+            return true;
+        }
+
+        layer = null!;
+        return false;
+    }
+
     /// <summary>Snapshots the slots (all, or one composition) for a fade: identities + start opacities.</summary>
     public IReadOnlyList<FadeCapture> CaptureForFade(string? compositionId) =>
         _slots
