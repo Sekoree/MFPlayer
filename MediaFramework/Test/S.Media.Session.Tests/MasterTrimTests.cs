@@ -84,6 +84,64 @@ public sealed class MasterTrimTests
         Assert.Equal(0.2f, levels.EffectiveLevel, 3);
     }
 
+    [Fact]
+    public async Task ControllerVolumeOverridesWithoutStoppingTheCueOwnedEnvelope()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(OneCue("fake://x"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        var instance = Assert.IsType<ShowCueInstance>(await session.CaptureActiveCueInstanceAsync("c"));
+        var owner = Guid.NewGuid();
+
+        await session.ApplyActiveVolumeAsync("c", 0.5f);
+        Assert.True(await session.ApplyControllerVolumeAsync(instance, owner, 0.25f, claim: true));
+        await session.ApplyActiveVolumeAsync("c", 0.8f);
+
+        var levels = Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c"));
+        Assert.Equal(0.8f, levels.EnvelopeLevel, 3);
+        Assert.Equal(0.25f, levels.EffectiveLevel, 3);
+
+        Assert.True(await session.ClearControllerVolumeAsync(instance, owner));
+        levels = Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c"));
+        Assert.Equal(0.8f, levels.EffectiveLevel, 3);
+    }
+
+    [Fact]
+    public async Task CapturedCueInstanceDoesNotFollowARefiredCue()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(OneCue("fake://x"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        var first = Assert.IsType<ShowCueInstance>(await session.CaptureActiveCueInstanceAsync("c"));
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        var second = Assert.IsType<ShowCueInstance>(await session.CaptureActiveCueInstanceAsync("c"));
+
+        Assert.NotEqual(first.InstanceId, second.InstanceId);
+        Assert.False(await session.ApplyControllerVolumeAsync(first, Guid.NewGuid(), 0.1f, claim: true));
+        Assert.True(await session.ApplyControllerVolumeAsync(second, Guid.NewGuid(), 0.2f, claim: true));
+    }
+
+    [Fact]
+    public async Task LatestControllerClaimPreemptsOlderWritersAndRestoresSafely()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(OneCue("fake://x"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        var instance = Assert.IsType<ShowCueInstance>(await session.CaptureActiveCueInstanceAsync("c"));
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+
+        Assert.True(await session.ApplyControllerVolumeAsync(instance, first, 0.5f, claim: true));
+        Assert.True(await session.ApplyControllerVolumeAsync(instance, second, 0.25f, claim: true));
+        Assert.False(await session.ApplyControllerVolumeAsync(instance, first, 0.75f, claim: false));
+        Assert.False(await session.ClearControllerVolumeAsync(instance, first));
+        Assert.Equal(0.25f,
+            Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).EffectiveLevel,
+            3);
+        Assert.True(await session.ClearControllerVolumeAsync(instance, second));
+    }
+
     /// <summary>A two-tone-cue session, each cue on its own peak-reading device - the crossfade tests read
     /// the outgoing tail's gain on <c>dev-c1</c> while <c>c2</c> fades in on <c>dev-c2</c>.</summary>
     private static (ShowSession Session, ConcurrentDictionary<string, PeakAudioOutput> Outputs)

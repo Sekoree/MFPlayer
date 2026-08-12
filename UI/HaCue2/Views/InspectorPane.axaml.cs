@@ -50,9 +50,8 @@ public partial class InspectorPane : UserControl
     private void OnAddLane(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector
-            && (sender as Control)?.Tag is string tag
-            && int.TryParse(tag, out var kind))
-            inspector.AddLane(kind);
+            && (sender as Control)?.Tag is string propertyId)
+            inspector.AddLane(propertyId);
     }
 
     private void OnRemoveLane(object? sender, RoutedEventArgs e)

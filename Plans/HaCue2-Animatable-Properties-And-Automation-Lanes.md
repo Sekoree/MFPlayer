@@ -1,6 +1,6 @@
 # HaCue2 animatable properties and automation lanes
 
-Status: adopted; phases 1-3 and the built-in video portion of phase 4 implemented
+Status: adopted; phases 1-3 implemented, phase 4 managed contracts underway, phase 5 new authoring complete
 
 Date: 2026-08-12
 
@@ -19,6 +19,23 @@ stable-instance chroma-key/colour-adjust parameters now use the same catalog and
 media, text, and visualizer cues. Visualizer lanes run against their surface layers on the shared clock,
 including seek and timeline-rehearsal offsets. The remaining phase-4 work is the general extensible rack,
 especially the real-time audio/plugin parameter contract described below.
+
+Correction/continuation pass (2026-08-12, working tree after `9020312a`): curve laws now have one
+direction-independent segment meaning in the editor, session and outbound runner, and compiled volume
+envelopes remain in dB until after interpolation. This required show-document schema 2 while retaining
+schema-1 linear-envelope reading. Automation-cue writes now use instance-captured controller slots with
+latest-owner arbitration; cue-owned automation continues underneath and is revealed on restore. The
+same contract covers media, text and visualizer placements, group modifiers, transform/effect parameters,
+refire handover and terminal outbound sends.
+
+The editor now uses a gesture-local draft and immutable viewport transform, commits one undo step on
+release, cancels on Escape, offers millisecond snapping/Alt bypass/Shift constraint/grid-aware nudging,
+click-drag creation, a visible ruler, and per-segment **Edit curve shape…**. Automation cues can select a
+specific placement on multi-placement targets. Unknown property IDs open read-only and remain runnable
+warnings; migration results are visible in Project Status. New authoring commands use stable property IDs
+instead of menu ordinals. The managed effect foundation now publishes scalar video authoring metadata and
+an optional real-time-safe audio parameter interface with effect-owned smoothing, proven by the built-in
+gain effect. The native ABI has intentionally not changed yet.
 
 Focused coverage now pins long-cue viewport/waveform projection, pause/seek/stop and rehearsal timing,
 automation-cue natural completion, outbound reposition/coalescing, group modifier composition,
@@ -649,20 +666,24 @@ This phase directly addresses the reported problem and is the recommended first 
 Built-in video parameter automation is implemented for chroma-key similarity/smoothness/spill and
 colour-adjust brightness/contrast. Stable effect IDs, duplication retargeting, compiler/session
 lowering, live surface/frame updates, and placement-editor entry points are in place. The remaining
-items in this phase are the extensible rack and audio/plugin contract:
+items in this phase are the extensible rack and plugin/native bridge. Managed descriptors now carry
+validated scalar authoring metadata, and `IAutomatableAudioBusEffect` defines control-thread publication,
+audio-thread safety and effect-owned smoothing:
 
 - model stable effect instances and parameter values;
-- enrich managed video effect descriptors with authoring metadata and a live-update path;
-- define a real-time-safe audio parameter interface with smoothing ownership;
-- expose built-in effect parameters through the automation catalog; and
+- build the ordered rack authoring UI and generic lowering over the new metadata;
+- connect managed audio effect instances to HaCue2's target catalog and runtime actuator;
+- expose additional built-in/plugin effect parameters through the automation catalog; and
 - extend plugin/native contracts only after the managed behaviour and compatibility rules are stable.
 
 ### Phase 5 — remove legacy authoring
 
-- stop creating `EffectLane` in UI/helpers;
-- keep only the necessary framework/project reader shims for the supported compatibility window;
-- update sample projects and the ducking helper to write native-time volume keyframes; and
-- remove enum-order switches and stale effect-lane wording.
+- **Done:** UI/helpers no longer create `EffectLane`; `DuckMath` and samples write native-time tracks.
+- **Done:** property creation is keyed by stable property ID rather than enum/menu position.
+- **Retained intentionally:** schema-1 model, validator, migration, badges and curve-target readers remain
+  compatibility shims for the supported project window.
+- **Remaining cleanup:** rename internal presentation members which still say `EffectLane` even though
+  they project `AutomationTrack`, once compatibility-facing names can be removed without churn.
 
 ## Acceptance tests
 

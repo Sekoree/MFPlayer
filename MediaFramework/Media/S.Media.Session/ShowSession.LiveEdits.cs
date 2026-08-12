@@ -6,6 +6,10 @@ using S.Media.Routing;
 
 namespace S.Media.Session;
 
+/// <summary>An opaque identity for one particular firing of a cue. Live controller writes using this
+/// token cannot jump to a replacement voice when the same cue is re-fired.</summary>
+public readonly record struct ShowCueInstance(string CueId, Guid InstanceId);
+
 /// <summary>
 /// Editing a cue WHILE it plays: its composition placement, its composition's outputs, its audio matrix and
 /// routes, and the held frame of a still. Each one reaches into a live voice's already-wired plumbing and
@@ -16,6 +20,100 @@ namespace S.Media.Session;
 /// </summary>
 public sealed partial class ShowSession
 {
+    public Task<ShowCueInstance?> CaptureActiveCueInstanceAsync(string cueId) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(cueId) is { } voice
+                ? (ShowCueInstance?)new ShowCueInstance(cueId, voice.InstanceId)
+                : null));
+
+    public Task<bool> ApplyControllerVolumeAsync(
+        ShowCueInstance instance, Guid ownerId, float level, bool claim) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ApplyControllerEnvelope(ownerId, level, claim) ?? false));
+
+    public Task<bool> ClearControllerVolumeAsync(ShowCueInstance instance, Guid ownerId) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ClearControllerEnvelope(ownerId) ?? false));
+
+    public Task<bool> ApplyControllerAudioModifierAsync(
+        ShowCueInstance instance, Guid ownerId, float level, bool claim) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ApplyControllerAudioModifier(ownerId, level, claim) ?? false));
+
+    public Task<bool> ClearControllerAudioModifierAsync(ShowCueInstance instance, Guid ownerId) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ClearControllerAudioModifier(ownerId) ?? false));
+
+    public Task<bool> ApplyControllerVideoModifierAsync(
+        ShowCueInstance instance, Guid ownerId, float level, bool claim) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ApplyControllerVideoModifier(ownerId, level, claim) ?? false));
+
+    public Task<bool> ClearControllerVideoModifierAsync(ShowCueInstance instance, Guid ownerId) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ClearControllerVideoModifier(ownerId) ?? false));
+
+    public Task<bool> ApplyControllerPlacementOpacityAsync(
+        ShowCueInstance instance,
+        Guid ownerId,
+        string compositionId,
+        int layerIndex,
+        float level,
+        bool claim) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ApplyControllerOpacity(
+                ownerId, compositionId, layerIndex, level, claim) ?? false));
+
+    public Task<bool> ClearControllerPlacementOpacityAsync(
+        ShowCueInstance instance, Guid ownerId, string compositionId, int layerIndex) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ClearControllerOpacity(ownerId, compositionId, layerIndex) ?? false));
+
+    public Task<bool> ApplyControllerPlacementTransformAsync(
+        ShowCueInstance instance,
+        Guid ownerId,
+        string compositionId,
+        int layerIndex,
+        ShowPlacementProperty property,
+        double value,
+        bool claim) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ApplyControllerPlacement(
+                ownerId, compositionId, layerIndex, property, value, claim) ?? false));
+
+    public Task<bool> ClearControllerPlacementTransformAsync(
+        ShowCueInstance instance,
+        Guid ownerId,
+        string compositionId,
+        int layerIndex,
+        ShowPlacementProperty property) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ClearControllerPlacement(
+                ownerId, compositionId, layerIndex, property) ?? false));
+
+    public Task<bool> ApplyControllerPlacementEffectAsync(
+        ShowCueInstance instance,
+        Guid ownerId,
+        string compositionId,
+        int layerIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        double value,
+        bool claim) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ApplyControllerEffect(
+                ownerId, compositionId, layerIndex, effectInstanceId, property, value, claim) ?? false));
+
+    public Task<bool> ClearControllerPlacementEffectAsync(
+        ShowCueInstance instance,
+        Guid ownerId,
+        string compositionId,
+        int layerIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ClearControllerEffect(
+                ownerId, compositionId, layerIndex, effectInstanceId, property) ?? false));
 
     /// <summary>Live-edit the active cue's absolute authored volume component. The value is the same
     /// linear level carried by <see cref="ShowClipBinding.VolumeEnvelope"/> and therefore continues to

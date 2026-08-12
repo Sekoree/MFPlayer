@@ -34,6 +34,7 @@ public partial class AutomationEditorWindow : Window
 
     private void OnGesture(object? sender, CurveGesture gesture) => Editor?.Apply(gesture);
     private void OnGestureCompleted(object? sender, EventArgs e) => Editor?.EndGesture();
+    private void OnGestureCancelled(object? sender, EventArgs e) => Editor?.CancelGesture();
     private void OnDelete(object? sender, RoutedEventArgs e) => Editor?.DeleteSelection();
     private void OnZoomIn(object? sender, RoutedEventArgs e) => Editor?.Zoom(0.5);
     private void OnZoomOut(object? sender, RoutedEventArgs e) => Editor?.Zoom(2);
@@ -89,6 +90,14 @@ public partial class AutomationEditorWindow : Window
     {
         if (sender is TextBox box)
             Editor?.CommitPointValue(box.Text ?? "");
+    }
+    private void OnEditSegmentCurve(object? sender, RoutedEventArgs e)
+    {
+        if (Editor is not { } automation || automation.SegmentCurveEditor() is not { } curve)
+            return;
+        var window = new CurveEditorWindow(curve);
+        window.Closed += (_, _) => automation.Refresh();
+        window.ShowDialog(this);
     }
     private void OnDone(object? sender, RoutedEventArgs e) => Close();
 }

@@ -234,7 +234,8 @@ public sealed class ShowSessionTests
     public void Validator_RejectsBadVersionDuplicatesDanglingAndCycles()
     {
         // NXT-12 / NXT-07: every structural problem is reported, and a well-formed show passes.
-        Assert.NotEmpty(ShowDocumentValidator.Validate(new ShowDocument(2, [], [], [], [])));
+        Assert.NotEmpty(ShowDocumentValidator.Validate(
+            new ShowDocument(ShowDocumentValidator.CurrentVersion + 1, [], [], [], [])));
 
         Assert.Contains(
             ShowDocumentValidator.Validate(new ShowDocument(1,
@@ -324,7 +325,8 @@ public sealed class ShowSessionTests
         Assert.True(Assert.Single(session.Snapshot()).IsRunning);
 
         await Assert.ThrowsAsync<ShowDocumentValidationException>(
-            () => session.LoadDocumentAsync(new ShowDocument(2, [], [], [], []))); // unsupported version
+            () => session.LoadDocumentAsync(new ShowDocument(
+                ShowDocumentValidator.CurrentVersion + 1, [], [], [], []))); // unsupported future version
 
         // The original show is untouched: still running, still has its two cues.
         Assert.True(Assert.Single(session.Snapshot()).IsRunning);

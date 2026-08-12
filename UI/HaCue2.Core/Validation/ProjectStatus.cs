@@ -130,6 +130,7 @@ public static class ProjectStatus
 
         var checks = new List<StatusCheck>
         {
+            CheckAutomationMigration(project),
             CheckMediaDecoding(environment),
             CheckMedia(project, projectPath, environment),
             CheckPreparedSources(project, environment),
@@ -144,6 +145,30 @@ public static class ProjectStatus
         checks.AddRange(DocumentChecks(documentIssues));
 
         return new ProjectStatusReport(checks, Stopwatch.GetElapsedTime(started).TotalSeconds);
+    }
+
+    private static StatusCheck CheckAutomationMigration(HaCueProject project)
+    {
+        if (project.LastAutomationMigration is not { } migration)
+            return new StatusCheck("Automation migration", CheckOutcome.Passed,
+                "current schema", "", []);
+        if (migration.IsComplete)
+            return new StatusCheck(
+                "Automation migration",
+                CheckOutcome.Passed,
+                $"converted {migration.TracksCreated} track(s) and {migration.KeyframesCreated} keyframe(s)",
+                "save the project to persist schema 2",
+                []);
+        return new StatusCheck(
+            "Automation migration",
+            CheckOutcome.Warning,
+            $"{migration.UnresolvedLanes} legacy lane(s) still need media duration",
+            "probe the referenced media before saving; unresolved lanes remain preserved",
+            [new ShowValidationIssue(
+                ShowValidationSeverity.Warning,
+                $"{migration.UnresolvedLanes} legacy automation lane(s) remain unresolved.",
+                "project",
+                null)]);
     }
 
     /// <summary>YouTube cues are local-cache playback sources, so their payload is a get-in fact.</summary>

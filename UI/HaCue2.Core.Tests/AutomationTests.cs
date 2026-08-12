@@ -10,6 +10,57 @@ namespace HaCue2.Core.Tests;
 public sealed class AutomationTests
 {
     [Fact]
+    public void UnknownPluginPropertyIsPreservedAsAnInertRunnableWarning()
+    {
+        var track = new AutomationTrack
+        {
+            Target = new AutomationTargetRef { PropertyId = "plugin.example.missing.parameter" },
+            Keyframes = [new AutomationKeyframe { TimeMs = 0, Value = 0.5 }],
+        };
+        var media = new MediaCueNode { MediaPath = "picture.mp4", AutomationTracks = [track] };
+        var project = new HaCueProject { CueLists = [new CueList { Name = "Main", Cues = [media] }] };
+
+        var issues = ProjectValidator.Validate(project);
+
+        Assert.Contains(issues, issue =>
+            issue.Severity == ShowValidationSeverity.Warning
+            && issue.Message.Contains("unresolved automation property", StringComparison.Ordinal));
+        Assert.True(ProjectValidator.IsRunnable(issues));
+        Assert.Same(track, Assert.Single(media.AutomationTracks));
+    }
+
+    [Fact]
+    public void ValidatorRejectsInvalidTargetOwnershipAndDuplicateTimes()
+    {
+        var media = new MediaCueNode
+        {
+            MediaPath = "picture.mp4",
+            AutomationTracks =
+            [
+                new AutomationTrack
+                {
+                    Target = new AutomationTargetRef
+                    {
+                        CueId = Guid.NewGuid(),
+                        PropertyId = AutomationPropertyIds.GroupVideoOpacity,
+                    },
+                    Keyframes =
+                    [
+                        new AutomationKeyframe { TimeMs = 100, Value = 1 },
+                        new AutomationKeyframe { TimeMs = 100, Value = 0.5 },
+                    ],
+                },
+            ],
+        };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [media] }] };
+
+        var issues = ProjectValidator.Validate(project);
+
+        Assert.Contains(issues, issue => issue.Message.Contains("not an automation cue", StringComparison.Ordinal));
+        Assert.Contains(issues, issue => issue.Message.Contains("duplicate or out-of-order", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ValidatorRejectsAmbiguousPlacementAndEffectInstanceIds()
     {
         var composition = new CompositionDefinition();
@@ -67,6 +118,54 @@ public sealed class AutomationTests
     }
 
     [Fact]
+    public void DecreasingCurvesUseTheSameOutgoingProgressAsIncreasingCurves()
+    {
+        var track = new AutomationTrack
+        {
+            Target = new AutomationTargetRef { PropertyId = AutomationPropertyIds.CueVolume },
+            Keyframes =
+            [
+                new AutomationKeyframe
+                {
+                    TimeMs = 0,
+                    Value = 0,
+                    Curve = new CurveSpec { Law = FadeCurve.Exponential },
+                },
+                new AutomationKeyframe { TimeMs = 1_000, Value = -60 },
+            ],
+        };
+
+        Assert.Equal(-7.5, AutomationEvaluator.Sample(track, new HaCueProject(), 500, 0), 6);
+    }
+
+    [Fact]
+    public void CompiledVolumeEnvelopeInterpolatesInNativeDecibels()
+    {
+        var media = new MediaCueNode
+        {
+            MediaPath = "tone.wav",
+            AutomationTracks =
+            [
+                new AutomationTrack
+                {
+                    Target = new AutomationTargetRef { PropertyId = AutomationPropertyIds.CueVolume },
+                    Keyframes =
+                    [
+                        new AutomationKeyframe { TimeMs = 0, Value = -60 },
+                        new AutomationKeyframe { TimeMs = 1_000, Value = 0 },
+                    ],
+                },
+            ],
+        };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [media] }] };
+
+        var envelope = Assert.Single(ShowCompiler.Compile(project).Clips).VolumeEnvelope!;
+
+        Assert.All(envelope, point => Assert.Equal(ShowEnvelopeValueScale.Decibels, point.ValueScale));
+        Assert.Equal((float)Math.Pow(10, -30 / 20d), VolumeEnvelopes.Sample(envelope, TimeSpan.FromMilliseconds(500)), 6);
+    }
+
+    [Fact]
     public void SchemaOneVolumeAndOpacityBecomeAbsolutePropertyTracks()
     {
         var composition = new CompositionDefinition();
@@ -101,6 +200,7 @@ public sealed class AutomationTests
         var result = AutomationMigration.Migrate(project);
 
         Assert.True(result.IsComplete);
+        Assert.Equal(3, project.LastAutomationMigration?.TracksCreated);
         Assert.Equal(3, result.TracksCreated);
         Assert.Equal(HaCueProject.CurrentSchemaVersion, project.SchemaVersion);
         Assert.Empty(media.EffectLanes);

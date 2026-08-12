@@ -64,7 +64,7 @@ public sealed class ShowDocumentTests
     [Fact]
     public void Empty_IsVersionOneWithNoContent()
     {
-        Assert.Equal(1, ShowDocument.Empty.Version);
+        Assert.Equal(ShowDocumentValidator.CurrentVersion, ShowDocument.Empty.Version);
         Assert.Empty(ShowDocument.Empty.Cues);
         Assert.Empty(ShowDocument.Empty.Clips);
         Assert.Empty(ShowDocument.Empty.Compositions);

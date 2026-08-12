@@ -104,6 +104,21 @@ public sealed class BusEffectTests
             Assert.True(samples[i] <= samples[i - 1] + 1e-6f, "gain-down ramp must be monotonic");
     }
 
+    [Fact]
+    public void GainAudioEffect_PublishesStableAutomatableMetadataAndClampsUpdates()
+    {
+        IAutomatableAudioBusEffect gain = new GainAudioEffect();
+        var parameter = Assert.Single(gain.Parameters);
+
+        Assert.Equal(GainAudioEffect.GainParameterId, parameter.Id);
+        Assert.Equal("dB", parameter.Unit);
+        Assert.True(parameter.SupportsAutomation);
+        Assert.False(gain.TrySetParameter("missing", -6, TimeSpan.FromMilliseconds(10)));
+        Assert.True(gain.TrySetParameter(
+            GainAudioEffect.GainParameterId, 100, TimeSpan.FromMilliseconds(25)));
+        Assert.Equal(12, Assert.IsType<GainAudioEffect>(gain).GainDb, 3);
+    }
+
     private sealed class ClockedStatsAudioOutput(AudioFormat format)
         : IAudioOutput, IClockedOutput, IPlaybackClock, IAudioOutputPlaybackStats, IDisposable
     {

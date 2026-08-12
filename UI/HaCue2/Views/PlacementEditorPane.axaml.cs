@@ -33,9 +33,8 @@ public partial class PlacementEditorPane : UserControl
     private void OnAddAutomation(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector
-            && (sender as Control)?.Tag is string tag
-            && int.TryParse(tag, out var kind))
-            inspector.AddLane(kind);
+            && (sender as Control)?.Tag is string propertyId)
+            inspector.AddLane(propertyId);
     }
 
     private void OnPlacementGesture(object? sender, Controls.PlacementGesture gesture)

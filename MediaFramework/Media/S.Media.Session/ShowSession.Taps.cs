@@ -208,6 +208,25 @@ public sealed partial class ShowSession
             compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
             placementIndex, level)));
 
+    public Task<bool> ApplyCompositionVisualizerControllerOpacityAutomationAsync(
+        string compositionId, int placementIndex, float level, string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ApplyControllerOpacityAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, level)));
+
+    public Task<bool> ClearCompositionVisualizerControllerOpacityAutomationAsync(
+        string compositionId, int placementIndex, string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ClearControllerOpacityAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex)));
+
+    public Task<bool> ApplyCompositionVisualizerControllerVideoModifierAsync(
+        string compositionId, float level, string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ApplyControllerVideoModifier(
+            compositionId,
+            visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            level)));
+
     public Task<bool> ApplyCompositionVisualizerPlacementAutomationAsync(
         string compositionId,
         int placementIndex,
@@ -224,6 +243,25 @@ public sealed partial class ShowSession
         ShowPlacementProperty property,
         string? visualizerId = null) =>
         InvokeAsync(() => Task.FromResult(_visualizers.ClearPlacementAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, property)));
+
+    public Task<bool> ApplyCompositionVisualizerControllerPlacementAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        ShowPlacementProperty property,
+        double value,
+        string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ApplyControllerPlacementAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, property, value)));
+
+    public Task<bool> ClearCompositionVisualizerControllerPlacementAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        ShowPlacementProperty property,
+        string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ClearControllerPlacementAutomation(
             compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
             placementIndex, property)));
 
@@ -245,6 +283,27 @@ public sealed partial class ShowSession
         ShowPlacementEffectProperty property,
         string? visualizerId = null) =>
         InvokeAsync(() => Task.FromResult(_visualizers.ClearEffectAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, effectInstanceId, property)));
+
+    public Task<bool> ApplyCompositionVisualizerControllerEffectAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        double value,
+        string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ApplyControllerEffectAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, effectInstanceId, property, value)));
+
+    public Task<bool> ClearCompositionVisualizerControllerEffectAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ClearControllerEffectAutomation(
             compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
             placementIndex, effectInstanceId, property)));
 

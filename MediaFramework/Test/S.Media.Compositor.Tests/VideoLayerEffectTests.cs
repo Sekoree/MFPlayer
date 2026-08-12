@@ -1,6 +1,7 @@
 using S.Media.Compositor;
 using S.Media.Compositor.Effects;
 using S.Media.Compositor.OpenGL;
+using S.Media.Core.Effects;
 using S.Media.Core.Video;
 using S.Media.Core.Video.Effects;
 using Xunit;
@@ -194,7 +195,36 @@ public sealed class VideoLayerEffectTests
             new VideoLayerEffectDescriptor("ok", "return src;",
                 [new VideoLayerEffectParameter("p", 1), new VideoLayerEffectParameter("p", 2)]));
         Assert.Throws<ArgumentException>(() =>
+            new VideoLayerEffectDescriptor("ok", "return src;",
+                [new VideoLayerEffectParameter("p", 2,
+                    [new EffectParameterDescriptor("onlyOne", "Only one", 0, 1, 0)])]));
+        Assert.Throws<ArgumentException>(() =>
+            new VideoLayerEffectDescriptor("ok", "return src;",
+            [
+                new VideoLayerEffectParameter("a", 1,
+                    [new EffectParameterDescriptor("duplicate", "First", 0, 1, 0)]),
+                new VideoLayerEffectParameter("b", 1,
+                    [new EffectParameterDescriptor("duplicate", "Second", 0, 1, 0)]),
+            ]));
+        Assert.Throws<ArgumentException>(() =>
             new VideoLayerEffect(ChromaKeyVideoEffect.Descriptor, [1f, 2f]));
+    }
+
+    [Fact]
+    public void BuiltInDescriptorsPublishScalarAuthoringMetadata()
+    {
+        var chroma = ChromaKeyVideoEffect.Descriptor.Parameters
+            .SelectMany(parameter => parameter.Authoring ?? [])
+            .ToDictionary(parameter => parameter.Id);
+        var colour = BrightnessContrastVideoEffect.Descriptor.Parameters
+            .SelectMany(parameter => parameter.Authoring ?? [])
+            .ToDictionary(parameter => parameter.Id);
+
+        Assert.Equal(6, chroma.Count);
+        Assert.Equal(.4f, chroma["similarity"].Default);
+        Assert.Equal(EffectParameterScale.Percentage, chroma["smoothness"].Scale);
+        Assert.Equal(-1, colour["brightness"].Minimum);
+        Assert.Equal(4, colour["contrast"].Maximum);
     }
 
     [Fact]

@@ -118,6 +118,51 @@ public sealed class CurveSpecTarget(
     public void WritePreset(Guid? presetId) => spec.PresetId = presetId;
 }
 
+/// <summary>An automation segment's normalized easing shape, resolved by stable key ID.</summary>
+/// <remarks>
+/// Automation key edits replace immutable snapshots of the whole key list. Holding the original
+/// <see cref="CurveSpec"/> object here would make an older curve command point at a detached key after
+/// a later move, so undo would appear to succeed while changing no document state.
+/// </remarks>
+public sealed class AutomationSegmentCurveTarget(
+    Guid subject,
+    AutomationTrack track,
+    Guid keyId,
+    HaCueProject project) : ICurveTarget
+{
+    public Guid Subject { get; } = subject;
+    public string Property { get; } = $"automation:{track.Id}:key:{keyId}:curve";
+    public bool SupportsHold => true;
+    public bool HasStored => Spec.Points is { Count: > 1 };
+
+    public IReadOnlyList<CurveKnot> Read() => Spec.Points is { Count: > 1 } points
+        ? [.. points.Select(ToKnot)]
+        : Spec.PresetId is { } presetId
+          && project.CurvePresets.FirstOrDefault(candidate => candidate.Id == presetId)
+              is { Points.Count: > 1 } preset
+            ? [.. preset.Points.Select(ToKnot)]
+            : [new CurveKnot(0, 0), new CurveKnot(1, 1)];
+
+    public void Write(IReadOnlyList<CurveKnot> knots) => Spec.Points =
+    [
+        .. knots.Select(knot => new FadeCurvePoint(
+            knot.X, knot.Y, knot.Hold, knot.CurveToNext,
+            knot.OutHandleX, knot.OutHandleY, knot.InHandleX, knot.InHandleY)),
+    ];
+
+    public void Clear() => Spec.Points = null;
+    public FadeCurve? Law => Spec.Law;
+    public void WriteLaw(FadeCurve law) => Spec.Law = law;
+    public Guid? PresetId => Spec.PresetId;
+    public void WritePreset(Guid? presetId) => Spec.PresetId = presetId;
+
+    private CurveSpec Spec => track.Keyframes.First(key => key.Id == keyId).Curve;
+
+    private static CurveKnot ToKnot(FadeCurvePoint point) => new(
+        point.Progress, point.Level, point.Hold, point.CurveToNext,
+        point.OutHandleX, point.OutHandleLevel, point.InHandleX, point.InHandleLevel);
+}
+
 /// <summary>A named project curve preset.</summary>
 public sealed class CurvePresetTarget(CurvePreset preset) : ICurveTarget
 {

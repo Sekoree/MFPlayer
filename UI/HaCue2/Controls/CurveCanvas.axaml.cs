@@ -30,7 +30,15 @@ public enum CurveGestureKind
 }
 
 /// <summary>One curve edit, in fractions of the canvas. Y is already flipped to level space.</summary>
-public sealed record CurveGesture(CurveGestureKind Kind, int Index, double X, double Y);
+public sealed record CurveGesture(
+    CurveGestureKind Kind,
+    int Index,
+    double X,
+    double Y,
+    bool BypassSnap = false,
+    bool ConstrainAxis = false,
+    bool IsNudge = false,
+    bool Accelerated = false);
 
 /// <summary>
 /// Draws a curve and turns drags on its points into edits.
@@ -53,6 +61,7 @@ public partial class CurveCanvas : UserControl
     private Panel? _surface;
     private int _draggedIndex = -1;
     private CurveTangent? _draggedTangent;
+    private IPointer? _capturedPointer;
 
     public static readonly StyledProperty<IReadOnlyList<CurvePoint>> PointsProperty =
         AvaloniaProperty.Register<CurveCanvas, IReadOnlyList<CurvePoint>>(nameof(Points), []);
@@ -67,6 +76,12 @@ public partial class CurveCanvas : UserControl
 
     public static readonly StyledProperty<bool> RemoveWhenDraggedOffCanvasProperty =
         AvaloniaProperty.Register<CurveCanvas, bool>(nameof(RemoveWhenDraggedOffCanvas), true);
+
+    public static readonly StyledProperty<bool> AddOnEmptyPointerPressProperty =
+        AvaloniaProperty.Register<CurveCanvas, bool>(nameof(AddOnEmptyPointerPress));
+
+    public static readonly StyledProperty<bool> LogicalNudgesProperty =
+        AvaloniaProperty.Register<CurveCanvas, bool>(nameof(LogicalNudges));
 
     /// <summary>Optional read-only audio context drawn behind an automation curve.</summary>
     public static readonly StyledProperty<IReadOnlyList<float>?> WaveformPeaksProperty =
@@ -84,6 +99,7 @@ public partial class CurveCanvas : UserControl
 
     /// <summary>Raised when a drag ends, so the view-model can close its undo step.</summary>
     public event EventHandler? GestureCompleted;
+    public event EventHandler? GestureCancelled;
 
     /// <summary>Raised on a right-click, to toggle the point's hold.</summary>
     public event EventHandler<int>? HoldToggled;
@@ -126,6 +142,22 @@ public partial class CurveCanvas : UserControl
         set => SetValue(RemoveWhenDraggedOffCanvasProperty, value);
     }
 
+    /// <summary>Timeline lanes opt in to click-and-drag creation; normalized curve editors keep
+    /// double-click creation so their existing selection gesture is unchanged.</summary>
+    public bool AddOnEmptyPointerPress
+    {
+        get => GetValue(AddOnEmptyPointerPressProperty);
+        set => SetValue(AddOnEmptyPointerPressProperty, value);
+    }
+
+    /// <summary>When true arrow gestures carry logical +/-1 units for a time/value editor to map to
+    /// its current grids. Normalized curve editors retain their existing one-percent nudges.</summary>
+    public bool LogicalNudges
+    {
+        get => GetValue(LogicalNudgesProperty);
+        set => SetValue(LogicalNudgesProperty, value);
+    }
+
     private Panel? Surface =>
         _surface ??= this.GetVisualDescendants().OfType<FractionPanel>().FirstOrDefault();
 
@@ -157,6 +189,25 @@ public partial class CurveCanvas : UserControl
             _draggedTangent = tangent;
             Gesture?.Invoke(this, new CurveGesture(CurveGestureKind.Select, tangent.Index, 0, 0));
             e.Pointer.Capture(this);
+            _capturedPointer = e.Pointer;
+            e.Handled = true;
+            return;
+        }
+
+        if (index < 0 && AddOnEmptyPointerPress)
+        {
+            Gesture?.Invoke(this, new CurveGesture(
+                CurveGestureKind.Add,
+                -1,
+                position.X / bounds.Width,
+                position.Y / bounds.Height,
+                e.KeyModifiers.HasFlag(KeyModifiers.Alt),
+                e.KeyModifiers.HasFlag(KeyModifiers.Shift)));
+            // The binding projection of the newly-selected key may update after this handler returns.
+            // Keep a sentinel until the first move can resolve the selected point from the new list.
+            _draggedIndex = int.MaxValue;
+            e.Pointer.Capture(this);
+            _capturedPointer = e.Pointer;
             e.Handled = true;
             return;
         }
@@ -190,6 +241,7 @@ public partial class CurveCanvas : UserControl
                 : CurveGestureKind.Select;
         Gesture?.Invoke(this, new CurveGesture(selection, index, 0, 0));
         e.Pointer.Capture(this);
+        _capturedPointer = e.Pointer;
         e.Handled = true;
     }
 
@@ -210,9 +262,18 @@ public partial class CurveCanvas : UserControl
             e.Handled = true;
             return;
         }
+        if (_draggedIndex == int.MaxValue)
+        {
+            var addedIndex = SelectedIndex();
+            if (addedIndex < 0)
+                return;
+            _draggedIndex = addedIndex;
+        }
         Gesture?.Invoke(this, new CurveGesture(
             CurveGestureKind.Move, _draggedIndex,
-            position.X / bounds.Width, position.Y / bounds.Height));
+            position.X / bounds.Width, position.Y / bounds.Height,
+            e.KeyModifiers.HasFlag(KeyModifiers.Alt),
+            e.KeyModifiers.HasFlag(KeyModifiers.Shift)));
         e.Handled = true;
     }
 
@@ -227,6 +288,7 @@ public partial class CurveCanvas : UserControl
         {
             _draggedTangent = null;
             e.Pointer.Capture(null);
+            _capturedPointer = null;
             GestureCompleted?.Invoke(this, EventArgs.Empty);
             return;
         }
@@ -234,6 +296,7 @@ public partial class CurveCanvas : UserControl
         var index = _draggedIndex;
         _draggedIndex = -1;
         e.Pointer.Capture(null);
+        _capturedPointer = null;
 
         if (RemoveWhenDraggedOffCanvas
             && Surface is { Bounds: { Width: > 0, Height: > 0 } bounds } surface
@@ -268,6 +331,7 @@ public partial class CurveCanvas : UserControl
 
         _draggedIndex = -1;
         _draggedTangent = null;
+        _capturedPointer = null;
         GestureCompleted?.Invoke(this, EventArgs.Empty);
     }
 
@@ -308,7 +372,21 @@ public partial class CurveCanvas : UserControl
         }
         if (e.Key == Key.Escape)
         {
-            Gesture?.Invoke(this, new CurveGesture(CurveGestureKind.ClearSelection, -1, 0, 0));
+            if (_draggedIndex >= 0 || _draggedTangent is not null)
+            {
+                _draggedIndex = -1;
+                _draggedTangent = null;
+                _capturedPointer?.Capture(null);
+                _capturedPointer = null;
+                if (GestureCancelled is not null)
+                    GestureCancelled.Invoke(this, EventArgs.Empty);
+                else
+                    GestureCompleted?.Invoke(this, EventArgs.Empty);
+            }
+            else
+            {
+                Gesture?.Invoke(this, new CurveGesture(CurveGestureKind.ClearSelection, -1, 0, 0));
+            }
             e.Handled = true;
             return;
         }
@@ -320,13 +398,12 @@ public partial class CurveCanvas : UserControl
             return;
         }
 
-        var step = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? NudgeStep * 5 : NudgeStep;
         var (dx, dy) = e.Key switch
         {
-            Key.Left => (-step, 0d),
-            Key.Right => (step, 0d),
-            Key.Up => (0d, -step),
-            Key.Down => (0d, step),
+            Key.Left => (-1d, 0d),
+            Key.Right => (1d, 0d),
+            Key.Up => (0d, -1d),
+            Key.Down => (0d, 1d),
             _ => (0d, 0d),
         };
 
@@ -336,9 +413,27 @@ public partial class CurveCanvas : UserControl
             return;
         }
 
-        var point = Points[selected];
-        Gesture?.Invoke(this, new CurveGesture(
-            CurveGestureKind.Move, selected, point.X + dx, point.Y + dy));
+        if (LogicalNudges)
+        {
+            Gesture?.Invoke(this, new CurveGesture(
+                CurveGestureKind.Move,
+                selected,
+                dx,
+                dy,
+                e.KeyModifiers.HasFlag(KeyModifiers.Alt),
+                IsNudge: true,
+                Accelerated: e.KeyModifiers.HasFlag(KeyModifiers.Shift)));
+        }
+        else
+        {
+            var multiplier = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? 5 : 1;
+            var point = Points[selected];
+            Gesture?.Invoke(this, new CurveGesture(
+                CurveGestureKind.Move,
+                selected,
+                point.X + (dx * NudgeStep * multiplier),
+                point.Y + (dy * NudgeStep * multiplier)));
+        }
         GestureCompleted?.Invoke(this, EventArgs.Empty);
         e.Handled = true;
     }

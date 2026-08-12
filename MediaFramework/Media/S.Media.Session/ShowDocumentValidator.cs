@@ -21,7 +21,7 @@ public sealed class ShowDocumentValidationException(IReadOnlyList<ShowValidation
 public static class ShowDocumentValidator
 {
     /// <summary>The schema version this build writes.</summary>
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     /// <summary>The oldest schema version this build can still load.</summary>
     /// <remarks>
@@ -73,6 +73,8 @@ public static class ShowDocumentValidator
         if (points is null)
             return;
 
+        var valueScale = points.Count > 0 ? points[0].ValueScale : ShowEnvelopeValueScale.Linear;
+
         for (var i = 0; i < points.Count; i++)
         {
             var point = points[i];
@@ -85,9 +87,24 @@ public static class ShowDocumentValidator
             if (!float.IsFinite(point.Level))
                 errors.Add("clip", cueId,
                     $"the clip for cue '{cueId}' has a non-finite {which} envelope level at point {i}.");
-            else if (!unrestricted && !opacity && (point.Level < 0f || point.Level > VolumeEnvelopes.MaxLevel))
+            else if (!unrestricted && !opacity && point.ValueScale == ShowEnvelopeValueScale.Linear
+                     && (point.Level < 0f || point.Level > VolumeEnvelopes.MaxLevel))
                 errors.Add("clip", cueId,
                     $"the clip for cue '{cueId}' has a volume envelope level outside 0..+12 dB at point {i}.");
+            else if (!unrestricted && !opacity && point.ValueScale == ShowEnvelopeValueScale.Decibels
+                     && point.Level is < VolumeEnvelopes.SilenceFloorDb or > VolumeEnvelopes.MaximumDb)
+                errors.Add("clip", cueId,
+                    $"the clip for cue '{cueId}' has a volume envelope dB value outside " +
+                    $"{VolumeEnvelopes.SilenceFloorDb}..+{VolumeEnvelopes.MaximumDb} dB at point {i}.");
+            if (!Enum.IsDefined(point.ValueScale))
+                errors.Add("clip", cueId,
+                    $"the clip for cue '{cueId}' has an unknown {which} envelope value scale at point {i}.");
+            else if (point.ValueScale != valueScale)
+                errors.Add("clip", cueId,
+                    $"the clip for cue '{cueId}' mixes value scales in its {which} envelope.");
+            else if ((opacity || unrestricted) && point.ValueScale != ShowEnvelopeValueScale.Linear)
+                errors.Add("clip", cueId,
+                    $"the clip for cue '{cueId}' uses a non-linear value scale for its {which} envelope.");
             if (!Enum.IsDefined(point.CurveToNext))
                 errors.Add("clip", cueId,
                     $"the clip for cue '{cueId}' has an unknown {which} envelope curve at point {i}.");

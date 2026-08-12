@@ -195,8 +195,18 @@ public class AudioEffectOutput
 /// <summary>The proof-of-concept audio effect: a click-free smoothed gain (also genuinely useful as a
 /// bus trim). Set <see cref="GainDb"/> from any thread; the ramp applies over ~10 ms of samples.
 /// Registry config blob: <c>{"gainDb": -6.0}</c>.</summary>
-public sealed class GainAudioEffect : IAudioBusEffect
+public sealed class GainAudioEffect : IAutomatableAudioBusEffect
 {
+    public const string GainParameterId = "gainDb";
+
+    private static readonly IReadOnlyList<S.Media.Core.Effects.EffectParameterDescriptor> ParameterCatalog =
+    [
+        new(GainParameterId, "Gain", -96, 12, 0, "dB",
+            S.Media.Core.Effects.EffectParameterScale.Decibels),
+    ];
+
+    public IReadOnlyList<S.Media.Core.Effects.EffectParameterDescriptor> Parameters => ParameterCatalog;
+
     /// <summary>Builds from the registry's opaque config blob (unknown/absent fields = unity).</summary>
     public static GainAudioEffect FromJson(string? configJson)
     {
@@ -220,6 +230,8 @@ public sealed class GainAudioEffect : IAudioBusEffect
     private float _targetLinear = 1f;
     private float _currentLinear = 1f;
     private float _rampPerFrame;
+    private float _requestedSmoothingSeconds = .01f;
+    private int _sampleRate = 48_000;
     private int _channels = 2;
 
     /// <summary>Gain in dB (0 = unity, -inf via <see cref="float.NegativeInfinity"/> = mute).
@@ -253,12 +265,35 @@ public sealed class GainAudioEffect : IAudioBusEffect
     public void Configure(AudioFormat format)
     {
         _channels = Math.Max(1, format.Channels);
-        _rampPerFrame = 1f / Math.Max(1, format.SampleRate / 100); // ~10 ms ramp, per FRAME
+        _sampleRate = Math.Max(1, format.SampleRate);
+        RefreshRamp();
+    }
+
+    public bool TrySetParameter(string parameterId, float value, TimeSpan smoothing)
+    {
+        if (!string.Equals(parameterId, GainParameterId, StringComparison.Ordinal))
+            return false;
+
+        var descriptor = ParameterCatalog[0];
+        var seconds = double.IsFinite(smoothing.TotalSeconds)
+            ? Math.Clamp(smoothing.TotalSeconds, 0, 10)
+            : .01;
+        Volatile.Write(ref _requestedSmoothingSeconds, (float)seconds);
+        RefreshRamp();
+        GainDb = descriptor.Clamp(value);
+        return true;
+    }
+
+    private void RefreshRamp()
+    {
+        var frames = Math.Max(1, _sampleRate * Volatile.Read(ref _requestedSmoothingSeconds));
+        Volatile.Write(ref _rampPerFrame, 1f / frames);
     }
 
     public void Process(Span<float> interleaved, long samplePosition)
     {
         var target = Volatile.Read(ref _targetLinear);
+        var rampPerFrame = Volatile.Read(ref _rampPerFrame);
         var current = _currentLinear;
         if (Math.Abs(current - target) < 1e-6f)
         {
@@ -275,8 +310,8 @@ public sealed class GainAudioEffect : IAudioBusEffect
         for (var f = 0; f < interleaved.Length; f += _channels)
         {
             current = current < target
-                ? Math.Min(target, current + _rampPerFrame)
-                : Math.Max(target, current - _rampPerFrame);
+                ? Math.Min(target, current + rampPerFrame)
+                : Math.Max(target, current - rampPerFrame);
             var end = Math.Min(f + _channels, interleaved.Length);
             for (var c = f; c < end; c++)
                 interleaved[c] *= current;

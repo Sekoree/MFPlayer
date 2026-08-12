@@ -112,6 +112,23 @@ public sealed class LayerOpacityCompositionTests
     }
 
     [Fact]
+    public void ControllerOpacityOverridesWhileCueOwnedAutomationContinuesUnderneath()
+    {
+        using var runtime = Runtime();
+        using var layer = runtime.AddSurfaceLayer(new StubSurface(), Placement(1));
+        layer.SetAutomationLevel(0.4f, absolute: true);
+
+        layer.SetControllerAutomationLevel(0.75f, absolute: true);
+        layer.SetAutomationLevel(0.2f, absolute: true);
+
+        Assert.Equal(0.2f, layer.AutomationLevel, 4);
+        Assert.Equal(0.75f, layer.EffectiveOpacity, 4);
+
+        layer.ClearControllerAutomationLevel();
+        Assert.Equal(0.2f, layer.EffectiveOpacity, 4);
+    }
+
+    [Fact]
     public void GroupModifier_ComposesWithoutReplacingPlacementAutomationOrFade()
     {
         using var runtime = Runtime();
@@ -165,6 +182,21 @@ public sealed class LayerOpacityCompositionTests
         layer.ClearPlacementAutomation(ShowPlacementProperty.DestX);
         Assert.Equal(0.3, layer.EffectivePlacement.DestX, 6);
         Assert.Equal(0.4, layer.EffectivePlacement.DestWidth, 6);
+    }
+
+    [Fact]
+    public void ControllerTransformRevealsTheCurrentCueOwnedValueWhenCleared()
+    {
+        using var runtime = Runtime();
+        using var layer = runtime.AddSurfaceLayer(new StubSurface(), Placement(1));
+        layer.SetPlacementAutomation(ShowPlacementProperty.DestX, 0.25);
+
+        layer.SetControllerPlacementAutomation(ShowPlacementProperty.DestX, 0.8);
+        layer.SetPlacementAutomation(ShowPlacementProperty.DestX, 0.4);
+
+        Assert.Equal(0.8, layer.EffectivePlacement.DestX, 6);
+        layer.ClearControllerPlacementAutomation(ShowPlacementProperty.DestX);
+        Assert.Equal(0.4, layer.EffectivePlacement.DestX, 6);
     }
 
     [Fact]

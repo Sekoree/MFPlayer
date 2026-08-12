@@ -304,6 +304,11 @@ public sealed partial class ShowSession
             .FirstOrDefault(voice =>
                 voice is not null && string.Equals(voice.Clip.Spec.Id, cueId, StringComparison.Ordinal));
 
+    private TransportVoice? ActiveVoiceOf(ShowCueInstance instance) =>
+        ActiveVoiceOf(instance.CueId) is { } voice && voice.InstanceId == instance.InstanceId
+            ? voice
+            : null;
+
     private TransportGroup GetOrAddGroup(string groupId)
     {
         if (!_groups.TryGetValue(groupId, out var group))

@@ -1,5 +1,7 @@
 namespace S.Media.Compositor.Effects;
 
+using S.Media.Core.Effects;
+
 /// <summary>
 /// The built-in chroma-key ("green screen") layer effect - the first effect of the layer-effect
 /// system and the reference for plugin authors. Parameter semantics live on
@@ -32,7 +34,20 @@ public static class ChromaKeyVideoEffect
     public static VideoLayerEffectDescriptor Descriptor { get; } = new(
         EffectId,
         GlslBody,
-        [new VideoLayerEffectParameter("key", 3), new VideoLayerEffectParameter("ranges", 3)],
+        [
+            new VideoLayerEffectParameter("key", 3,
+            [
+                new EffectParameterDescriptor("keyR", "Key red", 0, 1, 0, Scale: EffectParameterScale.Percentage),
+                new EffectParameterDescriptor("keyG", "Key green", 0, 1, 1, Scale: EffectParameterScale.Percentage),
+                new EffectParameterDescriptor("keyB", "Key blue", 0, 1, 0, Scale: EffectParameterScale.Percentage),
+            ]),
+            new VideoLayerEffectParameter("ranges", 3,
+            [
+                new EffectParameterDescriptor("similarity", "Similarity", 0, 1, .4f, Scale: EffectParameterScale.Percentage),
+                new EffectParameterDescriptor("smoothness", "Smoothness", 0, 1, .1f, Scale: EffectParameterScale.Percentage),
+                new EffectParameterDescriptor("spill", "Spill reduction", 0, 1, 0, Scale: EffectParameterScale.Percentage),
+            ]),
+        ],
         static values => new CpuKernel(values));
 
     /// <summary>Builds a configured effect instance from clamped <paramref name="settings"/>.</summary>

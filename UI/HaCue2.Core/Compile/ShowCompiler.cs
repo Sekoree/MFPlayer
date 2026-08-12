@@ -27,7 +27,7 @@ namespace HaCue2.Core.Compile;
 public static class ShowCompiler
 {
     /// <summary>The document version this compiler writes.</summary>
-    public const int DocumentVersion = 1;
+    public const int DocumentVersion = ShowDocumentValidator.CurrentVersion;
 
     /// <summary>
     /// Compiles the whole project — every cue list, merged into one document.
@@ -652,13 +652,19 @@ public static class ShowCompiler
         return points;
     }
 
-    /// <summary>The cue's absolute dB property lowered to the session's linear envelope component.</summary>
+    /// <summary>The cue's absolute dB property lowered without changing value space. The session converts
+    /// the sampled dB value to gain only after interpolation, matching the editor and automation cues.</summary>
     private static IReadOnlyList<ShowEnvelopePoint> VolumeEnvelope(HaCueProject project, MediaCueNode media)
     {
         var track = media.AutomationTracks.FirstOrDefault(candidate =>
             candidate.Target.PropertyId == AutomationPropertyIds.CueVolume
             && candidate.Target.ObjectId is null);
-        return Envelope(project, track, media.LevelDb, Linear);
+        return Envelope(
+            project,
+            track,
+            media.LevelDb,
+            value => (float)value,
+            ShowEnvelopeValueScale.Decibels);
     }
 
     /// <summary>One independently-addressed opacity envelope per placement that owns a track.</summary>
@@ -766,10 +772,11 @@ public static class ShowCompiler
         HaCueProject project,
         AutomationTrack? track,
         double authoredValue,
-        Func<double, float> valueMap)
+        Func<double, float> valueMap,
+        ShowEnvelopeValueScale valueScale = ShowEnvelopeValueScale.Linear)
     {
         if (track is not { Enabled: true, Keyframes.Count: > 0 })
-            return [new ShowEnvelopePoint(TimeSpan.Zero, valueMap(authoredValue))];
+            return [new ShowEnvelopePoint(TimeSpan.Zero, valueMap(authoredValue), ValueScale: valueScale)];
 
         var descriptor = AutomationPropertyCatalog.Get(track.Target.PropertyId);
         var keys = track.Keyframes
@@ -778,7 +785,7 @@ public static class ShowCompiler
             .ThenBy(key => key.Id)
             .ToList();
         if (keys.Count == 0)
-            return [new ShowEnvelopePoint(TimeSpan.Zero, valueMap(authoredValue))];
+            return [new ShowEnvelopePoint(TimeSpan.Zero, valueMap(authoredValue), ValueScale: valueScale)];
 
         float Mapped(double value) => valueMap(descriptor?.Value.Clamp(value) ?? value);
         var lowered = new List<ShowEnvelopePoint>();
@@ -791,10 +798,12 @@ public static class ShowCompiler
 
             if (from.Hold)
             {
-                lowered.Add(new ShowEnvelopePoint(TimeSpan.FromMilliseconds(from.TimeMs), Mapped(from.Value)));
+                lowered.Add(new ShowEnvelopePoint(
+                    TimeSpan.FromMilliseconds(from.TimeMs), Mapped(from.Value), ValueScale: valueScale));
                 lowered.Add(new ShowEnvelopePoint(
                     TimeSpan.FromMilliseconds(Math.Max(from.TimeMs, to.TimeMs - 1)),
-                    Mapped(from.Value)));
+                    Mapped(from.Value),
+                    ValueScale: valueScale));
                 continue;
             }
 
@@ -813,7 +822,8 @@ public static class ShowCompiler
                 lowered.Add(new ShowEnvelopePoint(
                     TimeSpan.FromMilliseconds(from.TimeMs),
                     Mapped(from.Value),
-                    shape.Law));
+                    shape.Law,
+                    valueScale));
                 continue;
             }
 
@@ -823,12 +833,14 @@ public static class ShowCompiler
                 var progress = (double)step / samples;
                 var time = from.TimeMs + ((to.TimeMs - from.TimeMs) * progress);
                 var value = from.Value + ((to.Value - from.Value) * shape.Custom.Evaluate(progress));
-                lowered.Add(new ShowEnvelopePoint(TimeSpan.FromMilliseconds(time), Mapped(value)));
+                lowered.Add(new ShowEnvelopePoint(
+                    TimeSpan.FromMilliseconds(time), Mapped(value), ValueScale: valueScale));
             }
         }
 
         var last = keys[^1];
-        lowered.Add(new ShowEnvelopePoint(TimeSpan.FromMilliseconds(last.TimeMs), Mapped(last.Value)));
+        lowered.Add(new ShowEnvelopePoint(
+            TimeSpan.FromMilliseconds(last.TimeMs), Mapped(last.Value), ValueScale: valueScale));
         return lowered;
     }
 

@@ -205,6 +205,34 @@ internal sealed class ShowSessionVisualizerService
         return true;
     }
 
+    public bool ApplyControllerOpacityAutomation(
+        string compositionId, string visualizerId, int placementIndex, float level)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.SetControllerAutomationLevel(level, absolute: true);
+        return true;
+    }
+
+    public bool ClearControllerOpacityAutomation(
+        string compositionId, string visualizerId, int placementIndex)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.ClearControllerAutomationLevel();
+        return true;
+    }
+
+    public bool ApplyControllerVideoModifier(
+        string compositionId, string visualizerId, float level)
+    {
+        if (!_slots.TryGetValue(new SlotKey(compositionId, visualizerId), out var slot))
+            return false;
+        foreach (var layer in slot.Layers)
+            layer.Slot.ModifierLevel = Math.Clamp(level, 0f, 1f);
+        return true;
+    }
+
     public bool ApplyPlacementAutomation(
         string compositionId,
         string visualizerId,
@@ -227,6 +255,31 @@ internal sealed class ShowSessionVisualizerService
         if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
             return false;
         layer.ClearPlacementAutomation(property);
+        return true;
+    }
+
+    public bool ApplyControllerPlacementAutomation(
+        string compositionId,
+        string visualizerId,
+        int placementIndex,
+        ShowPlacementProperty property,
+        double value)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.SetControllerPlacementAutomation(property, value);
+        return true;
+    }
+
+    public bool ClearControllerPlacementAutomation(
+        string compositionId,
+        string visualizerId,
+        int placementIndex,
+        ShowPlacementProperty property)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.ClearControllerPlacementAutomation(property);
         return true;
     }
 
@@ -254,6 +307,33 @@ internal sealed class ShowSessionVisualizerService
         if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
             return false;
         layer.ClearEffectAutomation(effectInstanceId, property);
+        return true;
+    }
+
+    public bool ApplyControllerEffectAutomation(
+        string compositionId,
+        string visualizerId,
+        int placementIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        double value)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.SetControllerEffectAutomation(effectInstanceId, property, value);
+        return true;
+    }
+
+    public bool ClearControllerEffectAutomation(
+        string compositionId,
+        string visualizerId,
+        int placementIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property)
+    {
+        if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
+            return false;
+        layer.ClearControllerEffectAutomation(effectInstanceId, property);
         return true;
     }
 

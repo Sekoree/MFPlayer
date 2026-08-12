@@ -415,18 +415,17 @@ public static class AutomationEvaluator
             return descriptor?.Value.Clamp(from.Value) ?? from.Value;
 
         var progress = Math.Clamp((double)(timeMs - from.TimeMs) / (to.TimeMs - from.TimeMs), 0, 1);
-        double shaped;
+        double value;
         try
         {
             var shape = from.Curve.Resolve(project);
-            shaped = shape.Custom?.Evaluate(progress) ?? FadeCurves.ShapeProgress(progress, shape.Law);
+            value = FadeCurves.Interpolate(from.Value, to.Value, progress, shape);
         }
         catch (ArgumentException)
         {
-            shaped = progress;
+            value = FadeCurves.Interpolate(from.Value, to.Value, progress, FadeCurve.Linear);
         }
 
-        var value = from.Value + ((to.Value - from.Value) * shaped);
         return descriptor?.Value.Clamp(value) ?? value;
     }
 }

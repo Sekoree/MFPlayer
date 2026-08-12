@@ -183,7 +183,7 @@ public class EditorRegressionTests
             shell.Cues.Inspector.Show([visualizer.Id]);
 
             // The command index is a UI property slot, not a position in the filtered list.
-            shell.Cues.Inspector.AddLane(1);
+            shell.Cues.Inspector.AddLane(AutomationPropertyIds.PlacementOpacity);
 
             Assert.Equal(
                 [AutomationPropertyIds.PlacementOpacity],
@@ -191,7 +191,7 @@ public class EditorRegressionTests
 
             // And the kind that does not apply is refused outright rather than silently added.
             shell.Cues.Inspector.Show([visualizer.Id]);
-            shell.Cues.Inspector.AddLane(0);
+            shell.Cues.Inspector.AddLane(AutomationPropertyIds.CueVolume);
             Assert.Single(visualizer.AutomationTracks);
         });
 

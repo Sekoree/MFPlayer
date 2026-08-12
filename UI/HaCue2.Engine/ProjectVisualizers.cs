@@ -6,6 +6,8 @@ using S.Media.Core.Video;
 
 namespace HaCue2.Engine;
 
+internal readonly record struct VisualizerCueInstance(Guid CueId, Guid InstanceId);
+
 /// <summary>
 /// The visualizer cues that are running, and the projectM renderers behind them.
 /// </summary>
@@ -54,6 +56,8 @@ public sealed class ProjectVisualizers : IAsyncDisposable
 
     /// <summary>One cue's renderers: a source per composition it is placed on.</summary>
     private readonly Dictionary<Guid, List<RunningAttachment>> _running = [];
+    private readonly Dictionary<Guid, Guid> _instances = [];
+    private readonly Dictionary<(Guid InstanceId, string Target), Guid> _controllerOwners = [];
 
     private readonly ShowSession _session;
     private readonly Lock _gate = new();
@@ -179,7 +183,10 @@ public sealed class ProjectVisualizers : IAsyncDisposable
             return firstFailure ?? $"“{cue.Label}” started nothing";
 
         lock (_gate)
+        {
             _running[cue.Id] = attached;
+            _instances[cue.Id] = Guid.NewGuid();
+        }
 
         // Partial success is still a start — the canvases that came up are showing something — but the
         // ones that did not are worth saying out loud.
@@ -257,12 +264,15 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 await StopAsync(item.Cue.Id).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
                 lock (_gate)
+                {
                     _running[item.Cue.Id] = [.. item.Attachments.Select(attachment =>
                         new RunningAttachment(
                             attachment.CompositionId,
                             attachment.VisualizerId,
                             attachment.Source,
                             attachment.PlacementIndexes))];
+                    _instances[item.Cue.Id] = Guid.NewGuid();
+                }
                 adopted.Add(item.Cue.Id);
                 started.Add(item.Cue.Id);
             }
@@ -405,6 +415,11 @@ public sealed class ProjectVisualizers : IAsyncDisposable
         {
             if (!_running.Remove(cueId, out attached))
                 return;
+            if (_instances.Remove(cueId, out var instanceId))
+                foreach (var key in _controllerOwners.Keys
+                             .Where(key => key.InstanceId == instanceId)
+                             .ToArray())
+                    _controllerOwners.Remove(key);
         }
 
         foreach (var attachment in attached)
@@ -487,6 +502,197 @@ public sealed class ProjectVisualizers : IAsyncDisposable
 
         return false;
     }
+
+    internal VisualizerCueInstance? CaptureInstance(Guid cueId)
+    {
+        lock (_gate)
+            return _running.ContainsKey(cueId) && _instances.TryGetValue(cueId, out var instanceId)
+                ? new VisualizerCueInstance(cueId, instanceId)
+                : null;
+    }
+
+    internal async Task<bool> ApplyControllerAutomationAsync(
+        VisualizerCueNode cue,
+        AutomationTrack track,
+        double value,
+        VisualizerCueInstance instance,
+        Guid ownerId,
+        bool claim)
+    {
+        if (!TryResolveControllerTarget(cue, track, instance, ownerId, claim,
+                out var attachment, out var placementIndex))
+            return false;
+
+        if (track.Target.PropertyId == AutomationPropertyIds.PlacementOpacity)
+            return await _session.ApplyCompositionVisualizerControllerOpacityAutomationAsync(
+                    attachment.CompositionId,
+                    placementIndex,
+                    (float)Math.Clamp(value, 0, 1),
+                    attachment.VisualizerId)
+                .ConfigureAwait(false);
+
+        if (TryPlacementProperty(track.Target.PropertyId, out var placementProperty))
+            return await _session.ApplyCompositionVisualizerControllerPlacementAutomationAsync(
+                    attachment.CompositionId,
+                    placementIndex,
+                    placementProperty,
+                    value,
+                    attachment.VisualizerId)
+                .ConfigureAwait(false);
+
+        if (track.Target.ObjectId is { } effectId
+            && TryEffectProperty(track.Target.PropertyId, out var effectProperty))
+            return await _session.ApplyCompositionVisualizerControllerEffectAutomationAsync(
+                    attachment.CompositionId,
+                    placementIndex,
+                    effectId.ToString(),
+                    effectProperty,
+                    value,
+                    attachment.VisualizerId)
+                .ConfigureAwait(false);
+
+        return false;
+    }
+
+    internal async Task<bool> ClearControllerAutomationAsync(
+        VisualizerCueNode cue,
+        AutomationTrack track,
+        VisualizerCueInstance instance,
+        Guid ownerId)
+    {
+        if (!TryReleaseControllerTarget(cue, track, instance, ownerId,
+                out var attachment, out var placementIndex))
+            return false;
+
+        if (track.Target.PropertyId == AutomationPropertyIds.PlacementOpacity)
+            return await _session.ClearCompositionVisualizerControllerOpacityAutomationAsync(
+                    attachment.CompositionId, placementIndex, attachment.VisualizerId)
+                .ConfigureAwait(false);
+
+        if (TryPlacementProperty(track.Target.PropertyId, out var placementProperty))
+            return await _session.ClearCompositionVisualizerControllerPlacementAutomationAsync(
+                    attachment.CompositionId, placementIndex, placementProperty, attachment.VisualizerId)
+                .ConfigureAwait(false);
+
+        if (track.Target.ObjectId is { } effectId
+            && TryEffectProperty(track.Target.PropertyId, out var effectProperty))
+            return await _session.ClearCompositionVisualizerControllerEffectAutomationAsync(
+                    attachment.CompositionId,
+                    placementIndex,
+                    effectId.ToString(),
+                    effectProperty,
+                    attachment.VisualizerId)
+                .ConfigureAwait(false);
+
+        return false;
+    }
+
+    internal async Task<bool> ApplyControllerVideoModifierAsync(
+        VisualizerCueInstance instance, Guid ownerId, float level, bool claim)
+    {
+        List<RunningAttachment> attachments;
+        lock (_gate)
+        {
+            if (!_instances.TryGetValue(instance.CueId, out var liveInstance)
+                || liveInstance != instance.InstanceId)
+                return false;
+            var key = (instance.InstanceId, "group:video");
+            if (claim)
+                _controllerOwners[key] = ownerId;
+            if (_controllerOwners.GetValueOrDefault(key) != ownerId)
+                return false;
+            attachments = [.. _running.GetValueOrDefault(instance.CueId) ?? []];
+        }
+
+        var applied = false;
+        foreach (var attachment in attachments)
+            applied |= await _session.ApplyCompositionVisualizerControllerVideoModifierAsync(
+                    attachment.CompositionId, level, attachment.VisualizerId)
+                .ConfigureAwait(false);
+        return applied;
+    }
+
+    internal async Task<bool> ClearControllerVideoModifierAsync(
+        VisualizerCueInstance instance, Guid ownerId)
+    {
+        List<RunningAttachment> attachments;
+        lock (_gate)
+        {
+            if (!_instances.TryGetValue(instance.CueId, out var liveInstance)
+                || liveInstance != instance.InstanceId
+                || _controllerOwners.GetValueOrDefault((instance.InstanceId, "group:video")) != ownerId)
+                return false;
+            _controllerOwners.Remove((instance.InstanceId, "group:video"));
+            attachments = [.. _running.GetValueOrDefault(instance.CueId) ?? []];
+        }
+
+        var cleared = false;
+        foreach (var attachment in attachments)
+            cleared |= await _session.ApplyCompositionVisualizerControllerVideoModifierAsync(
+                    attachment.CompositionId, 1f, attachment.VisualizerId)
+                .ConfigureAwait(false);
+        return cleared;
+    }
+
+    private bool TryResolveControllerTarget(
+        VisualizerCueNode cue,
+        AutomationTrack track,
+        VisualizerCueInstance instance,
+        Guid ownerId,
+        bool claim,
+        out RunningAttachment attachment,
+        out int placementIndex)
+    {
+        attachment = null!;
+        placementIndex = -1;
+        if (!TryResolvePlacement(cue, track, out var placement))
+            return false;
+        lock (_gate)
+        {
+            if (!_instances.TryGetValue(cue.Id, out var liveInstance)
+                || liveInstance != instance.InstanceId)
+                return false;
+            attachment = _running.GetValueOrDefault(cue.Id)?.FirstOrDefault(candidate =>
+                string.Equals(candidate.CompositionId, placement.CompositionId.ToString(), StringComparison.Ordinal))!;
+            if (attachment is null || !attachment.PlacementIndexes.TryGetValue(placement.Id, out placementIndex))
+                return false;
+            var key = (instance.InstanceId, ControllerTarget(track));
+            if (claim)
+                _controllerOwners[key] = ownerId;
+            return _controllerOwners.GetValueOrDefault(key) == ownerId;
+        }
+    }
+
+    private bool TryReleaseControllerTarget(
+        VisualizerCueNode cue,
+        AutomationTrack track,
+        VisualizerCueInstance instance,
+        Guid ownerId,
+        out RunningAttachment attachment,
+        out int placementIndex)
+    {
+        attachment = null!;
+        placementIndex = -1;
+        if (!TryResolvePlacement(cue, track, out var placement))
+            return false;
+        lock (_gate)
+        {
+            if (!_instances.TryGetValue(cue.Id, out var liveInstance)
+                || liveInstance != instance.InstanceId)
+                return false;
+            attachment = _running.GetValueOrDefault(cue.Id)?.FirstOrDefault(candidate =>
+                string.Equals(candidate.CompositionId, placement.CompositionId.ToString(), StringComparison.Ordinal))!;
+            if (attachment is null || !attachment.PlacementIndexes.TryGetValue(placement.Id, out placementIndex))
+                return false;
+            var key = (instance.InstanceId, ControllerTarget(track));
+            if (_controllerOwners.GetValueOrDefault(key) != ownerId)
+                return false;
+            return _controllerOwners.Remove(key);
+        }
+    }
+
+    private static string ControllerTarget(AutomationTrack track) =>
+        $"{track.Target.PropertyId}:{track.Target.ObjectId}";
 
     private static bool TryResolvePlacement(
         VisualizerCueNode cue, AutomationTrack track, out LayerPlacement placement)

@@ -67,6 +67,9 @@ internal sealed class SoundingLevel
     /// <summary>The volume-envelope factor (1 = no automation).</summary>
     public float Envelope { get; set; } = 1f;
 
+    /// <summary>An automation-cue override. Null exposes the continuously sampled cue-owned envelope.</summary>
+    public float? ControllerEnvelope { get; set; }
+
     /// <summary>A controller/group modifier over the cue-owned envelope (1 = no modifier).</summary>
     public float Modifier { get; set; } = 1f;
 
@@ -75,7 +78,7 @@ internal sealed class SoundingLevel
     public float Master { get; set; } = 1f;
 
     /// <summary>The gain actually written to the routes.</summary>
-    public float Effective => Source * Fade * Envelope * Modifier * Master;
+    public float Effective => Source * Fade * (ControllerEnvelope ?? Envelope) * Modifier * Master;
 }
 
 /// <summary>One registered sounding source. <see cref="SoundingSourceRole.Program"/> sources MUST supply the

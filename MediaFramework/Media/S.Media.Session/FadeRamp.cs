@@ -28,6 +28,19 @@ public enum FadeCurve
 /// </summary>
 public static class FadeCurves
 {
+    /// <summary>
+    /// Interpolates an arbitrary property value using a curve as normalized segment progress.
+    /// Unlike <see cref="LevelBetween(float,float,TimeSpan,TimeSpan,FadeCurve)"/>, this deliberately
+    /// does not reverse the curve when the value decreases: an automation segment's outgoing curve
+    /// always maps authored progress 0..1 to interpolation progress 0..1.
+    /// </summary>
+    public static double Interpolate(double start, double target, double progress, FadeCurve curve) =>
+        start + ((target - start) * ShapeProgress(progress, curve));
+
+    /// <summary>Custom-shape overload of <see cref="Interpolate(double,double,double,FadeCurve)"/>.</summary>
+    public static double Interpolate(double start, double target, double progress, FadeShape shape) =>
+        start + ((target - start) * shape.Evaluate(progress));
+
     /// <summary>The down-ramp level for <paramref name="elapsed"/> of <paramref name="duration"/>: 1 → 0,
     /// clamped, shaped by <paramref name="curve"/>.</summary>
     public static float LevelDown(TimeSpan elapsed, TimeSpan duration, FadeCurve curve = FadeCurve.Linear) =>
@@ -109,6 +122,8 @@ public static class VolumeEnvelopes
 {
     /// <summary>Ceiling for an envelope factor: +12 dB as linear gain (the authoring clamp's maximum).</summary>
     public static readonly float MaxLevel = (float)Math.Pow(10, 12 / 20d);
+    public const float SilenceFloorDb = -60f;
+    public const float MaximumDb = 12f;
 
     /// <summary>The envelope factor at <paramref name="position"/>: 1 for an empty envelope, the first
     /// point's level before the first point, the last point's level after the last, and in between the
@@ -118,9 +133,9 @@ public static class VolumeEnvelopes
         if (points is not { Count: > 0 })
             return 1f;
         if (position <= points[0].Time)
-            return points[0].Level;
+            return ToOutput(points[0]);
         if (position >= points[^1].Time)
-            return points[^1].Level;
+            return ToOutput(points[^1]);
 
         // Greatest i with points[i].Time <= position (invariant: points[lo].Time <= position < points[hi].Time).
         var lo = 0;
@@ -136,9 +151,22 @@ public static class VolumeEnvelopes
 
         var from = points[lo];
         var to = points[hi];
-        return FadeCurves.LevelBetween(
-            from.Level, to.Level, position - from.Time, to.Time - from.Time, from.CurveToNext);
+        var progress = Math.Clamp(
+            (position - from.Time).TotalMilliseconds / (to.Time - from.Time).TotalMilliseconds,
+            0d,
+            1d);
+        var value = FadeCurves.Interpolate(from.Level, to.Level, progress, from.CurveToNext);
+        return ToOutput((float)value, from.ValueScale);
     }
+
+    private static float ToOutput(ShowEnvelopePoint point) => ToOutput(point.Level, point.ValueScale);
+
+    private static float ToOutput(float value, ShowEnvelopeValueScale scale) => scale switch
+    {
+        ShowEnvelopeValueScale.Decibels when value <= SilenceFloorDb => 0f,
+        ShowEnvelopeValueScale.Decibels => (float)Math.Pow(10d, value / 20d),
+        _ => value,
+    };
 }
 
 /// <summary>

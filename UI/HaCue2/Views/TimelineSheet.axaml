@@ -25,38 +25,38 @@
                    and one track per concrete target), so the rule is visible instead of arriving as a refusal
                    after the click. -->
               <MenuFlyout>
-                <MenuItem Header="Volume" Click="OnAddLane" Tag="0"
+                <MenuItem Header="Volume" Click="OnAddLane" Tag="cue.audio.volume"
                           IsEnabled="{Binding CanAddVolumeLane}" />
-                <MenuItem Header="Opacity" Click="OnAddLane" Tag="1"
+                <MenuItem Header="Opacity" Click="OnAddLane" Tag="video.placement.opacity"
                           IsEnabled="{Binding CanAddOpacityLane}" />
-                <MenuItem Header="Position X" Click="OnAddLane" Tag="4"
+                <MenuItem Header="Position X" Click="OnAddLane" Tag="video.placement.x"
                           IsEnabled="{Binding CanAddPlacementXLane}" />
-                <MenuItem Header="Position Y" Click="OnAddLane" Tag="5"
+                <MenuItem Header="Position Y" Click="OnAddLane" Tag="video.placement.y"
                           IsEnabled="{Binding CanAddPlacementYLane}" />
-                <MenuItem Header="Width" Click="OnAddLane" Tag="6"
+                <MenuItem Header="Width" Click="OnAddLane" Tag="video.placement.width"
                           IsEnabled="{Binding CanAddPlacementWidthLane}" />
-                <MenuItem Header="Height" Click="OnAddLane" Tag="7"
+                <MenuItem Header="Height" Click="OnAddLane" Tag="video.placement.height"
                           IsEnabled="{Binding CanAddPlacementHeightLane}" />
-                <MenuItem Header="Rotation" Click="OnAddLane" Tag="8"
+                <MenuItem Header="Rotation" Click="OnAddLane" Tag="video.placement.rotation"
                           IsEnabled="{Binding CanAddPlacementRotationLane}" />
                 <MenuItem Header="Chroma key" IsVisible="{Binding HasAutomationChromaKey}">
-                  <MenuItem Header="Similarity" Click="OnAddLane" Tag="9"
+                  <MenuItem Header="Similarity" Click="OnAddLane" Tag="video.effect.chroma-key.similarity"
                             IsEnabled="{Binding CanAddChromaSimilarityLane}" />
-                  <MenuItem Header="Smoothness" Click="OnAddLane" Tag="10"
+                  <MenuItem Header="Smoothness" Click="OnAddLane" Tag="video.effect.chroma-key.smoothness"
                             IsEnabled="{Binding CanAddChromaSmoothnessLane}" />
-                  <MenuItem Header="Spill reduction" Click="OnAddLane" Tag="11"
+                  <MenuItem Header="Spill reduction" Click="OnAddLane" Tag="video.effect.chroma-key.spill-reduction"
                             IsEnabled="{Binding CanAddChromaSpillLane}" />
                 </MenuItem>
                 <MenuItem Header="Colour adjust" IsVisible="{Binding HasAutomationColorAdjust}">
-                  <MenuItem Header="Brightness" Click="OnAddLane" Tag="12"
+                  <MenuItem Header="Brightness" Click="OnAddLane" Tag="video.effect.color-adjust.brightness"
                             IsEnabled="{Binding CanAddColorBrightnessLane}" />
-                  <MenuItem Header="Contrast" Click="OnAddLane" Tag="13"
+                  <MenuItem Header="Contrast" Click="OnAddLane" Tag="video.effect.color-adjust.contrast"
                             IsEnabled="{Binding CanAddColorContrastLane}" />
                 </MenuItem>
                 <Separator />
-                <MenuItem Header="OSC value" Click="OnAddLane" Tag="2"
+                <MenuItem Header="OSC value" Click="OnAddLane" Tag="external.osc.value"
                           IsEnabled="{Binding CanAddOscLane}" />
-                <MenuItem Header="MIDI control" Click="OnAddLane" Tag="3"
+                <MenuItem Header="MIDI control" Click="OnAddLane" Tag="external.midi.control-value"
                           IsEnabled="{Binding CanAddMidiLane}" />
               </MenuFlyout>
             </Button.Flyout>

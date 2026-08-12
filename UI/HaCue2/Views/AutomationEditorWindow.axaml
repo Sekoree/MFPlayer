@@ -15,7 +15,8 @@
     <c:PanelBox.Footer>
       <Border Classes="chain">
         <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
-          <CheckBox Grid.Column="0" Content="enabled" IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+          <CheckBox Grid.Column="0" Content="enabled" IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+                    IsEnabled="{Binding CanEdit}" />
           <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
                      Text="{Binding ViewLabel}" />
           <TextBlock Grid.Column="2" Classes="mono warn small" HorizontalAlignment="Right"
@@ -26,21 +27,25 @@
     </c:PanelBox.Footer>
 
     <DockPanel Margin="10,6,10,10">
-      <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto"
+      <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto"
             ColumnSpacing="5" Margin="0,0,0,7">
         <Button Grid.Column="0" Classes="tight" Content="|◀ KEY" Click="OnPreviousKey" />
         <Button Grid.Column="1" Classes="tight" Content="KEY ▶|" Click="OnNextKey" />
         <Button Grid.Column="2" Classes="tight primary" Content="＋ KEY" Click="OnAddKey"
+                IsEnabled="{Binding CanEdit}"
                 ToolTip.Tip="Add a keyframe at the cursor" />
         <Button Grid.Column="3" Classes="tight" Content="−" Click="OnZoomOut" ToolTip.Tip="Zoom out" />
         <Button Grid.Column="4" Classes="tight" Content="+" Click="OnZoomIn" ToolTip.Tip="Zoom in" />
-        <Slider Grid.Column="5" Minimum="0" Maximum="{Binding DurationMs}"
+        <ComboBox Grid.Column="5" Width="78" ItemsSource="{Binding SnapTimeOptions}"
+                  SelectedItem="{Binding SnapTimeMs, Mode=TwoWay}"
+                  ToolTip.Tip="Time snap in milliseconds; Alt bypasses snap while dragging" />
+        <Slider Grid.Column="6" Minimum="0" Maximum="{Binding DurationMs}"
                 Value="{Binding CursorMs, Mode=TwoWay}" />
-        <TextBlock Grid.Column="6" Classes="mono small" VerticalAlignment="Center"
+        <TextBlock Grid.Column="7" Classes="mono small" VerticalAlignment="Center"
                    MinWidth="82" Text="{Binding CursorLabel}" />
-        <Button Grid.Column="7" Classes="tight" Content="SEEK" Click="OnSeek"
+        <Button Grid.Column="8" Classes="tight" Content="SEEK" Click="OnSeek"
                 ToolTip.Tip="Seek this cue when it is currently sounding" />
-        <Button Grid.Column="8" Classes="tight" Content="FIT" Click="OnFit" />
+        <Button Grid.Column="9" Classes="tight" Content="FIT" Click="OnFit" />
       </Grid>
 
       <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto" Margin="0,7,0,0">
@@ -58,41 +63,63 @@
         </Grid>
       </Grid>
 
-      <Grid ColumnDefinitions="*,230" ColumnSpacing="8">
-        <Border Grid.Column="0" Background="{DynamicResource BoothPit}"
+      <Grid ColumnDefinitions="*,230" RowDefinitions="Auto,*" ColumnSpacing="8">
+        <ItemsControl Grid.Column="0" Grid.Row="0" ItemsSource="{Binding RulerTicks}"
+                      IsHitTestVisible="False" Margin="0,0,0,2">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate><UniformGrid Rows="1" /></ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Border BorderBrush="{DynamicResource BoothRule}" BorderThickness="1,0,0,0">
+                <TextBlock Classes="mono dim3 micro" Text="{Binding .}" Margin="3,0" />
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <Border Grid.Column="0" Grid.Row="1" Background="{DynamicResource BoothPit}"
                 BorderBrush="{DynamicResource BoothRule}" BorderThickness="1" Padding="5">
           <c:CurveCanvas AutomationProperties.Name="Absolute-time automation editor"
-                         AutomationProperties.HelpText="Double-click to add. Drag a key to change its cue time and property value."
+                         AutomationProperties.HelpText="Click and drag empty space to add a key. Drag keys to edit. Alt bypasses snap, Shift constrains an axis, and Escape cancels a drag."
+                         AddOnEmptyPointerPress="True"
+                         LogicalNudges="True"
                          RemoveWhenDraggedOffCanvas="False"
+                         IsEnabled="{Binding CanEdit}"
                          WaveformPeaks="{Binding WaveformPeaks}"
                          Points="{Binding Points}" Shape="{Binding Shape}" Tangents="{Binding Tangents}"
                          Gesture="OnGesture" GestureCompleted="OnGestureCompleted"
+                         GestureCancelled="OnGestureCancelled"
                          CopyRequested="OnCopyPoints" PasteRequested="OnPastePoints"
                          SelectAllRequested="OnSelectAllPoints" />
         </Border>
 
-        <StackPanel Grid.Column="1" Spacing="5">
+        <StackPanel Grid.Column="1" Grid.RowSpan="2" Spacing="5">
           <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Key time">
-            <TextBox Text="{Binding PointTime}" IsEnabled="{Binding HasSelection}"
+            <TextBox Text="{Binding PointTime}" IsEnabled="{Binding CanEditSelection}"
                      LostFocus="OnPointTimeCommitted" />
           </HeaderedContentControl>
           <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Property value">
-            <TextBox Text="{Binding PointValue}" IsEnabled="{Binding HasSelection}"
+            <TextBox Text="{Binding PointValue}" IsEnabled="{Binding CanEditSelection}"
                      LostFocus="OnPointValueCommitted" />
           </HeaderedContentControl>
           <TextBlock Classes="mono dim3 micro" Margin="10,0" Text="{Binding Unit, StringFormat='unit · {0}'}" />
           <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Segment after key">
             <ComboBox ItemsSource="{Binding Segments}" SelectedItem="{Binding Segment, Mode=TwoWay}"
-                      IsEnabled="{Binding HasSelection}" />
+                      IsEnabled="{Binding CanEditSelection}" />
           </HeaderedContentControl>
+          <Button Classes="block" Content="EDIT CURVE SHAPE…" Click="OnEditSegmentCurve"
+                  IsEnabled="{Binding CanEditSelection}"
+                  ToolTip.Tip="Edit only the normalized easing between this key and the next" />
           <CheckBox Margin="10,4" Content="hold until next key"
-                    IsChecked="{Binding IsHold, Mode=TwoWay}" IsEnabled="{Binding HasSelection}" />
+                    IsChecked="{Binding IsHold, Mode=TwoWay}" IsEnabled="{Binding CanEditSelection}" />
           <Grid ColumnDefinitions="*,*" ColumnSpacing="5">
             <Button Grid.Column="0" Classes="block" Content="COPY" Click="OnCopyPointsClicked" />
-            <Button Grid.Column="1" Classes="block" Content="PASTE" Click="OnPastePointsClicked" />
+            <Button Grid.Column="1" Classes="block" Content="PASTE" Click="OnPastePointsClicked"
+                    IsEnabled="{Binding CanEdit}" />
           </Grid>
           <Button Classes="block" Content="DELETE SELECTED KEY(S)" Click="OnDelete"
-                  IsEnabled="{Binding HasSelection}" />
+                  IsEnabled="{Binding CanEditSelection}" />
           <TextBlock Classes="mono dim3 small" Margin="10,8" TextWrapping="Wrap"
                      Text="Values before the first key and after the last key hold. A disabled track falls back to the cue's authored property." />
           <TextBlock Classes="mono dim3 micro" Margin="10,0" Text="{Binding WaveformStatus}" />

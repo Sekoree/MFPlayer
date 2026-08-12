@@ -29,7 +29,20 @@ public static class AutomationMigration
                 Walk(cue, [], durations, counts);
 
         project.SchemaVersion = HaCueProject.CurrentSchemaVersion;
-        return new Result(counts.Tracks, counts.Keys, counts.Unresolved);
+        var result = new Result(counts.Tracks, counts.Keys, counts.Unresolved);
+        if (result.Changed || result.UnresolvedLanes > 0)
+        {
+            var previous = project.LastAutomationMigration;
+            project.LastAutomationMigration = new AutomationMigrationSummary(
+                (previous?.TracksCreated ?? 0) + result.TracksCreated,
+                (previous?.KeyframesCreated ?? 0) + result.KeyframesCreated,
+                result.UnresolvedLanes);
+        }
+        else if (project.LastAutomationMigration is { UnresolvedLanes: > 0 } pending)
+        {
+            project.LastAutomationMigration = pending with { UnresolvedLanes = 0 };
+        }
+        return result;
     }
 
     private static bool Walk(

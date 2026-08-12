@@ -15,6 +15,7 @@ internal sealed class OutboundEffects : IAsyncDisposable
     private readonly CancellationToken _lifetime;
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, List<Run>> _running = [];
+    private readonly SemaphoreSlim _startGate = new(1, 1);
 
     public OutboundEffects(
         ActionSender sender,
@@ -28,67 +29,79 @@ internal sealed class OutboundEffects : IAsyncDisposable
         _lifetime = lifetime;
     }
 
-    public void Start(
+    public async Task StartAsync(
         CueNode cue,
         TimeSpan duration,
         Func<RunClockSnapshot>? clock = null,
         bool keepAliveAfterEnd = false)
     {
-        Interrupt(cue.Id);
-        if (duration <= TimeSpan.Zero)
-            return;
-
-        var project = _project();
-        var tracks = Tracks(cue)
-            .Where(track => track.Enabled)
-            .Where(track => track.Target.PropertyId is AutomationPropertyIds.OscValue
-                or AutomationPropertyIds.MidiControlValue)
-            .Where(track => track.Keyframes.Count > 0)
-            .ToList();
-        if (tracks.Count == 0)
-            return;
-
-        var runs = new List<Run>();
-        foreach (var track in tracks)
+        await _startGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (track.Target.EndpointId is not { } endpointId
-                || project.ActionEndpoints.FirstOrDefault(endpoint => endpoint.Id == endpointId) is not { } endpoint)
+            await InterruptAndWaitAsync(cue.Id).ConfigureAwait(false);
+            if (duration <= TimeSpan.Zero)
+                return;
+
+            var project = _project();
+            var tracks = Tracks(cue)
+                .Where(track => track.Enabled)
+                .Where(track => track.Target.PropertyId is AutomationPropertyIds.OscValue
+                    or AutomationPropertyIds.MidiControlValue)
+                .Where(track => track.Keyframes.Count > 0)
+                .ToList();
+            if (tracks.Count == 0)
+                return;
+
+            var runs = new List<Run>();
+            foreach (var track in tracks)
             {
-                _report($"“{cue.Label}” has an automation track with no live endpoint");
-                continue;
+                if (track.Target.EndpointId is not { } endpointId
+                    || project.ActionEndpoints.FirstOrDefault(endpoint => endpoint.Id == endpointId)
+                        is not { } endpoint)
+                {
+                    _report($"“{cue.Label}” has an automation track with no live endpoint");
+                    continue;
+                }
+
+                var expected = track.Target.PropertyId == AutomationPropertyIds.OscValue
+                    ? EndpointKind.OscOut : EndpointKind.MidiOut;
+                if (endpoint.Kind != expected)
+                {
+                    _report($"“{cue.Label}” has automation pointed at {endpoint.Kind}");
+                    continue;
+                }
+
+                var points = Points(project, track);
+                if (points.Count == 0)
+                    continue;
+
+                var runner = new OutboundRampRunner(
+                    points,
+                    (value, _) => SendAsync(cue, track, endpoint, value),
+                    Math.Clamp(track.Target.SendRateHz, 1, 120));
+                var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
+                var started = Stopwatch.GetTimestamp();
+                var run = new Run(
+                    runner,
+                    cancellation,
+                    clock ?? (() => new RunClockSnapshot(Stopwatch.GetElapsedTime(started), 0)),
+                    keepAliveAfterEnd,
+                    track.Interruption);
+                runs.Add(run);
             }
 
-            var expected = track.Target.PropertyId == AutomationPropertyIds.OscValue
-                ? EndpointKind.OscOut : EndpointKind.MidiOut;
-            if (endpoint.Kind != expected)
+            if (runs.Count > 0)
             {
-                _report($"“{cue.Label}” has automation pointed at {endpoint.Kind}");
-                continue;
+                lock (_gate)
+                    _running[cue.Id] = runs;
+                foreach (var run in runs)
+                    run.Task = DriveAsync(cue.Id, run);
             }
-
-            var points = Points(project, track);
-            if (points.Count == 0)
-                continue;
-
-            var runner = new OutboundRampRunner(
-                points,
-                (value, _) => SendAsync(cue, track, endpoint, value),
-                Math.Clamp(track.Target.SendRateHz, 1, 120));
-            var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
-            var started = Stopwatch.GetTimestamp();
-            var run = new Run(
-                runner,
-                cancellation,
-                clock ?? (() => new RunClockSnapshot(Stopwatch.GetElapsedTime(started), 0)),
-                keepAliveAfterEnd,
-                track.Interruption);
-            run.Task = DriveAsync(cue.Id, run);
-            runs.Add(run);
         }
-
-        if (runs.Count > 0)
-            lock (_gate)
-                _running[cue.Id] = runs;
+        finally
+        {
+            _startGate.Release();
+        }
     }
 
     public void Interrupt(Guid cueId)
@@ -102,6 +115,20 @@ internal sealed class OutboundEffects : IAsyncDisposable
 
         foreach (var run in runs)
             run.Cancellation.Cancel();
+    }
+
+    private async Task InterruptAndWaitAsync(Guid cueId)
+    {
+        Task[] tasks;
+        lock (_gate)
+        {
+            if (!_running.TryGetValue(cueId, out var runs))
+                return;
+            foreach (var run in runs)
+                run.Cancellation.Cancel();
+            tasks = [.. runs.Select(run => run.Task)];
+        }
+        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     /// <summary>Normal media completion always lands the authored final value.</summary>
@@ -141,6 +168,8 @@ internal sealed class OutboundEffects : IAsyncDisposable
 
     private async Task DriveAsync(Guid cueId, Run run)
     {
+        // StartAsync publishes the complete run set before a terminal-at-zero ramp can remove itself.
+        await Task.Yield();
         try
         {
             while (run.KeepAliveAfterEnd || !run.Runner.IsFinished)
@@ -268,6 +297,7 @@ internal sealed class OutboundEffects : IAsyncDisposable
             tasks = [.. _running.Values.SelectMany(runs => runs).Select(run => run.Task)];
         }
         await Task.WhenAll(tasks).ConfigureAwait(false);
+        _startGate.Dispose();
     }
 
     private sealed class Run(

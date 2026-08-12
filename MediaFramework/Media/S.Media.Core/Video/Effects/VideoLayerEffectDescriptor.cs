@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using S.Media.Core.Effects;
 
 namespace S.Media.Core.Video.Effects;
 
@@ -6,7 +7,10 @@ namespace S.Media.Core.Video.Effects;
 /// <param name="Name">Identifier referenced from the GLSL body as <c>$P(name)</c>. Must be a valid
 /// GLSL identifier fragment (<c>[A-Za-z_][A-Za-z0-9_]*</c>).</param>
 /// <param name="Components">Vector width 1-4 (float / vec2 / vec3 / vec4).</param>
-public sealed record VideoLayerEffectParameter(string Name, int Components);
+public sealed record VideoLayerEffectParameter(
+    string Name,
+    int Components,
+    IReadOnlyList<EffectParameterDescriptor>? Authoring = null);
 
 /// <summary>
 /// Immutable definition of a per-layer video effect - the extension point for pixel effects that
@@ -45,6 +49,7 @@ public sealed class VideoLayerEffectDescriptor
                 nameof(id));
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seenAuthoring = new HashSet<string>(StringComparer.Ordinal);
         var total = 0;
         foreach (var p in parameters)
         {
@@ -54,6 +59,27 @@ public sealed class VideoLayerEffectDescriptor
                 throw new ArgumentException($"Effect '{id}' parameter '{p.Name}' has {p.Components} components; 1-4 supported.");
             if (!seen.Add(p.Name))
                 throw new ArgumentException($"Effect '{id}' declares parameter '{p.Name}' twice.");
+            if (p.Authoring is { } authoring)
+            {
+                if (authoring.Count != p.Components)
+                    throw new ArgumentException(
+                        $"Effect '{id}' parameter '{p.Name}' has {p.Components} components but {authoring.Count} authoring descriptors.");
+                foreach (var component in authoring)
+                {
+                    if (!ParamNamePattern.IsMatch(component.Id))
+                        throw new ArgumentException(
+                            $"Effect '{id}' authoring parameter '{component.Id}' is not a stable identifier.");
+                    if (!seenAuthoring.Add(component.Id))
+                        throw new ArgumentException(
+                            $"Effect '{id}' declares authoring parameter '{component.Id}' twice.");
+                    if (!float.IsFinite(component.Minimum) || !float.IsFinite(component.Maximum)
+                        || component.Maximum < component.Minimum
+                        || !float.IsFinite(component.Default)
+                        || component.Default < component.Minimum || component.Default > component.Maximum)
+                        throw new ArgumentException(
+                            $"Effect '{id}' authoring parameter '{component.Id}' has invalid limits/default.");
+                }
+            }
             total += p.Components;
         }
 

@@ -265,6 +265,8 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(OpacityLaneLabel));
         OnPropertyChanged(nameof(IsAutomationCue));
         OnPropertyChanged(nameof(AutomationTargetCues));
+        OnPropertyChanged(nameof(AutomationTargetPlacements));
+        OnPropertyChanged(nameof(HasMultipleAutomationTargetPlacements));
         OnPropertyChanged(nameof(AutomationDuration));
         OnPropertyChanged(nameof(AutomationRestoreBase));
         OnPropertyChanged(nameof(FadeInCurve));
@@ -3171,22 +3173,18 @@ public partial class InspectorViewModel : ObservableObject
         return name;
     }
 
-    public IReadOnlyList<string> LaneKinds =>
-        ["volume", "opacity", "osc value", "midi control", "position X", "position Y", "width", "height", "rotation",
-            "chroma similarity", "chroma smoothness", "spill reduction", "brightness", "contrast"];
-
-    public bool CanAddVolumeLane => CanAddLane(0);
-    public bool CanAddOpacityLane => CanAddLane(1);
-    public bool CanAddPlacementXLane => CanAddLane(4);
-    public bool CanAddPlacementYLane => CanAddLane(5);
-    public bool CanAddPlacementWidthLane => CanAddLane(6);
-    public bool CanAddPlacementHeightLane => CanAddLane(7);
-    public bool CanAddPlacementRotationLane => CanAddLane(8);
-    public bool CanAddChromaSimilarityLane => CanAddLane(9);
-    public bool CanAddChromaSmoothnessLane => CanAddLane(10);
-    public bool CanAddChromaSpillLane => CanAddLane(11);
-    public bool CanAddColorBrightnessLane => CanAddLane(12);
-    public bool CanAddColorContrastLane => CanAddLane(13);
+    public bool CanAddVolumeLane => CanAddLane(AutomationPropertyIds.CueVolume);
+    public bool CanAddOpacityLane => CanAddLane(AutomationPropertyIds.PlacementOpacity);
+    public bool CanAddPlacementXLane => CanAddLane(AutomationPropertyIds.PlacementX);
+    public bool CanAddPlacementYLane => CanAddLane(AutomationPropertyIds.PlacementY);
+    public bool CanAddPlacementWidthLane => CanAddLane(AutomationPropertyIds.PlacementWidth);
+    public bool CanAddPlacementHeightLane => CanAddLane(AutomationPropertyIds.PlacementHeight);
+    public bool CanAddPlacementRotationLane => CanAddLane(AutomationPropertyIds.PlacementRotation);
+    public bool CanAddChromaSimilarityLane => CanAddLane(AutomationPropertyIds.ChromaSimilarity);
+    public bool CanAddChromaSmoothnessLane => CanAddLane(AutomationPropertyIds.ChromaSmoothness);
+    public bool CanAddChromaSpillLane => CanAddLane(AutomationPropertyIds.ChromaSpillReduction);
+    public bool CanAddColorBrightnessLane => CanAddLane(AutomationPropertyIds.ColorBrightness);
+    public bool CanAddColorContrastLane => CanAddLane(AutomationPropertyIds.ColorContrast);
     public bool HasAutomationChromaKey => AutomationPlacement?.ChromaKey is not null;
     public bool HasAutomationColorAdjust => AutomationPlacement?.ColorAdjust is not null;
     public bool CanAddOutboundLane => CanCarryLanes;
@@ -3233,6 +3231,17 @@ public partial class InspectorViewModel : ObservableObject
     public IReadOnlyList<string> AutomationTargetCues =>
         [.. AutomationTargets.Select(target => $"Q{CuePresentation.Number(target.Number)} · {target.Label}")];
 
+    public IReadOnlyList<string> AutomationTargetPlacements => AutomationTargetCue is not { } target
+        ? []
+        :
+        [
+            .. CuePlacements.Of(target).Select(placement =>
+                $"{Project.Compositions.FirstOrDefault(item => item.Id == placement.CompositionId)?.Name ?? "missing composition"}"
+                + $" · L{placement.LayerIndex}"),
+        ];
+
+    public bool HasMultipleAutomationTargetPlacements => AutomationTargetPlacements.Count > 1;
+
     private IReadOnlyList<CueNode> AutomationTargets =>
         [.. Project.AllCues().Where(candidate => candidate.Id != Cue?.Id
             && candidate is not CommentCueNode and not ActionCueNode and not AutomationCueNode)];
@@ -3254,7 +3263,27 @@ public partial class InspectorViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(HasAutomationColorAdjust))]
     [NotifyPropertyChangedFor(nameof(VolumeLaneLabel))]
     [NotifyPropertyChangedFor(nameof(OpacityLaneLabel))]
+    [NotifyPropertyChangedFor(nameof(AutomationTargetPlacements))]
+    [NotifyPropertyChangedFor(nameof(HasMultipleAutomationTargetPlacements))]
     private int _automationTargetCueIndex;
+
+    partial void OnAutomationTargetCueIndexChanged(int value) => AutomationTargetPlacementIndex = 0;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanAddOpacityLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddPlacementXLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddPlacementYLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddPlacementWidthLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddPlacementHeightLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddPlacementRotationLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddChromaSimilarityLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddChromaSmoothnessLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddChromaSpillLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddColorBrightnessLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddColorContrastLane))]
+    [NotifyPropertyChangedFor(nameof(HasAutomationChromaKey))]
+    [NotifyPropertyChangedFor(nameof(HasAutomationColorAdjust))]
+    private int _automationTargetPlacementIndex;
 
     private CueNode? AutomationTargetCue => AutomationTargetCueIndex >= 0
         && AutomationTargetCueIndex < AutomationTargets.Count
@@ -3263,54 +3292,55 @@ public partial class InspectorViewModel : ObservableObject
 
     private LayerPlacement? AutomationPlacement => Cue switch
     {
-        AutomationCueNode when AutomationTargetCue is { } target => CuePlacements.Of(target).FirstOrDefault(),
+        AutomationCueNode when AutomationTargetCue is { } target =>
+            CuePlacements.Of(target).ElementAtOrDefault(AutomationTargetPlacementIndex),
         not null => Placement,
         _ => null,
     };
 
-    private AutomationTargetRef? TargetAt(int index)
+    private AutomationTargetRef? TargetFor(string propertyId)
     {
         if (Cue is not { } cue)
             return null;
         var targetCue = cue is AutomationCueNode ? AutomationTargetCue : cue;
         var targetCueId = cue is AutomationCueNode ? targetCue?.Id : null;
         var placement = AutomationPlacement;
-        return index switch
+        return propertyId switch
         {
-            0 when targetCue is MediaCueNode => new AutomationTargetRef
+            AutomationPropertyIds.CueVolume when targetCue is MediaCueNode => new AutomationTargetRef
                 { CueId = targetCueId, PropertyId = AutomationPropertyIds.CueVolume },
-            0 when cue is AutomationCueNode && targetCue is GroupCueNode => new AutomationTargetRef
+            AutomationPropertyIds.CueVolume when cue is AutomationCueNode && targetCue is GroupCueNode => new AutomationTargetRef
                 { CueId = targetCueId, PropertyId = AutomationPropertyIds.GroupAudioTrim },
-            1 when cue is AutomationCueNode && targetCue is GroupCueNode => new AutomationTargetRef
+            AutomationPropertyIds.PlacementOpacity when cue is AutomationCueNode && targetCue is GroupCueNode => new AutomationTargetRef
                 { CueId = targetCueId, PropertyId = AutomationPropertyIds.GroupVideoOpacity },
-            1 when placement is not null =>
+            AutomationPropertyIds.PlacementOpacity when placement is not null =>
                 new AutomationTargetRef
                 {
                     CueId = targetCueId,
                     PropertyId = AutomationPropertyIds.PlacementOpacity,
                     ObjectId = placement.Id,
                 },
-            2 => new AutomationTargetRef { PropertyId = AutomationPropertyIds.OscValue },
-            3 => new AutomationTargetRef { PropertyId = AutomationPropertyIds.MidiControlValue },
-            4 when placement is not null => NewPlacementTarget(
+            AutomationPropertyIds.OscValue => new AutomationTargetRef { PropertyId = AutomationPropertyIds.OscValue },
+            AutomationPropertyIds.MidiControlValue => new AutomationTargetRef { PropertyId = AutomationPropertyIds.MidiControlValue },
+            AutomationPropertyIds.PlacementX when placement is not null => NewPlacementTarget(
                 targetCueId, placement.Id, AutomationPropertyIds.PlacementX),
-            5 when placement is not null => NewPlacementTarget(
+            AutomationPropertyIds.PlacementY when placement is not null => NewPlacementTarget(
                 targetCueId, placement.Id, AutomationPropertyIds.PlacementY),
-            6 when placement is not null => NewPlacementTarget(
+            AutomationPropertyIds.PlacementWidth when placement is not null => NewPlacementTarget(
                 targetCueId, placement.Id, AutomationPropertyIds.PlacementWidth),
-            7 when placement is not null => NewPlacementTarget(
+            AutomationPropertyIds.PlacementHeight when placement is not null => NewPlacementTarget(
                 targetCueId, placement.Id, AutomationPropertyIds.PlacementHeight),
-            8 when placement is not null => NewPlacementTarget(
+            AutomationPropertyIds.PlacementRotation when placement is not null => NewPlacementTarget(
                 targetCueId, placement.Id, AutomationPropertyIds.PlacementRotation),
-            9 when placement?.ChromaKey is { } chroma => NewPlacementTarget(
+            AutomationPropertyIds.ChromaSimilarity when placement?.ChromaKey is { } chroma => NewPlacementTarget(
                 targetCueId, chroma.Id, AutomationPropertyIds.ChromaSimilarity),
-            10 when placement?.ChromaKey is { } chroma => NewPlacementTarget(
+            AutomationPropertyIds.ChromaSmoothness when placement?.ChromaKey is { } chroma => NewPlacementTarget(
                 targetCueId, chroma.Id, AutomationPropertyIds.ChromaSmoothness),
-            11 when placement?.ChromaKey is { } chroma => NewPlacementTarget(
+            AutomationPropertyIds.ChromaSpillReduction when placement?.ChromaKey is { } chroma => NewPlacementTarget(
                 targetCueId, chroma.Id, AutomationPropertyIds.ChromaSpillReduction),
-            12 when placement?.ColorAdjust is { } color => NewPlacementTarget(
+            AutomationPropertyIds.ColorBrightness when placement?.ColorAdjust is { } color => NewPlacementTarget(
                 targetCueId, color.Id, AutomationPropertyIds.ColorBrightness),
-            13 when placement?.ColorAdjust is { } color => NewPlacementTarget(
+            AutomationPropertyIds.ColorContrast when placement?.ColorAdjust is { } color => NewPlacementTarget(
                 targetCueId, color.Id, AutomationPropertyIds.ColorContrast),
             _ => null,
         };
@@ -3319,9 +3349,9 @@ public partial class InspectorViewModel : ObservableObject
     private static AutomationTargetRef NewPlacementTarget(Guid? cueId, Guid placementId, string propertyId) =>
         new() { CueId = cueId, ObjectId = placementId, PropertyId = propertyId };
 
-    public void AddLane(int kindIndex)
+    public void AddLane(string propertyId)
     {
-        if (Lanes is not { } tracks || Cue is not { } cue || TargetAt(kindIndex) is not { } target
+        if (Lanes is not { } tracks || Cue is not { } cue || TargetFor(propertyId) is not { } target
             || tracks.Any(track => CueAutomation.SameTarget(track.Target, target)))
             return;
 
@@ -3348,9 +3378,9 @@ public partial class InspectorViewModel : ObservableObject
         Reload();
     }
 
-    public bool CanAddLane(int kindIndex) =>
+    public bool CanAddLane(string propertyId) =>
         Lanes is { } tracks
-        && TargetAt(kindIndex) is { } target
+        && TargetFor(propertyId) is { } target
         && tracks.All(track => !CueAutomation.SameTarget(track.Target, target));
 
     public void RemoveLane(int index)

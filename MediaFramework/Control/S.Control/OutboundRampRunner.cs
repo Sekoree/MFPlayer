@@ -236,12 +236,7 @@ public sealed class OutboundRampRunner
             if (span <= 0)
                 return to.Value;
             var t = (elapsed - from.Time).TotalSeconds / span;
-            var shaped = to.Value < from.Value
-                ? FadeCurves.ShapeProgress(1d - t, from.CurveToNext)
-                : FadeCurves.ShapeProgress(t, from.CurveToNext);
-            return to.Value < from.Value
-                ? to.Value + (from.Value - to.Value) * shaped
-                : from.Value + (to.Value - from.Value) * shaped;
+            return FadeCurves.Interpolate(from.Value, to.Value, t, from.CurveToNext);
         }
 
         return FinalValue;

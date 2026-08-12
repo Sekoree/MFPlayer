@@ -28,12 +28,17 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
     private IReadOnlyList<float>? _cuePeaks;
     private readonly HashSet<Guid> _selection = [];
     private List<AutomationKeyframe> _visibleKeys = [];
-    private IDisposable? _drag;
     private Guid? _gestureKeyId;
+    private List<AutomationKeyframe>? _gestureOriginalKeys;
+    private List<AutomationKeyframe>? _gestureDraftKeys;
+    private double _gestureViewStartMs;
+    private double _gestureViewLengthMs;
+    private int _gestureAxis;
 
     public AutomationEditorViewModel()
     {
         _descriptor = AutomationPropertyCatalog.Get(AutomationPropertyIds.CueVolume)!;
+        IsResolved = true;
         Title = "Automation";
         DurationMs = 120_000;
         _viewLengthMs = 30_000;
@@ -61,8 +66,9 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         _waveformSourceDuration = waveformSourceDuration;
         _cacheRoot = cacheRoot;
         _waveformCacheBytes = waveformCacheBytes;
-        _descriptor = AutomationPropertyCatalog.Get(track.Target.PropertyId)
-                      ?? throw new ArgumentException($"unknown automation property '{track.Target.PropertyId}'", nameof(track));
+        var descriptor = AutomationPropertyCatalog.Get(track.Target.PropertyId);
+        IsResolved = descriptor is not null;
+        _descriptor = descriptor ?? UnresolvedDescriptor(track);
         CanExtend = duration is null;
         var lastKeyMs = track.Keyframes.Select(key => key.TimeMs).DefaultIfEmpty(0).Max();
         DurationMs = Math.Max(
@@ -72,16 +78,21 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         _viewLengthMs = Math.Min(DurationMs, 30_000);
         Title = $"Automation · Q{CuePresentation.Number(cue.Number)} · {TargetName(cue, track)}";
         Reload();
+        if (!IsResolved)
+            Problem = $"'{track.Target.PropertyId}' is unavailable on this machine; the track is preserved read-only";
     }
 
     public string Title { get; }
+    public bool IsResolved { get; }
+    public bool CanEdit => IsResolved;
     public long DurationMs { get; private set; }
     public bool CanExtend { get; }
     public string DurationLabel => (CanExtend ? "open · " : "")
                                    + ClipTimes.Format((int)Math.Min(int.MaxValue, DurationMs));
-    public string Unit => _descriptor.Value.Unit;
-    public string Hint =>
-        $"{DurationLabel} · absolute cue time · double-click to add · drag keys; scroll or zoom for long media";
+    public string Unit => IsResolved ? _descriptor.Value.Unit : "unresolved";
+    public string Hint => IsResolved
+        ? $"{DurationLabel} · absolute cue time · click-drag to add · Alt bypasses snap · Shift constrains"
+        : $"{DurationLabel} · unresolved property · preserved read-only until its effect/plugin is available";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasWaveform))]
@@ -102,6 +113,9 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
 
     [ObservableProperty]
     private IReadOnlyList<CurvePoint> _shape = [];
+
+    [ObservableProperty]
+    private IReadOnlyList<string> _rulerTicks = [];
 
     public IReadOnlyList<CurveTangent> Tangents => [];
 
@@ -171,13 +185,31 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSelection))]
+    [NotifyPropertyChangedFor(nameof(CanEditSelection))]
     private Guid? _primaryKeyId;
 
     public bool HasSelection => PrimaryKeyId is not null;
+    public bool CanEditSelection => CanEdit && HasSelection;
     public int SelectionCount => _selection.Count;
     public bool HasMultipleSelected => _selection.Count > 1;
 
     public IReadOnlyList<string> Segments { get; } = ["linear", "equal power", "exponential", "S-curve"];
+    public IReadOnlyList<int> SnapTimeOptions { get; } = [0, 10, 40, 100, 1_000];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SnapLabel))]
+    private int _snapTimeMs = 100;
+
+    public string SnapLabel => SnapTimeMs <= 0 ? "off" : $"{SnapTimeMs} ms";
+
+    private double ValueSnap => _descriptor.Value.Scale switch
+    {
+        AutomationScale.Decibels => 0.1,
+        AutomationScale.Percentage => 0.01,
+        AutomationScale.Midi7Bit => 1,
+        _ when _descriptor.Value.Unit == "°" => 1,
+        _ => Math.Max(0.001, (_descriptor.Value.Maximum - _descriptor.Value.Minimum) / 100d),
+    };
 
     public string Segment
     {
@@ -190,7 +222,7 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         };
         set
         {
-            if (SelectedKey() is not { } key)
+            if (!CanEdit || SelectedKey() is not { } key)
                 return;
             var law = value switch
             {
@@ -211,7 +243,7 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         get => SelectedKey()?.Hold ?? false;
         set
         {
-            if (SelectedKey() is { } key && key.Hold != value)
+            if (CanEdit && SelectedKey() is { } key && key.Hold != value)
                 ReplaceKey(key.Id, current => current with { Hold = value }, "toggle automation hold");
         }
     }
@@ -221,7 +253,7 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         get => _track?.Enabled ?? true;
         set
         {
-            if (_track is not { } track || _journal is null || track.Enabled == value)
+            if (!CanEdit || _track is not { } track || _journal is null || track.Enabled == value)
                 return;
             _journal.Do(new SetValueCommand<bool>(
                 _cue!.Id, $"automation:{track.Id}:enabled", "cues",
@@ -244,10 +276,48 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             return;
         }
 
+        if (!CanEdit)
+            return;
+
+        BeginGestureDraft();
+        var keys = _gestureDraftKeys!;
+
+        if (gesture.Kind == CurveGestureKind.Move && gesture.IsNudge)
+        {
+            if (GestureKey(gesture.Index) is not { } nudged)
+                return;
+            if (!_selection.Contains(nudged.Id))
+                SelectOnly(nudged);
+            var multiplier = gesture.Accelerated ? 5 : 1;
+            var timeStep = SnapTimeMs > 0
+                ? SnapTimeMs
+                : Math.Max(1, (int)Math.Round(ViewLengthMs / 1_000d));
+            foreach (var key in keys.Where(key => _selection.Contains(key.Id)))
+            {
+                key.TimeMs = Math.Clamp(
+                    key.TimeMs + ((long)(gesture.X * timeStep * multiplier)), 0, DurationMs);
+                key.Value = _descriptor.Value.Clamp(
+                    key.Value - (gesture.Y * ValueSnap * multiplier));
+            }
+            CursorMs = nudged.TimeMs;
+            Reload();
+            return;
+        }
+
         var timeMs = Math.Clamp(
-            (long)Math.Round(ViewStartMs + (Math.Clamp(gesture.X, 0, 1) * ViewLengthMs)), 0, DurationMs);
+            (long)Math.Round(_gestureViewStartMs
+                             + (Math.Clamp(gesture.X, 0, 1) * _gestureViewLengthMs)),
+            0,
+            DurationMs);
         var value = ValueAtCanvasY(gesture.Y);
-        var keys = _track.Keyframes.Select(Clone).ToList();
+        if (!gesture.BypassSnap)
+        {
+            if (SnapTimeMs > 0)
+                timeMs = Math.Clamp(
+                    (long)Math.Round((double)timeMs / SnapTimeMs) * SnapTimeMs, 0, DurationMs);
+            var valueStep = ValueSnap;
+            value = _descriptor.Value.Clamp(Math.Round(value / valueStep) * valueStep);
+        }
 
         switch (gesture.Kind)
         {
@@ -257,17 +327,36 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
                 _selection.Clear();
                 _selection.Add(added.Id);
                 PrimaryKeyId = added.Id;
+                _gestureKeyId = added.Id;
+                _gestureOriginalKeys = keys.Select(Clone).ToList();
                 break;
             case CurveGestureKind.Move when GestureKey(gesture.Index) is { } moved:
                 if (!_selection.Contains(moved.Id))
                     SelectOnly(moved);
-                var original = keys.First(key => key.Id == moved.Id);
+                var originalKeys = _gestureOriginalKeys!;
+                var original = originalKeys.First(key => key.Id == moved.Id);
                 var deltaTime = timeMs - original.TimeMs;
                 var deltaValue = value - original.Value;
+                if (gesture.ConstrainAxis)
+                {
+                    if (_gestureAxis == 0 && (deltaTime != 0 || Math.Abs(deltaValue) > double.Epsilon))
+                    {
+                        var timeDistance = Math.Abs(deltaTime / Math.Max(1d, _gestureViewLengthMs));
+                        var valueDistance = Math.Abs(deltaValue
+                                                     / Math.Max(double.Epsilon,
+                                                         _descriptor.Value.Maximum - _descriptor.Value.Minimum));
+                        _gestureAxis = timeDistance >= valueDistance ? 1 : 2;
+                    }
+                    if (_gestureAxis == 1)
+                        deltaValue = 0;
+                    else if (_gestureAxis == 2)
+                        deltaTime = 0;
+                }
                 foreach (var key in keys.Where(key => _selection.Contains(key.Id)))
                 {
-                    key.TimeMs = Math.Clamp(key.TimeMs + deltaTime, 0, DurationMs);
-                    key.Value = _descriptor.Value.Clamp(key.Value + deltaValue);
+                    var baseline = originalKeys.First(item => item.Id == key.Id);
+                    key.TimeMs = Math.Clamp(baseline.TimeMs + deltaTime, 0, DurationMs);
+                    key.Value = _descriptor.Value.Clamp(baseline.Value + deltaValue);
                 }
                 CursorMs = timeMs;
                 break;
@@ -286,22 +375,44 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
                 return;
         }
 
-        _drag ??= _journal.Composite("edit automation keyframes", "cues", quiet: true);
-        Write(keys, "edit automation keyframes");
         Reload();
     }
 
     public void EndGesture()
     {
-        _drag?.Dispose();
-        _drag = null;
+        var draft = _gestureDraftKeys;
+        ClearGestureDraft();
+        if (draft is not null)
+            Write(draft, "edit automation keyframes");
         _gestureKeyId = null;
         _journal?.CloseGroup();
+        Reload();
     }
+
+    public void CancelGesture()
+    {
+        ClearGestureDraft();
+        _gestureKeyId = null;
+        Reload();
+    }
+
+    public CurveEditorViewModel? SegmentCurveEditor()
+    {
+        if (!CanEdit || _journal is null || _cue is null || _track is null
+            || SelectedKey() is not { } key)
+            return null;
+
+        return new CurveEditorViewModel(
+            _journal,
+            new AutomationSegmentCurveTarget(_cue.Id, _track, key.Id, _journal.Project),
+            $"{Title} · segment shape");
+    }
+
+    public void Refresh() => Reload();
 
     public void AddKeyAtCursor()
     {
-        if (_track is null || _journal is null)
+        if (!CanEdit || _track is null || _journal is null)
             return;
 
         var timeMs = (long)Math.Round(Math.Clamp(CursorMs, 0, DurationMs));
@@ -362,7 +473,7 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
 
     public bool Paste(string? text)
     {
-        if (_track is null || _journal is null
+        if (!CanEdit || _track is null || _journal is null
             || LaneKeyframeClipboard.DecodeKnots(text) is not { Count: > 0 } decoded)
         {
             Problem = "clipboard has no HaCue2 keyframes";
@@ -391,7 +502,8 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
 
     public void CommitPointTime(string text)
     {
-        if (SelectedKey() is not { } key || ClipTimes.Parse(text, TimeSpan.FromMilliseconds(DurationMs)) is not { } time)
+        if (!CanEdit || SelectedKey() is not { } key
+            || ClipTimes.Parse(text, TimeSpan.FromMilliseconds(DurationMs)) is not { } time)
         {
             Problem = "enter a cue time such as 1:23.450";
             ReloadFields();
@@ -404,7 +516,7 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
 
     public void CommitPointValue(string text)
     {
-        if (SelectedKey() is not { } key
+        if (!CanEdit || SelectedKey() is not { } key
             || !double.TryParse(text.Trim().TrimEnd('%'), NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
         {
             Problem = "enter a numeric property value";
@@ -560,14 +672,35 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
     private AutomationKeyframe? GestureKey(int index)
     {
         var key = _gestureKeyId is { } id
-            ? _track?.Keyframes.FirstOrDefault(candidate => candidate.Id == id)
+            ? EditableKeys().FirstOrDefault(candidate => candidate.Id == id)
             : KeyAtVisibleIndex(index);
         _gestureKeyId ??= key?.Id;
         return key;
     }
 
     private AutomationKeyframe? SelectedKey() =>
-        _track?.Keyframes.FirstOrDefault(key => key.Id == PrimaryKeyId);
+        EditableKeys().FirstOrDefault(key => key.Id == PrimaryKeyId);
+
+    private IReadOnlyList<AutomationKeyframe> EditableKeys() =>
+        _gestureDraftKeys ?? _track?.Keyframes ?? [];
+
+    private void BeginGestureDraft()
+    {
+        if (_gestureDraftKeys is not null)
+            return;
+        _gestureOriginalKeys = _track?.Keyframes.Select(Clone).ToList() ?? [];
+        _gestureDraftKeys = _gestureOriginalKeys.Select(Clone).ToList();
+        _gestureViewStartMs = ViewStartMs;
+        _gestureViewLengthMs = ViewLengthMs;
+        _gestureAxis = 0;
+    }
+
+    private void ClearGestureDraft()
+    {
+        _gestureOriginalKeys = null;
+        _gestureDraftKeys = null;
+        _gestureAxis = 0;
+    }
 
     private void SelectOnly(AutomationKeyframe key)
     {
@@ -615,7 +748,7 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
 
     private void ReplaceKey(Guid id, Func<AutomationKeyframe, AutomationKeyframe> replace, string description)
     {
-        if (_track is null)
+        if (!CanEdit || _track is null)
             return;
         var keys = _track.Keyframes.Select(key => key.Id == id ? replace(Clone(key)) : Clone(key)).ToList();
         Write(keys, description);
@@ -626,7 +759,7 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
 
     private void Write(IEnumerable<AutomationKeyframe> keys, string description)
     {
-        if (_track is null || _journal is null || _cue is null)
+        if (!CanEdit || _track is null || _journal is null || _cue is null)
             return;
         var next = keys.OrderBy(key => key.TimeMs).ThenBy(key => key.Id).Select(Clone).ToList();
         _journal.Do(new SetValueCommand<List<AutomationKeyframe>>(
@@ -637,17 +770,47 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             description));
     }
 
+    private static AutomationPropertyDescriptor UnresolvedDescriptor(AutomationTrack track)
+    {
+        var values = track.Keyframes.Where(key => double.IsFinite(key.Value)).Select(key => key.Value).ToArray();
+        var minimum = values.Length == 0 ? 0 : values.Min();
+        var maximum = values.Length == 0 ? 1 : values.Max();
+        if (maximum <= minimum)
+        {
+            minimum -= 0.5;
+            maximum += 0.5;
+        }
+        return new AutomationPropertyDescriptor(
+            track.Target.PropertyId,
+            track.Target.PropertyId,
+            new AutomationValueSpec(minimum, maximum, values.FirstOrDefault(), "", AutomationScale.Linear),
+            AutomationTargetKind.Cue,
+            AutomationDomain.Host,
+            AutomationComposition.ReplaceAuthored,
+            "Unavailable",
+            SupportsCueOwnedTrack: false,
+            SupportsAutomationCue: false);
+    }
+
     private void Reload()
     {
         if (_track is null)
         {
             Points = [];
             Shape = [];
+            RulerTicks = [];
             return;
         }
 
         var end = ViewStartMs + ViewLengthMs;
-        _visibleKeys = _track.Keyframes
+        var editableKeys = EditableKeys();
+        RulerTicks =
+        [
+            .. Enumerable.Range(0, 5).Select(index =>
+                ClipTimes.Format((int)Math.Clamp(
+                    ViewStartMs + (index / 4d * ViewLengthMs), 0, DurationMs))),
+        ];
+        _visibleKeys = editableKeys
             .Where(key => key.TimeMs >= ViewStartMs && key.TimeMs <= end)
             .OrderBy(key => key.TimeMs).ThenBy(key => key.Id)
             .ToList();
@@ -664,7 +827,10 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
                 var x = (double)index / samples;
                 var time = (long)Math.Round(ViewStartMs + (x * ViewLengthMs));
                 var value = AutomationEvaluator.Sample(
-                    _track, _journal?.Project ?? new HaCueProject(), time, _descriptor.Value.Default);
+                    _track with { Keyframes = editableKeys.Select(Clone).ToList() },
+                    _journal?.Project ?? new HaCueProject(),
+                    time,
+                    _descriptor.Value.Default);
                 return new CurvePoint(x, CanvasY(value));
             }),
         ];

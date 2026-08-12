@@ -40,6 +40,10 @@ public sealed record HaCueProject
     /// <summary>Written by the app; checked on load against the tolerant-below, closed-above policy.</summary>
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
+    /// <summary>Session-only summary of schema-1 automation converted while opening/compiling this file.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public AutomationMigrationSummary? LastAutomationMigration { get; set; }
+
     public string Title { get; set; } = "";
 
     public ProjectSettings Settings { get; set; } = new();
@@ -90,6 +94,14 @@ public sealed record HaCueProject
 
     public AudioLineDefinition? FindLine(Guid id) =>
         AudioLines.FirstOrDefault(line => line.Id == id);
+}
+
+public sealed record AutomationMigrationSummary(
+    int TracksCreated,
+    int KeyframesCreated,
+    int UnresolvedLanes)
+{
+    public bool IsComplete => UnresolvedLanes == 0;
 }
 
 /// <summary>

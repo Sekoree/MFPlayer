@@ -138,7 +138,9 @@ public sealed class ShowCompilerTests
         // The send route carries its own −6 dB trim; cue volume is the envelope component. Their
         // runtime product is still −12 dB, while either property can now be automated independently.
         Assert.Equal(Math.Pow(10, -6 / 20d), clip.LogicalSends![0].Gain, 4);
-        Assert.Equal(Math.Pow(10, -6 / 20d), Assert.Single(clip.VolumeEnvelope!).Level, 4);
+        var volume = Assert.Single(clip.VolumeEnvelope!);
+        Assert.Equal(-6, volume.Level, 4);
+        Assert.Equal(ShowEnvelopeValueScale.Decibels, volume.ValueScale);
     }
 
     [Fact]
@@ -264,7 +266,8 @@ public sealed class ShowCompilerTests
         Assert.Equal(33, envelope.Count);
         // The migrated curve is absolute volume: the fixture's −6 dB base multiplied by the legacy
         // curve's 0.75 midpoint.
-        Assert.Equal((float)(Math.Pow(10, -6 / 20d) * 0.75), envelope[16].Level, 3);
+        Assert.Equal(-6 + (20 * Math.Log10(0.75)), envelope[16].Level, 3);
+        Assert.All(envelope, point => Assert.Equal(ShowEnvelopeValueScale.Decibels, point.ValueScale));
         Assert.All(envelope, point => Assert.Equal(FadeCurve.Linear, point.CurveToNext));
     }
 

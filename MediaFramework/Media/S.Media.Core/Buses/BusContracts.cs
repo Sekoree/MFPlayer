@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Effects;
 using S.Media.Core.Video;
 
 namespace S.Media.Core.Buses;
@@ -16,6 +17,23 @@ public interface IAudioBusEffect : IDisposable
     /// <summary>Processes one interleaved chunk in place. <paramref name="samplePosition"/> is the
     /// running per-channel sample count since the bus started (for LFOs/automation).</summary>
     void Process(Span<float> interleaved, long samplePosition);
+}
+
+/// <summary>
+/// Optional managed contract for an audio effect whose scalar parameters can change while processing.
+/// </summary>
+/// <remarks>
+/// <see cref="TrySetParameter"/> is called from a control thread and must publish bounded state without
+/// waiting for the audio thread. <see cref="Process"/> remains allocation/lock-free. The effect owns
+/// smoothing because only it knows which representation and discontinuities are safe; the host supplies
+/// the requested transition duration rather than writing sample-by-sample values.
+/// </remarks>
+public interface IAutomatableAudioBusEffect : IAudioBusEffect
+{
+    IReadOnlyList<EffectParameterDescriptor> Parameters { get; }
+
+    /// <summary>Publishes one clamped parameter target. Returns false for an unknown/non-automatable ID.</summary>
+    bool TrySetParameter(string parameterId, float value, TimeSpan smoothing);
 }
 
 /// <summary>

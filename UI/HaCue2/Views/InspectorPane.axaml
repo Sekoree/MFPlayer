@@ -391,6 +391,11 @@
               <ComboBox ItemsSource="{Binding AutomationTargetCues}"
                         SelectedIndex="{Binding AutomationTargetCueIndex, Mode=TwoWay}" />
             </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Target placement"
+                                    IsVisible="{Binding HasMultipleAutomationTargetPlacements}">
+              <ComboBox ItemsSource="{Binding AutomationTargetPlacements}"
+                        SelectedIndex="{Binding AutomationTargetPlacementIndex, Mode=TwoWay}" />
+            </HeaderedContentControl>
             <!-- Hidden until added (register item 18): a cue with no automation shows none, rather
                  than four empty lanes implying it has some. -->
             <TextBlock Margin="10,4" Classes="mono dim3 small" IsVisible="{Binding !HasEffectLanes}"
@@ -424,38 +429,38 @@
                   <MenuFlyout>
                     <!-- Only what this cue can carry. A volume lane over a visualizer and an opacity
                          lane over a WAV both compile to automation the engine has nowhere to apply. -->
-                    <MenuItem Header="{Binding VolumeLaneLabel}" Click="OnAddLane" Tag="0"
+                    <MenuItem Header="{Binding VolumeLaneLabel}" Click="OnAddLane" Tag="cue.audio.volume"
                               IsVisible="{Binding CanAddVolumeLane}" />
-                    <MenuItem Header="{Binding OpacityLaneLabel}" Click="OnAddLane" Tag="1"
+                    <MenuItem Header="{Binding OpacityLaneLabel}" Click="OnAddLane" Tag="video.placement.opacity"
                               IsVisible="{Binding CanAddOpacityLane}" />
-                    <MenuItem Header="Position X" Click="OnAddLane" Tag="4"
+                    <MenuItem Header="Position X" Click="OnAddLane" Tag="video.placement.x"
                               IsVisible="{Binding CanAddPlacementXLane}" />
-                    <MenuItem Header="Position Y" Click="OnAddLane" Tag="5"
+                    <MenuItem Header="Position Y" Click="OnAddLane" Tag="video.placement.y"
                               IsVisible="{Binding CanAddPlacementYLane}" />
-                    <MenuItem Header="Width" Click="OnAddLane" Tag="6"
+                    <MenuItem Header="Width" Click="OnAddLane" Tag="video.placement.width"
                               IsVisible="{Binding CanAddPlacementWidthLane}" />
-                    <MenuItem Header="Height" Click="OnAddLane" Tag="7"
+                    <MenuItem Header="Height" Click="OnAddLane" Tag="video.placement.height"
                               IsVisible="{Binding CanAddPlacementHeightLane}" />
-                    <MenuItem Header="Rotation" Click="OnAddLane" Tag="8"
+                    <MenuItem Header="Rotation" Click="OnAddLane" Tag="video.placement.rotation"
                               IsVisible="{Binding CanAddPlacementRotationLane}" />
                     <MenuItem Header="Chroma key" IsVisible="{Binding HasAutomationChromaKey}">
-                      <MenuItem Header="Similarity" Click="OnAddLane" Tag="9"
+                      <MenuItem Header="Similarity" Click="OnAddLane" Tag="video.effect.chroma-key.similarity"
                                 IsVisible="{Binding CanAddChromaSimilarityLane}" />
-                      <MenuItem Header="Smoothness" Click="OnAddLane" Tag="10"
+                      <MenuItem Header="Smoothness" Click="OnAddLane" Tag="video.effect.chroma-key.smoothness"
                                 IsVisible="{Binding CanAddChromaSmoothnessLane}" />
-                      <MenuItem Header="Spill reduction" Click="OnAddLane" Tag="11"
+                      <MenuItem Header="Spill reduction" Click="OnAddLane" Tag="video.effect.chroma-key.spill-reduction"
                                 IsVisible="{Binding CanAddChromaSpillLane}" />
                     </MenuItem>
                     <MenuItem Header="Colour adjust" IsVisible="{Binding HasAutomationColorAdjust}">
-                      <MenuItem Header="Brightness" Click="OnAddLane" Tag="12"
+                      <MenuItem Header="Brightness" Click="OnAddLane" Tag="video.effect.color-adjust.brightness"
                                 IsVisible="{Binding CanAddColorBrightnessLane}" />
-                      <MenuItem Header="Contrast" Click="OnAddLane" Tag="13"
+                      <MenuItem Header="Contrast" Click="OnAddLane" Tag="video.effect.color-adjust.contrast"
                                 IsVisible="{Binding CanAddColorContrastLane}" />
                     </MenuItem>
                     <Separator IsVisible="{Binding CanAddOutboundLane}" />
-                    <MenuItem Header="OSC value" Click="OnAddLane" Tag="2"
+                    <MenuItem Header="OSC value" Click="OnAddLane" Tag="external.osc.value"
                               IsVisible="{Binding CanAddOutboundLane}" />
-                    <MenuItem Header="MIDI control" Click="OnAddLane" Tag="3"
+                    <MenuItem Header="MIDI control" Click="OnAddLane" Tag="external.midi.control-value"
                               IsVisible="{Binding CanAddOutboundLane}" />
                   </MenuFlyout>
                 </Button.Flyout>

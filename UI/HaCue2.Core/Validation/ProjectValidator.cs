@@ -633,8 +633,8 @@ public static class ProjectValidator
         {
             if (!AutomationPropertyCatalog.TryGet(track.Target.PropertyId, out var descriptor))
             {
-                issues.Add(Error("cue", id,
-                    $"Q{cue.Number} automates an unknown property '{track.Target.PropertyId}'."));
+                issues.Add(Warn("cue", id,
+                    $"Q{cue.Number} preserves unresolved automation property '{track.Target.PropertyId}' as inert."));
                 continue;
             }
 
@@ -644,6 +644,9 @@ public static class ProjectValidator
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} has an invalid automation interruption policy."));
             var propertyOwner = track.Target.CueId is { } targetCueId ? project.FindCue(targetCueId) : cue;
+            if (cue is not AutomationCueNode && track.Target.CueId is not null)
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} has a targeted track but is not an automation cue."));
             if (track.Target.CueId is { } missingTarget && propertyOwner is null)
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} automates a cue that no longer exists."));
@@ -663,6 +666,9 @@ public static class ProjectValidator
             if (track.Target.PropertyId == AutomationPropertyIds.CueVolume && propertyOwner is not MediaCueNode)
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} targets volume on a cue that has no cue-volume property."));
+            if (descriptor.TargetKind == AutomationTargetKind.Group && propertyOwner is not GroupCueNode)
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} targets {descriptor.DisplayName} on a cue that is not a group."));
             if (cue is not AutomationCueNode && !descriptor.SupportsCueOwnedTrack)
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} can use {descriptor.DisplayName} only from an automation cue."));
@@ -671,6 +677,7 @@ public static class ProjectValidator
                     $"Q{cue.Number} cannot drive {descriptor.DisplayName} from an automation cue."));
 
             long previousTime = -1;
+            var firstKey = true;
             var keyIds = new HashSet<Guid>();
             foreach (var key in track.Keyframes)
             {
@@ -680,11 +687,12 @@ public static class ProjectValidator
                     || key.Value < descriptor.Value.Minimum || key.Value > descriptor.Value.Maximum)
                     issues.Add(Error("cue", id,
                         $"Q{cue.Number} has a {descriptor.DisplayName} key outside its valid time/value range."));
-                if (key.TimeMs < previousTime)
+                if (!firstKey && key.TimeMs <= previousTime)
                     issues.Add(Error("cue", id,
-                        $"Q{cue.Number} has an out-of-order {descriptor.DisplayName} track."));
+                        $"Q{cue.Number} has duplicate or out-of-order times in its {descriptor.DisplayName} track."));
                 ValidateCurve(project, key.Curve, cue, issues);
                 previousTime = key.TimeMs;
+                firstKey = false;
             }
 
             if (descriptor.Domain == AutomationDomain.External && track.Target.EndpointId is null)

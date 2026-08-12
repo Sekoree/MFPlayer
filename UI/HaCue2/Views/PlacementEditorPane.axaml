@@ -122,11 +122,11 @@
       <Button Classes="block" Content="AUTOMATE CHROMA ▾">
         <Button.Flyout>
           <MenuFlyout>
-            <MenuItem Header="Similarity" Click="OnAddAutomation" Tag="9"
+            <MenuItem Header="Similarity" Click="OnAddAutomation" Tag="video.effect.chroma-key.similarity"
                       IsEnabled="{Binding CanAddChromaSimilarityLane}" />
-            <MenuItem Header="Smoothness" Click="OnAddAutomation" Tag="10"
+            <MenuItem Header="Smoothness" Click="OnAddAutomation" Tag="video.effect.chroma-key.smoothness"
                       IsEnabled="{Binding CanAddChromaSmoothnessLane}" />
-            <MenuItem Header="Spill reduction" Click="OnAddAutomation" Tag="11"
+            <MenuItem Header="Spill reduction" Click="OnAddAutomation" Tag="video.effect.chroma-key.spill-reduction"
                       IsEnabled="{Binding CanAddChromaSpillLane}" />
           </MenuFlyout>
         </Button.Flyout>
@@ -149,9 +149,9 @@
     <Button Classes="block" Content="AUTOMATE COLOUR ▾" IsVisible="{Binding HasColorAdjust}">
       <Button.Flyout>
         <MenuFlyout>
-          <MenuItem Header="Brightness" Click="OnAddAutomation" Tag="12"
+          <MenuItem Header="Brightness" Click="OnAddAutomation" Tag="video.effect.color-adjust.brightness"
                     IsEnabled="{Binding CanAddColorBrightnessLane}" />
-          <MenuItem Header="Contrast" Click="OnAddAutomation" Tag="13"
+          <MenuItem Header="Contrast" Click="OnAddAutomation" Tag="video.effect.color-adjust.contrast"
                     IsEnabled="{Binding CanAddColorContrastLane}" />
         </MenuFlyout>
       </Button.Flyout>

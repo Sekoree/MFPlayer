@@ -13,13 +13,13 @@ namespace HaCue2.Tests;
 /// </remarks>
 public class EffectLaneTests
 {
-    private const int Volume = 0;
-    private const int Opacity = 1;
-    private const int Osc = 2;
-    private const int PositionX = 4;
-    private const int Rotation = 8;
-    private const int ChromaSimilarity = 9;
-    private const int ColorContrast = 13;
+    private const string Volume = AutomationPropertyIds.CueVolume;
+    private const string Opacity = AutomationPropertyIds.PlacementOpacity;
+    private const string Osc = AutomationPropertyIds.OscValue;
+    private const string PositionX = AutomationPropertyIds.PlacementX;
+    private const string Rotation = AutomationPropertyIds.PlacementRotation;
+    private const string ChromaSimilarity = AutomationPropertyIds.ChromaSimilarity;
+    private const string ColorContrast = AutomationPropertyIds.ColorContrast;
 
     private static MediaCueNode SelectBed(ShellViewModel shell)
     {
@@ -216,6 +216,45 @@ public class EffectLaneTests
                 Assert.Equal(group.Id, track.Target.CueId);
                 Assert.Equal(AutomationPropertyIds.GroupVideoOpacity, track.Target.PropertyId);
             });
+    });
+
+    [Fact]
+    public Task AnAutomationCueCanSelectWhichPlacementItTargets() => ShellFixture.WithShell(shell =>
+    {
+        var first = new LayerPlacement
+        {
+            CompositionId = shell.Project.Compositions[0].Id,
+            LayerIndex = 2,
+        };
+        var second = new LayerPlacement
+        {
+            CompositionId = shell.Project.Compositions[0].Id,
+            LayerIndex = 7,
+        };
+        var card = new TextCueNode
+        {
+            Number = "901.1",
+            Label = "Two placements",
+            DurationMs = 2_000,
+            Placements = [first, second],
+        };
+        var automation = new AutomationCueNode { Number = "901.2", Label = "Layer controller" };
+        shell.Project.CueLists[0].Cues.AddRange([card, automation]);
+        shell.Cues.Refresh();
+        ShellFixture.Select(shell.Cues, automation.Id);
+        shell.Cues.Inspector.AutomationTargetCueIndex = shell.Cues.Inspector.AutomationTargetCues
+            .Select((label, index) => (label, index))
+            .Single(item => item.label.Contains(card.Label, StringComparison.Ordinal)).index;
+
+        Assert.True(shell.Cues.Inspector.HasMultipleAutomationTargetPlacements);
+        Assert.Equal(2, shell.Cues.Inspector.AutomationTargetPlacements.Count);
+        shell.Cues.Inspector.AutomationTargetPlacementIndex = 1;
+        shell.Cues.Inspector.AddLane(Opacity);
+
+        var track = Assert.Single(automation.AutomationTracks);
+        Assert.Equal(card.Id, track.Target.CueId);
+        Assert.Equal(second.Id, track.Target.ObjectId);
+        Assert.Equal(AutomationPropertyIds.PlacementOpacity, track.Target.PropertyId);
     });
 
     [Fact]

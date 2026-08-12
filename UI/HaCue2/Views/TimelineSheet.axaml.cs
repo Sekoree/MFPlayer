@@ -369,13 +369,12 @@ public partial class TimelineSheet : UserControl
     private void OnAddLane(object? sender, RoutedEventArgs e)
     {
         if (Timeline is not { Owner.Inspector: { } inspector } timeline
-            || (sender as Control)?.Tag is not string tag
-            || !int.TryParse(tag, out var kind))
+            || (sender as Control)?.Tag is not string propertyId)
             return;
 
         // The menu already disables what the selection cannot carry, so reaching here with a refusal
         // means no cue is selected at all — which the menu has no way to grey out.
-        if (!inspector.CanAddLane(kind))
+        if (!inspector.CanAddLane(propertyId))
         {
             timeline.TransportProblem =
                 "select a cue that can carry that lane (and does not have one yet)";
@@ -383,7 +382,7 @@ public partial class TimelineSheet : UserControl
         }
 
         timeline.TransportProblem = "";
-        inspector.AddLane(kind);
+        inspector.AddLane(propertyId);
         timeline.Refresh();
     }
 

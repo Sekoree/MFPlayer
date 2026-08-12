@@ -15,6 +15,28 @@ namespace HaCue2.Tests;
 public sealed class AutomationEditorTests
 {
     [Fact]
+    public void UnresolvedPluginTrackOpensReadOnlyAndPreservesItsKeys()
+    {
+        var key = new AutomationKeyframe { TimeMs = 500, Value = 42 };
+        var track = new AutomationTrack
+        {
+            Target = new AutomationTargetRef { PropertyId = "plugin.example.missing.parameter" },
+            Keyframes = [key],
+        };
+        var cue = new MediaCueNode { MediaPath = "missing.wav", AutomationTracks = [track] };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [cue] }] };
+        var editor = new AutomationEditorViewModel(
+            new ProjectJournal(project), cue, track, TimeSpan.FromSeconds(10));
+
+        Assert.False(editor.IsResolved);
+        Assert.False(editor.CanEdit);
+        Assert.Contains("preserved read-only", editor.Problem, StringComparison.Ordinal);
+        editor.CursorMs = 1_000;
+        editor.AddKeyAtCursor();
+        Assert.Equal([key], track.Keyframes);
+    }
+
+    [Fact]
     public Task WindowRendersTheScrollableEditorAndAddAtCursorControl() =>
         ShellFixture.Session.DispatchGuarded(() =>
         {
@@ -77,6 +99,63 @@ public sealed class AutomationEditorTests
         journal.Undo();
         Assert.Equal(1_635_100, track.Keyframes.Single(key => key.Id == first.Id).TimeMs);
         Assert.Equal(1_635_200, track.Keyframes.Single(key => key.Id == second.Id).TimeMs);
+    }
+
+    [Fact]
+    public void DragUsesALocalDraftUntilReleaseAndEscapeDiscardsIt()
+    {
+        var key = new AutomationKeyframe { TimeMs = 1_000, Value = -6 };
+        var (editor, track, journal) = Editor(key);
+        editor.ViewLengthMs = 10_000;
+
+        editor.Apply(new CurveGesture(CurveGestureKind.Select, 0, 0, 0));
+        editor.Apply(new CurveGesture(CurveGestureKind.Move, 0, .5, .5));
+
+        Assert.Equal(1_000, track.Keyframes.Single().TimeMs);
+        Assert.Empty(journal.Log);
+
+        editor.CancelGesture();
+
+        Assert.Equal(1_000, track.Keyframes.Single().TimeMs);
+        Assert.Empty(journal.Log);
+    }
+
+    [Fact]
+    public void ArrowNudgeUsesTheSelectedSnapGridAndIsOneUndoStep()
+    {
+        var key = new AutomationKeyframe { TimeMs = 1_000, Value = -6 };
+        var (editor, track, journal) = Editor(key);
+        editor.SnapTimeMs = 40;
+
+        editor.Apply(new CurveGesture(CurveGestureKind.Select, 0, 0, 0));
+        editor.Apply(new CurveGesture(
+            CurveGestureKind.Move, 0, 1, 0, IsNudge: true, Accelerated: true));
+        editor.EndGesture();
+
+        Assert.Equal(1_200, track.Keyframes.Single().TimeMs);
+        Assert.Single(journal.Log);
+        journal.Undo();
+        Assert.Equal(1_000, track.Keyframes.Single().TimeMs);
+    }
+
+    [Fact]
+    public void SegmentCurveUndoResolvesTheKeyAfterALaterListReplacement()
+    {
+        var key = new AutomationKeyframe { TimeMs = 1_000, Value = -6 };
+        var (editor, track, journal) = Editor(key);
+        editor.Apply(new CurveGesture(CurveGestureKind.Select, 0, 0, 0));
+        var curve = Assert.IsType<CurveEditorViewModel>(editor.SegmentCurveEditor());
+
+        curve.Apply(new CurveGesture(CurveGestureKind.Add, -1, .5, .5));
+        curve.EndGesture();
+        Assert.Equal(3, track.Keyframes.Single().Curve.Points?.Count);
+
+        editor.Apply(new CurveGesture(CurveGestureKind.Move, 0, .2, .5));
+        editor.EndGesture();
+        journal.Undo();
+        journal.Undo();
+
+        Assert.Null(track.Keyframes.Single().Curve.Points);
     }
 
     [Fact]

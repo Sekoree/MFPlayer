@@ -47,6 +47,9 @@ public sealed partial class ShowSession
     /// uniformly instead of special-casing a slot.</summary>
     private sealed class TransportVoice(IArmedClip clip, ShowClipBinding binding, float masterTrim)
     {
+        private readonly Dictionary<string, Guid> _controllerOwners = new(StringComparer.Ordinal);
+
+        public Guid InstanceId { get; } = Guid.NewGuid();
         public IArmedClip Clip { get; } = clip;
         public ShowClipBinding Binding { get; private set; } = binding;
         public S.Media.Players.MediaPlayer Player => Clip.Player;
@@ -450,6 +453,24 @@ public sealed partial class ShowSession
             ApplyAudioScale(RouteTargets, Level.Fade);
         }
 
+        public bool ApplyControllerEnvelope(Guid ownerId, float level, bool claim)
+        {
+            if (State == VoiceState.Retired || !OwnsController("audio:volume", ownerId, claim))
+                return false;
+            Level.ControllerEnvelope = Math.Clamp(level, 0f, VolumeEnvelopes.MaxLevel);
+            ApplyAudioScale(RouteTargets, Level.Fade);
+            return true;
+        }
+
+        public bool ClearControllerEnvelope(Guid ownerId)
+        {
+            if (!ReleaseController("audio:volume", ownerId))
+                return false;
+            Level.ControllerEnvelope = null;
+            ApplyAudioScale(RouteTargets, Level.Fade);
+            return true;
+        }
+
         /// <summary>Applies a group/controller modifier without overwriting the cue-owned envelope.</summary>
         public void ApplyModifierLevel(float level)
         {
@@ -470,6 +491,149 @@ public sealed partial class ShowSession
             level = Math.Clamp(level, 0f, 1f);
             foreach (var placed in Layers)
                 placed.Slot.ModifierLevel = level;
+        }
+
+        public bool ApplyControllerAudioModifier(Guid ownerId, float level, bool claim)
+        {
+            if (State == VoiceState.Retired || !OwnsController("group:audio", ownerId, claim))
+                return false;
+            ApplyModifierLevel(level);
+            return true;
+        }
+
+        public bool ClearControllerAudioModifier(Guid ownerId)
+        {
+            if (!ReleaseController("group:audio", ownerId))
+                return false;
+            ApplyModifierLevel(1f);
+            return true;
+        }
+
+        public bool ApplyControllerVideoModifier(Guid ownerId, float level, bool claim)
+        {
+            if (State == VoiceState.Retired || !OwnsController("group:video", ownerId, claim))
+                return false;
+            ApplyOpacityModifier(level);
+            return true;
+        }
+
+        public bool ClearControllerVideoModifier(Guid ownerId)
+        {
+            if (!ReleaseController("group:video", ownerId))
+                return false;
+            ApplyOpacityModifier(1f);
+            return true;
+        }
+
+        public bool ApplyControllerOpacity(
+            Guid ownerId,
+            string compositionId,
+            int layerIndex,
+            float level,
+            bool claim)
+        {
+            var key = $"opacity:{compositionId}:{layerIndex}";
+            if (State == VoiceState.Retired || !OwnsController(key, ownerId, claim))
+                return false;
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.SetControllerAutomationLevel(level, absolute: true);
+            return true;
+        }
+
+        public bool ClearControllerOpacity(Guid ownerId, string compositionId, int layerIndex)
+        {
+            var key = $"opacity:{compositionId}:{layerIndex}";
+            if (!ReleaseController(key, ownerId))
+                return false;
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.ClearControllerAutomationLevel();
+            return true;
+        }
+
+        public bool ApplyControllerPlacement(
+            Guid ownerId,
+            string compositionId,
+            int layerIndex,
+            ShowPlacementProperty property,
+            double value,
+            bool claim)
+        {
+            var key = $"placement:{compositionId}:{layerIndex}:{property}";
+            if (State == VoiceState.Retired || !OwnsController(key, ownerId, claim))
+                return false;
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.SetControllerPlacementAutomation(property, value);
+            return true;
+        }
+
+        public bool ClearControllerPlacement(
+            Guid ownerId, string compositionId, int layerIndex, ShowPlacementProperty property)
+        {
+            var key = $"placement:{compositionId}:{layerIndex}:{property}";
+            if (!ReleaseController(key, ownerId))
+                return false;
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.ClearControllerPlacementAutomation(property);
+            return true;
+        }
+
+        public bool ApplyControllerEffect(
+            Guid ownerId,
+            string compositionId,
+            int layerIndex,
+            string effectInstanceId,
+            ShowPlacementEffectProperty property,
+            double value,
+            bool claim)
+        {
+            var key = $"effect:{compositionId}:{layerIndex}:{effectInstanceId}:{property}";
+            if (State == VoiceState.Retired || !OwnsController(key, ownerId, claim))
+                return false;
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.SetControllerEffectAutomation(effectInstanceId, property, value);
+            return true;
+        }
+
+        public bool ClearControllerEffect(
+            Guid ownerId,
+            string compositionId,
+            int layerIndex,
+            string effectInstanceId,
+            ShowPlacementEffectProperty property)
+        {
+            var key = $"effect:{compositionId}:{layerIndex}:{effectInstanceId}:{property}";
+            if (!ReleaseController(key, ownerId))
+                return false;
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.ClearControllerEffectAutomation(effectInstanceId, property);
+            return true;
+        }
+
+        private bool OwnsController(string key, Guid ownerId, bool claim)
+        {
+            if (claim)
+                _controllerOwners[key] = ownerId;
+            return _controllerOwners.GetValueOrDefault(key) == ownerId;
+        }
+
+        private bool ReleaseController(string key, Guid ownerId)
+        {
+            if (_controllerOwners.GetValueOrDefault(key) != ownerId)
+                return false;
+            _controllerOwners.Remove(key);
+            return true;
         }
 
         /// <summary>This voice's level/stop-bus trim hook: stores the new session trim and rewrites whatever

@@ -345,10 +345,24 @@ public sealed record ShowClipBinding(
     public IReadOnlyList<ShowPlacementEffectEnvelope>? PlacementEffectEnvelopes { get; init; }
 }
 
-/// <summary>One volume-envelope keyframe: the clip-relative <paramref name="Time"/>, the LINEAR gain
-/// factor <paramref name="Level"/> (0 = silence; may exceed 1 up to +12 dB - the GUI/mapper converts dB),
-/// and the curve shaping the segment from this point to the next (<see cref="VolumeEnvelopes.Sample"/>).</summary>
-public sealed record ShowEnvelopePoint(TimeSpan Time, float Level, FadeCurve CurveToNext = FadeCurve.Linear);
+public enum ShowEnvelopeValueScale
+{
+    /// <summary>The stored value is already the runtime property value.</summary>
+    Linear,
+
+    /// <summary>The stored value is authored dB and is converted to gain after segment interpolation.</summary>
+    Decibels,
+}
+
+/// <summary>One property-envelope keyframe: the clip-relative <paramref name="Time"/>, its authored
+/// <paramref name="Level"/>, and the curve shaping the segment from this point to the next. Existing
+/// documents default to linear values; new volume automation stores dB so every runtime interpolates in
+/// the same native authoring space.</summary>
+public sealed record ShowEnvelopePoint(
+    TimeSpan Time,
+    float Level,
+    FadeCurve CurveToNext = FadeCurve.Linear,
+    ShowEnvelopeValueScale ValueScale = ShowEnvelopeValueScale.Linear);
 
 /// <summary>A selected subtitle source. <paramref name="Path"/> null means the clip's media container;
 /// <paramref name="StreamIndex"/> <c>-1</c> selects the best subtitle stream.</summary>
@@ -393,8 +407,8 @@ public sealed record ShowDocument(
     /// drive several outputs/devices per group (each with its own N→M route).</summary>
     public IReadOnlyList<ShowAudioOutput> AudioOutputs { get; init; } = [];
 
-    /// <summary>An empty version-1 show.</summary>
-    public static ShowDocument Empty { get; } = new(1, [], [], [], []);
+    /// <summary>An empty show at the current writable document version.</summary>
+    public static ShowDocument Empty { get; } = new(ShowDocumentValidator.CurrentVersion, [], [], [], []);
 
     /// <summary>Serializes to indented JSON via the source-generated context (no reflection - D10).</summary>
     public string ToJson() => JsonSerializer.Serialize(this, ShowDocumentJsonContext.Default.ShowDocument);

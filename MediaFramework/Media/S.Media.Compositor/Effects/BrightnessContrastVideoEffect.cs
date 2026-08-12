@@ -1,5 +1,7 @@
 namespace S.Media.Compositor.Effects;
 
+using S.Media.Core.Effects;
+
 /// <summary>Serializable brightness/contrast parameters, mirroring <see cref="ChromaKeySettings"/>'
 /// role for the chroma key: the value the session placement records carry.</summary>
 /// <param name="Brightness">Additive offset in [-1, 1]; 0 = unchanged.</param>
@@ -24,7 +26,11 @@ public static class BrightnessContrastVideoEffect
     public static VideoLayerEffectDescriptor Descriptor { get; } = new(
         EffectId,
         GlslBody,
-        [new VideoLayerEffectParameter("bc", 2)],
+        [new VideoLayerEffectParameter("bc", 2,
+        [
+            new EffectParameterDescriptor("brightness", "Brightness", -1, 1, 0),
+            new EffectParameterDescriptor("contrast", "Contrast", 0, 4, 1),
+        ])],
         static values => new CpuKernel(values));
 
     public static VideoLayerEffect Create(float brightness, float contrast) =>

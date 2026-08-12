@@ -2267,24 +2267,24 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// targets such as a media cue's volume or one placement's opacity — so the menu and inspector
     /// can never disagree about what the selected cue can animate.
     /// </remarks>
-    public bool CanAddVolumeLane => CanAddLane(0);
-    public bool CanAddOpacityLane => CanAddLane(1);
-    public bool CanAddOscLane => CanAddLane(2);
-    public bool CanAddMidiLane => CanAddLane(3);
-    public bool CanAddPlacementXLane => CanAddLane(4);
-    public bool CanAddPlacementYLane => CanAddLane(5);
-    public bool CanAddPlacementWidthLane => CanAddLane(6);
-    public bool CanAddPlacementHeightLane => CanAddLane(7);
-    public bool CanAddPlacementRotationLane => CanAddLane(8);
-    public bool CanAddChromaSimilarityLane => CanAddLane(9);
-    public bool CanAddChromaSmoothnessLane => CanAddLane(10);
-    public bool CanAddChromaSpillLane => CanAddLane(11);
-    public bool CanAddColorBrightnessLane => CanAddLane(12);
-    public bool CanAddColorContrastLane => CanAddLane(13);
+    public bool CanAddVolumeLane => CanAddLane(AutomationPropertyIds.CueVolume);
+    public bool CanAddOpacityLane => CanAddLane(AutomationPropertyIds.PlacementOpacity);
+    public bool CanAddOscLane => CanAddLane(AutomationPropertyIds.OscValue);
+    public bool CanAddMidiLane => CanAddLane(AutomationPropertyIds.MidiControlValue);
+    public bool CanAddPlacementXLane => CanAddLane(AutomationPropertyIds.PlacementX);
+    public bool CanAddPlacementYLane => CanAddLane(AutomationPropertyIds.PlacementY);
+    public bool CanAddPlacementWidthLane => CanAddLane(AutomationPropertyIds.PlacementWidth);
+    public bool CanAddPlacementHeightLane => CanAddLane(AutomationPropertyIds.PlacementHeight);
+    public bool CanAddPlacementRotationLane => CanAddLane(AutomationPropertyIds.PlacementRotation);
+    public bool CanAddChromaSimilarityLane => CanAddLane(AutomationPropertyIds.ChromaSimilarity);
+    public bool CanAddChromaSmoothnessLane => CanAddLane(AutomationPropertyIds.ChromaSmoothness);
+    public bool CanAddChromaSpillLane => CanAddLane(AutomationPropertyIds.ChromaSpillReduction);
+    public bool CanAddColorBrightnessLane => CanAddLane(AutomationPropertyIds.ColorBrightness);
+    public bool CanAddColorContrastLane => CanAddLane(AutomationPropertyIds.ColorContrast);
     public bool HasAutomationChromaKey => Owner?.Inspector.HasAutomationChromaKey ?? false;
     public bool HasAutomationColorAdjust => Owner?.Inspector.HasAutomationColorAdjust ?? false;
 
-    private bool CanAddLane(int kind) => Owner?.Inspector.CanAddLane(kind) ?? false;
+    private bool CanAddLane(string propertyId) => Owner?.Inspector.CanAddLane(propertyId) ?? false;
 
     /// <summary>The grid picker in the transport row: how fine a drag steps, or free.</summary>
     public IReadOnlyList<string> SnapModes { get; } = ["1 s", "0.5 s", "0.1 s", "free"];

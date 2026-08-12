@@ -214,6 +214,20 @@ public class OutboundRampRunnerTests
     }
 
     [Fact]
+    public void DecreasingSegmentsDoNotReverseTheirAuthoredCurve()
+    {
+        var sent = new List<double>();
+        var runner = new OutboundRampRunner(
+            [new OutboundRampPoint(TimeSpan.Zero, 1, FadeCurve.Exponential),
+             new OutboundRampPoint(TimeSpan.FromSeconds(1), 0)],
+            sent.Add);
+
+        runner.Advance(TimeSpan.FromMilliseconds(500));
+
+        Assert.Equal(0.875, sent[^1], 3);
+    }
+
+    [Fact]
     public void HoldsTheLastValue_PastTheEndOfTheRamp()
     {
         var sent = new List<double>();
