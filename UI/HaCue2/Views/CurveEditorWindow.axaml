@@ -6,7 +6,7 @@
         x:DataType="vm:CurveEditorViewModel"
         x:CompileBindings="True"
         Title="Fade curve"
-        Width="780" Height="430"
+        Width="820" Height="570"
         MinWidth="620" MinHeight="360"
         CanResize="True"
         WindowStartupLocation="CenterOwner"
@@ -42,6 +42,7 @@
                        AutomationProperties.HelpText="Drag points to shape the curve. Exact keyboard-editable values are beside the canvas."
                        Points="{Binding Points}"
                        Shape="{Binding Shape}"
+                       Tangents="{Binding Tangents}"
                        Gesture="OnCurveGesture"
                        GestureCompleted="OnCurveGestureCompleted"
                        HoldToggled="OnHoldToggled" />
@@ -69,6 +70,30 @@
               <TextBox Grid.Column="0" Text="{Binding PresetName}" />
               <Button Grid.Column="1" Classes="tight" Content="SAVE" Click="OnSavePreset" />
             </Grid>
+          </HeaderedContentControl>
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Preset library">
+            <StackPanel Spacing="4">
+              <ComboBox ItemsSource="{Binding Presets}"
+                        SelectedIndex="{Binding SelectedPresetIndex, Mode=TwoWay}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:CurvePresetRow">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                      <TextBlock Text="{Binding Name}" />
+                      <TextBlock Grid.Column="1" Classes="mono dim3 micro" Text="{Binding ReferenceLabel}" />
+                    </Grid>
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <TextBox Text="{Binding ManagedPresetName}" IsEnabled="{Binding HasManagedPreset}" />
+              <WrapPanel Orientation="Horizontal">
+                <Button Classes="tight" Content="RENAME" IsEnabled="{Binding HasManagedPreset}"
+                        Click="OnRenamePreset" />
+                <Button Classes="tight" Content="DELETE" IsEnabled="{Binding HasManagedPreset}"
+                        Click="OnDeletePreset"
+                        ToolTip.Tip="Referenced curves are preserved inline; the whole deletion is undoable." />
+                <Button Classes="tight" Content="IMPORT…" Click="OnImportPresets" />
+              </WrapPanel>
+            </StackPanel>
           </HeaderedContentControl>
           <TextBlock Margin="10,0" Classes="mono dim2 micro" TextWrapping="Wrap"
                      Text="{Binding PresetStatus}" />

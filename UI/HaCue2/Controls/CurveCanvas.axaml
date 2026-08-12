@@ -18,6 +18,8 @@
            BOUNDING BOX, so a curve that never reaches 1 would be drawn as if it did. -->
       <c:EnvelopeGraph Points="{Binding Shape, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}"
                        Stroke="{DynamicResource GelCongo}" StrokeThickness="1.4" />
+      <c:TangentGraph Tangents="{Binding Tangents, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}"
+                      Stroke="{DynamicResource GelAmber}" />
 
       <ItemsControl ItemsSource="{Binding Points, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}">
         <ItemsControl.ItemsPanel>

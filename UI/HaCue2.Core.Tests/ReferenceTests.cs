@@ -178,6 +178,23 @@ public sealed class ReferenceTests
     }
 
     [Fact]
+    public void ProjectStopFadeIsIncludedInCurvePresetReferences()
+    {
+        var fixture = new TestProject();
+        var preset = new CurvePreset
+        {
+            Name = "Stop",
+            Points = [new S.Media.Session.FadeCurvePoint(0, 1), new S.Media.Session.FadeCurvePoint(1, 0)],
+        };
+        fixture.Project.CurvePresets.Add(preset);
+        fixture.Project.Settings.StopFadeCurve.PresetId = preset.Id;
+
+        Assert.Contains(
+            ProjectReferences.To(fixture.Project, ProjectReferences.CurvePreset, preset.Id),
+            reference => reference.Description.Contains("stop fade", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void NothingReferencesSomethingNobodyUses()
     {
         var fixture = new TestProject();

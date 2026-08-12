@@ -204,12 +204,16 @@ public static class ProjectReferences
         return found;
     }
 
-    private static List<ProjectReference> ToCurvePreset(HaCueProject project, Guid id) =>
-    [
-        .. project.AllCues()
+    private static List<ProjectReference> ToCurvePreset(HaCueProject project, Guid id)
+    {
+        var references = project.AllCues()
             .Where(cue => CurvesOf(cue).Any(curve => curve?.PresetId == id))
-            .Select(cue => CueRef(cue, "uses it")),
-    ];
+            .Select(cue => CueRef(cue, "uses it"))
+            .ToList();
+        if (project.Settings.StopFadeCurve.PresetId == id)
+            references.Add(new ProjectReference("document", null!, "the project stop fade uses it"));
+        return references;
+    }
 
     private static IEnumerable<CurveSpec?> CurvesOf(CueNode cue) => cue switch
     {

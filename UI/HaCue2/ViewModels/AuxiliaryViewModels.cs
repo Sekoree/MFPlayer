@@ -240,6 +240,7 @@ public partial class CurveEditorViewModel : ObservableObject
     private readonly ICurveTarget? _target;
     private readonly TimeSpan? _duration;
     private IDisposable? _drag;
+    private Guid? _managedPresetId;
 
     /// <summary>The dummy editor, for a preview with no document behind it.</summary>
     public CurveEditorViewModel()
@@ -264,6 +265,9 @@ public partial class CurveEditorViewModel : ObservableObject
         _knots = target.Read();
         _supportsHold = target.SupportsHold;
         _duration = duration is { TotalMilliseconds: > 0 } ? duration : null;
+        _managedPresetId = target.PresetId ?? journal.Project.CurvePresets.FirstOrDefault()?.Id;
+        _managedPresetName = journal.Project.CurvePresets
+            .FirstOrDefault(preset => preset.Id == _managedPresetId)?.Name ?? "";
     }
 
     public string Title { get; }
@@ -351,6 +355,10 @@ public partial class CurveEditorViewModel : ObservableObject
             knot.X, 1 - knot.Y, index == SelectedIndex, knot.Hold)),
     ];
 
+    public IReadOnlyList<CurveTangent> Tangents => HasSelection
+        ? CurveLibrary.Tangents(_knots, new HashSet<int> { SelectedIndex })
+        : [];
+
     /// <summary>
     /// The polyline. A held point gets a corner the point list does not contain.
     /// </summary>
@@ -363,13 +371,43 @@ public partial class CurveEditorViewModel : ObservableObject
 
     public IReadOnlyList<string> Scales { get; } = ["dB", "linear"];
     public IReadOnlyList<string> Segments => _supportsHold
-        ? ["linear", "equal-power", "exponential", "s-curve", "hold"]
-        : ["linear", "equal-power", "exponential", "s-curve"];
+        ? ["linear", "equal-power", "exponential", "s-curve", "bezier", "hold"]
+        : ["linear", "equal-power", "exponential", "s-curve", "bezier"];
 
     [ObservableProperty] private string _scale = "dB";
     [ObservableProperty] private int _selectedIndex = -1;
     [ObservableProperty] private string _presetName = "";
     [ObservableProperty] private string _presetStatus = "";
+    [ObservableProperty] private string _managedPresetName = "";
+
+    public IReadOnlyList<CurvePresetRow> Presets => _journal is null
+        ? []
+        : [.. _journal.Project.CurvePresets.Select(preset => new CurvePresetRow(
+            preset.Id, preset.Name, CurveBindings(_journal.Project)
+                .Count(binding => binding.Spec.PresetId == preset.Id)))];
+
+    public int SelectedPresetIndex
+    {
+        get
+        {
+            for (var index = 0; index < Presets.Count; index++)
+                if (Presets[index].Id == _managedPresetId)
+                    return index;
+            return -1;
+        }
+        set
+        {
+            if (value < 0 || value >= Presets.Count || Presets[value].Id == _managedPresetId)
+                return;
+            _managedPresetId = Presets[value].Id;
+            ManagedPresetName = Presets[value].Name;
+            PresetStatus = $"{Presets[value].ReferenceLabel}";
+            OnPropertyChanged(nameof(SelectedPresetIndex));
+            OnPropertyChanged(nameof(HasManagedPreset));
+        }
+    }
+
+    public bool HasManagedPreset => SelectedPresetIndex >= 0;
 
     public bool HasSelection => SelectedIndex >= 0 && SelectedIndex < _knots.Count;
 
@@ -430,15 +468,20 @@ public partial class CurveEditorViewModel : ObservableObject
             ? "linear"
             : _knots[SelectedIndex].Hold
                 ? "hold"
+                : HasBezier(SelectedIndex)
+                    ? "bezier"
                 : SegmentName(_knots[SelectedIndex].CurveToNext);
         set
         {
             if (_target is null || _journal is null || !HasSelection)
                 return;
 
-            var command = value == "hold"
-                ? CurveEdits.SetHold(_target, SelectedIndex, hold: true)
-                : CurveEdits.SetSegment(_target, SelectedIndex, SegmentCurve(value));
+            var command = value switch
+            {
+                "hold" => CurveEdits.SetHold(_target, SelectedIndex, hold: true),
+                "bezier" => CurveEdits.SetBezier(_target, SelectedIndex),
+                _ => CurveEdits.SetSegment(_target, SelectedIndex, SegmentCurve(value)),
+            };
 
             if (command is not null)
             {
@@ -450,7 +493,7 @@ public partial class CurveEditorViewModel : ObservableObject
     }
 
     public string EditHint =>
-        "double-click adds · drag moves · drag off removes · right-click toggles hold";
+        "double-click adds · drag points/tangents · drag off removes · right-click toggles hold";
 
     /// <summary>Saves the current drawing into the project and immediately uses it on this cue. This
     /// is the action the old “Save as” textbox promised but never performed.</summary>
@@ -468,7 +511,8 @@ public partial class CurveEditorViewModel : ObservableObject
 
         var points = _target.Read()
             .Select(knot => new FadeCurvePoint(
-                knot.X, knot.Y, knot.Hold, knot.CurveToNext))
+                knot.X, knot.Y, knot.Hold, knot.CurveToNext,
+                knot.OutHandleX, knot.OutHandleY, knot.InHandleX, knot.InHandleY))
             .ToList();
         var existing = _journal.Project.CurvePresets.FirstOrDefault(
             preset => string.Equals(preset.Name, name, StringComparison.OrdinalIgnoreCase));
@@ -504,8 +548,184 @@ public partial class CurveEditorViewModel : ObservableObject
         }
 
         PresetStatus = existing.Name + " saved and selected";
+        _managedPresetId = existing.Id;
+        ManagedPresetName = existing.Name;
         OnPropertyChanged(nameof(Curves));
+        RefreshPresetLibrary();
         Reload();
+    }
+
+    /// <summary>Renames the selected preset without touching references: consumers bind by stable id.</summary>
+    public void RenamePreset()
+    {
+        if (_journal is null || _managedPresetId is not { } id
+            || _journal.Project.CurvePresets.FirstOrDefault(preset => preset.Id == id) is not { } preset)
+            return;
+
+        var name = ManagedPresetName.Trim();
+        if (name.Length == 0)
+        {
+            PresetStatus = "enter a preset name";
+            return;
+        }
+        if (_journal.Project.CurvePresets.Any(candidate => candidate.Id != id
+                && string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            PresetStatus = "that preset name is already in use";
+            return;
+        }
+        if (preset.Name == name)
+            return;
+
+        _journal.Do(new SetValueCommand<string>(
+            preset.Id, "curvePresetName", "cues",
+            () => preset.Name, value => preset.Name = value, name,
+            $"rename curve preset to {name}"));
+        _journal.CloseGroup();
+        PresetStatus = $"renamed to {name}";
+        OnPropertyChanged(nameof(Curves));
+        RefreshPresetLibrary();
+    }
+
+    /// <summary>Deletes a preset without changing playback. Every reference is first converted to an
+    /// inline copy of the preset, and the conversion plus removal is one undoable operation.</summary>
+    public void DeletePreset()
+    {
+        if (_journal is null || _managedPresetId is not { } id
+            || _journal.Project.CurvePresets.FirstOrDefault(preset => preset.Id == id) is not { } preset)
+            return;
+
+        var points = preset.Points.ToList();
+        var references = CurveBindings(_journal.Project)
+            .Where(binding => binding.Spec.PresetId == id)
+            .ToList();
+        using (_journal.Composite($"delete curve preset {preset.Name}", "cues"))
+        {
+            foreach (var binding in references)
+            {
+                var spec = binding.Spec;
+                _journal.Do(new SetValueCommand<List<FadeCurvePoint>?>(
+                    binding.Subject, "curvePoints", "cues",
+                    () => spec.Points, value => spec.Points = value, points.ToList(),
+                    "preserve preset as an inline curve"));
+                _journal.Do(new SetValueCommand<Guid?>(
+                    binding.Subject, "curvePreset", "cues",
+                    () => spec.PresetId, value => spec.PresetId = value, null,
+                    "detach deleted curve preset"));
+            }
+            _journal.Do(new RemoveItemCommand<CurvePreset>(
+                _journal.Project.CurvePresets, preset, "cues", $"delete curve preset {preset.Name}"));
+        }
+
+        _managedPresetId = _journal.Project.CurvePresets.FirstOrDefault()?.Id;
+        ManagedPresetName = _journal.Project.CurvePresets.FirstOrDefault()?.Name ?? "";
+        PresetStatus = references.Count == 0
+            ? $"{preset.Name} deleted"
+            : $"{preset.Name} deleted · {references.Count} use(s) preserved inline";
+        OnPropertyChanged(nameof(Curves));
+        RefreshPresetLibrary();
+        Reload();
+    }
+
+    /// <summary>Imports valid curve presets from another HaCue2 project. IDs are rotated and names are
+    /// uniquified so importing the same library twice never retargets existing cues.</summary>
+    public void ImportPresets(HaCueProject source)
+    {
+        if (_journal is null)
+            return;
+
+        var imported = new List<CurvePreset>();
+        using (_journal.Composite("import curve presets", "cues"))
+        {
+            foreach (var sourcePreset in source.CurvePresets.Where(CanImport))
+            {
+                var name = UniquePresetName(sourcePreset.Name);
+                var copy = new CurvePreset
+                {
+                    Id = Guid.NewGuid(),
+                    Name = name,
+                    Points = sourcePreset.Points.ToList(),
+                };
+                _journal.Do(new AddItemCommand<CurvePreset>(
+                    _journal.Project.CurvePresets, copy, _journal.Project.CurvePresets.Count,
+                    "cues", $"import curve preset {name}"));
+                imported.Add(copy);
+            }
+        }
+
+        if (imported.Count == 0)
+        {
+            PresetStatus = "that project has no valid curve presets";
+            return;
+        }
+        _managedPresetId = imported[0].Id;
+        ManagedPresetName = imported[0].Name;
+        PresetStatus = $"imported {imported.Count} preset(s)";
+        OnPropertyChanged(nameof(Curves));
+        RefreshPresetLibrary();
+    }
+
+    public void ReportPresetError(string message) => PresetStatus = message;
+
+    private void RefreshPresetLibrary()
+    {
+        OnPropertyChanged(nameof(Presets));
+        OnPropertyChanged(nameof(SelectedPresetIndex));
+        OnPropertyChanged(nameof(HasManagedPreset));
+    }
+
+    private string UniquePresetName(string proposed)
+    {
+        var root = string.IsNullOrWhiteSpace(proposed) ? "Imported curve" : proposed.Trim();
+        var name = root;
+        for (var suffix = 2; _journal!.Project.CurvePresets.Any(preset =>
+                 string.Equals(preset.Name, name, StringComparison.OrdinalIgnoreCase)); suffix++)
+            name = $"{root} ({suffix})";
+        return name;
+    }
+
+    private static bool CanImport(CurvePreset preset)
+    {
+        if (preset.Points.Count < 2 || preset.Points.Any(point =>
+                !double.IsFinite(point.Progress) || !double.IsFinite(point.Level)
+                || point.Progress is < 0 or > 1 || point.Level is < 0 or > 1))
+            return false;
+        try
+        {
+            _ = new CustomFadeCurve(preset.Points);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static IReadOnlyList<(Guid Subject, CurveSpec Spec)> CurveBindings(HaCueProject project)
+    {
+        var bindings = new List<(Guid, CurveSpec)> { (Guid.Empty, project.Settings.StopFadeCurve) };
+        foreach (var cue in project.AllCues())
+            switch (cue)
+            {
+                case MediaCueNode media:
+                    bindings.Add((cue.Id, media.FadeInCurve));
+                    bindings.Add((cue.Id, media.FadeOutCurve));
+                    break;
+                case TextCueNode text:
+                    bindings.Add((cue.Id, text.FadeInCurve));
+                    bindings.Add((cue.Id, text.FadeOutCurve));
+                    break;
+                case GroupCueNode group:
+                    bindings.Add((cue.Id, group.CrossfadeCurve));
+                    break;
+                case FadeCueNode fade:
+                    bindings.Add((cue.Id, fade.Curve));
+                    break;
+                case PatchCueNode patch:
+                    bindings.Add((cue.Id, patch.FadeCurve));
+                    break;
+            }
+        return bindings;
     }
 
     /// <summary>A drag, a nudge, an add or a remove — every route ends in one command.</summary>
@@ -519,6 +739,16 @@ public partial class CurveEditorViewModel : ObservableObject
             SelectedIndex = gesture.Index;
             return;
         }
+        if (gesture.Kind is CurveGestureKind.ToggleSelection or CurveGestureKind.RangeSelection)
+        {
+            SelectedIndex = gesture.Index;
+            return;
+        }
+        if (gesture.Kind == CurveGestureKind.ClearSelection)
+        {
+            SelectedIndex = -1;
+            return;
+        }
 
         // The gesture arrives in canvas space; the document stores levels, so y flips back here.
         var x = gesture.X;
@@ -529,6 +759,11 @@ public partial class CurveEditorViewModel : ObservableObject
             CurveGestureKind.Move => CurveEdits.Move(_target, gesture.Index, x, y),
             CurveGestureKind.Add when !CurveEdits.HasPointNear(_target, x) => CurveEdits.Add(_target, x, y),
             CurveGestureKind.Remove => CurveEdits.Remove(_target, gesture.Index),
+            CurveGestureKind.RemoveSelection when HasSelection => CurveEdits.Remove(_target, SelectedIndex),
+            CurveGestureKind.MoveIncomingTangent =>
+                CurveEdits.MoveTangent(_target, gesture.Index, incoming: true, x, y),
+            CurveGestureKind.MoveOutgoingTangent =>
+                CurveEdits.MoveTangent(_target, gesture.Index, incoming: false, x, y),
             _ => null,
         };
 
@@ -538,7 +773,7 @@ public partial class CurveEditorViewModel : ObservableObject
         _drag ??= _journal.Composite(command.Description, "cues");
         _journal.Do(command);
 
-        if (gesture.Kind == CurveGestureKind.Remove)
+        if (gesture.Kind is CurveGestureKind.Remove or CurveGestureKind.RemoveSelection)
             SelectedIndex = -1;
 
         Reload();
@@ -565,6 +800,7 @@ public partial class CurveEditorViewModel : ObservableObject
 
         OnPropertyChanged(nameof(Points));
         OnPropertyChanged(nameof(Shape));
+        OnPropertyChanged(nameof(Tangents));
         OnPropertyChanged(nameof(SelectedPoint));
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(Segment));
@@ -579,6 +815,7 @@ public partial class CurveEditorViewModel : ObservableObject
     partial void OnSelectedIndexChanged(int value)
     {
         OnPropertyChanged(nameof(Points));
+        OnPropertyChanged(nameof(Tangents));
         OnPropertyChanged(nameof(SelectedPoint));
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(Segment));
@@ -641,6 +878,11 @@ public partial class CurveEditorViewModel : ObservableObject
                 return index;
         return CustomIndex;
     }
+
+    private bool HasBezier(int index) =>
+        index >= 0 && index + 1 < _knots.Count
+        && _knots[index].OutHandleX is not null
+        && _knots[index + 1].InHandleX is not null;
 
     private static string SegmentName(FadeCurve curve) => curve switch
     {

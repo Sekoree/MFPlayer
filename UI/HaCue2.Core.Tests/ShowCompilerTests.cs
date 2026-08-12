@@ -240,6 +240,30 @@ public sealed class ShowCompilerTests
     }
 
     [Fact]
+    public void ABezierEffectLaneCompilesToFineLinearEnvelopePoints()
+    {
+        var fixture = new TestProject();
+        fixture.Track.EffectLanes.Add(new EffectLane
+        {
+            Kind = EffectLaneKind.Volume,
+            Points =
+            [
+                new LanePoint(0, 0, OutHandleX: 0, OutHandleY: 1),
+                new LanePoint(1, 0, InHandleX: 1, InHandleY: 1),
+            ],
+        });
+
+        var document = ShowCompiler.Compile(
+            fixture.Project,
+            new Dictionary<Guid, TimeSpan> { [fixture.Track.Id] = TimeSpan.FromSeconds(8) });
+        var envelope = Clip(document, fixture.Track).VolumeEnvelope!;
+
+        Assert.Equal(33, envelope.Count);
+        Assert.Equal(0.75f, envelope[16].Level, 3);
+        Assert.All(envelope, point => Assert.Equal(FadeCurve.Linear, point.CurveToNext));
+    }
+
+    [Fact]
     public void AnOutPointBecomesAnEndOffsetCountedBackFromTheFilesEnd()
     {
         var fixture = new TestProject();

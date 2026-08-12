@@ -39,6 +39,35 @@ public class CustomFadeCurveTests
     }
 
     [Fact]
+    public void CubicBezierHandlesAreEvaluatedAtTheAuthoredXCoordinate()
+    {
+        var curve = new CustomFadeCurve(
+        [
+            new FadeCurvePoint(0, 0, OutHandleX: 0, OutHandleLevel: 1),
+            new FadeCurvePoint(1, 0, InHandleX: 1, InHandleLevel: 1),
+        ]);
+
+        Assert.Equal(0.75f, curve.Evaluate(0.5), 4);
+        Assert.Equal(0f, curve.Evaluate(0), 5);
+        Assert.Equal(0f, curve.Evaluate(1), 5);
+    }
+
+    [Fact]
+    public void BezierSegmentsRejectIncompleteOrOutOfSegmentHandles()
+    {
+        Assert.Throws<ArgumentException>(() => new CustomFadeCurve(
+        [
+            new FadeCurvePoint(0, 0, OutHandleX: 0.2, OutHandleLevel: 0.2),
+            new FadeCurvePoint(1, 1),
+        ]));
+        Assert.Throws<ArgumentException>(() => new CustomFadeCurve(
+        [
+            new FadeCurvePoint(0, 0, OutHandleX: 1.2, OutHandleLevel: 0.2),
+            new FadeCurvePoint(1, 1, InHandleX: 0.8, InHandleLevel: 0.8),
+        ]));
+    }
+
+    [Fact]
     public void HoldSegments_Step_RatherThanRamp()
     {
         // A hold is how an author draws "stay here, then jump" - a plain ramp cannot express it.

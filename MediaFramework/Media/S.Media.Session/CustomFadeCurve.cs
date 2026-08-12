@@ -7,11 +7,20 @@ namespace S.Media.Session;
 /// toward it - a step rather than a ramp.</param>
 /// <param name="CurveToNext">The interpolation law from this point to the next. The default preserves
 /// every document written before shaped custom segments were introduced.</param>
+/// <param name="OutHandleX">Absolute normalized X of the outgoing cubic Bézier handle.</param>
+/// <param name="OutHandleLevel">Absolute normalized level of the outgoing handle.</param>
+/// <param name="InHandleX">Absolute normalized X of the incoming cubic Bézier handle.</param>
+/// <param name="InHandleLevel">Absolute normalized level of the incoming handle. Tangents are
+/// nullable and therefore additive: documents without them retain their previous segment law.</param>
 public readonly record struct FadeCurvePoint(
     double Progress,
     double Level,
     bool Hold = false,
-    FadeCurve CurveToNext = FadeCurve.Linear);
+    FadeCurve CurveToNext = FadeCurve.Linear,
+    double? OutHandleX = null,
+    double? OutHandleLevel = null,
+    double? InHandleX = null,
+    double? InHandleLevel = null);
 
 /// <summary>
 /// A user-drawn fade shape: a normalized point list evaluated the same way a volume envelope is.
@@ -52,7 +61,24 @@ public sealed record CustomFadeCurve
                 throw new ArgumentException("curve points must be finite", nameof(points));
             if (i > 0 && p.Progress < points[i - 1].Progress)
                 throw new ArgumentException("curve points must be sorted by progress", nameof(points));
+            ValidateHandle(p.InHandleX, p.InHandleLevel, nameof(points));
+            ValidateHandle(p.OutHandleX, p.OutHandleLevel, nameof(points));
         }
+
+        for (var i = 0; i + 1 < points.Count; i++)
+        {
+            var from = points[i];
+            var to = points[i + 1];
+            var hasOut = from.OutHandleX is not null;
+            var hasIn = to.InHandleX is not null;
+            if (hasOut != hasIn)
+                throw new ArgumentException("a Bézier segment needs both endpoint handles", nameof(points));
+            if (hasOut && (from.OutHandleX < from.Progress || from.OutHandleX > to.Progress
+                           || to.InHandleX < from.Progress || to.InHandleX > to.Progress))
+                throw new ArgumentException("Bézier handles must stay inside their segment", nameof(points));
+        }
+        if (points[0].InHandleX is not null || points[^1].OutHandleX is not null)
+            throw new ArgumentException("curve endpoint handles must point into an existing segment", nameof(points));
 
         _points = [.. points];
     }
@@ -85,8 +111,19 @@ public sealed record CustomFadeCurve
             if (span <= 0)
                 return (float)to.Level;
 
-            // Same interpolation the envelope sampler uses, so a shape drawn in the editor behaves
-            // identically whether it is applied as a fade or as automation. Linear remains the
+            if (from.OutHandleX is { } outX
+                && from.OutHandleLevel is { } outLevel
+                && to.InHandleX is { } inX
+                && to.InHandleLevel is { } inLevel)
+                return (float)BezierLevel(
+                    progress,
+                    from.Progress, from.Level,
+                    outX, outLevel,
+                    inX, inLevel,
+                    to.Progress, to.Level);
+
+            // Same interpolation the envelope sampler uses, so a non-Bézier shape drawn in the editor
+            // behaves identically whether it is applied as a fade or as automation. Linear remains the
             // serialized default, so old custom curves keep their exact shape.
             var t = (progress - from.Progress) / span;
             return FadeCurves.LevelBetween(
@@ -95,6 +132,48 @@ public sealed record CustomFadeCurve
         }
 
         return (float)_points[^1].Level;
+    }
+
+    private static void ValidateHandle(double? x, double? level, string parameter)
+    {
+        if ((x is null) != (level is null))
+            throw new ArgumentException("a curve handle needs both coordinates", parameter);
+        if (x is { } handleX
+            && (!double.IsFinite(handleX) || !double.IsFinite(level!.Value)
+                || handleX is < 0 or > 1 || level.Value is < 0 or > 1))
+            throw new ArgumentException("curve handles must be finite and inside 0–1", parameter);
+    }
+
+    /// <summary>Evaluates a monotonic-X cubic Bézier at an authored X coordinate. X is inverted with a
+    /// bounded binary search; handle X is constrained to the segment, so the solution is unique.</summary>
+    private static double BezierLevel(
+        double x,
+        double x0, double y0,
+        double x1, double y1,
+        double x2, double y2,
+        double x3, double y3)
+    {
+        var low = 0d;
+        var high = 1d;
+        for (var iteration = 0; iteration < 30; iteration++)
+        {
+            var middle = (low + high) / 2;
+            if (Cubic(x0, x1, x2, x3, middle) < x)
+                low = middle;
+            else
+                high = middle;
+        }
+
+        return Cubic(y0, y1, y2, y3, (low + high) / 2);
+    }
+
+    private static double Cubic(double a, double b, double c, double d, double t)
+    {
+        var inverse = 1 - t;
+        return (inverse * inverse * inverse * a)
+               + (3 * inverse * inverse * t * b)
+               + (3 * inverse * t * t * c)
+               + (t * t * t * d);
     }
 
     /// <summary>Value-equality over the points, so two curves deserialized separately compare equal

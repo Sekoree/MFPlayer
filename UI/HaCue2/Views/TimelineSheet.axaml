@@ -31,7 +31,7 @@
           </Button>
           <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
                      TextTrimming="CharacterEllipsis"
-                     Text="volume · opacity · OSC ramp · MIDI ramp — per cue or per group, hidden until added" />
+                     Text="{Binding KeyframeStatus}" />
           <Border Grid.Column="2" Classes="badge"><TextBlock Text="LIVE" /></Border>
           <TextBlock Grid.Column="3" Classes="mono dim3 small" VerticalAlignment="Center"
                      Text="edits while running apply on the next pass" />
@@ -118,17 +118,30 @@
                                 BorderThickness="0,0,1,0" Padding="8,8,8,0"
                                 Background="Transparent"
                                 PointerPressed="OnLaneLabelPressed">
-                          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
-                            <TextBlock Grid.Column="0" Classes="mono dim2 small ellipsis"
+                          <Grid RowDefinitions="Auto,*" RowSpacing="5">
+                            <TextBlock Grid.Row="0" Classes="mono dim2 small ellipsis"
                                        VerticalAlignment="Center" Text="{Binding Name}" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="3"
-                                        IsVisible="{Binding IsEffect}">
+                            <WrapPanel Grid.Row="1" Orientation="Horizontal"
+                                       IsVisible="{Binding IsEffect}">
                               <Button Classes="icon" Content="{Binding ExpandLabel}"
                                       Click="OnToggleEffectLane"
                                       ToolTip.Tip="Expand this lane into an inline point editor" />
                               <Button Classes="icon" Content="CURVE…" Click="OnOpenLaneEditor"
                                       ToolTip.Tip="Edit exact time/value fields and segment curves" />
-                            </StackPanel>
+                              <Button Classes="icon" Content="ALL" Click="OnSelectAllKeyframes"
+                                      IsVisible="{Binding IsExpanded}"
+                                      ToolTip.Tip="Select every keyframe (Ctrl+A)" />
+                              <Button Classes="icon" Content="COPY" Click="OnCopyKeyframes"
+                                      IsVisible="{Binding IsExpanded}"
+                                      ToolTip.Tip="Copy selected keyframes (Ctrl+C)" />
+                              <Button Classes="icon" Content="PASTE" Click="OnPasteKeyframes"
+                                      IsVisible="{Binding IsExpanded}"
+                                      ToolTip.Tip="Paste at the playhead (Ctrl+V)" />
+                              <Button Classes="icon" Content="DEL" Click="OnDeleteKeyframes"
+                                      IsVisible="{Binding IsExpanded}"
+                                      IsEnabled="{Binding HasSelectedPoints}"
+                                      ToolTip.Tip="Delete selected keyframes" />
+                            </WrapPanel>
                           </Grid>
                         </Border>
 
@@ -157,9 +170,13 @@
                                                Stroke="{DynamicResource GelAmber}"
                                                StrokeThickness="1.4" Margin="0,4" />
                               <c:CurveCanvas Points="{Binding Points}" Shape="{Binding Shape}"
+                                             Tangents="{Binding Tangents}"
                                              IsVisible="{Binding IsExpanded}"
                                              Gesture="OnLaneGesture"
-                                             GestureCompleted="OnLaneGestureCompleted" />
+                                             GestureCompleted="OnLaneGestureCompleted"
+                                             SelectAllRequested="OnCanvasSelectAllKeyframes"
+                                             CopyRequested="OnCanvasCopyKeyframes"
+                                             PasteRequested="OnCanvasPasteKeyframes" />
                             </Grid>
                           </c:FractionPanel>
                         </Panel>

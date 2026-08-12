@@ -1,4 +1,5 @@
 using HaCue2.Core.Model;
+using S.Media.Session;
 
 namespace HaCue2.Core.Timeline;
 
@@ -127,6 +128,24 @@ public static class DuckMath
         if (x <= points[0].X)
             return points[0].Y;
 
+        if (points.Count > 1)
+        {
+            try
+            {
+                return new CustomFadeCurve([
+                    .. points.Select(point => new FadeCurvePoint(
+                        point.X, point.Y, CurveToNext: point.CurveToNext,
+                        OutHandleX: point.OutHandleX, OutHandleLevel: point.OutHandleY,
+                        InHandleX: point.InHandleX, InHandleLevel: point.InHandleY)),
+                ]).Evaluate(x);
+            }
+            catch (ArgumentException)
+            {
+                // Validation reports malformed authored tangents; ducking can still fall back to the
+                // legacy linear sampler so an operator can repair the lane rather than losing the tool.
+            }
+        }
+
         for (var index = 1; index < points.Count; index++)
         {
             if (x > points[index].X)
@@ -160,8 +179,16 @@ public static class DuckMath
         var restoreIn = Sample(points, t0);
         var restoreOut = Sample(points, t3);
 
+        var before = points.Where(point => point.X < t0).ToList();
+        var after = points.Where(point => point.X > t3).ToList();
+        if (before.Count > 0)
+            before[^1] = before[^1] with { OutHandleX = null, OutHandleY = null };
+        if (after.Count > 0)
+            after[0] = after[0] with { InHandleX = null, InHandleY = null };
+
         var spliced = new List<LanePoint>(points.Count + 4);
-        spliced.AddRange(points.Where(point => point.X < t0 || point.X > t3));
+        spliced.AddRange(before);
+        spliced.AddRange(after);
 
         // A ramp squeezed off the clip edge drops its restore point: holding the depth to the edge is
         // what "the voice-over is already talking when the bed starts" should sound like.

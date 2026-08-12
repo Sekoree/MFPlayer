@@ -149,4 +149,16 @@ public sealed class DuckMathTests
         // No automation means no attenuation — the honest reading of "nobody drew anything".
         Assert.Equal(1, DuckMath.Sample([], 0.5));
     }
+
+    [Fact]
+    public void RestoreSamplingUsesTheAuthoredBezierRatherThanAChord()
+    {
+        IReadOnlyList<LanePoint> curve =
+        [
+            new(0, 0, OutHandleX: 0, OutHandleY: 1),
+            new(1, 0, InHandleX: 1, InHandleY: 1),
+        ];
+
+        Assert.Equal(0.75, DuckMath.Sample(curve, 0.5), 4);
+    }
 }

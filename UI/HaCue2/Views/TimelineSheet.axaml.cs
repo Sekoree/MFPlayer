@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.VisualTree;
@@ -80,6 +81,63 @@ public partial class TimelineSheet : UserControl
     }
 
     private void OnLaneGestureCompleted(object? sender, EventArgs e) => Timeline?.EndGesture();
+
+    private void OnSelectAllKeyframes(object? sender, RoutedEventArgs e) => SelectAllKeyframes(sender);
+
+    private void OnCanvasSelectAllKeyframes(object? sender, EventArgs e) => SelectAllKeyframes(sender);
+
+    private void SelectAllKeyframes(object? sender)
+    {
+        if (Timeline is { } timeline && (sender as Control)?.DataContext is TimelineLane lane)
+            timeline.SelectAllKeyframes(lane);
+    }
+
+    private async void OnCopyKeyframes(object? sender, RoutedEventArgs e) => await CopyKeyframes(sender);
+
+    private async void OnCanvasCopyKeyframes(object? sender, EventArgs e) => await CopyKeyframes(sender);
+
+    private async Task CopyKeyframes(object? sender)
+    {
+        if (Timeline is not { } timeline
+            || (sender as Control)?.DataContext is not TimelineLane lane
+            || timeline.CopySelectedKeyframes(lane) is not { Length: > 0 } text
+            || TopLevel.GetTopLevel(this)?.Clipboard is not { } clipboard)
+            return;
+        try
+        {
+            await clipboard.SetTextAsync(text);
+        }
+        catch (Exception)
+        {
+            // Clipboard ownership is best-effort; the document and selection remain untouched.
+        }
+    }
+
+    private async void OnPasteKeyframes(object? sender, RoutedEventArgs e) => await PasteKeyframes(sender);
+
+    private async void OnCanvasPasteKeyframes(object? sender, EventArgs e) => await PasteKeyframes(sender);
+
+    private async Task PasteKeyframes(object? sender)
+    {
+        if (Timeline is not { } timeline
+            || (sender as Control)?.DataContext is not TimelineLane lane
+            || TopLevel.GetTopLevel(this)?.Clipboard is not { } clipboard)
+            return;
+        try
+        {
+            timeline.PasteKeyframes(lane, await clipboard.TryGetTextAsync());
+        }
+        catch (Exception)
+        {
+            // Another process can temporarily own the clipboard. Treat that as an empty paste.
+        }
+    }
+
+    private void OnDeleteKeyframes(object? sender, RoutedEventArgs e)
+    {
+        if (Timeline is { } timeline && (sender as Control)?.DataContext is TimelineLane lane)
+            timeline.DeleteSelectedKeyframes(lane);
+    }
 
     private void OnToggleEffectLane(object? sender, RoutedEventArgs e)
     {

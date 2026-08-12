@@ -688,13 +688,40 @@ public static class ShowCompiler
         if (span is not { } duration || duration <= TimeSpan.Zero)
             return null;
 
-        return
-        [
-            .. lane.Points.Select(point => new ShowEnvelopePoint(
-                point.X * duration,
-                (float)Math.Clamp(point.Y, 0, 1),
-                point.CurveToNext)),
-        ];
+        if (!lane.Points.Any(point => point.OutHandleX is not null || point.InHandleX is not null))
+            return
+            [
+                .. lane.Points.Select(point => new ShowEnvelopePoint(
+                    point.X * duration,
+                    (float)Math.Clamp(point.Y, 0, 1),
+                    point.CurveToNext)),
+            ];
+
+        // The runtime envelope document predates tangent metadata. Compile a Bézier lane into 32
+        // linear subdivisions per authored segment: this is additive-safe for every show-document
+        // consumer, while bounding the geometric approximation independently of cue duration.
+        var curve = new CustomFadeCurve([
+            .. lane.Points.Select(point => new FadeCurvePoint(
+                point.X, point.Y, CurveToNext: point.CurveToNext,
+                OutHandleX: point.OutHandleX, OutHandleLevel: point.OutHandleY,
+                InHandleX: point.InHandleX, InHandleLevel: point.InHandleY)),
+        ]);
+        var sampled = new List<ShowEnvelopePoint>
+        {
+            new(lane.Points[0].X * duration, (float)lane.Points[0].Y),
+        };
+        for (var index = 0; index + 1 < lane.Points.Count; index++)
+        {
+            var from = lane.Points[index];
+            var to = lane.Points[index + 1];
+            const int samples = 32;
+            for (var step = 1; step <= samples; step++)
+            {
+                var x = from.X + ((to.X - from.X) * step / samples);
+                sampled.Add(new ShowEnvelopePoint(x * duration, curve.Evaluate(x)));
+            }
+        }
+        return sampled;
     }
 
     private static IReadOnlyList<EffectLane> MergeLanes(

@@ -763,7 +763,11 @@ public enum EffectLaneKind
 public readonly record struct LanePoint(
     double X,
     double Y,
-    FadeCurve CurveToNext = FadeCurve.Linear);
+    FadeCurve CurveToNext = FadeCurve.Linear,
+    double? OutHandleX = null,
+    double? OutHandleY = null,
+    double? InHandleX = null,
+    double? InHandleY = null);
 
 /// <summary>
 /// How a fade is shaped: a built-in law, a project preset, or an inline custom curve.

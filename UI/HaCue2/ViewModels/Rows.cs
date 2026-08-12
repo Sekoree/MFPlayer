@@ -731,12 +731,19 @@ public sealed partial class TimelineLane : ObservableObject
     [NotifyPropertyChangedFor(nameof(ExpandLabel))]
     private bool _isExpanded;
 
-    public double Height => IsEffect ? IsExpanded ? 132 : 30 : 34;
+    public double Height => IsEffect ? IsExpanded ? 152 : 58 : 34;
     public string ExpandLabel => IsExpanded ? "COLLAPSE" : "EDIT";
 
     /// <summary>The authored handles, local to the cue rather than the whole visible group.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSelectedPoints))]
     private IReadOnlyList<CurvePoint> _points = [];
+
+    public bool HasSelectedPoints => Points.Any(point => point.IsSelected);
+
+    /// <summary>Bézier tangent arms for the selected keyframes.</summary>
+    [ObservableProperty]
+    private IReadOnlyList<CurveTangent> _tangents = [];
 
     /// <summary>The sampled shaped path, local to the cue.</summary>
     [ObservableProperty]
@@ -817,6 +824,22 @@ public sealed record CurveOption(
 /// <summary>A draggable point on the custom-curve editor, in fractions of the canvas.</summary>
 /// <param name="IsHold">Flat until the next point. Drawn as a square rather than a circle.</param>
 public sealed record CurvePoint(double X, double Y, bool IsSelected = false, bool IsHold = false);
+
+/// <summary>One visible cubic Bézier tangent, in canvas fractions. Incoming identifies which side of
+/// the owning keyframe is edited.</summary>
+public sealed record CurveTangent(
+    int Index,
+    bool Incoming,
+    double AnchorX,
+    double AnchorY,
+    double X,
+    double Y);
+
+/// <summary>One row in the project curve-preset library.</summary>
+public sealed record CurvePresetRow(Guid Id, string Name, int References)
+{
+    public string ReferenceLabel => References == 1 ? "1 use" : $"{References} uses";
+}
 
 /// <summary>
 /// One source-to-hardware route, as the inspector's chain draws it.

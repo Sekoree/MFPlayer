@@ -2122,7 +2122,8 @@ public sealed partial class TimelineViewModel : ObservableObject
     private GroupCueNode? _group;
     private IDisposable? _drag;
     private readonly HashSet<Guid> _expandedEffectLanes = [];
-    private readonly Dictionary<Guid, int> _selectedEffectPoints = [];
+    private readonly Dictionary<Guid, HashSet<int>> _selectedEffectPoints = [];
+    private readonly Dictionary<Guid, int> _effectSelectionAnchors = [];
     private readonly Dictionary<Guid, float[]> _waveforms = [];
     private readonly HashSet<Guid> _waveformLoads = [];
 
@@ -2213,6 +2214,10 @@ public sealed partial class TimelineViewModel : ObservableObject
 
     [ObservableProperty]
     private IReadOnlyList<TimelineLane> _lanes = [];
+
+    [ObservableProperty]
+    private string _keyframeStatus =
+        "volume · opacity · OSC ramp · MIDI ramp — Ctrl/Shift-click keyframes to select";
 
     /// <summary>The grid picker in the transport row: how fine a drag steps, or free.</summary>
     public IReadOnlyList<string> SnapModes { get; } = ["1 s", "0.5 s", "0.1 s", "free"];
@@ -2336,10 +2341,43 @@ public sealed partial class TimelineViewModel : ObservableObject
             || EffectLanes(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } lane)
             return;
 
+        var selected = Selection(laneId);
         if (gesture.Kind == CurveGestureKind.Select)
         {
-            _selectedEffectPoints[laneId] = gesture.Index;
-            SelectPoint(row, gesture.Index);
+            if (!selected.Contains(gesture.Index))
+            {
+                selected.Clear();
+                selected.Add(gesture.Index);
+            }
+            _effectSelectionAnchors[laneId] = gesture.Index;
+            SelectPoints(row, selected);
+            row.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(cue.Id, lane).Read(), selected);
+            return;
+        }
+        if (gesture.Kind == CurveGestureKind.ToggleSelection)
+        {
+            if (!selected.Add(gesture.Index))
+                selected.Remove(gesture.Index);
+            _effectSelectionAnchors[laneId] = gesture.Index;
+            SelectPoints(row, selected);
+            row.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(cue.Id, lane).Read(), selected);
+            return;
+        }
+        if (gesture.Kind == CurveGestureKind.RangeSelection)
+        {
+            var anchor = _effectSelectionAnchors.GetValueOrDefault(laneId, gesture.Index);
+            selected.Clear();
+            for (var index = Math.Min(anchor, gesture.Index); index <= Math.Max(anchor, gesture.Index); index++)
+                selected.Add(index);
+            SelectPoints(row, selected);
+            row.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(cue.Id, lane).Read(), selected);
+            return;
+        }
+        if (gesture.Kind == CurveGestureKind.ClearSelection)
+        {
+            selected.Clear();
+            row.Points = [.. row.Points.Select(point => point with { IsSelected = false })];
+            row.Tangents = [];
             return;
         }
 
@@ -2348,9 +2386,16 @@ public sealed partial class TimelineViewModel : ObservableObject
         var y = 1 - gesture.Y;
         var command = gesture.Kind switch
         {
+            CurveGestureKind.Move when selected.Count > 1 && selected.Contains(gesture.Index) =>
+                CurveEdits.MoveMany(target, selected, gesture.Index, x, y),
             CurveGestureKind.Move => CurveEdits.Move(target, gesture.Index, x, y),
             CurveGestureKind.Add when !CurveEdits.HasPointNear(target, x) => CurveEdits.Add(target, x, y),
             CurveGestureKind.Remove => CurveEdits.Remove(target, gesture.Index),
+            CurveGestureKind.RemoveSelection => CurveEdits.RemoveMany(target, selected),
+            CurveGestureKind.MoveIncomingTangent =>
+                CurveEdits.MoveTangent(target, gesture.Index, true, x, y),
+            CurveGestureKind.MoveOutgoingTangent =>
+                CurveEdits.MoveTangent(target, gesture.Index, false, x, y),
             _ => null,
         };
         if (command is null)
@@ -2358,8 +2403,21 @@ public sealed partial class TimelineViewModel : ObservableObject
 
         _drag ??= _journal.Composite(command.Description, "cues", quiet: true);
         _journal.Do(command);
-        if (gesture.Kind == CurveGestureKind.Remove)
-            _selectedEffectPoints.Remove(laneId);
+        if (gesture.Kind is CurveGestureKind.Remove or CurveGestureKind.RemoveSelection)
+        {
+            selected.Clear();
+            _effectSelectionAnchors.Remove(laneId);
+        }
+        else if (gesture.Kind == CurveGestureKind.Add)
+        {
+            var added = lane.Points
+                .Select((point, index) => (point, index))
+                .OrderBy(pair => Math.Abs(pair.point.X - x) + Math.Abs(pair.point.Y - y))
+                .First().index;
+            selected.Clear();
+            selected.Add(added);
+            _effectSelectionAnchors[laneId] = added;
+        }
         Refresh();
     }
 
@@ -2380,6 +2438,96 @@ public sealed partial class TimelineViewModel : ObservableObject
             $"Q{CuePresentation.Number(cue.Number)} · {lane.Kind.ToString().ToLowerInvariant()} lane",
             duration > TimeSpan.Zero ? duration : null);
     }
+
+    public void SelectAllKeyframes(TimelineLane row)
+    {
+        if (row.EffectLaneId is not { } laneId)
+            return;
+        var selected = Selection(laneId);
+        selected.Clear();
+        for (var index = 0; index < row.Points.Count; index++)
+            selected.Add(index);
+        _effectSelectionAnchors[laneId] = 0;
+        Refresh();
+        KeyframeStatus = $"selected {selected.Count} keyframe(s)";
+    }
+
+    public string? CopySelectedKeyframes(TimelineLane row)
+    {
+        if (row.EffectLaneId is not { } laneId
+            || _project.FindCue(row.SubjectId) is not { } cue
+            || EffectLanes(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } lane
+            || !_selectedEffectPoints.TryGetValue(laneId, out var selected)
+            || selected.Count == 0)
+        {
+            KeyframeStatus = "select one or more keyframes to copy";
+            return null;
+        }
+
+        KeyframeStatus = $"copied {selected.Count} keyframe(s)";
+        return LaneKeyframeClipboard.Encode(lane.Points, selected);
+    }
+
+    public bool PasteKeyframes(TimelineLane row, string? text)
+    {
+        if (_journal is null
+            || LaneKeyframeClipboard.Decode(text) is not { Count: > 0 } decoded
+            || row.EffectLaneId is not { } laneId
+            || _project.FindCue(row.SubjectId) is not { } cue
+            || EffectLanes(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } lane)
+        {
+            KeyframeStatus = "clipboard has no HaCue2 keyframes";
+            return false;
+        }
+
+        var copiedSpan = decoded[^1].X - decoded[0].X;
+        var cueSpan = Span(cue);
+        var cueLength = Math.Max(1, cueSpan.EndMs - cueSpan.StartMs);
+        var atPlayhead = (_playheadMs - cue.TimelineOffsetMs) / cueLength;
+        var anchor = Math.Clamp(atPlayhead, 0, Math.Max(0, 1 - copiedSpan));
+        var translated = decoded.Select(point => new CurveKnot(
+            anchor + point.X,
+            point.Y,
+            CurveToNext: point.CurveToNext,
+            OutHandleX: ShiftHandle(point.OutHandleX, anchor),
+            OutHandleY: point.OutHandleY,
+            InHandleX: ShiftHandle(point.InHandleX, anchor),
+            InHandleY: point.InHandleY)).ToList();
+
+        var target = new EffectLaneTarget(cue.Id, lane);
+        var combined = target.Read().Concat(translated).ToList();
+        _journal.Do(CurveEdits.Replace(target, combined, $"paste {translated.Count} keyframes"));
+        _journal.CloseGroup();
+
+        var selected = Selection(laneId);
+        selected.Clear();
+        var claimed = new HashSet<int>();
+        foreach (var pasted in translated)
+        {
+            var match = lane.Points
+                .Select((point, index) => (point, index))
+                .Where(pair => !claimed.Contains(pair.index))
+                .OrderBy(pair => Math.Abs(pair.point.X - pasted.X) + Math.Abs(pair.point.Y - pasted.Y))
+                .ThenByDescending(pair => pair.index)
+                .First().index;
+            claimed.Add(match);
+            selected.Add(match);
+        }
+        _effectSelectionAnchors[laneId] = selected.Min();
+        Refresh();
+        KeyframeStatus = $"pasted {selected.Count} keyframe(s) at {PlayheadLabel}";
+        return true;
+    }
+
+    public void DeleteSelectedKeyframes(TimelineLane row)
+    {
+        ApplyLaneGesture(row, new CurveGesture(CurveGestureKind.RemoveSelection, -1, 0, 0));
+        EndGesture();
+        KeyframeStatus = "selected keyframes deleted";
+    }
+
+    private static double? ShiftHandle(double? value, double offset) =>
+        value is { } number ? number + offset : null;
 
     /// <summary>Ends the gesture, closing its undo step.</summary>
     public void EndGesture()
@@ -2509,7 +2657,13 @@ public sealed partial class TimelineViewModel : ObservableObject
             var laneId = lane.EffectLaneId!.Value;
             lane.IsExpanded = _expandedEffectLanes.Contains(laneId);
             if (_selectedEffectPoints.TryGetValue(laneId, out var selected))
-                SelectPoint(lane, selected);
+            {
+                selected.RemoveWhere(index => index < 0 || index >= lane.Points.Count);
+                SelectPoints(lane, selected);
+                if (_project.FindCue(lane.SubjectId) is { } owner
+                    && EffectLanes(owner).FirstOrDefault(item => item.Id == laneId) is { } effect)
+                    lane.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(owner.Id, effect).Read(), selected);
+            }
             if (_waveforms.TryGetValue(lane.SubjectId, out var peaks)
                 && _project.FindCue(lane.SubjectId) is MediaCueNode media)
                 lane.Peaks = TrimmedPeaks(media, peaks);
@@ -2528,6 +2682,7 @@ public sealed partial class TimelineViewModel : ObservableObject
                 Lanes[i].Envelope = lanes[i].Envelope;
                 Lanes[i].Points = lanes[i].Points;
                 Lanes[i].Shape = lanes[i].Shape;
+                Lanes[i].Tangents = lanes[i].Tangents;
                 Lanes[i].Peaks = lanes[i].Peaks;
                 Lanes[i].IsExpanded = lanes[i].IsExpanded;
             }
@@ -2595,10 +2750,17 @@ public sealed partial class TimelineViewModel : ObservableObject
         _ => [],
     };
 
-    private static void SelectPoint(TimelineLane lane, int selected) =>
+    private HashSet<int> Selection(Guid laneId)
+    {
+        if (!_selectedEffectPoints.TryGetValue(laneId, out var selected))
+            _selectedEffectPoints[laneId] = selected = [];
+        return selected;
+    }
+
+    private static void SelectPoints(TimelineLane lane, IReadOnlySet<int> selected) =>
         lane.Points =
         [
-            .. lane.Points.Select((point, index) => point with { IsSelected = index == selected }),
+            .. lane.Points.Select((point, index) => point with { IsSelected = selected.Contains(index) }),
         ];
 
     private async void BeginWaveform(Guid cueId)

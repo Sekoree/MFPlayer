@@ -122,13 +122,18 @@ public static class ProjectValidator
                 Identity(binding.Id, "triggerBinding", input.Id.ToString());
         }
 
+        var presetNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var preset in project.CurvePresets)
         {
             Identity(preset.Id, "curvePreset", preset.Id.ToString());
             if (string.IsNullOrWhiteSpace(preset.Name))
                 issues.Add(Error("curvePreset", preset.Id.ToString(), "A curve preset has no name."));
+            else if (!presetNames.Add(preset.Name))
+                issues.Add(Error("curvePreset", preset.Id.ToString(),
+                    $"More than one curve preset is called “{preset.Name}”."));
             ValidateCurvePoints(preset.Points, "curvePreset", preset.Id.ToString(), preset.Name, issues);
         }
+        ValidateDocumentCurve(project, project.Settings.StopFadeCurve, "project stop fade", issues);
 
         if (project.AudioPatch.MixSampleRate is < 8_000 or > 384_000)
             issues.Add(Error("document", null,
@@ -597,8 +602,9 @@ public static class ProjectValidator
             // Points must advance. A lane whose X went backwards would evaluate differently depending
             // on how it was walked, which is the kind of ambiguity that shows up once, live.
             var previousX = double.NegativeInfinity;
-            foreach (var point in lane.Points)
+            for (var pointIndex = 0; pointIndex < lane.Points.Count; pointIndex++)
             {
+                var point = lane.Points[pointIndex];
                 if (!double.IsFinite(point.X) || !double.IsFinite(point.Y)
                     || point.X < 0 || point.X > 1 || point.Y < 0 || point.Y > 1)
                     issues.Add(Error("cue", id,
@@ -608,8 +614,23 @@ public static class ProjectValidator
                 if (!Enum.IsDefined(point.CurveToNext))
                     issues.Add(Error("cue", id,
                         $"Q{cue.Number} has a {lane.Kind} lane with an unknown segment curve."));
+                ValidateHandlePair(
+                    point.InHandleX, point.InHandleY, "cue", id,
+                    $"Q{cue.Number} {lane.Kind} incoming tangent", issues);
+                ValidateHandlePair(
+                    point.OutHandleX, point.OutHandleY, "cue", id,
+                    $"Q{cue.Number} {lane.Kind} outgoing tangent", issues);
+                if (pointIndex + 1 < lane.Points.Count)
+                    ValidateBezierSegment(
+                        point.X, point.OutHandleX,
+                        lane.Points[pointIndex + 1].X, lane.Points[pointIndex + 1].InHandleX,
+                        "cue", id, $"Q{cue.Number} {lane.Kind}", issues);
                 previousX = point.X;
             }
+            if (lane.Points.Count > 0
+                && (lane.Points[0].InHandleX is not null || lane.Points[^1].OutHandleX is not null))
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} has a {lane.Kind} tangent pointing outside its endpoints."));
 
             if (lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp && lane.EndpointId is null)
                 issues.Add(Error("cue", id,
@@ -653,6 +674,18 @@ public static class ProjectValidator
                 $"Q{cue.Number} uses a curve preset that no longer exists."));
     }
 
+    private static void ValidateDocumentCurve(
+        HaCueProject project, CurveSpec curve, string label, List<ShowValidationIssue> issues)
+    {
+        if (!Enum.IsDefined(curve.Law))
+            issues.Add(Error("document", null, $"The {label} uses an unknown fade law."));
+        if (curve.Points is { } points)
+            ValidateCurvePoints(points, "document", null, label, issues);
+        if (curve.PresetId is { } presetId
+            && project.CurvePresets.All(preset => preset.Id != presetId))
+            issues.Add(Error("document", null, $"The {label} uses a curve preset that no longer exists."));
+    }
+
     private static void ValidateCurvePoints(
         IReadOnlyList<FadeCurvePoint> points,
         string kind,
@@ -664,8 +697,9 @@ public static class ProjectValidator
             issues.Add(Error(kind, id, $"{label} curve has fewer than two points."));
 
         var previous = double.NegativeInfinity;
-        foreach (var point in points)
+        for (var pointIndex = 0; pointIndex < points.Count; pointIndex++)
         {
+            var point = points[pointIndex];
             if (!double.IsFinite(point.Progress) || !double.IsFinite(point.Level)
                 || point.Progress is < 0 or > 1 || point.Level is < 0 or > 1)
                 issues.Add(Error(kind, id, $"{label} curve has a point outside the finite 0–1 range."));
@@ -673,8 +707,43 @@ public static class ProjectValidator
                 issues.Add(Error(kind, id, $"{label} curve points are out of order."));
             if (!Enum.IsDefined(point.CurveToNext))
                 issues.Add(Error(kind, id, $"{label} curve has an unknown segment law."));
+            ValidateHandlePair(
+                point.InHandleX, point.InHandleLevel, kind, id, $"{label} incoming tangent", issues);
+            ValidateHandlePair(
+                point.OutHandleX, point.OutHandleLevel, kind, id, $"{label} outgoing tangent", issues);
+            if (pointIndex + 1 < points.Count)
+                ValidateBezierSegment(
+                    point.Progress, point.OutHandleX,
+                    points[pointIndex + 1].Progress, points[pointIndex + 1].InHandleX,
+                    kind, id, label, issues);
             previous = point.Progress;
         }
+        if (points.Count > 0 && (points[0].InHandleX is not null || points[^1].OutHandleX is not null))
+            issues.Add(Error(kind, id, $"{label} curve has a tangent pointing outside its endpoints."));
+    }
+
+    private static void ValidateHandlePair(
+        double? x, double? y, string kind, string? id, string label, List<ShowValidationIssue> issues)
+    {
+        if ((x is null) != (y is null)
+            || x is { } handleX && (!double.IsFinite(handleX) || handleX is < 0 or > 1)
+            || y is { } handleY && (!double.IsFinite(handleY) || handleY is < 0 or > 1))
+            issues.Add(Error(kind, id, $"{label} is incomplete or outside the finite 0–1 range."));
+    }
+
+    private static void ValidateBezierSegment(
+        double fromX, double? outX, double toX, double? inX,
+        string kind, string? id, string label, List<ShowValidationIssue> issues)
+    {
+        if ((outX is null) != (inX is null))
+        {
+            issues.Add(Error(kind, id, $"{label} curve has a Bézier segment missing one handle."));
+            return;
+        }
+
+        if (outX is { } outgoing && inX is { } incoming
+            && (outgoing < fromX || outgoing > toX || incoming < fromX || incoming > toX))
+            issues.Add(Error(kind, id, $"{label} curve has a Bézier handle outside its segment."));
     }
 
     private static void ValidateTriggers(HaCueProject project, List<ShowValidationIssue> issues)

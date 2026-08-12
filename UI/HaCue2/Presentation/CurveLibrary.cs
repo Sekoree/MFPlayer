@@ -65,7 +65,8 @@ public static class CurveLibrary
         preset.Name.Length > 0 ? preset.Name : "unnamed preset",
         Thumbnail([
             .. preset.Points.Select(point => new CurveKnot(
-                point.Progress, point.Level, point.Hold, point.CurveToNext)),
+                point.Progress, point.Level, point.Hold, point.CurveToNext,
+                point.OutHandleX, point.OutHandleLevel, point.InHandleX, point.InHandleLevel)),
         ]),
         PresetId: preset.Id);
 
@@ -77,6 +78,23 @@ public static class CurveLibrary
             return [];
 
         var shape = new List<CurvePoint> { new(knots[0].X, 1 - knots[0].Y) };
+        if (knots.Count == 1)
+            return shape;
+        CustomFadeCurve? evaluator;
+        try
+        {
+            evaluator = new CustomFadeCurve([
+                .. knots.Select(knot => new FadeCurvePoint(
+                    knot.X, knot.Y, knot.Hold, knot.CurveToNext,
+                    knot.OutHandleX, knot.OutHandleY, knot.InHandleX, knot.InHandleY)),
+            ]);
+        }
+        catch (ArgumentException)
+        {
+            // Invalid imported/hand-edited project data is reported by ProjectValidator. The editor
+            // must still open so the operator can repair it, hence this visual-only law fallback.
+            evaluator = null;
+        }
 
         for (var index = 0; index + 1 < knots.Count; index++)
         {
@@ -94,19 +112,38 @@ public static class CurveLibrary
             for (var step = 1; step <= samples; step++)
             {
                 var progress = (double)step / samples;
-                var level = FadeCurves.LevelBetween(
+                var x = from.X + ((to.X - from.X) * progress);
+                var level = evaluator?.Evaluate(x) ?? FadeCurves.LevelBetween(
                     (float)from.Y,
                     (float)to.Y,
                     TimeSpan.FromSeconds(progress),
                     TimeSpan.FromSeconds(1),
                     from.CurveToNext);
                 shape.Add(new CurvePoint(
-                    from.X + ((to.X - from.X) * progress),
+                    x,
                     1 - level));
             }
         }
 
         return shape;
+    }
+
+    /// <summary>The selected knots' authored Bézier handles in canvas coordinates.</summary>
+    public static IReadOnlyList<CurveTangent> Tangents(
+        IReadOnlyList<CurveKnot> knots, IReadOnlySet<int> selected)
+    {
+        var handles = new List<CurveTangent>();
+        foreach (var index in selected.Where(index => index >= 0 && index < knots.Count))
+        {
+            var knot = knots[index];
+            if (knot.InHandleX is { } inX && knot.InHandleY is { } inY)
+                handles.Add(new CurveTangent(
+                    index, true, knot.X, 1 - knot.Y, inX, 1 - inY));
+            if (knot.OutHandleX is { } outX && knot.OutHandleY is { } outY)
+                handles.Add(new CurveTangent(
+                    index, false, knot.X, 1 - knot.Y, outX, 1 - outY));
+        }
+        return handles;
     }
 
     private static string Thumbnail(IReadOnlyList<CurveKnot> knots)

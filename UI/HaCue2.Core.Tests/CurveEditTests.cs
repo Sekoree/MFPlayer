@@ -286,6 +286,30 @@ public sealed class CurveEditTests
     }
 
     [Fact]
+    public void BezierTangentsAreCreatedMovedEvaluatedAndUndoable()
+    {
+        var fixture = new TestProject();
+        var journal = new ProjectJournal(fixture.Project);
+        var target = new CurveSpecTarget(fixture.Track.Id, "fadeIn", fixture.Track.FadeInCurve);
+
+        journal.Do(CurveEdits.SetBezier(target, 0)!);
+        journal.CloseGroup();
+        journal.Do(CurveEdits.MoveTangent(target, 0, false, 0.1, 0.9)!);
+        journal.CloseGroup();
+
+        var points = fixture.Track.FadeInCurve.Points!;
+        Assert.Equal(0.1, points[0].OutHandleX);
+        Assert.Equal(0.9, points[0].OutHandleLevel);
+        Assert.NotNull(points[1].InHandleX);
+        Assert.True(new CustomFadeCurve(points).Evaluate(0.25) > 0.25f);
+
+        journal.Undo();
+        Assert.NotEqual(0.1, fixture.Track.FadeInCurve.Points![0].OutHandleX);
+        journal.Undo();
+        Assert.Null(fixture.Track.FadeInCurve.Points);
+    }
+
+    [Fact]
     public void EveryPickerThumbnailNamesTheLawItDraws() =>
         // The thumbnails are drawings of these. Out of step, the picker's pictures and its effects
         // would disagree — the one failure nobody would think to look for.

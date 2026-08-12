@@ -68,7 +68,9 @@ public static class TimelinePresentation
             {
                 var knots = lane.Points
                     .Select(point => new CurveKnot(
-                        point.X, point.Y, CurveToNext: point.CurveToNext))
+                        point.X, point.Y, CurveToNext: point.CurveToNext,
+                        OutHandleX: point.OutHandleX, OutHandleY: point.OutHandleY,
+                        InHandleX: point.InHandleX, InHandleY: point.InHandleY))
                     .ToList();
                 lanes.Add(new TimelineLane
                 {

@@ -20,6 +20,13 @@ public enum CurveGestureKind
 
     /// <summary>Just select it, without changing anything.</summary>
     Select,
+
+    ToggleSelection,
+    RangeSelection,
+    ClearSelection,
+    RemoveSelection,
+    MoveIncomingTangent,
+    MoveOutgoingTangent,
 }
 
 /// <summary>One curve edit, in fractions of the canvas. Y is already flipped to level space.</summary>
@@ -45,6 +52,7 @@ public partial class CurveCanvas : UserControl
 
     private Panel? _surface;
     private int _draggedIndex = -1;
+    private CurveTangent? _draggedTangent;
 
     public static readonly StyledProperty<IReadOnlyList<CurvePoint>> PointsProperty =
         AvaloniaProperty.Register<CurveCanvas, IReadOnlyList<CurvePoint>>(nameof(Points), []);
@@ -53,6 +61,9 @@ public partial class CurveCanvas : UserControl
     /// a corner the point list does not contain.</summary>
     public static readonly StyledProperty<IReadOnlyList<CurvePoint>> ShapeProperty =
         AvaloniaProperty.Register<CurveCanvas, IReadOnlyList<CurvePoint>>(nameof(Shape), []);
+
+    public static readonly StyledProperty<IReadOnlyList<CurveTangent>> TangentsProperty =
+        AvaloniaProperty.Register<CurveCanvas, IReadOnlyList<CurveTangent>>(nameof(Tangents), []);
 
     public CurveCanvas()
     {
@@ -70,6 +81,10 @@ public partial class CurveCanvas : UserControl
     /// <summary>Raised on a right-click, to toggle the point's hold.</summary>
     public event EventHandler<int>? HoldToggled;
 
+    public event EventHandler? CopyRequested;
+    public event EventHandler? PasteRequested;
+    public event EventHandler? SelectAllRequested;
+
     public IReadOnlyList<CurvePoint> Points
     {
         get => GetValue(PointsProperty);
@@ -80,6 +95,12 @@ public partial class CurveCanvas : UserControl
     {
         get => GetValue(ShapeProperty);
         set => SetValue(ShapeProperty, value);
+    }
+
+    public IReadOnlyList<CurveTangent> Tangents
+    {
+        get => GetValue(TangentsProperty);
+        set => SetValue(TangentsProperty, value);
     }
 
     private Panel? Surface =>
@@ -94,6 +115,7 @@ public partial class CurveCanvas : UserControl
 
         var position = e.GetPosition(surface);
         var index = PointAt(position, bounds);
+        var tangent = TangentAt(position, bounds);
         Focus();
 
         if (e.GetCurrentPoint(surface).Properties.IsRightButtonPressed)
@@ -104,6 +126,15 @@ public partial class CurveCanvas : UserControl
                 e.Handled = true;
             }
 
+            return;
+        }
+
+        if (tangent is not null)
+        {
+            _draggedTangent = tangent;
+            Gesture?.Invoke(this, new CurveGesture(CurveGestureKind.Select, tangent.Index, 0, 0));
+            e.Pointer.Capture(this);
+            e.Handled = true;
             return;
         }
 
@@ -123,10 +154,18 @@ public partial class CurveCanvas : UserControl
         }
 
         if (index < 0)
+        {
+            Gesture?.Invoke(this, new CurveGesture(CurveGestureKind.ClearSelection, -1, 0, 0));
             return;
+        }
 
         _draggedIndex = index;
-        Gesture?.Invoke(this, new CurveGesture(CurveGestureKind.Select, index, 0, 0));
+        var selection = e.KeyModifiers.HasFlag(KeyModifiers.Control)
+            ? CurveGestureKind.ToggleSelection
+            : e.KeyModifiers.HasFlag(KeyModifiers.Shift)
+                ? CurveGestureKind.RangeSelection
+                : CurveGestureKind.Select;
+        Gesture?.Invoke(this, new CurveGesture(selection, index, 0, 0));
         e.Pointer.Capture(this);
         e.Handled = true;
     }
@@ -135,10 +174,19 @@ public partial class CurveCanvas : UserControl
     {
         base.OnPointerMoved(e);
 
-        if (_draggedIndex < 0 || Surface is not { Bounds: { Width: > 0, Height: > 0 } bounds } surface)
+        if (_draggedIndex < 0 && _draggedTangent is null
+            || Surface is not { Bounds: { Width: > 0, Height: > 0 } bounds } surface)
             return;
 
         var position = e.GetPosition(surface);
+        if (_draggedTangent is { } tangent)
+        {
+            Gesture?.Invoke(this, new CurveGesture(
+                tangent.Incoming ? CurveGestureKind.MoveIncomingTangent : CurveGestureKind.MoveOutgoingTangent,
+                tangent.Index, position.X / bounds.Width, position.Y / bounds.Height));
+            e.Handled = true;
+            return;
+        }
         Gesture?.Invoke(this, new CurveGesture(
             CurveGestureKind.Move, _draggedIndex,
             position.X / bounds.Width, position.Y / bounds.Height));
@@ -149,8 +197,16 @@ public partial class CurveCanvas : UserControl
     {
         base.OnPointerReleased(e);
 
-        if (_draggedIndex < 0)
+        if (_draggedIndex < 0 && _draggedTangent is null)
             return;
+
+        if (_draggedTangent is not null)
+        {
+            _draggedTangent = null;
+            e.Pointer.Capture(null);
+            GestureCompleted?.Invoke(this, EventArgs.Empty);
+            return;
+        }
 
         var index = _draggedIndex;
         _draggedIndex = -1;
@@ -170,6 +226,45 @@ public partial class CurveCanvas : UserControl
     /// <summary>Arrow keys nudge the selected point, for the precision a mouse cannot give.</summary>
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            switch (e.Key)
+            {
+                case Key.A:
+                    if (SelectAllRequested is null)
+                        break;
+                    SelectAllRequested?.Invoke(this, EventArgs.Empty);
+                    e.Handled = true;
+                    return;
+                case Key.C:
+                    if (CopyRequested is null)
+                        break;
+                    CopyRequested?.Invoke(this, EventArgs.Empty);
+                    e.Handled = true;
+                    return;
+                case Key.V:
+                    if (PasteRequested is null)
+                        break;
+                    PasteRequested?.Invoke(this, EventArgs.Empty);
+                    e.Handled = true;
+                    return;
+            }
+        }
+
+        if (e.Key == Key.Delete || e.Key == Key.Back)
+        {
+            Gesture?.Invoke(this, new CurveGesture(CurveGestureKind.RemoveSelection, -1, 0, 0));
+            GestureCompleted?.Invoke(this, EventArgs.Empty);
+            e.Handled = true;
+            return;
+        }
+        if (e.Key == Key.Escape)
+        {
+            Gesture?.Invoke(this, new CurveGesture(CurveGestureKind.ClearSelection, -1, 0, 0));
+            e.Handled = true;
+            return;
+        }
+
         var selected = SelectedIndex();
         if (selected < 0)
         {
@@ -229,6 +324,23 @@ public partial class CurveCanvas : UserControl
             best = index;
         }
 
+        return best;
+    }
+
+    private CurveTangent? TangentAt(Point position, Rect bounds)
+    {
+        CurveTangent? best = null;
+        var nearest = PointGrab;
+        foreach (var tangent in Tangents)
+        {
+            var dx = (tangent.X * bounds.Width) - position.X;
+            var dy = (tangent.Y * bounds.Height) - position.Y;
+            var distance = Math.Sqrt((dx * dx) + (dy * dy));
+            if (distance > nearest)
+                continue;
+            nearest = distance;
+            best = tangent;
+        }
         return best;
     }
 

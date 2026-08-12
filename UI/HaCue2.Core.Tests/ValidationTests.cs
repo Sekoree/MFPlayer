@@ -273,4 +273,21 @@ public sealed class ValidationTests
         // otherwise the status view has nowhere to send the operator.
         Assert.All(issues, issue => Assert.False(string.IsNullOrEmpty(issue.SubjectKind)));
     }
+
+    [Fact]
+    public void ProjectStopFadeAndDuplicatePresetNamesAreValidated()
+    {
+        var fixture = new TestProject();
+        fixture.Project.Settings.StopFadeCurve.PresetId = Guid.NewGuid();
+        fixture.Project.CurvePresets =
+        [
+            new CurvePreset { Name = "Fade", Points = [new(0, 0), new(1, 1)] },
+            new CurvePreset { Name = "fade", Points = [new(0, 0), new(1, 1)] },
+        ];
+
+        var issues = ProjectValidator.Validate(fixture.Project);
+
+        Assert.Contains(issues, issue => issue.Message.Contains("stop fade"));
+        Assert.Contains(issues, issue => issue.Message.Contains("More than one curve preset"));
+    }
 }

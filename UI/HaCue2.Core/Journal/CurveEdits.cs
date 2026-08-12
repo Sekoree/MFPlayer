@@ -9,7 +9,11 @@ public readonly record struct CurveKnot(
     double X,
     double Y,
     bool Hold = false,
-    FadeCurve CurveToNext = FadeCurve.Linear);
+    FadeCurve CurveToNext = FadeCurve.Linear,
+    double? OutHandleX = null,
+    double? OutHandleY = null,
+    double? InHandleX = null,
+    double? InHandleY = null);
 
 /// <summary>
 /// Something the curve editor can edit.
@@ -87,11 +91,13 @@ public sealed class CurveSpecTarget(
     public IReadOnlyList<CurveKnot> Read() =>
         spec.Points is { Count: > 1 } points
             ? [.. points.Select(point => new CurveKnot(
-                point.Progress, point.Level, point.Hold, point.CurveToNext))]
+                point.Progress, point.Level, point.Hold, point.CurveToNext,
+                point.OutHandleX, point.OutHandleLevel, point.InHandleX, point.InHandleLevel))]
             : spec.PresetId is { } presetId
               && project?.CurvePresets.FirstOrDefault(candidate => candidate.Id == presetId) is { Points.Count: > 1 } preset
                 ? [.. preset.Points.Select(point => new CurveKnot(
-                    point.Progress, point.Level, point.Hold, point.CurveToNext))]
+                    point.Progress, point.Level, point.Hold, point.CurveToNext,
+                    point.OutHandleX, point.OutHandleLevel, point.InHandleX, point.InHandleLevel))]
             // A spec that has never been drawn on opens with the owning control's natural direction.
             // Fade-ins rise while fade-outs and stops fall. Nothing is written until an edit happens.
             : emptyShape is { Count: > 1 }
@@ -100,7 +106,8 @@ public sealed class CurveSpecTarget(
 
     public void Write(IReadOnlyList<CurveKnot> knots) =>
         spec.Points = [.. knots.Select(knot => new FadeCurvePoint(
-            knot.X, knot.Y, knot.Hold, knot.CurveToNext))];
+            knot.X, knot.Y, knot.Hold, knot.CurveToNext,
+            knot.OutHandleX, knot.OutHandleY, knot.InHandleX, knot.InHandleY))];
 
     public void Clear() => spec.Points = null;
 
@@ -124,12 +131,14 @@ public sealed class CurvePresetTarget(CurvePreset preset) : ICurveTarget
     public IReadOnlyList<CurveKnot> Read() =>
         preset.Points is { Count: > 1 }
             ? [.. preset.Points.Select(point => new CurveKnot(
-                point.Progress, point.Level, point.Hold, point.CurveToNext))]
+                point.Progress, point.Level, point.Hold, point.CurveToNext,
+                point.OutHandleX, point.OutHandleLevel, point.InHandleX, point.InHandleLevel))]
             : [new CurveKnot(0, 0), new CurveKnot(1, 1)];
 
     public void Write(IReadOnlyList<CurveKnot> knots) =>
         preset.Points = [.. knots.Select(knot => new FadeCurvePoint(
-            knot.X, knot.Y, knot.Hold, knot.CurveToNext))];
+            knot.X, knot.Y, knot.Hold, knot.CurveToNext,
+            knot.OutHandleX, knot.OutHandleY, knot.InHandleX, knot.InHandleY))];
 
     public void Clear() => preset.Points = [];
 
@@ -161,11 +170,15 @@ public sealed class EffectLaneTarget(Guid subject, EffectLane lane) : ICurveTarg
     public IReadOnlyList<CurveKnot> Read() =>
         lane.Points is { Count: > 1 }
             ? [.. lane.Points.Select(point => new CurveKnot(
-                point.X, point.Y, CurveToNext: point.CurveToNext))]
+                point.X, point.Y, CurveToNext: point.CurveToNext,
+                OutHandleX: point.OutHandleX, OutHandleY: point.OutHandleY,
+                InHandleX: point.InHandleX, InHandleY: point.InHandleY))]
             : [new CurveKnot(0, 1), new CurveKnot(1, 1)];
 
     public void Write(IReadOnlyList<CurveKnot> knots) =>
-        lane.Points = [.. knots.Select(knot => new LanePoint(knot.X, knot.Y, knot.CurveToNext))];
+        lane.Points = [.. knots.Select(knot => new LanePoint(
+            knot.X, knot.Y, knot.CurveToNext,
+            knot.OutHandleX, knot.OutHandleY, knot.InHandleX, knot.InHandleY))];
 
     public void Clear() => lane.Points = [];
 
@@ -348,14 +361,74 @@ public static class CurveEdits
     /// <summary>How close counts as the same point when adding — in fractions of the canvas.</summary>
     private const double SamePointDistance = 0.01;
 
+    /// <summary>Replaces a whole curve after applying the same ordering, bounds, and tangent repair as
+    /// direct point gestures. Used by paste/import-style edits.</summary>
+    public static SetCurveCommand Replace(
+        ICurveTarget target, IEnumerable<CurveKnot> knots, string description) =>
+        new(target, Normalize(knots.ToList()), description);
+
     public static SetCurveCommand Move(ICurveTarget target, int index, double x, double y)
     {
         var knots = target.Read().ToList();
         if (index < 0 || index >= knots.Count)
             return new SetCurveCommand(target, Normalize(knots), "move curve point");
 
-        knots[index] = knots[index] with { X = x, Y = y };
+        var before = knots[index];
+        var dx = x - before.X;
+        var dy = y - before.Y;
+        knots[index] = before with
+        {
+            X = x,
+            Y = y,
+            OutHandleX = Shift(before.OutHandleX, dx),
+            OutHandleY = Shift(before.OutHandleY, dy),
+            InHandleX = Shift(before.InHandleX, dx),
+            InHandleY = Shift(before.InHandleY, dy),
+        };
         return new SetCurveCommand(target, Normalize(knots), "move curve point");
+    }
+
+    /// <summary>Moves every selected keyframe by the anchor's delta while preserving their spacing and
+    /// tangent vectors. The group stops at the canvas edge as one object.</summary>
+    public static SetCurveCommand MoveMany(
+        ICurveTarget target, IReadOnlySet<int> indices, int anchorIndex, double x, double y)
+    {
+        var knots = target.Read().ToList();
+        var selected = indices.Where(index => index >= 0 && index < knots.Count).ToHashSet();
+        if (selected.Count == 0 || !selected.Contains(anchorIndex))
+            return Move(target, anchorIndex, x, y);
+
+        var anchor = knots[anchorIndex];
+        var dx = x - anchor.X;
+        var dy = y - anchor.Y;
+        var minimumDx = -selected.Min(index => knots[index].X);
+        var maximumDx = 1 - selected.Max(index => knots[index].X);
+        foreach (var index in selected)
+        {
+            if (index > 0 && !selected.Contains(index - 1))
+                minimumDx = Math.Max(minimumDx, knots[index - 1].X - knots[index].X);
+            if (index + 1 < knots.Count && !selected.Contains(index + 1))
+                maximumDx = Math.Min(maximumDx, knots[index + 1].X - knots[index].X);
+        }
+        dx = Math.Clamp(dx, minimumDx, maximumDx);
+        dy = Math.Clamp(dy, -selected.Min(index => knots[index].Y),
+            1 - selected.Max(index => knots[index].Y));
+
+        foreach (var index in selected)
+        {
+            var knot = knots[index];
+            knots[index] = knot with
+            {
+                X = knot.X + dx,
+                Y = knot.Y + dy,
+                OutHandleX = Shift(knot.OutHandleX, dx),
+                OutHandleY = Shift(knot.OutHandleY, dy),
+                InHandleX = Shift(knot.InHandleX, dx),
+                InHandleY = Shift(knot.InHandleY, dy),
+            };
+        }
+
+        return new SetCurveCommand(target, Normalize(knots), $"move {selected.Count} curve points");
     }
 
     public static SetCurveCommand Add(ICurveTarget target, double x, double y)
@@ -380,8 +453,38 @@ public static class CurveEdits
         if (index < 0 || index >= knots.Count || knots.Count <= MinimumPoints)
             return null;
 
+        if (index > 0)
+            knots[index - 1] = ClearOut(knots[index - 1]);
+        if (index + 1 < knots.Count)
+            knots[index + 1] = ClearIn(knots[index + 1]);
         knots.RemoveAt(index);
         return new SetCurveCommand(target, Normalize(knots), "remove curve point");
+    }
+
+    public static SetCurveCommand? RemoveMany(ICurveTarget target, IReadOnlySet<int> indices)
+    {
+        var knots = target.Read().ToList();
+        var remove = indices.Where(index => index >= 0 && index < knots.Count).ToHashSet();
+        if (remove.Count == 0 || knots.Count - remove.Count < MinimumPoints)
+            return null;
+
+        var kept = knots
+            .Select((knot, index) => (Knot: knot, OriginalIndex: index))
+            .Where(item => !remove.Contains(item.OriginalIndex))
+            .ToList();
+        // Joining formerly non-adjacent points must not accidentally join the two halves of an old
+        // Bézier segment. Incomplete pairs are also cleaned by Normalize.
+        for (var index = 0; index + 1 < kept.Count; index++)
+        {
+            if (kept[index + 1].OriginalIndex != kept[index].OriginalIndex + 1)
+            {
+                kept[index] = (ClearOut(kept[index].Knot), kept[index].OriginalIndex);
+                kept[index + 1] = (ClearIn(kept[index + 1].Knot), kept[index + 1].OriginalIndex);
+            }
+        }
+        return new SetCurveCommand(
+            target, Normalize(kept.Select(item => item.Knot).ToList()),
+            $"remove {remove.Count} curve points");
     }
 
     /// <summary>
@@ -446,7 +549,11 @@ public static class CurveEdits
         if (index < 0 || index >= knots.Count)
             return null;
 
-        knots[index] = knots[index] with { Hold = hold };
+        knots[index] = hold
+            ? ClearOut(knots[index]) with { Hold = true }
+            : knots[index] with { Hold = false };
+        if (hold && index + 1 < knots.Count)
+            knots[index + 1] = ClearIn(knots[index + 1]);
         return new SetCurveCommand(target, Normalize(knots), hold ? "hold segment" : "ramp segment");
     }
 
@@ -458,8 +565,89 @@ public static class CurveEdits
         if (index < 0 || index >= knots.Count)
             return null;
 
-        knots[index] = knots[index] with { Hold = false, CurveToNext = curve };
+        knots[index] = ClearOut(knots[index]) with { Hold = false, CurveToNext = curve };
+        if (index + 1 < knots.Count)
+            knots[index + 1] = ClearIn(knots[index + 1]);
         return new SetCurveCommand(target, Normalize(knots), $"use {Name(curve)} segment");
+    }
+
+    /// <summary>Turns the segment beginning at <paramref name="index"/> into a cubic Bézier with
+    /// conventional one-third handles. Moving either handle afterwards is completely free inside the
+    /// segment.</summary>
+    public static SetCurveCommand? SetBezier(ICurveTarget target, int index)
+    {
+        var knots = target.Read().ToList();
+        if (index < 0 || index + 1 >= knots.Count)
+            return null;
+
+        var start = knots[index];
+        var to = knots[index + 1];
+        var dx = (to.X - start.X) / 3;
+        var dy = (to.Y - start.Y) / 3;
+        knots[index] = start with
+        {
+            Hold = false,
+            CurveToNext = FadeCurve.Linear,
+            OutHandleX = start.X + dx,
+            OutHandleY = start.Y + dy,
+        };
+        knots[index + 1] = to with
+        {
+            InHandleX = to.X - dx,
+            InHandleY = to.Y - dy,
+        };
+        return new SetCurveCommand(target, Normalize(knots), "use Bézier segment");
+    }
+
+    public static SetCurveCommand? MoveTangent(
+        ICurveTarget target, int index, bool incoming, double x, double y)
+    {
+        var knots = target.Read().ToList();
+        if (index < 0 || index >= knots.Count
+            || (incoming && index == 0)
+            || (!incoming && index == knots.Count - 1))
+            return null;
+
+        var knot = knots[index];
+        if (incoming)
+        {
+            var previous = knots[index - 1];
+            knots[index] = knot with
+            {
+                InHandleX = Math.Clamp(Fraction(x), previous.X, knot.X),
+                InHandleY = Fraction(y),
+            };
+            if (previous.OutHandleX is null)
+            {
+                var third = (knot.X - previous.X) / 3;
+                knots[index - 1] = previous with
+                {
+                    OutHandleX = previous.X + third,
+                    OutHandleY = previous.Y + ((knot.Y - previous.Y) / 3),
+                };
+            }
+        }
+        else
+        {
+            var next = knots[index + 1];
+            knots[index] = knot with
+            {
+                Hold = false,
+                OutHandleX = Math.Clamp(Fraction(x), knot.X, next.X),
+                OutHandleY = Fraction(y),
+            };
+            if (next.InHandleX is null)
+            {
+                var third = (next.X - knot.X) / 3;
+                knots[index + 1] = next with
+                {
+                    InHandleX = next.X - third,
+                    InHandleY = next.Y - ((next.Y - knot.Y) / 3),
+                };
+            }
+        }
+
+        return new SetCurveCommand(target, Normalize(knots), "move Bézier tangent");
     }
 
     /// <summary>Chooses one of the project's reusable shapes for a cue curve.</summary>
@@ -481,12 +669,50 @@ public static class CurveEdits
     /// engine requires the list sorted, so it is sorted on the way in rather than checked on the way
     /// out. The sort is STABLE, so two points at the same x keep the order they were drawn in.
     /// </remarks>
-    private static IReadOnlyList<CurveKnot> Normalize(List<CurveKnot> knots) =>
-    [
-        .. knots
-            .Select(knot => knot with { X = Fraction(knot.X), Y = Fraction(knot.Y) })
-            .OrderBy(knot => knot.X),
-    ];
+    private static IReadOnlyList<CurveKnot> Normalize(List<CurveKnot> knots)
+    {
+        var sorted = knots
+            .Select(knot =>
+            {
+                var hasOut = knot.OutHandleX is not null && knot.OutHandleY is not null;
+                var hasIn = knot.InHandleX is not null && knot.InHandleY is not null;
+                return knot with
+                {
+                    X = Fraction(knot.X),
+                    Y = Fraction(knot.Y),
+                    OutHandleX = hasOut ? OptionalFraction(knot.OutHandleX) : null,
+                    OutHandleY = hasOut ? OptionalFraction(knot.OutHandleY) : null,
+                    InHandleX = hasIn ? OptionalFraction(knot.InHandleX) : null,
+                    InHandleY = hasIn ? OptionalFraction(knot.InHandleY) : null,
+                };
+            })
+            .OrderBy(knot => knot.X)
+            .ToList();
+
+        for (var index = 0; index < sorted.Count; index++)
+        {
+            var knot = sorted[index];
+            if (index == 0)
+                knot = ClearIn(knot);
+            else if (knot.InHandleX is { } inX)
+                knot = knot with { InHandleX = Math.Clamp(inX, sorted[index - 1].X, knot.X) };
+
+            if (index == sorted.Count - 1)
+                knot = ClearOut(knot);
+            else if (knot.OutHandleX is { } outX)
+                knot = knot with { OutHandleX = Math.Clamp(outX, knot.X, sorted[index + 1].X) };
+            sorted[index] = knot;
+        }
+
+        for (var index = 0; index + 1 < sorted.Count; index++)
+            if ((sorted[index].OutHandleX is null) != (sorted[index + 1].InHandleX is null))
+            {
+                sorted[index] = ClearOut(sorted[index]);
+                sorted[index + 1] = ClearIn(sorted[index + 1]);
+            }
+
+        return sorted;
+    }
 
     /// <summary>
     /// A number into 0..1, treating anything non-finite as 0.
@@ -499,6 +725,16 @@ public static class CurveEdits
     /// </remarks>
     private static double Fraction(double value) =>
         double.IsFinite(value) ? Math.Clamp(value, 0, 1) : 0;
+
+    private static double? OptionalFraction(double? value) => value is { } number ? Fraction(number) : null;
+
+    private static double? Shift(double? value, double delta) => value is { } number ? number + delta : null;
+
+    private static CurveKnot ClearOut(CurveKnot knot) =>
+        knot with { OutHandleX = null, OutHandleY = null };
+
+    private static CurveKnot ClearIn(CurveKnot knot) =>
+        knot with { InHandleX = null, InHandleY = null };
 
     /// <summary>Whether a point already sits where one is about to be added.</summary>
     public static bool HasPointNear(ICurveTarget target, double x) =>

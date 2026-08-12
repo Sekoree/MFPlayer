@@ -204,4 +204,114 @@ public sealed class CurveEditorTests
             Assert.Equal(custom, settings.StopFadeCurveIndex);
             Assert.NotNull(settings.StopFadeEditor());
         });
+
+    [Fact]
+    public Task BezierSegmentHandlesAreVisibleAndWriteThroughToTheFade() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var cue = ShellFixture.Bed(shell.Project);
+            ShellFixture.Select(shell.Cues, cue.Id);
+            var editor = shell.Cues.Inspector.CurveEditor("fadeIn")!;
+
+            editor.Apply(new CurveGesture(CurveGestureKind.Select, 0, 0, 0));
+            editor.Segment = "bezier";
+
+            Assert.Single(editor.Tangents);
+            Assert.NotNull(cue.FadeInCurve.Points![0].OutHandleX);
+            Assert.NotNull(cue.FadeInCurve.Points[1].InHandleX);
+
+            editor.Apply(new CurveGesture(CurveGestureKind.MoveOutgoingTangent, 0, 0.12, 0.1));
+            editor.EndGesture();
+
+            Assert.Equal(0.12, cue.FadeInCurve.Points[0].OutHandleX!.Value, 3);
+            Assert.Equal(0.9, cue.FadeInCurve.Points[0].OutHandleLevel!.Value, 3);
+            Assert.True(cue.FadeInCurve.Resolve(shell.Project).Evaluate(0.25) > 0.25f);
+        });
+
+    [Fact]
+    public Task PresetsCanBeRenamedDeletedWithoutChangingReferencesAndImportedSafely() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var cue = ShellFixture.Bed(shell.Project);
+            ShellFixture.Select(shell.Cues, cue.Id);
+            var editor = shell.Cues.Inspector.CurveEditor("fadeIn")!;
+            editor.PresetName = "House curve";
+            editor.SavePreset();
+            var preset = Assert.Single(shell.Project.CurvePresets);
+            shell.Project.Settings.StopFadeCurve.PresetId = preset.Id;
+
+            editor.ManagedPresetName = "House fade";
+            editor.RenamePreset();
+            Assert.Equal("House fade", preset.Name);
+            Assert.Equal(preset.Id, cue.FadeInCurve.PresetId);
+
+            editor.DeletePreset();
+            Assert.Empty(shell.Project.CurvePresets);
+            Assert.Null(cue.FadeInCurve.PresetId);
+            Assert.NotNull(cue.FadeInCurve.Points);
+            Assert.Null(shell.Project.Settings.StopFadeCurve.PresetId);
+            Assert.NotNull(shell.Project.Settings.StopFadeCurve.Points);
+
+            shell.Journal.Undo();
+            Assert.Single(shell.Project.CurvePresets);
+            Assert.Equal(preset.Id, cue.FadeInCurve.PresetId);
+            Assert.Equal(preset.Id, shell.Project.Settings.StopFadeCurve.PresetId);
+
+            var source = new HaCueProject
+            {
+                CurvePresets =
+                [
+                    new CurvePreset
+                    {
+                        Id = preset.Id,
+                        Name = "House fade",
+                        Points = [new FadeCurvePoint(0, 0), new FadeCurvePoint(1, 1)],
+                    },
+                ],
+            };
+            editor.ImportPresets(source);
+
+            Assert.Equal(2, shell.Project.CurvePresets.Count);
+            Assert.Equal(2, shell.Project.CurvePresets.Select(item => item.Id).Distinct().Count());
+            Assert.Contains(shell.Project.CurvePresets, item => item.Name == "House fade (2)");
+        });
+
+    [Fact]
+    public Task TimelineKeyframesCanBeMultiSelectedMovedCopiedPastedAndDeleted() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var group = shell.Project.AllCues().OfType<GroupCueNode>()
+                .First(candidate => candidate.FireMode == GroupFireMode.Timeline);
+            var media = group.Children.OfType<MediaCueNode>().First();
+            var lane = new EffectLane
+            {
+                Kind = EffectLaneKind.Volume,
+                Points = [new LanePoint(0.1, 1), new LanePoint(0.3, 0.5), new LanePoint(0.8, 1)],
+            };
+            media.EffectLanes.Add(lane);
+            shell.Runtime.MediaDurations[media.Id] = TimeSpan.FromSeconds(8);
+            shell.Cues.Timeline.Show(group);
+            var row = shell.Cues.Timeline.Lanes.Single(item => item.EffectLaneId == lane.Id);
+
+            shell.Cues.Timeline.ApplyLaneGesture(
+                row, new CurveGesture(CurveGestureKind.Select, 0, 0, 0));
+            shell.Cues.Timeline.ApplyLaneGesture(
+                row, new CurveGesture(CurveGestureKind.ToggleSelection, 1, 0, 0));
+            shell.Cues.Timeline.ApplyLaneGesture(
+                row, new CurveGesture(CurveGestureKind.Move, 0, 0.2, 0));
+            shell.Cues.Timeline.EndGesture();
+            Assert.Equal(0.2, lane.Points[0].X, 3);
+            Assert.Equal(0.4, lane.Points[1].X, 3);
+
+            row = shell.Cues.Timeline.Lanes.Single(item => item.EffectLaneId == lane.Id);
+            var clipboard = shell.Cues.Timeline.CopySelectedKeyframes(row);
+            Assert.StartsWith("HaCue2-Keyframes/1", clipboard);
+            Assert.True(shell.Cues.Timeline.PasteKeyframes(row, clipboard));
+            Assert.Equal(5, lane.Points.Count);
+
+            row = shell.Cues.Timeline.Lanes.Single(item => item.EffectLaneId == lane.Id);
+            Assert.Equal(2, row.Points.Count(point => point.IsSelected));
+            shell.Cues.Timeline.DeleteSelectedKeyframes(row);
+            Assert.Equal(3, lane.Points.Count);
+        });
 }

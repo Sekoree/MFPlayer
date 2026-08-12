@@ -9,6 +9,45 @@ namespace HaCue2.Core.Tests;
 public sealed class ProjectFileTests
 {
     [Fact]
+    public void BezierFadeAndLaneTangentsRoundTripAdditively()
+    {
+        var media = new MediaCueNode
+        {
+            FadeInCurve = new CurveSpec
+            {
+                Points =
+                [
+                    new S.Media.Session.FadeCurvePoint(
+                        0, 0, OutHandleX: 0.2, OutHandleLevel: 0.8),
+                    new S.Media.Session.FadeCurvePoint(
+                        1, 1, InHandleX: 0.8, InHandleLevel: 0.2),
+                ],
+            },
+            EffectLanes =
+            [
+                new EffectLane
+                {
+                    Points =
+                    [
+                        new LanePoint(0, 0, OutHandleX: 0.25, OutHandleY: 0.75),
+                        new LanePoint(1, 1, InHandleX: 0.75, InHandleY: 0.25),
+                    ],
+                },
+            ],
+        };
+        var project = new HaCueProject
+        {
+            CueLists = [new CueList { Cues = [media] }],
+        };
+
+        var restored = Assert.IsType<MediaCueNode>(
+            Assert.Single(HaCueProjectFile.Deserialize(HaCueProjectFile.Serialize(project)).CueLists).Cues[0]);
+
+        Assert.Equal(0.2, restored.FadeInCurve.Points![0].OutHandleX);
+        Assert.Equal(0.25, restored.EffectLanes[0].Points[0].OutHandleX);
+    }
+
+    [Fact]
     public void ExactCompositionRateRoundTripsAlongsideItsDisplayDecimal()
     {
         var composition = new CompositionDefinition { Name = "Broadcast" };
