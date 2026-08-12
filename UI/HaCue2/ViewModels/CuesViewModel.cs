@@ -1502,6 +1502,15 @@ public partial class CuesViewModel : ObservableObject
                      })
                 legacy.Id = Guid.NewGuid();
 
+            if (node is MediaCueNode audioMedia)
+                foreach (var effect in audioMedia.AudioEffects)
+                {
+                    var oldEffectId = effect.Id;
+                    effect.Id = Guid.NewGuid();
+                    foreach (var track in CueAutomation.Of(node).Where(track => track.Target.ObjectId == oldEffectId))
+                        track.Target.ObjectId = effect.Id;
+                }
+
             foreach (var placement in CuePlacements.Of(node))
             {
                 var oldPlacementId = placement.Id;
@@ -1521,6 +1530,13 @@ public partial class CuesViewModel : ObservableObject
                     color.Id = Guid.NewGuid();
                     foreach (var track in CueAutomation.Of(node).Where(track => track.Target.ObjectId == oldEffectId))
                         track.Target.ObjectId = color.Id;
+                }
+                foreach (var effect in placement.Effects)
+                {
+                    var oldEffectId = effect.Id;
+                    effect.Id = Guid.NewGuid();
+                    foreach (var track in CueAutomation.Of(node).Where(track => track.Target.ObjectId == oldEffectId))
+                        track.Target.ObjectId = effect.Id;
                 }
                 foreach (var section in placement.VideoFx)
                     section.Id = Guid.NewGuid();
@@ -2281,8 +2297,11 @@ public sealed partial class TimelineViewModel : ObservableObject
     public bool CanAddChromaSpillLane => CanAddLane(AutomationPropertyIds.ChromaSpillReduction);
     public bool CanAddColorBrightnessLane => CanAddLane(AutomationPropertyIds.ColorBrightness);
     public bool CanAddColorContrastLane => CanAddLane(AutomationPropertyIds.ColorContrast);
+    public bool CanAddAudioGainLane => CanAddLane(AudioEffectCatalog.PropertyId(
+        S.Media.Routing.GainAudioEffect.EffectId, S.Media.Routing.GainAudioEffect.GainParameterId));
     public bool HasAutomationChromaKey => Owner?.Inspector.HasAutomationChromaKey ?? false;
     public bool HasAutomationColorAdjust => Owner?.Inspector.HasAutomationColorAdjust ?? false;
+    public bool HasAutomationAudioGain => Owner?.Inspector.HasAutomationAudioGain ?? false;
 
     private bool CanAddLane(string propertyId) => Owner?.Inspector.CanAddLane(propertyId) ?? false;
 
@@ -2884,8 +2903,10 @@ public sealed partial class TimelineViewModel : ObservableObject
         OnPropertyChanged(nameof(CanAddChromaSpillLane));
         OnPropertyChanged(nameof(CanAddColorBrightnessLane));
         OnPropertyChanged(nameof(CanAddColorContrastLane));
+        OnPropertyChanged(nameof(CanAddAudioGainLane));
         OnPropertyChanged(nameof(HasAutomationChromaKey));
         OnPropertyChanged(nameof(HasAutomationColorAdjust));
+        OnPropertyChanged(nameof(HasAutomationAudioGain));
     }
 
     /// <summary>The cue whose lane reads as selected — follows the tree's selection.</summary>

@@ -275,6 +275,9 @@ public sealed record MediaCueNode : CueNode
     /// <summary>The N×V half: which source channel feeds which logical output, at what gain.</summary>
     public List<CueAudioSend> Sends { get; set; } = [];
 
+    /// <summary>Ordered cue-local audio insert effects, before the cue's logical/device routes.</summary>
+    public List<AudioEffectInstance> AudioEffects { get; set; } = [];
+
     /// <summary>
     /// Where this cue's video appears. Empty for an audio-only cue.
     /// </summary>
@@ -657,6 +660,12 @@ public sealed record LayerPlacement
     public ColorAdjustSpec? ColorAdjust { get; set; }
 
     public bool ColorAdjustEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Ordered colour-stage effect instances. Instance IDs, rather than positions or display names,
+    /// are the durable automation address; type and parameter IDs come from the code-owned catalog.
+    /// </summary>
+    public List<LayerEffectInstance> Effects { get; set; } = [];
 
     /// <summary>Whether the layer carries a mapping the renderer will actually apply.</summary>
     [System.Text.Json.Serialization.JsonIgnore]

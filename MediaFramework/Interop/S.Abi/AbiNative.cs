@@ -353,6 +353,35 @@ internal unsafe struct MfpLayerSurfaceFactoryVTable
     public delegate* unmanaged<void*, void> Destroy;
 }
 
+internal enum MfpEffectParameterScale : uint
+{
+    Linear = 0,
+    Decibels = 1,
+    Percentage = 2,
+}
+
+[Flags]
+internal enum MfpEffectParameterFlags : uint
+{
+    None = 0,
+    Automatable = 1u << 0,
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpEffectParameterDescriptor
+{
+    public uint AbiVersion;
+    public uint StructSize;
+    public byte* Id;
+    public byte* DisplayName;
+    public byte* Unit;
+    public float Minimum;
+    public float Maximum;
+    public float DefaultValue;
+    public MfpEffectParameterScale Scale;
+    public MfpEffectParameterFlags Flags;
+}
+
 [StructLayout(LayoutKind.Sequential)]
 internal unsafe struct MfpAudioEffectVTable
 {
@@ -361,6 +390,7 @@ internal unsafe struct MfpAudioEffectVTable
     public delegate* unmanaged<void*, MfpAudioFormat*, int> Configure;
     public delegate* unmanaged<void*, float*, int, long, int> Process;   // (effect, interleaved, count, framePos)
     public delegate* unmanaged<void*, void> Destroy;
+    public delegate* unmanaged<void*, byte*, float, long, int> SetParameter;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -371,6 +401,8 @@ internal unsafe struct MfpAudioEffectFactoryVTable
     public delegate* unmanaged<void*, byte*, void*> Create;   // (self, config_json) -> effect instance
     public MfpAudioEffectVTable* EffectVTable;
     public delegate* unmanaged<void*, void> Destroy;
+    public delegate* unmanaged<void*, int*, int> GetParameterCount;
+    public delegate* unmanaged<void*, int, MfpEffectParameterDescriptor*, int> GetParameterDescriptor;
 }
 
 [StructLayout(LayoutKind.Sequential)]

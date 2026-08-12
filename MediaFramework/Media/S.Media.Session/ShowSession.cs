@@ -1,5 +1,6 @@
 using S.Media.Compositor;
 using S.Media.Core.Audio;
+using S.Media.Core.Buses;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Registry;
 using S.Media.Core.Threading;
@@ -7,6 +8,8 @@ using S.Media.Core.Video;
 using S.Media.Routing;
 using S.Media.Time;
 using System.Text.Json;
+using System.Buffers;
+using System.Text;
 
 namespace S.Media.Session;
 
@@ -153,6 +156,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     // GL context can inject a GPU/warp compositor so session compositions use the intended zero-copy GPU path
     // instead of building full-BGRA CPU canvases (NXT-11). Threaded into every ClipCompositionRuntime at load.
     private readonly Func<VideoFormat, ClipCompositionCompositor>? _compositorFactory;
+    private readonly IBusRegistry? _effectRegistry;
     // Host audio-output factory (route deviceId, format) → a borrowed sink for that device, or null to let the
     // IAudioBackend create it. Mirrors _videoOutputFactory: a returned lease with DisposeOutputOnRuntimeDispose
     // = false is NEVER disposed by the session (the host owns it - e.g. an NDI sender's audio side sharing the
@@ -241,7 +245,12 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     // A clip's attached audio output plus its ownership. The session disposes it on clip replace only when
     // DisposeOnRelease (a backend-created device it owns); a host lease (e.g. an NDI carrier's audio) is
     // BORROWED - never disposed, only its Release hook is invoked so the host can drop its reference.
-    private readonly record struct ClipAudioOutput(IAudioOutput Output, bool DisposeOnRelease, Action? Release);
+    private sealed record AudioEffectControl(string InstanceId, IAutomatableAudioBusEffect Effect);
+    private readonly record struct ClipAudioOutput(
+        IAudioOutput Output,
+        bool DisposeOnRelease,
+        Action? Release,
+        IReadOnlyList<AudioEffectControl>? EffectControls = null);
     private sealed record AudioRouteTarget(string OutputId, float TargetGain, ShowClipAudioRoute? Route = null);
 
     /// <summary>The route-less fallback output device (backend default, else first), resolved through the
@@ -271,6 +280,79 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             (o.Output as IDisposable)?.Dispose();
     }
 
+    private ClipAudioOutput ApplyAudioEffects(
+        ClipAudioOutput output,
+        IReadOnlyList<ShowAudioEffectInstance>? instances)
+    {
+        if (instances is not { Count: > 0 })
+            return output;
+        var effects = new List<IAudioBusEffect>(instances.Count);
+        var controls = new List<AudioEffectControl>();
+        foreach (var instance in instances)
+        {
+            if (!instance.Enabled || string.IsNullOrWhiteSpace(instance.EffectTypeId))
+                continue;
+            var config = EffectConfig(instance.ConfigJson, instance.Parameters);
+            IAudioBusEffect? effect = null;
+            if (_effectRegistry?.TryCreateAudioEffect(instance.EffectTypeId, config, out var registered) == true)
+                effect = registered;
+            else if (instance.EffectTypeId == GainAudioEffect.EffectId)
+                effect = GainAudioEffect.FromJson(config);
+            if (effect is null)
+                continue;
+            effects.Add(effect);
+            if (effect is IAutomatableAudioBusEffect automatable)
+                controls.Add(new AudioEffectControl(instance.InstanceId, automatable));
+        }
+        if (effects.Count == 0)
+            return output;
+        try
+        {
+            var wrapped = AudioEffectOutput.Wrap(output.Output, effects, disposeInner: output.DisposeOnRelease);
+            return new ClipAudioOutput(wrapped, DisposeOnRelease: true, output.Release, controls);
+        }
+        catch
+        {
+            foreach (var effect in effects)
+                effect.Dispose();
+            throw;
+        }
+    }
+
+    private static string? EffectConfig(
+        string? configJson,
+        IReadOnlyList<ShowEffectParameterValue> parameters)
+    {
+        var authored = parameters.Where(parameter =>
+            !string.IsNullOrWhiteSpace(parameter.ParameterId) && double.IsFinite(parameter.Value)).ToArray();
+        if (authored.Length == 0)
+            return configJson;
+        var overwritten = authored.Select(parameter => parameter.ParameterId).ToHashSet(StringComparer.Ordinal);
+        var buffer = new ArrayBufferWriter<byte>();
+        using var writer = new Utf8JsonWriter(buffer);
+        writer.WriteStartObject();
+        if (!string.IsNullOrWhiteSpace(configJson))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(configJson);
+                if (document.RootElement.ValueKind == JsonValueKind.Object)
+                    foreach (var property in document.RootElement.EnumerateObject())
+                        if (!overwritten.Contains(property.Name))
+                            property.WriteTo(writer);
+            }
+            catch (JsonException)
+            {
+                // Scalar authoring remains usable even when a plugin's optional blob is malformed.
+            }
+        }
+        foreach (var parameter in authored)
+            writer.WriteNumber(parameter.ParameterId, parameter.Value);
+        writer.WriteEndObject();
+        writer.Flush();
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
     /// <summary>
     /// The scheduling lead a session voice's video player gets so its frame delivery never races the
     /// compositor slot's timestamp selection: half the source frame period, capped at 20 ms (a
@@ -298,7 +380,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         int rate,
         float gain,
         List<ClipAudioOutput> outputs,
-        ShowClipAudioRoute? route = null)
+        ShowClipAudioRoute? route = null,
+        IReadOnlyList<ShowAudioEffectInstance>? audioEffects = null)
     {
         ClipAudioOutput o;
         try
@@ -306,7 +389,20 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             var channels = route is { HasGainMatrix: true }
                 ? route.MatrixOutputChannels ?? route.MatrixCells!.Max(c => c.OutputChannel) + 1
                 : channelMap?.OutputChannels ?? 2;
-            o = ResolveAudioOutput(deviceId ?? ResolveFallbackOutputDeviceId(), new AudioFormat(rate, channels));
+            var resolved = ResolveAudioOutput(
+                deviceId ?? ResolveFallbackOutputDeviceId(), new AudioFormat(rate, channels));
+            try
+            {
+                o = ApplyAudioEffects(resolved, audioEffects);
+            }
+            catch
+            {
+                // ApplyAudioEffects owns any effects it managed to construct, but ownership of the
+                // terminal output is transferred only after the wrapper exists. Release the raw output
+                // when wrapper construction/configuration fails so an invalid insert cannot leak a device.
+                ReleaseClipAudioOutput(resolved);
+                throw;
+            }
         }
         catch (Exception ex)
         {
@@ -367,7 +463,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         float attachLevel,
         List<ClipAudioOutput> outputs,
         List<AudioRouteTarget> routeTargets,
-        string cueId)
+        string cueId,
+        IReadOnlyList<ShowAudioEffectInstance>? audioEffects = null)
     {
         const string outputId = "_program";
         if (player.AudioRouter is not { } router || player.AudioSourceId is not { } sourceId)
@@ -415,9 +512,11 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             return false;
         }
 
+        var output = new ClipAudioOutput(lease.Output, DisposeOnRelease: false, Release: lease.Dispose);
         try
         {
-            router.AddOutput(lease.Output, outputId);
+            output = ApplyAudioEffects(output, audioEffects);
+            router.AddOutput(output.Output, outputId);
             try
             {
                 router.ApplyMatrix(sourceId, outputId, route.ToGainMatrix(attachLevel));
@@ -430,7 +529,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         }
         catch (Exception ex)
         {
-            lease.Dispose();
+            ReleaseClipAudioOutput(output);
             MediaDiagnostics.LogWarning(
                 "ShowSession: clip '{0}' could not attach its program input ({1}); the clip plays without audio.",
                 cueId, ex.Message);
@@ -438,7 +537,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         }
 
         // BORROWED like a host audio lease: the voice's teardown runs the release hook, never a dispose.
-        outputs.Add(new ClipAudioOutput(lease.Output, DisposeOnRelease: false, Release: lease.Dispose));
+        outputs.Add(output);
         routeTargets.Add(new AudioRouteTarget(outputId, 1f, route));
         return true;
     }
@@ -486,7 +585,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         Func<string, AudioFormat, ClipAudioOutputLease?>? audioOutputFactory = null,
         Func<string, S.Media.Core.Buses.MediaItemMetadata?>? metadataProbe = null,
         IShowProgramAudioTarget? programAudioTarget = null,
-        int dispatcherCapacity = SessionDispatcher.DefaultCapacity)
+        int dispatcherCapacity = SessionDispatcher.DefaultCapacity,
+        IBusRegistry? effectRegistry = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _dispatcher = new SessionDispatcher("show-session", dispatcherCapacity);
@@ -495,6 +595,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         _subtitleFactory = subtitleFactory;
         _videoOutputFactory = videoOutputFactory;
         _compositorFactory = compositorFactory;
+        _effectRegistry = effectRegistry;
         _audioOutputFactory = audioOutputFactory;
         _programAudio = programAudioTarget;
         _metadataPublisher = new ShowSessionMetadataPublisher(MetadataHub, metadataProbe);
@@ -908,7 +1009,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                     : [new ClipCompositionOutputLease(
                         $"{comp.Id}_out", comp.Name, new DiscardingVideoOutput(), DisposeOutputOnRuntimeDispose: true)];
                 newCompositions[comp.Id] = new ClipCompositionRuntime(
-                    definition, leases, compositorFactory: _compositorFactory, compositionMapping: comp.OutputMapping);
+                    definition, leases, compositorFactory: _compositorFactory, compositionMapping: comp.OutputMapping,
+                    effectRegistry: _effectRegistry);
             }
         }
         catch
@@ -1243,6 +1345,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         var opacityEnvelopes = PlacementOpacityEnvelopes(binding);
         var transformEnvelopes = binding.PlacementTransformEnvelopes ?? [];
         var effectEnvelopes = binding.PlacementEffectEnvelopes ?? [];
+        var audioEffectEnvelopes = binding.AudioEffectEnvelopes ?? [];
         var fadeInStartLevel = fadeIn
             ? FadeCurves.LevelUp(cueElapsed, fadeInDuration, fadeInCurve)
             : 1f;
@@ -1428,7 +1531,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                     // target. Precedence over the direct-route adapter, mirroring its explicit-empty
                     // semantics (empty sends = silent clip, not fallback).
                     TryAttachProgramInput(
-                        player, _programAudio!, programSends, rate, attachLevel, outputs, routeTargets, binding.ClipId);
+                        player, _programAudio!, programSends, rate, attachLevel, outputs, routeTargets,
+                        binding.ClipId, binding.AudioEffects);
                 }
                 else if (binding.AudioRoutes is { } clipRoutes)
                 {
@@ -1442,7 +1546,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                         var outputId = $"clip{i}";
                         if (!TryAttachRouteOutput(
                                 player, outputId, route.DeviceId, route.ToChannelMap(), rate,
-                                gain: route.Gain * attachLevel, outputs, route))
+                                gain: route.Gain * attachLevel, outputs, route, binding.AudioEffects))
                             continue; // one un-openable device must not fault the whole cue - play the rest
                         routeTargets.Add(new AudioRouteTarget(outputId, route.Gain, route));
                         if (route.DeviceId is { } clipDevice)
@@ -1460,7 +1564,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                         // Fade-in: attach silent (gain 0) and ramp the route gain up to unity over FadeIn after Start.
                         if (!TryAttachRouteOutput(
                                 player, outDef.Id, outDef.DeviceId, ResolveOutputChannelMap(binding, outDef.Id), rate,
-                                gain: attachLevel, outputs))
+                                gain: attachLevel, outputs, audioEffects: binding.AudioEffects))
                             continue;
                         routeTargets.Add(new AudioRouteTarget(outDef.Id, 1f));
                         if (outDef.DeviceId is { } groupDevice)
@@ -1468,6 +1572,13 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                     }
                 }
             }
+
+            foreach (var lane in audioEffectEnvelopes)
+                voice.ApplyAudioEffectAutomation(
+                    lane.EffectInstanceId,
+                    lane.ParameterId,
+                    VolumeEnvelopes.Sample(lane.Points, cueElapsed),
+                    TimeSpan.Zero);
 
             if (layers.Count > 0
                 && binding.CompositionId is { } subtitleCompositionId
@@ -1532,8 +1643,11 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 var hasOpacityLane = opacityEnvelopes.Count > 0 && layers.Count > 0;
                 var hasTransformLane = transformEnvelopes.Count > 0 && layers.Count > 0;
                 var hasEffectLane = effectEnvelopes.Count > 0 && layers.Count > 0;
+                // Keep sampling even while every route is absent/failed: a later live route rebuild
+                // must receive the current cue-owned value, not the seed from the original fire.
+                var hasAudioEffectLane = audioEffectEnvelopes.Count > 0;
                 if (!fadeIn && !endHandling && !hasEnvelope && !hasOpacityLane
-                    && !hasTransformLane && !hasEffectLane)
+                    && !hasTransformLane && !hasEffectLane && !hasAudioEffectLane)
                     return;
 
                 var clipCts = new CancellationTokenSource();
@@ -1550,6 +1664,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                     StartPlacementTransformRunner(groupId, voice, transformEnvelopes, clipCts.Token);
                 if (hasEffectLane)
                     StartPlacementEffectRunner(groupId, voice, effectEnvelopes, clipCts.Token);
+                if (hasAudioEffectLane)
+                    StartAudioEffectRunner(groupId, voice, audioEffectEnvelopes, clipCts.Token);
                 if (endHandling)
                     StartEndMonitor(groupId, voice, end, clipCts.Token);
             }
@@ -1744,7 +1860,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 ChromaKey: p.ChromaKey,
                 ColorAdjust: p.ColorAdjust,
                 ChromaKeyInstanceId: p.ChromaKeyInstanceId,
-                ColorAdjustInstanceId: p.ColorAdjustInstanceId);
+                ColorAdjustInstanceId: p.ColorAdjustInstanceId,
+                Effects: p.Effects);
 
     private static void SeedPlacementTransformEnvelopes(
         ClipCompositionRuntime.IPlacedClipLayer slot,
@@ -1773,7 +1890,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 && lane.LayerIndex == layerIndex)
                 slot.SetEffectAutomation(
                     lane.EffectInstanceId,
-                    lane.Property,
+                    lane.EffectiveParameterId,
                     VolumeEnvelopes.Sample(lane.Points, cueTime));
     }
     /// <see cref="StopPreviewAsync"/> / a replacing preview cancels it mid-open.</summary>

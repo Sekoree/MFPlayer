@@ -27,6 +27,10 @@
               <MenuFlyout>
                 <MenuItem Header="Volume" Click="OnAddLane" Tag="cue.audio.volume"
                           IsEnabled="{Binding CanAddVolumeLane}" />
+                <MenuItem Header="Gain insert" Click="OnAddLane"
+                          Tag="audio.effect.parameter.gain.v1.gainDb"
+                          IsVisible="{Binding HasAutomationAudioGain}"
+                          IsEnabled="{Binding CanAddAudioGainLane}" />
                 <MenuItem Header="Opacity" Click="OnAddLane" Tag="video.placement.opacity"
                           IsEnabled="{Binding CanAddOpacityLane}" />
                 <MenuItem Header="Position X" Click="OnAddLane" Tag="video.placement.x"

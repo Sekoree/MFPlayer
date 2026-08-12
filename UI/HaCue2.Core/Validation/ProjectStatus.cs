@@ -157,7 +157,7 @@ public static class ProjectStatus
                 "Automation migration",
                 CheckOutcome.Passed,
                 $"converted {migration.TracksCreated} track(s) and {migration.KeyframesCreated} keyframe(s)",
-                "save the project to persist schema 2",
+                $"save the project to persist schema {HaCueProject.CurrentSchemaVersion}",
                 []);
         return new StatusCheck(
             "Automation migration",

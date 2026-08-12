@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using S.Media.Core.Effects;
 using S.Media.Core.Video;
 using S.Media.Core.Video.Effects;
 
@@ -12,6 +13,13 @@ public sealed record VisualSourceCreateArgs(
     Rational FrameRate,
     string? ConfigJson = null);
 
+/// <summary>Authoring metadata published with an audio-effect factory. Runtime-only/legacy factories may
+/// omit it; hosts then retain the kind but do not offer scalar parameter authoring for it.</summary>
+public sealed record AudioEffectRegistrationDescriptor(
+    string Kind,
+    string DisplayName,
+    IReadOnlyList<EffectParameterDescriptor> Parameters);
+
 /// <summary>
 /// Bus-capability registration (mirrors <c>CompositorRegistry</c>'s kind→factory shape, Doc 05): modules
 /// register audio/video effects and audio-visual sources <em>by kind</em>; the UI enumerates the kinds
@@ -21,6 +29,14 @@ public interface IBusRegistryBuilder
 {
     /// <summary>Register an audio effect factory (case-insensitive kind; later registration replaces).</summary>
     IBusRegistryBuilder AddAudioEffect(string kind, Func<string?, IAudioBusEffect> factory);
+
+    /// <summary>Register an audio effect factory plus the stable scalar metadata an authoring host can
+    /// enumerate without constructing a live processing instance.</summary>
+    IBusRegistryBuilder AddAudioEffect(
+        string kind,
+        string displayName,
+        IReadOnlyList<EffectParameterDescriptor> parameters,
+        Func<string?, IAudioBusEffect> factory);
 
     /// <summary>Register a video effect factory.</summary>
     IBusRegistryBuilder AddVideoEffect(string kind, Func<string?, IVideoBusEffect> factory);
@@ -47,6 +63,12 @@ public interface IBusRegistry
 {
     IReadOnlyCollection<string> AudioEffectKinds { get; }
 
+    IReadOnlyCollection<AudioEffectRegistrationDescriptor> AudioEffectDescriptors { get; }
+
+    bool TryGetAudioEffectDescriptor(
+        string kind,
+        [MaybeNullWhen(false)] out AudioEffectRegistrationDescriptor descriptor);
+
     IReadOnlyCollection<string> VideoEffectKinds { get; }
 
     IReadOnlyCollection<string> VisualSourceKinds { get; }
@@ -70,6 +92,8 @@ public interface IBusRegistry
 public sealed class BusRegistryBuilder : IBusRegistryBuilder
 {
     private readonly Dictionary<string, Func<string?, IAudioBusEffect>> _audio = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AudioEffectRegistrationDescriptor> _audioDescriptors =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Func<string?, IVideoBusEffect>> _video = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Func<VisualSourceCreateArgs, IAudioVisualSource>> _visual = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Func<string?, VideoLayerEffect>> _layer = new(StringComparer.OrdinalIgnoreCase);
@@ -80,6 +104,26 @@ public sealed class BusRegistryBuilder : IBusRegistryBuilder
         ArgumentException.ThrowIfNullOrEmpty(kind);
         ArgumentNullException.ThrowIfNull(factory);
         _audio[kind] = factory;
+        _audioDescriptors.Remove(kind);
+        return this;
+    }
+
+    public IBusRegistryBuilder AddAudioEffect(
+        string kind,
+        string displayName,
+        IReadOnlyList<EffectParameterDescriptor> parameters,
+        Func<string?, IAudioBusEffect> factory)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(kind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        ArgumentNullException.ThrowIfNull(parameters);
+        ArgumentNullException.ThrowIfNull(factory);
+        var snapshot = parameters.ToArray();
+        if (snapshot.Any(parameter => string.IsNullOrWhiteSpace(parameter.Id))
+            || snapshot.GroupBy(parameter => parameter.Id, StringComparer.Ordinal).Any(group => group.Count() > 1))
+            throw new ArgumentException("audio-effect parameter IDs must be non-empty and unique.", nameof(parameters));
+        _audio[kind] = factory;
+        _audioDescriptors[kind] = new AudioEffectRegistrationDescriptor(kind, displayName, snapshot);
         return this;
     }
 
@@ -115,7 +159,8 @@ public sealed class BusRegistryBuilder : IBusRegistryBuilder
         return this;
     }
 
-    public IBusRegistry Build() => new BusRegistry(_audio, _video, _visual, _layer, _geometry);
+    public IBusRegistry Build() =>
+        new BusRegistry(_audio, _audioDescriptors, _video, _visual, _layer, _geometry);
 
     public static IBusRegistry Build(Action<IBusRegistryBuilder> configure)
     {
@@ -128,6 +173,7 @@ public sealed class BusRegistryBuilder : IBusRegistryBuilder
 
 internal sealed class BusRegistry(
     Dictionary<string, Func<string?, IAudioBusEffect>> audio,
+    Dictionary<string, AudioEffectRegistrationDescriptor> audioDescriptors,
     Dictionary<string, Func<string?, IVideoBusEffect>> video,
     Dictionary<string, Func<VisualSourceCreateArgs, IAudioVisualSource>> visual,
     Dictionary<string, Func<string?, VideoLayerEffect>> layer,
@@ -135,6 +181,8 @@ internal sealed class BusRegistry(
 {
     private readonly Dictionary<string, Func<string?, IAudioBusEffect>> _audio =
         new(audio, StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AudioEffectRegistrationDescriptor> _audioDescriptors =
+        new(audioDescriptors, StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Func<string?, IVideoBusEffect>> _video =
         new(video, StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Func<VisualSourceCreateArgs, IAudioVisualSource>> _visual =
@@ -145,6 +193,14 @@ internal sealed class BusRegistry(
         new(geometry, StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyCollection<string> AudioEffectKinds => _audio.Keys;
+
+    public IReadOnlyCollection<AudioEffectRegistrationDescriptor> AudioEffectDescriptors =>
+        _audioDescriptors.Values;
+
+    public bool TryGetAudioEffectDescriptor(
+        string kind,
+        [MaybeNullWhen(false)] out AudioEffectRegistrationDescriptor descriptor) =>
+        _audioDescriptors.TryGetValue(kind, out descriptor);
 
     public IReadOnlyCollection<string> VideoEffectKinds => _video.Keys;
 

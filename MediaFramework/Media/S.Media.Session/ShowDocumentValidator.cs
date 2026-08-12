@@ -21,7 +21,7 @@ public sealed class ShowDocumentValidationException(IReadOnlyList<ShowValidation
 public static class ShowDocumentValidator
 {
     /// <summary>The schema version this build writes.</summary>
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     /// <summary>The oldest schema version this build can still load.</summary>
     /// <remarks>
@@ -262,6 +262,9 @@ public static class ShowDocumentValidator
             }
             foreach (var effectEnvelope in clip.PlacementEffectEnvelopes ?? [])
             {
+                if (string.IsNullOrWhiteSpace(effectEnvelope.EffectiveParameterId))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has placement-effect automation without a parameter id.");
                 var effectTargetPlacement = clip.GetPlacements().FirstOrDefault(candidate =>
                     string.Equals(candidate.CompositionId, effectEnvelope.CompositionId, StringComparison.Ordinal)
                     && candidate.LayerIndex == effectEnvelope.LayerIndex);
@@ -275,11 +278,42 @@ public static class ShowDocumentValidator
                     && !string.Equals(effectPlacement.ChromaKeyInstanceId, effectEnvelope.EffectInstanceId,
                         StringComparison.Ordinal)
                     && !string.Equals(effectPlacement.ColorAdjustInstanceId, effectEnvelope.EffectInstanceId,
-                        StringComparison.Ordinal))
+                        StringComparison.Ordinal)
+                    && (effectPlacement.Effects?.All(effect =>
+                        !string.Equals(effect.InstanceId, effectEnvelope.EffectInstanceId,
+                            StringComparison.Ordinal)) ?? true))
                     errors.Add("clip", clip.ClipId,
                         $"the clip for cue '{clip.ClipId}' has parameter automation for an effect it does not use.");
                 ValidateEnvelope(
                     errors, clip.ClipId, "placement effect", effectEnvelope.Points,
+                    opacity: false, unrestricted: true);
+            }
+            foreach (var effect in clip.AudioEffects ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(effect.InstanceId)
+                    || string.IsNullOrWhiteSpace(effect.EffectTypeId))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has an invalid audio effect instance.");
+                if (effect.Parameters is null || effect.Parameters.Any(parameter =>
+                        string.IsNullOrWhiteSpace(parameter.ParameterId) || !double.IsFinite(parameter.Value))
+                    || effect.Parameters.GroupBy(parameter => parameter.ParameterId, StringComparer.Ordinal)
+                        .Any(group => group.Count() > 1))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has invalid audio effect parameters.");
+            }
+            if ((clip.AudioEffects ?? []).GroupBy(effect => effect.InstanceId, StringComparer.Ordinal)
+                .Any(group => group.Count() > 1))
+                errors.Add("clip", clip.ClipId,
+                    $"the clip for cue '{clip.ClipId}' has duplicate audio effect instance ids.");
+            foreach (var envelope in clip.AudioEffectEnvelopes ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(envelope.EffectInstanceId)
+                    || string.IsNullOrWhiteSpace(envelope.ParameterId)
+                    || (clip.AudioEffects?.All(effect => effect.InstanceId != envelope.EffectInstanceId) ?? true))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has an invalid audio effect automation target.");
+                ValidateEnvelope(
+                    errors, clip.ClipId, "audio effect", envelope.Points,
                     opacity: false, unrestricted: true);
             }
 
@@ -367,6 +401,27 @@ public static class ShowDocumentValidator
             errors.Add($"the clip for cue '{cueId}' has horizontal crops that erase the whole frame in {where}.");
         if (double.IsFinite(p.CropTop) && double.IsFinite(p.CropBottom) && p.CropTop + p.CropBottom >= 1)
             errors.Add($"the clip for cue '{cueId}' has vertical crops that erase the whole frame in {where}.");
+
+        if (p.Effects is { Count: > 0 } effects)
+        {
+            if (effects.Any(effect => string.IsNullOrWhiteSpace(effect.InstanceId)))
+                errors.Add($"the clip for cue '{cueId}' has a layer effect without an instance id in {where}.");
+            if (effects.Any(effect => string.IsNullOrWhiteSpace(effect.EffectTypeId)))
+                errors.Add($"the clip for cue '{cueId}' has a layer effect without a type id in {where}.");
+            if (effects.GroupBy(effect => effect.InstanceId, StringComparer.Ordinal)
+                .Any(group => group.Count() > 1))
+                errors.Add($"the clip for cue '{cueId}' has duplicate layer-effect instance ids in {where}.");
+            foreach (var effect in effects)
+            {
+                if (effect.Parameters is null || effect.Parameters.Any(parameter =>
+                        string.IsNullOrWhiteSpace(parameter.ParameterId) || !double.IsFinite(parameter.Value)))
+                    errors.Add($"the clip for cue '{cueId}' has an invalid layer-effect parameter in {where}.");
+                if (effect.Parameters is not null
+                    && effect.Parameters.GroupBy(parameter => parameter.ParameterId, StringComparer.Ordinal)
+                    .Any(group => group.Count() > 1))
+                    errors.Add($"the clip for cue '{cueId}' has duplicate layer-effect parameters in {where}.");
+            }
+        }
 
         void CheckCrop(double v, string name)
         {

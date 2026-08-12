@@ -38,7 +38,34 @@ public sealed record ShowVideoPlacement(
     Compositor.Effects.BrightnessContrastSettings? ColorAdjust = null,
     // Stable authoring identities used by effect-parameter automation; settings remain null when bypassed.
     string? ChromaKeyInstanceId = null,
-    string? ColorAdjustInstanceId = null);
+    string? ColorAdjustInstanceId = null,
+    // Ordered, stable layer-effect rack. When present it supersedes the two typed compatibility fields above.
+    IReadOnlyList<ShowLayerEffectInstance>? Effects = null);
+
+/// <summary>One scalar value in a layer-effect instance's type-local parameter namespace.</summary>
+public sealed record ShowEffectParameterValue(string ParameterId, double Value);
+
+/// <summary>An ordered layer-effect instance lowered by an authoring host.</summary>
+public sealed record ShowLayerEffectInstance(
+    string InstanceId,
+    string EffectTypeId,
+    bool Enabled,
+    IReadOnlyList<ShowEffectParameterValue> Parameters,
+    string? ConfigJson = null);
+
+/// <summary>One ordered cue-local audio insert instance.</summary>
+public sealed record ShowAudioEffectInstance(
+    string InstanceId,
+    string EffectTypeId,
+    bool Enabled,
+    IReadOnlyList<ShowEffectParameterValue> Parameters,
+    string? ConfigJson = null);
+
+/// <summary>Absolute cue-time automation for one scalar audio-effect parameter.</summary>
+public sealed record ShowAudioEffectEnvelope(
+    string EffectInstanceId,
+    string ParameterId,
+    IReadOnlyList<ShowEnvelopePoint> Points);
 
 /// <summary>One composition placement of a clip's video: which composition canvas (<paramref name="CompositionId"/>),
 /// which layer (<paramref name="LayerIndex"/>), and where/how the frame sits on it (<paramref name="Placement"/>).
@@ -82,6 +109,7 @@ public enum ShowPlacementEffectProperty
     ChromaSpillReduction,
     ColorBrightness,
     ColorContrast,
+    Custom = 1000,
 }
 
 /// <summary>Absolute automation for one parameter of one stable placement-effect instance.</summary>
@@ -90,7 +118,27 @@ public sealed record ShowPlacementEffectEnvelope(
     int LayerIndex,
     string EffectInstanceId,
     ShowPlacementEffectProperty Property,
-    IReadOnlyList<ShowEnvelopePoint> Points);
+    IReadOnlyList<ShowEnvelopePoint> Points)
+{
+    /// <summary>Type-local scalar parameter ID. Null reads the legacy <see cref="Property"/> enum.</summary>
+    public string? ParameterId { get; init; }
+
+    public string EffectiveParameterId => ParameterId ?? ShowEffectParameterIds.FromLegacy(Property);
+}
+
+/// <summary>Compatibility mapping for the original five hard-coded effect parameters.</summary>
+public static class ShowEffectParameterIds
+{
+    public static string FromLegacy(ShowPlacementEffectProperty property) => property switch
+    {
+        ShowPlacementEffectProperty.ChromaSimilarity => "similarity",
+        ShowPlacementEffectProperty.ChromaSmoothness => "smoothness",
+        ShowPlacementEffectProperty.ChromaSpillReduction => "spill",
+        ShowPlacementEffectProperty.ColorBrightness => "brightness",
+        ShowPlacementEffectProperty.ColorContrast => "contrast",
+        _ => "",
+    };
+}
 
 /// <summary>One audio output a clip plays on (GUI per-cue audio routing - a group of <c>CueAudioRoute</c>s to
 /// the same output line). Unlike a per-group <see cref="ShowAudioOutput"/>, this is carried on the clip so a
@@ -318,6 +366,11 @@ public sealed record ShowClipBinding(
     /// Null - or a session with no program-audio target - falls back to the v1 direct-route adapter
     /// (<see cref="AudioRoutes"/> / group outputs) unchanged.</summary>
     public IReadOnlyList<ShowClipLogicalSend>? LogicalSends { get; init; }
+
+    /// <summary>Ordered cue-local audio inserts, applied before every route/program send.</summary>
+    public IReadOnlyList<ShowAudioEffectInstance>? AudioEffects { get; init; }
+
+    public IReadOnlyList<ShowAudioEffectEnvelope>? AudioEffectEnvelopes { get; init; }
 
     /// <summary>Volume-automation keyframes, sorted by time.
     /// Times are CLIP positions (post-<see cref="StartOffset"/>), so the envelope survives seeks and

@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using S.Media.Core.Effects;
 using S.Media.Session;
 
 namespace HaCue2.Core.Model;
@@ -243,13 +244,36 @@ public static class AutomationPropertyCatalog
             AutomationComposition.ReplaceAuthored,
             group);
 
-    public static IReadOnlyCollection<AutomationPropertyDescriptor> All => [.. Descriptors.Values];
+    public static IReadOnlyCollection<AutomationPropertyDescriptor> All =>
+    [
+        .. Descriptors.Values,
+        .. LayerEffectCatalog.All
+            .SelectMany(effect => effect.Parameters.Select(parameter => DynamicEffectDescriptor(effect, parameter)))
+            .Where(descriptor => !Descriptors.ContainsKey(descriptor.Id)),
+        .. AudioEffectCatalog.All
+            .SelectMany(effect => effect.Parameters.Select(parameter => DynamicAudioEffectDescriptor(effect, parameter))),
+    ];
 
-    public static bool TryGet(string propertyId, out AutomationPropertyDescriptor descriptor) =>
-        Descriptors.TryGetValue(propertyId, out descriptor!);
+    public static bool TryGet(string propertyId, out AutomationPropertyDescriptor descriptor)
+    {
+        if (Descriptors.TryGetValue(propertyId, out descriptor!))
+            return true;
+        if (LayerEffectCatalog.TryResolveProperty(propertyId, out var effect, out var parameter))
+        {
+            descriptor = DynamicEffectDescriptor(effect, parameter);
+            return true;
+        }
+        if (AudioEffectCatalog.TryResolveProperty(propertyId, out var audioEffect, out var audioParameter))
+        {
+            descriptor = DynamicAudioEffectDescriptor(audioEffect, audioParameter);
+            return true;
+        }
+        descriptor = null!;
+        return false;
+    }
 
     public static AutomationPropertyDescriptor? Get(string propertyId) =>
-        Descriptors.GetValueOrDefault(propertyId);
+        TryGet(propertyId, out var descriptor) ? descriptor : null;
 
     /// <summary>Concrete internal targets which actually exist on this cue.</summary>
     public static IReadOnlyList<AutomationTargetOption> ForCue(CueNode cue)
@@ -262,6 +286,21 @@ public static class AutomationPropertyCatalog
                 Descriptors[AutomationPropertyIds.CueVolume],
                 "Volume",
                 media.LevelDb));
+            foreach (var effect in media.AudioEffects)
+            {
+                if (AudioEffectCatalog.Get(effect.EffectTypeId) is not { } definition)
+                    continue;
+                foreach (var parameter in definition.Parameters)
+                    targets.Add(new AutomationTargetOption(
+                        new AutomationTargetRef
+                        {
+                            PropertyId = AudioEffectCatalog.PropertyId(effect.EffectTypeId, parameter.Id),
+                            ObjectId = effect.Id,
+                        },
+                        DynamicAudioEffectDescriptor(definition, parameter),
+                        $"{definition.DisplayName} · {parameter.DisplayName}",
+                        effect.Read(parameter.Id, parameter.Default)));
+            }
         }
 
         foreach (var placement in CuePlacements.Of(cue))
@@ -285,26 +324,17 @@ public static class AutomationPropertyCatalog
                 placement, AutomationPropertyIds.PlacementHeight, "Height", placement.Height));
             targets.Add(PlacementOption(
                 placement, AutomationPropertyIds.PlacementRotation, "Rotation", placement.RotationDegrees));
-            if (placement.ChromaKey is { } chroma)
+            foreach (var effect in LayerEffectRack.Effective(placement))
             {
-                targets.Add(EffectOption(
-                    placement, chroma.Id, AutomationPropertyIds.ChromaSimilarity,
-                    "Chroma similarity", chroma.Similarity));
-                targets.Add(EffectOption(
-                    placement, chroma.Id, AutomationPropertyIds.ChromaSmoothness,
-                    "Chroma smoothness", chroma.Smoothness));
-                targets.Add(EffectOption(
-                    placement, chroma.Id, AutomationPropertyIds.ChromaSpillReduction,
-                    "Spill reduction", chroma.SpillReduction));
-            }
-            if (placement.ColorAdjust is { } color)
-            {
-                targets.Add(EffectOption(
-                    placement, color.Id, AutomationPropertyIds.ColorBrightness,
-                    "Brightness", color.Brightness));
-                targets.Add(EffectOption(
-                    placement, color.Id, AutomationPropertyIds.ColorContrast,
-                    "Contrast", color.Contrast));
+                if (LayerEffectCatalog.Get(effect.EffectTypeId) is not { } definition)
+                    continue;
+                foreach (var parameter in definition.Parameters)
+                    targets.Add(EffectOption(
+                        placement,
+                        effect.Id,
+                        LayerEffectCatalog.PropertyId(effect.EffectTypeId, parameter.Id),
+                        $"{definition.DisplayName} · {parameter.DisplayName}",
+                        effect.Read(parameter.Id, parameter.Default)));
             }
         }
 
@@ -337,9 +367,50 @@ public static class AutomationPropertyCatalog
         LayerPlacement placement, Guid effectId, string propertyId, string name, double authoredValue) =>
         new(
             new AutomationTargetRef { PropertyId = propertyId, ObjectId = effectId },
-            Descriptors[propertyId],
+            Get(propertyId)!,
             $"{name} · layer {placement.LayerIndex}",
             authoredValue);
+
+    private static AutomationPropertyDescriptor DynamicEffectDescriptor(
+        LayerEffectDefinition effect,
+        EffectParameterDescriptor parameter) =>
+        EffectDescriptor(
+            LayerEffectCatalog.PropertyId(effect.TypeId, parameter.Id),
+            $"{effect.DisplayName} · {parameter.DisplayName}",
+            new AutomationValueSpec(
+                parameter.Minimum,
+                parameter.Maximum,
+                parameter.Default,
+                parameter.Unit,
+                parameter.Scale switch
+                {
+                    EffectParameterScale.Decibels => AutomationScale.Decibels,
+                    EffectParameterScale.Percentage => AutomationScale.Percentage,
+                    _ => AutomationScale.Linear,
+                }),
+            effect.DisplayName);
+
+    private static AutomationPropertyDescriptor DynamicAudioEffectDescriptor(
+        LayerEffectDefinition effect,
+        EffectParameterDescriptor parameter) =>
+        new(
+            AudioEffectCatalog.PropertyId(effect.TypeId, parameter.Id),
+            $"{effect.DisplayName} · {parameter.DisplayName}",
+            new AutomationValueSpec(
+                parameter.Minimum,
+                parameter.Maximum,
+                parameter.Default,
+                parameter.Unit,
+                parameter.Scale switch
+                {
+                    EffectParameterScale.Decibels => AutomationScale.Decibels,
+                    EffectParameterScale.Percentage => AutomationScale.Percentage,
+                    _ => AutomationScale.Linear,
+                }),
+            AutomationTargetKind.EffectInstance,
+            AutomationDomain.SessionAudio,
+            AutomationComposition.ReplaceAuthored,
+            effect.DisplayName);
 }
 
 /// <summary>Model helpers shared by compiler, validation, journal, and presentation.</summary>

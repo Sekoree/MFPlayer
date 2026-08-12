@@ -10,6 +10,9 @@ using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Compositor;
 using S.Media.Core.Video.Effects;
+using S.Media.Core.Buses;
+using System.Text.Json;
+using System.Text;
 
 namespace S.Media.Session;
 
@@ -138,6 +141,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     private bool _disposed;
 
     private readonly Func<VideoFormat, ClipCompositionCompositor> _compositorFactory;
+    private readonly IBusRegistry? _effectRegistry;
 
     /// <summary>Mapping stages whose compositor must be torn down on the pump (driver) thread -
     /// retired by live mapping updates or runtime dispose; drained at the next tick.</summary>
@@ -166,7 +170,8 @@ public sealed class ClipCompositionRuntime : IDisposable
         ClipCompositionDefinition definition,
         IReadOnlyList<ClipCompositionOutputLease> outputs,
         Func<VideoFormat, ClipCompositionCompositor>? compositorFactory = null,
-        ClipOutputMappingSpec? compositionMapping = null)
+        ClipOutputMappingSpec? compositionMapping = null,
+        IBusRegistry? effectRegistry = null)
     {
         _definition = definition ?? throw new ArgumentNullException(nameof(definition));
         ArgumentNullException.ThrowIfNull(outputs);
@@ -183,6 +188,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         _canvasPeriod = _canvasGrid.ApproximatePeriod;
 
         _compositorFactory = compositorFactory ?? CreateDefaultCompositor;
+        _effectRegistry = effectRegistry;
         var compositor = _compositorFactory(_canvasFormat);
         _compositor = compositor.Compositor ?? throw new InvalidOperationException("Compositor factory returned null compositor.");
         RequiresBgraLayerConversion = compositor.RequiresBgraLayerConversion;
@@ -2592,51 +2598,60 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// <summary>Parameter overrides keyed by stable effect instance and property.</summary>
     internal sealed class PlacementEffectAutomation
     {
-        private readonly Dictionary<(string InstanceId, ShowPlacementEffectProperty Property), double> _values = [];
+        private readonly Dictionary<(string InstanceId, string ParameterId), double> _values = [];
 
-        public void Set(string instanceId, ShowPlacementEffectProperty property, double value)
+        public void Set(string instanceId, string parameterId, double value)
         {
-            if (instanceId.Length == 0 || !double.IsFinite(value))
+            if (instanceId.Length == 0 || parameterId.Length == 0 || !double.IsFinite(value))
                 return;
-            _values[(instanceId, property)] = property switch
-            {
-                ShowPlacementEffectProperty.ChromaSimilarity => Math.Clamp(value, 0, 1),
-                ShowPlacementEffectProperty.ChromaSmoothness => Math.Clamp(value, 0, 1),
-                ShowPlacementEffectProperty.ChromaSpillReduction => Math.Clamp(value, 0, 1),
-                ShowPlacementEffectProperty.ColorBrightness => Math.Clamp(value, -1, 1),
-                ShowPlacementEffectProperty.ColorContrast => Math.Clamp(value, 0, 4),
-                _ => value,
-            };
+            _values[(instanceId, parameterId)] = value;
         }
 
-        public void Clear(string instanceId, ShowPlacementEffectProperty property) =>
-            _values.Remove((instanceId, property));
+        public void Clear(string instanceId, string parameterId) =>
+            _values.Remove((instanceId, parameterId));
 
         public VideoPlacementSpec Apply(VideoPlacementSpec authored)
         {
+            if (authored.Effects is { Count: > 0 } rack)
+            {
+                var effects = rack.Select(effect =>
+                {
+                    var parameters = effect.Parameters
+                        .Select(parameter => parameter with
+                        {
+                            Value = Read(effect.InstanceId, parameter.ParameterId, parameter.Value),
+                        })
+                        .ToList();
+                    foreach (var ((instanceId, parameterId), value) in _values)
+                        if (string.Equals(instanceId, effect.InstanceId, StringComparison.Ordinal)
+                            && parameters.All(parameter =>
+                                !string.Equals(parameter.ParameterId, parameterId, StringComparison.Ordinal)))
+                            parameters.Add(new ShowEffectParameterValue(parameterId, value));
+                    return effect with { Parameters = parameters };
+                }).ToArray();
+                return authored with { Effects = effects };
+            }
+
             var chroma = authored.ChromaKey;
             if (chroma is { } key && authored.ChromaKeyInstanceId is { Length: > 0 } chromaId)
                 chroma = key with
                 {
-                    Similarity = (float)Read(chromaId, ShowPlacementEffectProperty.ChromaSimilarity, key.Similarity),
-                    Smoothness = (float)Read(chromaId, ShowPlacementEffectProperty.ChromaSmoothness, key.Smoothness),
-                    SpillSuppression = (float)Read(
-                        chromaId, ShowPlacementEffectProperty.ChromaSpillReduction, key.SpillSuppression),
+                    Similarity = (float)Math.Clamp(Read(chromaId, "similarity", key.Similarity), 0, 1),
+                    Smoothness = (float)Math.Clamp(Read(chromaId, "smoothness", key.Smoothness), 0, 1),
+                    SpillSuppression = (float)Math.Clamp(Read(chromaId, "spill", key.SpillSuppression), 0, 1),
                 };
             var color = authored.ColorAdjust;
             if (color is { } adjust && authored.ColorAdjustInstanceId is { Length: > 0 } colorId)
                 color = adjust with
                 {
-                    Brightness = (float)Read(
-                        colorId, ShowPlacementEffectProperty.ColorBrightness, adjust.Brightness),
-                    Contrast = (float)Read(
-                        colorId, ShowPlacementEffectProperty.ColorContrast, adjust.Contrast),
+                    Brightness = (float)Math.Clamp(Read(colorId, "brightness", adjust.Brightness), -1, 1),
+                    Contrast = (float)Math.Clamp(Read(colorId, "contrast", adjust.Contrast), 0, 4),
                 };
             return authored with { ChromaKey = chroma, ColorAdjust = color };
         }
 
-        private double Read(string instanceId, ShowPlacementEffectProperty property, double fallback) =>
-            _values.GetValueOrDefault((instanceId, property), fallback);
+        private double Read(string instanceId, string parameterId, double fallback) =>
+            _values.GetValueOrDefault((instanceId, parameterId), fallback);
     }
 
     public interface IPlacedClipLayer : IDisposable
@@ -2669,10 +2684,20 @@ public sealed class ClipCompositionRuntime : IDisposable
         void ClearPlacementAutomation(ShowPlacementProperty property);
         void SetControllerPlacementAutomation(ShowPlacementProperty property, double value);
         void ClearControllerPlacementAutomation(ShowPlacementProperty property);
-        void SetEffectAutomation(string instanceId, ShowPlacementEffectProperty property, double value);
-        void ClearEffectAutomation(string instanceId, ShowPlacementEffectProperty property);
-        void SetControllerEffectAutomation(string instanceId, ShowPlacementEffectProperty property, double value);
-        void ClearControllerEffectAutomation(string instanceId, ShowPlacementEffectProperty property);
+        void SetEffectAutomation(string instanceId, string parameterId, double value);
+        void ClearEffectAutomation(string instanceId, string parameterId);
+        void SetControllerEffectAutomation(string instanceId, string parameterId, double value);
+        void ClearControllerEffectAutomation(string instanceId, string parameterId);
+
+        void SetEffectAutomation(string instanceId, ShowPlacementEffectProperty property, double value) =>
+            SetEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property), value);
+        void ClearEffectAutomation(string instanceId, ShowPlacementEffectProperty property) =>
+            ClearEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property));
+        void SetControllerEffectAutomation(
+            string instanceId, ShowPlacementEffectProperty property, double value) =>
+            SetControllerEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property), value);
+        void ClearControllerEffectAutomation(string instanceId, ShowPlacementEffectProperty property) =>
+            ClearControllerEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property));
 
         /// <summary>The composed opacity actually handed to the compositor.</summary>
         float EffectiveOpacity { get; }
@@ -2855,50 +2880,61 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         public void SetEffectAutomation(
-            string instanceId, ShowPlacementEffectProperty property, double value)
+            string instanceId, string parameterId, double value)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _effectAutomation.Set(instanceId, property, value);
-                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                _effectAutomation.Set(instanceId, parameterId, value);
+                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
-        public void ClearEffectAutomation(string instanceId, ShowPlacementEffectProperty property)
+        public void ClearEffectAutomation(string instanceId, string parameterId)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _effectAutomation.Clear(instanceId, property);
-                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                _effectAutomation.Clear(instanceId, parameterId);
+                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
         public void SetControllerEffectAutomation(
-            string instanceId, ShowPlacementEffectProperty property, double value)
+            string instanceId, string parameterId, double value)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _controllerEffectAutomation.Set(instanceId, property, value);
-                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                _controllerEffectAutomation.Set(instanceId, parameterId, value);
+                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
-        public void ClearControllerEffectAutomation(string instanceId, ShowPlacementEffectProperty property)
+        public void ClearControllerEffectAutomation(string instanceId, string parameterId)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _controllerEffectAutomation.Clear(instanceId, property);
-                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                _controllerEffectAutomation.Clear(instanceId, parameterId);
+                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
+
+        public void SetEffectAutomation(
+            string instanceId, ShowPlacementEffectProperty property, double value) =>
+            SetEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property), value);
+        public void ClearEffectAutomation(string instanceId, ShowPlacementEffectProperty property) =>
+            ClearEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property));
+        public void SetControllerEffectAutomation(
+            string instanceId, ShowPlacementEffectProperty property, double value) =>
+            SetControllerEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property), value);
+        public void ClearControllerEffectAutomation(string instanceId, ShowPlacementEffectProperty property) =>
+            ClearControllerEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property));
 
         private VideoPlacementSpec ApplyAutomatedPlacement(VideoPlacementSpec authored) =>
             _controllerPlacementAutomation.Apply(_placementAutomation.Apply(authored));
@@ -2972,7 +3008,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                 RawSlot.Opacity = _level.Effective;
                 // Same color-stage chain as frame layers (chroma key first, then brightness/contrast) -
                 // a visualizer placement's Effects-tab settings apply to the surface like any clip layer.
-                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
@@ -3018,7 +3054,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             {
                 _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
                 RawSlot.Opacity = _level.Effective;
-                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                RawSlot.Effects = LayerSlot.BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
@@ -3194,50 +3230,61 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         public void SetEffectAutomation(
-            string instanceId, ShowPlacementEffectProperty property, double value)
+            string instanceId, string parameterId, double value)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _effectAutomation.Set(instanceId, property, value);
-                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                _effectAutomation.Set(instanceId, parameterId, value);
+                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
-        public void ClearEffectAutomation(string instanceId, ShowPlacementEffectProperty property)
+        public void ClearEffectAutomation(string instanceId, string parameterId)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _effectAutomation.Clear(instanceId, property);
-                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                _effectAutomation.Clear(instanceId, parameterId);
+                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
         public void SetControllerEffectAutomation(
-            string instanceId, ShowPlacementEffectProperty property, double value)
+            string instanceId, string parameterId, double value)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _controllerEffectAutomation.Set(instanceId, property, value);
-                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                _controllerEffectAutomation.Set(instanceId, parameterId, value);
+                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
-        public void ClearControllerEffectAutomation(string instanceId, ShowPlacementEffectProperty property)
+        public void ClearControllerEffectAutomation(string instanceId, string parameterId)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _controllerEffectAutomation.Clear(instanceId, property);
-                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                _controllerEffectAutomation.Clear(instanceId, parameterId);
+                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
+
+        public void SetEffectAutomation(
+            string instanceId, ShowPlacementEffectProperty property, double value) =>
+            SetEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property), value);
+        public void ClearEffectAutomation(string instanceId, ShowPlacementEffectProperty property) =>
+            ClearEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property));
+        public void SetControllerEffectAutomation(
+            string instanceId, ShowPlacementEffectProperty property, double value) =>
+            SetControllerEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property), value);
+        public void ClearControllerEffectAutomation(string instanceId, ShowPlacementEffectProperty property) =>
+            ClearControllerEffectAutomation(instanceId, ShowEffectParameterIds.FromLegacy(property));
 
         private VideoPlacementSpec ApplyAutomatedPlacement(VideoPlacementSpec authored) =>
             _controllerPlacementAutomation.Apply(_placementAutomation.Apply(authored));
@@ -3323,16 +3370,43 @@ public sealed class ClipCompositionRuntime : IDisposable
                 _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
                 RawSlot.Opacity = _level.Effective;
                 RawSlot.BlendMode = BlendMode.SourceOver;
-                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
-        /// <summary>Color-stage effect chain for this placement. Chroma key runs FIRST (keying must
-        /// see the original colors - a brightness shift would move pixels off the key), then
-        /// brightness/contrast on the survivors. Hosts driving <c>Slot.Effects</c> directly own
-        /// the whole list.</summary>
-        internal static IReadOnlyList<VideoLayerEffect>? BuildLayerEffects(VideoPlacementSpec placement)
+        /// <summary>Builds the authored color-stage chain in rack order. The two typed fields are a
+        /// compatibility fallback for schema-1/HaPlay documents which predate ordered instances.</summary>
+        internal static IReadOnlyList<VideoLayerEffect>? BuildLayerEffects(
+            VideoPlacementSpec placement,
+            IBusRegistry? registry = null)
         {
+            if (placement.Effects is { Count: > 0 } rack)
+            {
+                var resolved = new List<VideoLayerEffect>(rack.Count);
+                foreach (var instance in rack)
+                {
+                    if (!instance.Enabled || string.IsNullOrWhiteSpace(instance.EffectTypeId))
+                        continue;
+                    var config = MergeEffectConfig(instance);
+                    if (registry?.TryCreateLayerEffect(instance.EffectTypeId, config, out var plugin) == true)
+                    {
+                        resolved.Add(plugin);
+                        continue;
+                    }
+                    VideoLayerEffect? builtIn = instance.EffectTypeId switch
+                    {
+                        S.Media.Compositor.Effects.ChromaKeyVideoEffect.EffectId =>
+                            S.Media.Compositor.Effects.ChromaKeyVideoEffect.FromJson(config),
+                        S.Media.Compositor.Effects.BrightnessContrastVideoEffect.EffectId =>
+                            S.Media.Compositor.Effects.BrightnessContrastVideoEffect.FromJson(config),
+                        _ => null,
+                    };
+                    if (builtIn is not null)
+                        resolved.Add(builtIn);
+                }
+                return resolved.Count == 0 ? null : resolved;
+            }
+
             if (placement is { ChromaKey: null, ColorAdjust: null })
                 return null;
             var effects = new List<VideoLayerEffect>(2);
@@ -3341,6 +3415,42 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (placement.ColorAdjust is { } adjust)
                 effects.Add(S.Media.Compositor.Effects.BrightnessContrastVideoEffect.Create(adjust));
             return effects;
+        }
+
+        private static string? MergeEffectConfig(ShowLayerEffectInstance instance)
+        {
+            var parameters = instance.Parameters
+                .Where(parameter =>
+                    !string.IsNullOrWhiteSpace(parameter.ParameterId) && double.IsFinite(parameter.Value))
+                .ToArray();
+            if (parameters.Length == 0)
+                return instance.ConfigJson;
+
+            var overwritten = parameters.Select(parameter => parameter.ParameterId)
+                .ToHashSet(StringComparer.Ordinal);
+            var buffer = new ArrayBufferWriter<byte>();
+            using var writer = new Utf8JsonWriter(buffer);
+            writer.WriteStartObject();
+            if (!string.IsNullOrWhiteSpace(instance.ConfigJson))
+            {
+                try
+                {
+                    using var document = JsonDocument.Parse(instance.ConfigJson!);
+                    if (document.RootElement.ValueKind == JsonValueKind.Object)
+                        foreach (var property in document.RootElement.EnumerateObject())
+                            if (!overwritten.Contains(property.Name))
+                                property.WriteTo(writer);
+                }
+                catch (JsonException)
+                {
+                    // Preserve playback of the scalar parameters even when an optional plugin blob is bad.
+                }
+            }
+            foreach (var parameter in parameters)
+                writer.WriteNumber(parameter.ParameterId, parameter.Value);
+            writer.WriteEndObject();
+            writer.Flush();
+            return Encoding.UTF8.GetString(buffer.WrittenSpan);
         }
 
         private void ApplyMappedPlacement(
@@ -3399,7 +3509,7 @@ public sealed class ClipCompositionRuntime : IDisposable
                 _level.Base = Math.Clamp((float)_placement.Opacity, 0f, 1f);
                 RawSlot.Opacity = _level.Effective;
                 RawSlot.BlendMode = BlendMode.SourceOver;
-                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement));
+                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 

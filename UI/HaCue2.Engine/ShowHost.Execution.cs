@@ -546,10 +546,25 @@ public sealed partial class ShowHost
                     run.Claim(track.Id, captured)).ConfigureAwait(false);
             return;
         }
-        if (TryEffectProperty(track.Target.PropertyId, out var effectProperty)
+        if (TryAudioEffectParameter(track.Target.PropertyId, out var audioParameter)
+            && target is MediaCueNode audioTarget
+            && track.Target.ObjectId is { } audioEffectId
+            && audioTarget.AudioEffects.Any(effect => effect.Id == audioEffectId))
+        {
+            foreach (var captured in capturedTargets.Where(item => item.SessionInstance.HasValue))
+                await _session.ApplyControllerAudioEffectAsync(
+                    captured.SessionInstance!.Value,
+                    run.OwnerId,
+                    audioEffectId.ToString(),
+                    audioParameter,
+                    value,
+                    run.Claim(track.Id, captured)).ConfigureAwait(false);
+            return;
+        }
+        if (TryEffectParameter(track.Target.PropertyId, out var effectParameter)
             && track.Target.ObjectId is { } effectId
             && CuePlacements.Of(target).FirstOrDefault(placement =>
-                placement.ChromaKey?.Id == effectId || placement.ColorAdjust?.Id == effectId) is { } effectPlacement)
+                LayerEffectRack.Effective(placement).Any(effect => effect.Id == effectId)) is { } effectPlacement)
         {
             foreach (var captured in capturedTargets.Where(item => item.SessionInstance.HasValue))
                 await _session.ApplyControllerPlacementEffectAsync(
@@ -558,7 +573,7 @@ public sealed partial class ShowHost
                     effectPlacement.CompositionId.ToString(),
                     effectPlacement.LayerIndex,
                     effectId.ToString(),
-                    effectProperty,
+                    effectParameter,
                     value,
                     run.Claim(track.Id, captured)).ConfigureAwait(false);
             return;
@@ -644,10 +659,23 @@ public sealed partial class ShowHost
                     transform).ConfigureAwait(false);
             return;
         }
-        if (TryEffectProperty(track.Target.PropertyId, out var effectProperty)
+        if (TryAudioEffectParameter(track.Target.PropertyId, out var audioParameter)
+            && target is MediaCueNode audioTarget
+            && track.Target.ObjectId is { } audioEffectId
+            && audioTarget.AudioEffects.Any(effect => effect.Id == audioEffectId))
+        {
+            foreach (var captured in capturedTargets.Where(item => item.SessionInstance.HasValue))
+                await _session.ClearControllerAudioEffectAsync(
+                    captured.SessionInstance!.Value,
+                    run.OwnerId,
+                    audioEffectId.ToString(),
+                    audioParameter).ConfigureAwait(false);
+            return;
+        }
+        if (TryEffectParameter(track.Target.PropertyId, out var effectParameter)
             && track.Target.ObjectId is { } effectId
             && CuePlacements.Of(target).FirstOrDefault(placement =>
-                placement.ChromaKey?.Id == effectId || placement.ColorAdjust?.Id == effectId) is { } effectPlacement)
+                LayerEffectRack.Effective(placement).Any(effect => effect.Id == effectId)) is { } effectPlacement)
         {
             foreach (var captured in capturedTargets.Where(item => item.SessionInstance.HasValue))
                 await _session.ClearControllerPlacementEffectAsync(
@@ -656,7 +684,7 @@ public sealed partial class ShowHost
                     effectPlacement.CompositionId.ToString(),
                     effectPlacement.LayerIndex,
                     effectId.ToString(),
-                    effectProperty).ConfigureAwait(false);
+                    effectParameter).ConfigureAwait(false);
             return;
         }
 
@@ -700,6 +728,13 @@ public sealed partial class ShowHost
 
     private static double AuthoredValue(CueNode target, AutomationTrack track)
     {
+        if (target is MediaCueNode audioTarget
+            && track.Target.ObjectId is { } audioEffectId
+            && audioTarget.AudioEffects.FirstOrDefault(effect => effect.Id == audioEffectId) is { } audioEffect
+            && AudioEffectCatalog.TryResolveProperty(
+                track.Target.PropertyId, out var audioType, out var audioParameter)
+            && audioEffect.EffectTypeId == audioType.TypeId)
+            return audioEffect.Read(audioParameter.Id, audioParameter.Default);
         if (track.Target.ObjectId is { } placementId
             && CuePlacements.Of(target).FirstOrDefault(placement => placement.Id == placementId) is { } placement)
             return track.Target.PropertyId switch
@@ -713,17 +748,13 @@ public sealed partial class ShowHost
                 _ => AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Value.Default ?? 0,
             };
         if (track.Target.ObjectId is { } effectId
-            && CuePlacements.Of(target).FirstOrDefault(candidate =>
-                candidate.ChromaKey?.Id == effectId || candidate.ColorAdjust?.Id == effectId) is { } effectPlacement)
-            return track.Target.PropertyId switch
-            {
-                AutomationPropertyIds.ChromaSimilarity => effectPlacement.ChromaKey?.Similarity ?? .4,
-                AutomationPropertyIds.ChromaSmoothness => effectPlacement.ChromaKey?.Smoothness ?? .1,
-                AutomationPropertyIds.ChromaSpillReduction => effectPlacement.ChromaKey?.SpillReduction ?? .1,
-                AutomationPropertyIds.ColorBrightness => effectPlacement.ColorAdjust?.Brightness ?? 0,
-                AutomationPropertyIds.ColorContrast => effectPlacement.ColorAdjust?.Contrast ?? 1,
-                _ => AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Value.Default ?? 0,
-            };
+            && CuePlacements.Of(target)
+                .SelectMany(LayerEffectRack.Effective)
+                .FirstOrDefault(effect => effect.Id == effectId) is { } effect
+            && LayerEffectCatalog.TryResolveProperty(
+                track.Target.PropertyId, out var effectType, out var parameter)
+            && string.Equals(effect.EffectTypeId, effectType.TypeId, StringComparison.Ordinal))
+            return effect.Read(parameter.Id, parameter.Default);
         return track.Target.PropertyId switch
         {
             AutomationPropertyIds.CueVolume when target is MediaCueNode media => media.LevelDb,
@@ -747,18 +778,26 @@ public sealed partial class ShowHost
         return (int)property >= 0;
     }
 
-    private static bool TryEffectProperty(string propertyId, out ShowPlacementEffectProperty property)
+    private static bool TryEffectParameter(string propertyId, out string parameterId)
     {
-        property = propertyId switch
+        if (LayerEffectCatalog.TryResolveProperty(propertyId, out _, out var parameter))
         {
-            AutomationPropertyIds.ChromaSimilarity => ShowPlacementEffectProperty.ChromaSimilarity,
-            AutomationPropertyIds.ChromaSmoothness => ShowPlacementEffectProperty.ChromaSmoothness,
-            AutomationPropertyIds.ChromaSpillReduction => ShowPlacementEffectProperty.ChromaSpillReduction,
-            AutomationPropertyIds.ColorBrightness => ShowPlacementEffectProperty.ColorBrightness,
-            AutomationPropertyIds.ColorContrast => ShowPlacementEffectProperty.ColorContrast,
-            _ => (ShowPlacementEffectProperty)(-1),
-        };
-        return (int)property >= 0;
+            parameterId = parameter.Id;
+            return true;
+        }
+        parameterId = "";
+        return false;
+    }
+
+    private static bool TryAudioEffectParameter(string propertyId, out string parameterId)
+    {
+        if (AudioEffectCatalog.TryResolveProperty(propertyId, out _, out var parameter))
+        {
+            parameterId = parameter.Id;
+            return true;
+        }
+        parameterId = "";
+        return false;
     }
 
     private static AutomationTrack CloneAutomationTrack(AutomationTrack track) => track with

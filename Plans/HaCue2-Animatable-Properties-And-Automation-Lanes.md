@@ -1,6 +1,6 @@
 # HaCue2 animatable properties and automation lanes
 
-Status: adopted; phases 1-3 implemented, phase 4 managed contracts underway, phase 5 new authoring complete
+Status: adopted; phases 1-3 implemented, phase 4 framework rack/audio/native path implemented with app plugin discovery remaining, phase 5 new authoring complete
 
 Date: 2026-08-12
 
@@ -17,8 +17,7 @@ policy. Group audio trim and video opacity are exposed as automation-cue targets
 dedicated modifier slots rather than overwriting child automation or fades. Placement transforms and
 stable-instance chroma-key/colour-adjust parameters now use the same catalog and composition slots for
 media, text, and visualizer cues. Visualizer lanes run against their surface layers on the shared clock,
-including seek and timeline-rehearsal offsets. The remaining phase-4 work is the general extensible rack,
-especially the real-time audio/plugin parameter contract described below.
+including seek and timeline-rehearsal offsets.
 
 Correction/continuation pass (2026-08-12, working tree after `9020312a`): curve laws now have one
 direction-independent segment meaning in the editor, session and outbound runner, and compiled volume
@@ -28,6 +27,26 @@ latest-owner arbitration; cue-owned automation continues underneath and is revea
 same contract covers media, text and visualizer placements, group modifiers, transform/effect parameters,
 refire handover and terminal outbound sends.
 
+Effect-rack continuation pass (2026-08-12, working tree after `aad6c1a3`): HaCue project schema 3 now
+stores ordered, bypassable video-effect instances with stable IDs, type-local scalar values and retained
+opaque plugin configuration. Schema-2 chroma/colour settings migrate without changing instance identity
+or render order. Catalog-driven lowering carries the rack into show-document schema 3, and the session
+resolves each instance through the injected bus registry with built-in fallback. Automation addresses
+arbitrary descriptor parameters by effect-instance ID and parameter ID; duplication, validation, live
+controller ownership, visualizer layers and the rack authoring controls all use that same identity.
+
+Cue-local managed audio inserts now follow the same model. The built-in smoothed gain insert publishes
+dB metadata, compiles into each clip route/program input, and accepts cue-time or automation-cue values
+through `IAutomatableAudioBusEffect`. Each routed copy receives identical writes, effect wrappers preserve
+device clock/stat capabilities and borrowed-output ownership, and a controller claim reveals the latest
+cue-owned value when released. Focused tests cover migration/order/bypass, registry config overlay,
+generic video parameters, audio factory/configuration, live audio automation and controller restoration.
+The bus registry and append-only native ABI now also publish effect descriptors without constructing a
+live processing instance. New native effects can receive clamped control-thread values plus a smoothing
+duration, while pre-extension vtables remain runtime-compatible and simply expose no authoring metadata.
+The remaining phase-4 boundary is application-level discovery: HaCue2 does not yet load external plugin
+registrations into its insertion menus/property catalog. This is not required by the built-in rack.
+
 The editor now uses a gesture-local draft and immutable viewport transform, commits one undo step on
 release, cancels on Escape, offers millisecond snapping/Alt bypass/Shift constraint/grid-aware nudging,
 click-drag creation, a visible ruler, and per-segment **Edit curve shape…**. Automation cues can select a
@@ -35,13 +54,14 @@ specific placement on multi-placement targets. Unknown property IDs open read-on
 warnings; migration results are visible in Project Status. New authoring commands use stable property IDs
 instead of menu ordinals. The managed effect foundation now publishes scalar video authoring metadata and
 an optional real-time-safe audio parameter interface with effect-owned smoothing, proven by the built-in
-gain effect. The native ABI has intentionally not changed yet.
+gain effect. The native ABI extension is append-only and covered by both new-parameter and old-vtable
+gcc fixtures.
 
 Focused coverage now pins long-cue viewport/waveform projection, pause/seek/stop and rehearsal timing,
 automation-cue natural completion, outbound reposition/coalescing, group modifier composition,
 group-target authoring, placement transforms, stable effect-instance duplication/lowering, and
-visualizer surface automation. The broader editor, engine, session, and control suites plus a real
-first-frame desktop launch smoke pass with these changes.
+visualizer surface automation. The broader Core, editor, engine, session and native-ABI suites pass,
+along with the native plugin smoke executable and a clean HaPlay build.
 
 This supersedes the `EffectLaneKind`/shared whole-curve-editor direction in
 `Plans/HaCue-Feature-Ideas.md` and the automation-lane portions of
@@ -438,15 +458,14 @@ An effect descriptor must publish stable parameter IDs plus display name, type/c
 default, unit/scale, and whether it supports live automation. A track targets the effect instance ID and
 one parameter ID. That gives “animate contrast on this colour effect” a durable address.
 
-The current framework needs additional contracts before arbitrary plugin parameters can be animated:
+At adoption the framework needed additional contracts before arbitrary plugin parameters could be animated:
 
-- `VideoLayerEffectParameter` exposes only name and component width, not authoring metadata. Effect
-  values are held in immutable instances, so a safe live parameter block or efficient instance-swap
-  path must be specified.
-- `IAudioBusEffect` exposes processing but no parameter descriptor or setter; registry configuration is
-  opaque JSON. A real-time-safe parameter-update interface and smoothing ownership are required.
-- the native ABI mirrors those limitations and should be extended only after the managed contract is
-  proven.
+- video descriptors needed authoring metadata and a safe immutable instance-swap path;
+- audio effects needed parameter descriptors, a real-time-safe setter and clear smoothing ownership; and
+- the native ABI needed an append-only mirror only after proving that managed contract.
+
+Those framework contracts are now implemented. What remains is for HaCue2's application composition root
+to load external registrations and inject their descriptors into the authoring catalog.
 
 Therefore phase one should wrap the built-in placement/chroma/colour fields in descriptors. The effect
 rack and plugin parameter contract are a later layer over the same automation target system, not a
@@ -663,18 +682,17 @@ This phase directly addresses the reported problem and is the recommended first 
 
 ### Phase 4 — effect rack and parameter automation
 
-Built-in video parameter automation is implemented for chroma-key similarity/smoothness/spill and
-colour-adjust brightness/contrast. Stable effect IDs, duplication retargeting, compiler/session
-lowering, live surface/frame updates, and placement-editor entry points are in place. The remaining
-items in this phase are the extensible rack and plugin/native bridge. Managed descriptors now carry
-validated scalar authoring metadata, and `IAutomatableAudioBusEffect` defines control-thread publication,
-audio-thread safety and effect-owned smoothing:
-
-- model stable effect instances and parameter values;
-- build the ordered rack authoring UI and generic lowering over the new metadata;
-- connect managed audio effect instances to HaCue2's target catalog and runtime actuator;
-- expose additional built-in/plugin effect parameters through the automation catalog; and
-- extend plugin/native contracts only after the managed behaviour and compatibility rules are stable.
+- **Done:** schema-3 stable video/audio effect instances, ordered rack values, bypass and legacy migration.
+- **Done:** ordered video-rack authoring UI, descriptor-based built-in discovery, generic lowering and
+  registry resolution while retaining unknown plugin configuration.
+- **Done:** every built-in chroma/colour authoring parameter is catalogued and addressable by stable
+  effect-instance/parameter IDs rather than the original five-property enum.
+- **Done:** cue-local gain inserts, managed real-time parameter publication/smoothing, compiler/session
+  actuation, automation-cue control ownership, duplication retargeting and validation.
+- **Remaining:** let injected managed/native plugin registrations publish authoring descriptors to
+  HaCue2's insertion menus and property catalog instead of only the framework bus registry.
+- **Done:** the native audio-effect ABI appends factory descriptors and a live setter, normalizes nested
+  vtables, and retains compatibility with plugins whose struct sizes end at the original fields.
 
 ### Phase 5 — remove legacy authoring
 

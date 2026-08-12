@@ -94,7 +94,11 @@ internal static class MediaRuntime
     private static readonly Lazy<S.Media.Core.Buses.IBusRegistry> BusesLazy = new(
         static () => S.Media.Core.Buses.BusRegistryBuilder.Build(b =>
         {
-            b.AddAudioEffect("gain", static config => S.Media.Routing.GainAudioEffect.FromJson(config));
+            b.AddAudioEffect(
+                "gain",
+                "Gain",
+                S.Media.Routing.GainAudioEffect.ParameterDescriptors,
+                static config => S.Media.Routing.GainAudioEffect.FromJson(config));
             b.AddVideoEffect("grayscale", static _ => new S.Media.Routing.GrayscaleVideoEffect());
             // Color-stage layer effects register on BOTH stages of the unified catalog: as
             // compositor layer effects (GPU, per cue placement) and - through the CPU-kernel

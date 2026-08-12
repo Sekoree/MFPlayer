@@ -4,6 +4,7 @@ using HaCue2.Core.Model;
 using HaCue2.Machine;
 using HaCue2.Core.Patch;
 using S.Media.Core.Audio;
+using S.Media.Core.Buses;
 using S.Media.Core.Registry;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
@@ -478,7 +479,8 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             backend,
             ShowSessionWiring.CreateSubtitleOverlay,
             programAudioTarget: target,
-            compositorFactory: ShowSessionWiring.CreateCompositor);
+            compositorFactory: ShowSessionWiring.CreateCompositor,
+            effectRegistry: BuildEffectRegistry());
         var host = new ShowHost(registry, bay, screens, session, runtimeProject);
         host.SetActiveCueList(runtimeProject.CueLists.FirstOrDefault()?.Id);
 
@@ -565,6 +567,23 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             // here would open onto an empty one and report every prepared cue as unprepared.
             Optional(builder, YouTubeRuntime.Module, "YouTube");
             Optional(builder, () => new S.Media.Source.Text.TextSourceModule(), "Text");
+        });
+
+    /// <summary>Stable managed effect types available to compiled placement racks.</summary>
+    private static IBusRegistry BuildEffectRegistry() =>
+        BusRegistryBuilder.Build(builder =>
+        {
+            builder.AddAudioEffect(
+                S.Media.Routing.GainAudioEffect.EffectId,
+                "Gain",
+                S.Media.Routing.GainAudioEffect.ParameterDescriptors,
+                S.Media.Routing.GainAudioEffect.FromJson);
+            builder.AddLayerEffect(
+                S.Media.Compositor.Effects.ChromaKeyVideoEffect.EffectId,
+                S.Media.Compositor.Effects.ChromaKeyVideoEffect.FromJson);
+            builder.AddLayerEffect(
+                S.Media.Compositor.Effects.BrightnessContrastVideoEffect.EffectId,
+                S.Media.Compositor.Effects.BrightnessContrastVideoEffect.FromJson);
         });
 
     /// <summary>Registers a module, or notes that this machine cannot provide it.</summary>

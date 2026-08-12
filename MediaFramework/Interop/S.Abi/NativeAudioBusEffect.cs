@@ -1,6 +1,7 @@
 using System.Text;
 using S.Media.Core.Audio;
 using S.Media.Core.Buses;
+using S.Media.Core.Effects;
 
 namespace S.Abi;
 
@@ -28,7 +29,21 @@ public sealed unsafe class NativeAudioEffectFactory : IDisposable
         _vt = (MfpAudioEffectFactoryVTable*)vtable;
         _self = (void*)self;
         _lease = lease;
+        try
+        {
+            Parameters = ReadParameters();
+        }
+        catch
+        {
+            // Construction did not hand this lease to a usable adapter. The registered factory itself
+            // remains plugin-owned and is destroyed once by AbiLoadedPlugin during eventual unload.
+            _lease.Dispose();
+            throw;
+        }
     }
+
+    /// <summary>The factory-level authoring catalog. Empty for an older/native runtime-only effect.</summary>
+    public IReadOnlyList<EffectParameterDescriptor> Parameters { get; }
 
     /// <summary>Creates one effect instance (throws when the plugin returns NULL - the registry's
     /// factory contract; the host surfaces the plugin's last-error detail).</summary>
@@ -50,8 +65,67 @@ public sealed unsafe class NativeAudioEffectFactory : IDisposable
         if (instance == null)
             throw AbiPluginHost.StatusException("audio-effect create", (int)MfpStatus.ErrInternal);
 
-        return new NativeAudioBusEffect(_vt->EffectVTable, instance, _lease.AcquireDependent());
+        return new NativeAudioBusEffect(
+            _vt->EffectVTable, instance, Parameters, _lease.AcquireDependent());
     }
+
+    private IReadOnlyList<EffectParameterDescriptor> ReadParameters()
+    {
+        if (_vt->GetParameterCount == null || _vt->GetParameterDescriptor == null)
+            return [];
+        AbiPluginHost.ClearLastError();
+        var count = 0;
+        var rc = _vt->GetParameterCount(_self, &count);
+        if (rc != (int)MfpStatus.Ok)
+            throw AbiPluginHost.StatusException("audio-effect parameter count", rc);
+        if (count is < 0 or > 4096)
+            throw new InvalidOperationException($"audio-effect factory returned invalid parameter count {count}.");
+
+        var result = new List<EffectParameterDescriptor>(count);
+        for (var index = 0; index < count; index++)
+        {
+            var native = new MfpEffectParameterDescriptor
+            {
+                AbiVersion = AbiPluginHost.AbiVersion,
+                StructSize = (uint)sizeof(MfpEffectParameterDescriptor),
+            };
+            AbiPluginHost.ClearLastError();
+            rc = _vt->GetParameterDescriptor(_self, index, &native);
+            if (rc != (int)MfpStatus.Ok)
+                throw AbiPluginHost.StatusException($"audio-effect parameter descriptor {index}", rc);
+            var id = Utf8(native.Id);
+            if (string.IsNullOrWhiteSpace(id))
+                throw new InvalidOperationException($"audio-effect parameter {index} has an empty id.");
+            if (!float.IsFinite(native.Minimum) || !float.IsFinite(native.Maximum)
+                || !float.IsFinite(native.DefaultValue) || native.Minimum > native.Maximum
+                || native.DefaultValue < native.Minimum || native.DefaultValue > native.Maximum)
+                throw new InvalidOperationException($"audio-effect parameter '{id}' has invalid bounds/default.");
+            var scale = native.Scale switch
+            {
+                MfpEffectParameterScale.Decibels => EffectParameterScale.Decibels,
+                MfpEffectParameterScale.Percentage => EffectParameterScale.Percentage,
+                _ => EffectParameterScale.Linear,
+            };
+            result.Add(new EffectParameterDescriptor(
+                id,
+                string.IsNullOrWhiteSpace(Utf8(native.DisplayName)) ? id : Utf8(native.DisplayName),
+                native.Minimum,
+                native.Maximum,
+                native.DefaultValue,
+                Utf8(native.Unit),
+                scale,
+                native.Flags.HasFlag(MfpEffectParameterFlags.Automatable)
+                && _vt->EffectVTable->SetParameter != null));
+        }
+
+        if (result.GroupBy(parameter => parameter.Id, StringComparer.Ordinal).Any(group => group.Count() > 1))
+            throw new InvalidOperationException("audio-effect factory returned duplicate parameter ids.");
+        return result;
+    }
+
+    private static string Utf8(byte* value) => value == null
+        ? ""
+        : System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)value) ?? "";
 
     public void Dispose()
     {
@@ -65,19 +139,26 @@ public sealed unsafe class NativeAudioEffectFactory : IDisposable
 }
 
 /// <summary>One created native effect instance behind <see cref="IAudioBusEffect"/>.</summary>
-internal sealed unsafe class NativeAudioBusEffect : IAudioBusEffect
+internal sealed unsafe class NativeAudioBusEffect : IAutomatableAudioBusEffect
 {
     private readonly MfpAudioEffectVTable* _vt;
     private readonly void* _effect;
     private readonly AbiPluginLease _lease;
     private bool _disposed;
 
-    internal NativeAudioBusEffect(MfpAudioEffectVTable* vt, void* effect, AbiPluginLease lease)
+    internal NativeAudioBusEffect(
+        MfpAudioEffectVTable* vt,
+        void* effect,
+        IReadOnlyList<EffectParameterDescriptor> parameters,
+        AbiPluginLease lease)
     {
         _vt = vt;
         _effect = effect;
+        Parameters = parameters;
         _lease = lease;
     }
+
+    public IReadOnlyList<EffectParameterDescriptor> Parameters { get; }
 
     public void Configure(AudioFormat format)
     {
@@ -104,6 +185,21 @@ internal sealed unsafe class NativeAudioBusEffect : IAudioBusEffect
             return;
         fixed (float* samples = interleaved)
             _vt->Process(_effect, samples, interleaved.Length, samplePosition);
+    }
+
+    public bool TrySetParameter(string parameterId, float value, TimeSpan smoothing)
+    {
+        if (_disposed || _vt->SetParameter == null || string.IsNullOrWhiteSpace(parameterId))
+            return false;
+        var descriptor = Parameters.FirstOrDefault(parameter =>
+            parameter.SupportsAutomation && string.Equals(parameter.Id, parameterId, StringComparison.Ordinal));
+        if (descriptor is null)
+            return false;
+        var id = Encoding.UTF8.GetBytes(parameterId + '\0');
+        var ticks = Math.Max(0, smoothing.Ticks);
+        AbiPluginHost.ClearLastError();
+        fixed (byte* nativeId = id)
+            return _vt->SetParameter(_effect, nativeId, descriptor.Clamp(value), ticks) == (int)MfpStatus.Ok;
     }
 
     public void Dispose()

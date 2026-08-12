@@ -490,12 +490,12 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 .ConfigureAwait(false);
 
         if (track.Target.ObjectId is { } effectId
-            && TryEffectProperty(track.Target.PropertyId, out var effectProperty))
+            && TryEffectParameter(track.Target.PropertyId, out var effectParameter))
             return await _session.ApplyCompositionVisualizerEffectAutomationAsync(
                     attachment.CompositionId,
                     placementIndex,
                     effectId.ToString(),
-                    effectProperty,
+                    effectParameter,
                     value,
                     attachment.VisualizerId)
                 .ConfigureAwait(false);
@@ -541,12 +541,12 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 .ConfigureAwait(false);
 
         if (track.Target.ObjectId is { } effectId
-            && TryEffectProperty(track.Target.PropertyId, out var effectProperty))
+            && TryEffectParameter(track.Target.PropertyId, out var effectParameter))
             return await _session.ApplyCompositionVisualizerControllerEffectAutomationAsync(
                     attachment.CompositionId,
                     placementIndex,
                     effectId.ToString(),
-                    effectProperty,
+                    effectParameter,
                     value,
                     attachment.VisualizerId)
                 .ConfigureAwait(false);
@@ -575,12 +575,12 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 .ConfigureAwait(false);
 
         if (track.Target.ObjectId is { } effectId
-            && TryEffectProperty(track.Target.PropertyId, out var effectProperty))
+            && TryEffectParameter(track.Target.PropertyId, out var effectParameter))
             return await _session.ClearCompositionVisualizerControllerEffectAutomationAsync(
                     attachment.CompositionId,
                     placementIndex,
                     effectId.ToString(),
-                    effectProperty,
+                    effectParameter,
                     attachment.VisualizerId)
                 .ConfigureAwait(false);
 
@@ -703,8 +703,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
 
         placement = CuePlacements.Of(cue).FirstOrDefault(candidate =>
             candidate.Id == objectId
-            || candidate.ChromaKey?.Id == objectId
-            || candidate.ColorAdjust?.Id == objectId)!;
+            || LayerEffectRack.Effective(candidate).Any(effect => effect.Id == objectId))!;
         return placement is not null;
     }
 
@@ -722,18 +721,15 @@ public sealed class ProjectVisualizers : IAsyncDisposable
         return (int)property >= 0;
     }
 
-    private static bool TryEffectProperty(string propertyId, out ShowPlacementEffectProperty property)
+    private static bool TryEffectParameter(string propertyId, out string parameterId)
     {
-        property = propertyId switch
+        if (LayerEffectCatalog.TryResolveProperty(propertyId, out _, out var parameter))
         {
-            AutomationPropertyIds.ChromaSimilarity => ShowPlacementEffectProperty.ChromaSimilarity,
-            AutomationPropertyIds.ChromaSmoothness => ShowPlacementEffectProperty.ChromaSmoothness,
-            AutomationPropertyIds.ChromaSpillReduction => ShowPlacementEffectProperty.ChromaSpillReduction,
-            AutomationPropertyIds.ColorBrightness => ShowPlacementEffectProperty.ColorBrightness,
-            AutomationPropertyIds.ColorContrast => ShowPlacementEffectProperty.ColorContrast,
-            _ => (ShowPlacementEffectProperty)(-1),
-        };
-        return (int)property >= 0;
+            parameterId = parameter.Id;
+            return true;
+        }
+        parameterId = "";
+        return false;
     }
 
     /// <summary>
@@ -792,11 +788,36 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                      && AutomationPropertyCatalog.Get(track.Target.PropertyId)
                          is { Domain: not AutomationDomain.External }
                      && (track.Target.ObjectId == placement.Id
-                         || track.Target.ObjectId == placement.ChromaKey?.Id
-                         || track.Target.ObjectId == placement.ColorAdjust?.Id)))
+                         || LayerEffectRack.Effective(placement).Any(effect =>
+                             track.Target.ObjectId == effect.Id))))
         {
             var value = AutomationEvaluator.Sample(
                 track, project, timeMs, AuthoredValue(placement, track.Target.PropertyId));
+            if (track.Target.ObjectId is { } effectId
+                && LayerEffectCatalog.TryResolveProperty(
+                    track.Target.PropertyId, out _, out var parameter)
+                && appearance.Effects is { Count: > 0 } effects)
+            {
+                appearance = appearance with
+                {
+                    Effects =
+                    [
+                        .. effects.Select(effect => effect.InstanceId == effectId.ToString()
+                            ? effect with
+                            {
+                                Parameters =
+                                [
+                                    .. effect.Parameters.Select(item =>
+                                        item.ParameterId == parameter.Id
+                                            ? item with { Value = value }
+                                            : item),
+                                ],
+                            }
+                            : effect),
+                    ],
+                };
+                continue;
+            }
             appearance = track.Target.PropertyId switch
             {
                 AutomationPropertyIds.PlacementOpacity => appearance with { Opacity = value },
@@ -805,16 +826,6 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 AutomationPropertyIds.PlacementWidth => appearance with { DestWidth = value },
                 AutomationPropertyIds.PlacementHeight => appearance with { DestHeight = value },
                 AutomationPropertyIds.PlacementRotation => appearance with { RotationDegrees = value },
-                AutomationPropertyIds.ChromaSimilarity when appearance.ChromaKey is { } chroma =>
-                    appearance with { ChromaKey = chroma with { Similarity = (float)value } },
-                AutomationPropertyIds.ChromaSmoothness when appearance.ChromaKey is { } chroma =>
-                    appearance with { ChromaKey = chroma with { Smoothness = (float)value } },
-                AutomationPropertyIds.ChromaSpillReduction when appearance.ChromaKey is { } chroma =>
-                    appearance with { ChromaKey = chroma with { SpillSuppression = (float)value } },
-                AutomationPropertyIds.ColorBrightness when appearance.ColorAdjust is { } color =>
-                    appearance with { ColorAdjust = color with { Brightness = (float)value } },
-                AutomationPropertyIds.ColorContrast when appearance.ColorAdjust is { } color =>
-                    appearance with { ColorAdjust = color with { Contrast = (float)value } },
                 _ => appearance,
             };
         }
@@ -837,24 +848,30 @@ public sealed class ProjectVisualizers : IAsyncDisposable
             ChromaKey: appearance.ChromaKey,
             ColorAdjust: appearance.ColorAdjust,
             ChromaKeyInstanceId: appearance.ChromaKeyInstanceId,
-            ColorAdjustInstanceId: appearance.ColorAdjustInstanceId);
+            ColorAdjustInstanceId: appearance.ColorAdjustInstanceId,
+            Effects: appearance.Effects);
     }
 
-    private static double AuthoredValue(LayerPlacement placement, string propertyId) => propertyId switch
+    private static double AuthoredValue(LayerPlacement placement, string propertyId)
     {
-        AutomationPropertyIds.PlacementOpacity => placement.Opacity,
-        AutomationPropertyIds.PlacementX => placement.X,
-        AutomationPropertyIds.PlacementY => placement.Y,
-        AutomationPropertyIds.PlacementWidth => placement.Width,
-        AutomationPropertyIds.PlacementHeight => placement.Height,
-        AutomationPropertyIds.PlacementRotation => placement.RotationDegrees,
-        AutomationPropertyIds.ChromaSimilarity => placement.ChromaKey?.Similarity ?? .4,
-        AutomationPropertyIds.ChromaSmoothness => placement.ChromaKey?.Smoothness ?? .1,
-        AutomationPropertyIds.ChromaSpillReduction => placement.ChromaKey?.SpillReduction ?? .1,
-        AutomationPropertyIds.ColorBrightness => placement.ColorAdjust?.Brightness ?? 0,
-        AutomationPropertyIds.ColorContrast => placement.ColorAdjust?.Contrast ?? 1,
-        _ => 0,
-    };
+        var placementValue = propertyId switch
+        {
+            AutomationPropertyIds.PlacementOpacity => placement.Opacity,
+            AutomationPropertyIds.PlacementX => placement.X,
+            AutomationPropertyIds.PlacementY => placement.Y,
+            AutomationPropertyIds.PlacementWidth => placement.Width,
+            AutomationPropertyIds.PlacementHeight => placement.Height,
+            AutomationPropertyIds.PlacementRotation => placement.RotationDegrees,
+            _ => double.NaN,
+        };
+        if (double.IsFinite(placementValue))
+            return placementValue;
+        if (!LayerEffectCatalog.TryResolveProperty(propertyId, out var effectType, out var parameter))
+            return 0;
+        var effect = LayerEffectRack.Effective(placement).FirstOrDefault(candidate =>
+            string.Equals(candidate.EffectTypeId, effectType.TypeId, StringComparison.Ordinal));
+        return effect?.Read(parameter.Id, parameter.Default) ?? parameter.Default;
+    }
 
     public async ValueTask DisposeAsync() => await StopAllAsync().ConfigureAwait(false);
 }

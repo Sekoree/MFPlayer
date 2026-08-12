@@ -197,15 +197,16 @@ public class AudioEffectOutput
 /// Registry config blob: <c>{"gainDb": -6.0}</c>.</summary>
 public sealed class GainAudioEffect : IAutomatableAudioBusEffect
 {
+    public const string EffectId = "gain.v1";
     public const string GainParameterId = "gainDb";
 
-    private static readonly IReadOnlyList<S.Media.Core.Effects.EffectParameterDescriptor> ParameterCatalog =
+    public static IReadOnlyList<S.Media.Core.Effects.EffectParameterDescriptor> ParameterDescriptors { get; } =
     [
         new(GainParameterId, "Gain", -96, 12, 0, "dB",
             S.Media.Core.Effects.EffectParameterScale.Decibels),
     ];
 
-    public IReadOnlyList<S.Media.Core.Effects.EffectParameterDescriptor> Parameters => ParameterCatalog;
+    public IReadOnlyList<S.Media.Core.Effects.EffectParameterDescriptor> Parameters => ParameterDescriptors;
 
     /// <summary>Builds from the registry's opaque config blob (unknown/absent fields = unity).</summary>
     public static GainAudioEffect FromJson(string? configJson)
@@ -274,7 +275,7 @@ public sealed class GainAudioEffect : IAutomatableAudioBusEffect
         if (!string.Equals(parameterId, GainParameterId, StringComparison.Ordinal))
             return false;
 
-        var descriptor = ParameterCatalog[0];
+        var descriptor = ParameterDescriptors[0];
         var seconds = double.IsFinite(smoothing.TotalSeconds)
             ? Math.Clamp(smoothing.TotalSeconds, 0, 10)
             : .01;

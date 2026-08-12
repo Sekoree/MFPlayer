@@ -348,7 +348,12 @@ public static unsafe class AbiPluginHost
         if (buses is not null)
         {
             foreach (var (kind, factory) in BindAudioEffects(plugin))
-                buses.AddAudioEffect(kind, factory.Create);
+            {
+                if (factory.Parameters.Count > 0)
+                    buses.AddAudioEffect(kind, kind, factory.Parameters, factory.Create);
+                else
+                    buses.AddAudioEffect(kind, factory.Create);
+            }
             foreach (var (kind, factory) in BindVideoEffects(plugin))
                 buses.AddVideoEffect(kind, factory.Create);
         }
@@ -482,7 +487,12 @@ public static unsafe class AbiPluginHost
                 var audioEffect = (MfpAudioEffectFactoryVTable*)main;
                 Require(audioEffect->Create != null, "audio-effect must provide create");
                 Require(audioEffect->EffectVTable != null, "audio-effect must provide effect_vtable");
+                audioEffect->EffectVTable = (MfpAudioEffectVTable*)NormalizeTable<MfpAudioEffectVTable>(
+                    audioEffect->EffectVTable, nameof(MfpAudioEffectVTable.Destroy),
+                    "audio-effect-instance", owned);
                 Require(audioEffect->EffectVTable->Process != null, "audio-effect instances must provide process");
+                Require((audioEffect->GetParameterCount == null) == (audioEffect->GetParameterDescriptor == null),
+                    "audio-effect factory must provide both parameter catalog callbacks or neither");
                 break;
             case "video-effect":
                 main = NormalizeTable<MfpVideoEffectFactoryVTable>(vt, nameof(MfpVideoEffectFactoryVTable.Destroy), capability, owned);

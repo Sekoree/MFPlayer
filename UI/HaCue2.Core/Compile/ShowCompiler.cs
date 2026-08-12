@@ -351,6 +351,19 @@ public static class ShowCompiler
                     extra.LayerIndex,
                     VideoPlacement(extra)))],
             LogicalSends = [.. Sends(media)],
+            AudioEffects =
+            [
+                .. media.AudioEffects.Select(effect => new ShowAudioEffectInstance(
+                    effect.Id.ToString(),
+                    effect.EffectTypeId,
+                    effect.Enabled,
+                    [
+                        .. effect.Parameters.Select(parameter =>
+                            new ShowEffectParameterValue(parameter.ParameterId, parameter.Value)),
+                    ],
+                    effect.ConfigJson)),
+            ],
+            AudioEffectEnvelopes = AudioEffectEnvelopes(project, media),
             // Cue volume is authored in absolute dB. It lives in the envelope component (including the
             // static one-point case), leaving send gains as independent route trims.
             VolumeEnvelope = VolumeEnvelope(project, media),
@@ -556,8 +569,14 @@ public static class ShowCompiler
     /// The fit name is passed as TEXT the framework maps by name, so the two enums can be read side by
     /// side rather than through a table that drifts.
     /// </remarks>
-    public static ShowVideoPlacement VideoPlacement(LayerPlacement placement) =>
-        new(
+    public static ShowVideoPlacement VideoPlacement(LayerPlacement placement)
+    {
+        var rack = LayerEffectRack.Effective(placement);
+        var chroma = rack.FirstOrDefault(effect =>
+            effect.EffectTypeId == S.Media.Compositor.Effects.ChromaKeyVideoEffect.EffectId);
+        var colour = rack.FirstOrDefault(effect =>
+            effect.EffectTypeId == S.Media.Compositor.Effects.BrightnessContrastVideoEffect.EffectId);
+        return new ShowVideoPlacement(
             DestX: placement.X,
             DestY: placement.Y,
             DestWidth: placement.Width,
@@ -578,17 +597,31 @@ public static class ShowCompiler
             CropRight: Fraction(placement.CropRight),
             CropBottom: Fraction(placement.CropBottom),
             VideoFx: LayerMapping(placement),
-            ChromaKey: placement is { ChromaKeyEnabled: true, ChromaKey: { } key }
+            ChromaKey: chroma is { Enabled: true }
                 ? new S.Media.Compositor.ChromaKeySettings(
-                    (float)key.Red, (float)key.Green, (float)key.Blue,
-                    (float)key.Similarity, (float)key.Smoothness, (float)key.SpillReduction)
+                    (float)chroma.Read("keyR", 0), (float)chroma.Read("keyG", 1),
+                    (float)chroma.Read("keyB", 0), (float)chroma.Read("similarity", .4),
+                    (float)chroma.Read("smoothness", .1), (float)chroma.Read("spill", .1))
                 : null,
-            ColorAdjust: placement is { ColorAdjustEnabled: true, ColorAdjust: { } colour }
+            ColorAdjust: colour is { Enabled: true }
                 ? new S.Media.Compositor.Effects.BrightnessContrastSettings(
-                    (float)colour.Brightness, (float)colour.Contrast)
+                    (float)colour.Read("brightness", 0), (float)colour.Read("contrast", 1))
                 : null,
-            ChromaKeyInstanceId: placement.ChromaKey?.Id.ToString(),
-            ColorAdjustInstanceId: placement.ColorAdjust?.Id.ToString());
+            ChromaKeyInstanceId: chroma?.Id.ToString(),
+            ColorAdjustInstanceId: colour?.Id.ToString(),
+            Effects:
+            [
+                .. rack.Select(effect => new ShowLayerEffectInstance(
+                    effect.Id.ToString(),
+                    effect.EffectTypeId,
+                    effect.Enabled,
+                    [
+                        .. effect.Parameters.Select(parameter =>
+                            new ShowEffectParameterValue(parameter.ParameterId, parameter.Value)),
+                    ],
+                    effect.ConfigJson)),
+            ]);
+    }
 
     /// <summary>A crop inset, clamped so opposite edges can never cross and erase the picture.</summary>
     private static double Fraction(double value) => Math.Clamp(value, 0, 0.49);
@@ -731,24 +764,25 @@ public static class ShowCompiler
         var result = new List<ShowPlacementEffectEnvelope>();
         foreach (var placement in placements)
         {
-            if (placement.ChromaKey is { } chroma)
+            foreach (var effect in LayerEffectRack.Effective(placement))
             {
-                Add(chroma.Id, AutomationPropertyIds.ChromaSimilarity,
-                    ShowPlacementEffectProperty.ChromaSimilarity, chroma.Similarity);
-                Add(chroma.Id, AutomationPropertyIds.ChromaSmoothness,
-                    ShowPlacementEffectProperty.ChromaSmoothness, chroma.Smoothness);
-                Add(chroma.Id, AutomationPropertyIds.ChromaSpillReduction,
-                    ShowPlacementEffectProperty.ChromaSpillReduction, chroma.SpillReduction);
-            }
-            if (placement.ColorAdjust is { } color)
-            {
-                Add(color.Id, AutomationPropertyIds.ColorBrightness,
-                    ShowPlacementEffectProperty.ColorBrightness, color.Brightness);
-                Add(color.Id, AutomationPropertyIds.ColorContrast,
-                    ShowPlacementEffectProperty.ColorContrast, color.Contrast);
+                if (LayerEffectCatalog.Get(effect.EffectTypeId) is not { } definition)
+                    continue;
+                foreach (var parameter in definition.Parameters)
+                    Add(
+                        effect.Id,
+                        LayerEffectCatalog.PropertyId(effect.EffectTypeId, parameter.Id),
+                        LegacyProperty(effect.EffectTypeId, parameter.Id),
+                        parameter.Id,
+                        effect.Read(parameter.Id, parameter.Default));
             }
 
-            void Add(Guid effectId, string propertyId, ShowPlacementEffectProperty property, double authored)
+            void Add(
+                Guid effectId,
+                string propertyId,
+                ShowPlacementEffectProperty property,
+                string parameterId,
+                double authored)
             {
                 var track = CueAutomation.Of(cue).FirstOrDefault(candidate =>
                     candidate.Target.PropertyId == propertyId && candidate.Target.ObjectId == effectId);
@@ -759,11 +793,59 @@ public static class ShowCompiler
                     placement.LayerIndex,
                     effectId.ToString(),
                     property,
-                    Envelope(project, track, authored, value => (float)value)));
+                    Envelope(project, track, authored, value => (float)value))
+                {
+                    ParameterId = parameterId,
+                });
             }
         }
         return result.Count == 0 ? null : result;
     }
+
+    private static IReadOnlyList<ShowAudioEffectEnvelope>? AudioEffectEnvelopes(
+        HaCueProject project,
+        MediaCueNode cue)
+    {
+        var result = new List<ShowAudioEffectEnvelope>();
+        foreach (var effect in cue.AudioEffects)
+        {
+            if (AudioEffectCatalog.Get(effect.EffectTypeId) is not { } definition)
+                continue;
+            foreach (var parameter in definition.Parameters)
+            {
+                var propertyId = AudioEffectCatalog.PropertyId(effect.EffectTypeId, parameter.Id);
+                var track = cue.AutomationTracks.FirstOrDefault(candidate =>
+                    candidate.Target.PropertyId == propertyId && candidate.Target.ObjectId == effect.Id);
+                if (track is not { Enabled: true, Keyframes.Count: > 0 })
+                    continue;
+                result.Add(new ShowAudioEffectEnvelope(
+                    effect.Id.ToString(),
+                    parameter.Id,
+                    Envelope(
+                        project,
+                        track,
+                        effect.Read(parameter.Id, parameter.Default),
+                        value => (float)value)));
+            }
+        }
+        return result.Count == 0 ? null : result;
+    }
+
+    private static ShowPlacementEffectProperty LegacyProperty(string effectTypeId, string parameterId) =>
+        (effectTypeId, parameterId) switch
+        {
+            (S.Media.Compositor.Effects.ChromaKeyVideoEffect.EffectId, "similarity") =>
+                ShowPlacementEffectProperty.ChromaSimilarity,
+            (S.Media.Compositor.Effects.ChromaKeyVideoEffect.EffectId, "smoothness") =>
+                ShowPlacementEffectProperty.ChromaSmoothness,
+            (S.Media.Compositor.Effects.ChromaKeyVideoEffect.EffectId, "spill") =>
+                ShowPlacementEffectProperty.ChromaSpillReduction,
+            (S.Media.Compositor.Effects.BrightnessContrastVideoEffect.EffectId, "brightness") =>
+                ShowPlacementEffectProperty.ColorBrightness,
+            (S.Media.Compositor.Effects.BrightnessContrastVideoEffect.EffectId, "contrast") =>
+                ShowPlacementEffectProperty.ColorContrast,
+            _ => ShowPlacementEffectProperty.Custom,
+        };
 
     /// <summary>Lowers absolute-time property keys. Built-in segment laws remain exact; custom curves
     /// and holds are expanded to linear document points because the runtime wire type intentionally

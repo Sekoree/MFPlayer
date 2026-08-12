@@ -137,6 +137,10 @@ public sealed class MediaPluginDirectoryTests : IDisposable
         // The plugin's "test.gain" effect registers into a real bus registry like any built-in kind.
         var buses = S.Media.Core.Buses.BusRegistryBuilder.Build(b => plugins.RegisterInto(buses: b));
         Assert.Contains("test.gain", buses.AudioEffectKinds);
+        var descriptor = Assert.Single(buses.AudioEffectDescriptors, candidate => candidate.Kind == "test.gain");
+        var parameter = Assert.Single(descriptor.Parameters);
+        Assert.Equal("gain", parameter.Id);
+        Assert.Equal(0.5f, parameter.Default);
         Assert.True(buses.TryCreateAudioEffect("test.gain", null, out var effect));
 
         // Configure + process straight through the C vtable: a fixed 0.5x gain.
@@ -145,7 +149,32 @@ public sealed class MediaPluginDirectoryTests : IDisposable
         effect.Process(samples, 0);
         Assert.Equal([0.5f, 0.25f, -0.5f, 0.125f], samples);
 
+        var automatable = Assert.IsAssignableFrom<S.Media.Core.Buses.IAutomatableAudioBusEffect>(effect);
+        Assert.True(automatable.TrySetParameter("gain", 0.25f, TimeSpan.FromMilliseconds(10)));
+        samples = [1f, 0.5f, -1f, 0.25f];
+        effect.Process(samples, 4);
+        Assert.Equal([0.25f, 0.125f, -0.25f, 0.0625f], samples);
+
         effect.Dispose(); // releases its plugin lease so the library can unload
+    }
+
+    [GccFact]
+    public void RealPlugin_PreParameterAudioEffectVtableRemainsCompatible()
+    {
+        CompileTestPlugin(_dir);
+
+        using var plugins = MediaPluginDirectory.Load(_dir);
+        Assert.Empty(plugins.Failures);
+        var buses = S.Media.Core.Buses.BusRegistryBuilder.Build(b => plugins.RegisterInto(buses: b));
+        Assert.Contains("test.gain.legacy", buses.AudioEffectKinds);
+        Assert.DoesNotContain(buses.AudioEffectDescriptors, descriptor => descriptor.Kind == "test.gain.legacy");
+        Assert.True(buses.TryCreateAudioEffect("test.gain.legacy", null, out var effect));
+        var samples = new float[] { 1f, -1f };
+        effect!.Process(samples, 0);
+        Assert.Equal([0.5f, -0.5f], samples);
+        Assert.False(Assert.IsAssignableFrom<S.Media.Core.Buses.IAutomatableAudioBusEffect>(effect)
+            .TrySetParameter("gain", 0.25f, TimeSpan.Zero));
+        effect.Dispose();
     }
 
     [GccFact]

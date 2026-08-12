@@ -97,6 +97,39 @@
       </WrapPanel>
     </ContentControl>
 
+    <!-- Ordered rack: identity and order live here; focused built-in editors follow below. -->
+    <ContentControl Theme="{StaticResource Subhead}" Content="Effect rack" />
+    <ItemsControl ItemsSource="{Binding EffectRackRows}">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:LayerEffectRackRow">
+          <Grid Margin="10,2" ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="4">
+            <TextBlock Grid.Column="0" Classes="mono dim3" VerticalAlignment="Center"
+                       Text="{Binding Number, StringFormat='#{0}'}" />
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+              <TextBlock Text="{Binding Name}" />
+              <TextBlock Classes="small dim3" Text="{Binding Enabled, StringFormat='enabled: {0}'}" />
+            </StackPanel>
+            <Button Grid.Column="2" Classes="tight" Content="ON/OFF" Tag="{Binding Id}"
+                    Click="OnToggleEffect" />
+            <Button Grid.Column="3" Classes="tight" Content="↑" Tag="{Binding Id}"
+                    IsEnabled="{Binding CanMoveUp}" Click="OnMoveEffectUp" />
+            <Button Grid.Column="4" Classes="tight" Content="↓" Tag="{Binding Id}"
+                    IsEnabled="{Binding CanMoveDown}" Click="OnMoveEffectDown" />
+            <Button Grid.Column="5" Classes="tight" Content="×" Tag="{Binding Id}"
+                    Click="OnRemoveEffect" />
+          </Grid>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+    <Button Classes="block" Content="ADD EFFECT ▾">
+      <Button.Flyout>
+        <MenuFlyout>
+          <MenuItem Header="Chroma key" Tag="chroma-key.v1" Click="OnAddEffect" />
+          <MenuItem Header="Brightness / contrast" Tag="brightness-contrast.v1" Click="OnAddEffect" />
+        </MenuFlyout>
+      </Button.Flyout>
+    </Button>
+
     <!-- OFF IS NOT DELETE: effect settings survive their toggles. -->
     <ContentControl Theme="{StaticResource Subhead}" Content="Chroma key" />
     <HeaderedContentControl Theme="{StaticResource Field}" Header="Key">

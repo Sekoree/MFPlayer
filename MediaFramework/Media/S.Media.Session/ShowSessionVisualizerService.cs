@@ -288,12 +288,12 @@ internal sealed class ShowSessionVisualizerService
         string visualizerId,
         int placementIndex,
         string effectInstanceId,
-        ShowPlacementEffectProperty property,
+        string parameterId,
         double value)
     {
         if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
             return false;
-        layer.SetEffectAutomation(effectInstanceId, property, value);
+        layer.SetEffectAutomation(effectInstanceId, parameterId, value);
         return true;
     }
 
@@ -302,11 +302,11 @@ internal sealed class ShowSessionVisualizerService
         string visualizerId,
         int placementIndex,
         string effectInstanceId,
-        ShowPlacementEffectProperty property)
+        string parameterId)
     {
         if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
             return false;
-        layer.ClearEffectAutomation(effectInstanceId, property);
+        layer.ClearEffectAutomation(effectInstanceId, parameterId);
         return true;
     }
 
@@ -315,12 +315,12 @@ internal sealed class ShowSessionVisualizerService
         string visualizerId,
         int placementIndex,
         string effectInstanceId,
-        ShowPlacementEffectProperty property,
+        string parameterId,
         double value)
     {
         if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
             return false;
-        layer.SetControllerEffectAutomation(effectInstanceId, property, value);
+        layer.SetControllerEffectAutomation(effectInstanceId, parameterId, value);
         return true;
     }
 
@@ -329,11 +329,11 @@ internal sealed class ShowSessionVisualizerService
         string visualizerId,
         int placementIndex,
         string effectInstanceId,
-        ShowPlacementEffectProperty property)
+        string parameterId)
     {
         if (!TryLayer(compositionId, visualizerId, placementIndex, out var layer))
             return false;
-        layer.ClearControllerEffectAutomation(effectInstanceId, property);
+        layer.ClearControllerEffectAutomation(effectInstanceId, parameterId);
         return true;
     }
 

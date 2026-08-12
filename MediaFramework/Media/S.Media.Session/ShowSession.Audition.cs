@@ -79,7 +79,8 @@ public sealed partial class ShowSession
                     $"{AuditionCompositionId}_null", "Audition", new DiscardingVideoOutput(),
                     DisposeOutputOnRuntimeDispose: true)],
                 compositorFactory: _compositorFactory,
-                compositionMapping: wanted.Mapping);
+                compositionMapping: wanted.Mapping,
+                effectRegistry: _effectRegistry);
             _auditionSpec = wanted;
             return Task.CompletedTask;
         });

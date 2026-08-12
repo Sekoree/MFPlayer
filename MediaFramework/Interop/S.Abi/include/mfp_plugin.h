@@ -43,7 +43,9 @@
  *       - The host MUST NOT invoke two methods of the SAME capability instance concurrently. Every vtable
  *         call on a given instance is serialized (happens-before the next), so a plugin needs no internal
  *         lock for its own per-instance state - EXCEPT the release_frame family and destroy, which observe
- *         the ordering rules in (4)/(5) below.
+ *         the ordering rules in (4)/(5) below, and MfpAudioEffectVTable.set_parameter. set_parameter is a
+ *         control-thread publication call which MAY run concurrently with process; an effect MUST publish
+ *         its bounded scalar target atomically/lock-free and perform any smoothing on the audio thread.
  *       - The host MAY call DIFFERENT instances (even of the same vtable) concurrently on different threads.
  *         Any state a plugin shares across instances (globals, caches) MUST be synchronized by the plugin.
  *       - A plugin's own background threads are the plugin's responsibility: they MUST NOT call host methods
@@ -440,10 +442,35 @@ typedef struct MfpControlDecoderVTable {
     void (*destroy)(void* self);
 } MfpControlDecoderVTable;
 
+typedef enum MfpEffectParameterScale {
+    MFP_EFFECT_SCALE_LINEAR     = 0,
+    MFP_EFFECT_SCALE_DECIBELS   = 1,
+    MFP_EFFECT_SCALE_PERCENTAGE = 2
+} MfpEffectParameterScale;
+
+enum {
+    MFP_EFFECT_PARAMETER_AUTOMATABLE = 1u << 0
+};
+
+/* Returned authoring metadata. The host initializes abi_version/struct_size; the plugin fills the
+ * remaining fields and keeps strings valid until the next call on the same factory. */
+typedef struct MfpEffectParameterDescriptor {
+    MFP_STRUCT_HEADER;
+    const char* id;
+    const char* display_name;
+    const char* unit;
+    float minimum;
+    float maximum;
+    float default_value;
+    uint32_t scale;       /* MfpEffectParameterScale */
+    uint32_t flags;       /* MFP_EFFECT_PARAMETER_* */
+} MfpEffectParameterDescriptor;
+
 /* Audio bus effect ↔ IAudioBusEffect - one in-place processing stage hosted by an output insert or
  * send/return bus. REAL-TIME CONTRACT: `process` runs on the audio pull/pump path - bounded work per
- * chunk, no allocation, no locking, no host reentry (the general RT rules above apply). The host never
- * invokes two methods of the same instance concurrently. */
+ * chunk, no allocation, no locking, no host reentry (the general RT rules above apply). The optional
+ * `set_parameter` runs on a control thread and MAY overlap process; it publishes only a target and the
+ * effect applies smoothing in process. Other calls on one instance remain serialized. */
 typedef struct MfpAudioEffectVTable {
     MFP_STRUCT_HEADER;
     /* Called once before the first process and again when the host reconfigures. Sample format is
@@ -453,6 +480,9 @@ typedef struct MfpAudioEffectVTable {
      * count since the insert started (for LFOs/automation). */
     int  (*process)(void* effect, float* interleaved, int32_t count, int64_t frame_position);
     void (*destroy)(void* effect);
+    /* Optional live scalar setter. `smoothing_ticks` is a requested transition duration in 100-ns ticks;
+     * clamp `value` to the matching descriptor. Return MFP_ERR_NOT_FOUND for an unknown parameter id. */
+    int  (*set_parameter)(void* effect, const char* parameter_id, float value, int64_t smoothing_ticks);
 } MfpAudioEffectVTable;
 
 /* Audio-effect FACTORY, registered per `kind` (e.g. "acme.compressor") - the same shape as the layer-
@@ -464,6 +494,9 @@ typedef struct MfpAudioEffectFactoryVTable {
     void* (*create)(void* self, const char* config_json);
     const MfpAudioEffectVTable* effect_vtable;               /* vtable for instances `create` returns */
     void  (*destroy)(void* self);                            /* destroy the factory itself */
+    /* Optional authoring catalog. Supply both or neither. Descriptors are stable for the factory lifetime. */
+    int   (*get_parameter_count)(void* self, int32_t* out_count);
+    int   (*get_parameter_descriptor)(void* self, int32_t index, MfpEffectParameterDescriptor* out_descriptor);
 } MfpAudioEffectFactoryVTable;
 
 /* Video bus effect ↔ IVideoBusEffect - one processing stage on an output's pump drain thread (off the

@@ -48,6 +48,9 @@ public sealed partial class ShowSession
     private sealed class TransportVoice(IArmedClip clip, ShowClipBinding binding, float masterTrim)
     {
         private readonly Dictionary<string, Guid> _controllerOwners = new(StringComparer.Ordinal);
+        private readonly Dictionary<(string InstanceId, string ParameterId), double> _audioEffectValues = [];
+        private readonly Dictionary<(string InstanceId, string ParameterId), double>
+            _controllerAudioEffectValues = [];
 
         public Guid InstanceId { get; } = Guid.NewGuid();
         public IArmedClip Clip { get; } = clip;
@@ -413,7 +416,7 @@ public sealed partial class ShowSession
             string compositionId,
             int layerIndex,
             string effectInstanceId,
-            ShowPlacementEffectProperty property,
+            string parameterId,
             double value)
         {
             if (State == VoiceState.Retired)
@@ -421,21 +424,52 @@ public sealed partial class ShowSession
             foreach (var placed in Layers)
                 if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
                     && placed.LayerIndex == layerIndex)
-                    placed.Slot.SetEffectAutomation(effectInstanceId, property, value);
+                    placed.Slot.SetEffectAutomation(effectInstanceId, parameterId, value);
         }
 
         public void ClearPlacementEffectAutomation(
             string compositionId,
             int layerIndex,
             string effectInstanceId,
-            ShowPlacementEffectProperty property)
+            string parameterId)
         {
             if (State == VoiceState.Retired)
                 return;
             foreach (var placed in Layers)
                 if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
                     && placed.LayerIndex == layerIndex)
-                    placed.Slot.ClearEffectAutomation(effectInstanceId, property);
+                    placed.Slot.ClearEffectAutomation(effectInstanceId, parameterId);
+        }
+
+        public void ApplyAudioEffectAutomation(
+            string effectInstanceId,
+            string parameterId,
+            double value,
+            TimeSpan smoothing)
+        {
+            if (State == VoiceState.Retired || !double.IsFinite(value))
+                return;
+            _audioEffectValues[(effectInstanceId, parameterId)] = value;
+            if (_controllerOwners.ContainsKey($"audio-effect:{effectInstanceId}:{parameterId}"))
+                return;
+            PublishAudioEffect(effectInstanceId, parameterId, value, smoothing);
+        }
+
+        private void PublishAudioEffect(
+            string effectInstanceId, string parameterId, double value, TimeSpan smoothing)
+        {
+            foreach (var control in Outputs.SelectMany(output => output.EffectControls ?? []))
+                if (control.InstanceId == effectInstanceId)
+                    control.Effect.TrySetParameter(parameterId, (float)value, smoothing);
+        }
+
+        public void ReapplyAudioEffectAutomation()
+        {
+            foreach (var ((instanceId, parameterId), value) in _audioEffectValues)
+                if (!_controllerOwners.ContainsKey($"audio-effect:{instanceId}:{parameterId}"))
+                    PublishAudioEffect(instanceId, parameterId, value, TimeSpan.Zero);
+            foreach (var ((instanceId, parameterId), value) in _controllerAudioEffectValues)
+                PublishAudioEffect(instanceId, parameterId, value, TimeSpan.Zero);
         }
 
         /// <summary>Applies one envelope-automation step: stores the factor and rewrites the route gains
@@ -590,17 +624,17 @@ public sealed partial class ShowSession
             string compositionId,
             int layerIndex,
             string effectInstanceId,
-            ShowPlacementEffectProperty property,
+            string parameterId,
             double value,
             bool claim)
         {
-            var key = $"effect:{compositionId}:{layerIndex}:{effectInstanceId}:{property}";
+            var key = $"effect:{compositionId}:{layerIndex}:{effectInstanceId}:{parameterId}";
             if (State == VoiceState.Retired || !OwnsController(key, ownerId, claim))
                 return false;
             foreach (var placed in Layers)
                 if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
                     && placed.LayerIndex == layerIndex)
-                    placed.Slot.SetControllerEffectAutomation(effectInstanceId, property, value);
+                    placed.Slot.SetControllerEffectAutomation(effectInstanceId, parameterId, value);
             return true;
         }
 
@@ -609,15 +643,45 @@ public sealed partial class ShowSession
             string compositionId,
             int layerIndex,
             string effectInstanceId,
-            ShowPlacementEffectProperty property)
+            string parameterId)
         {
-            var key = $"effect:{compositionId}:{layerIndex}:{effectInstanceId}:{property}";
+            var key = $"effect:{compositionId}:{layerIndex}:{effectInstanceId}:{parameterId}";
             if (!ReleaseController(key, ownerId))
                 return false;
             foreach (var placed in Layers)
                 if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
                     && placed.LayerIndex == layerIndex)
-                    placed.Slot.ClearControllerEffectAutomation(effectInstanceId, property);
+                    placed.Slot.ClearControllerEffectAutomation(effectInstanceId, parameterId);
+            return true;
+        }
+
+        public bool ApplyControllerAudioEffect(
+            Guid ownerId,
+            string effectInstanceId,
+            string parameterId,
+            double value,
+            bool claim)
+        {
+            var key = $"audio-effect:{effectInstanceId}:{parameterId}";
+            if (State == VoiceState.Retired || !double.IsFinite(value)
+                || !OwnsController(key, ownerId, claim))
+                return false;
+            _controllerAudioEffectValues[(effectInstanceId, parameterId)] = value;
+            PublishAudioEffect(effectInstanceId, parameterId, value, TimeSpan.FromMilliseconds(10));
+            return true;
+        }
+
+        public bool ClearControllerAudioEffect(Guid ownerId, string effectInstanceId, string parameterId)
+        {
+            var key = $"audio-effect:{effectInstanceId}:{parameterId}";
+            if (!ReleaseController(key, ownerId))
+                return false;
+            _controllerAudioEffectValues.Remove((effectInstanceId, parameterId));
+            var authored = Binding.AudioEffects?
+                .FirstOrDefault(effect => effect.InstanceId == effectInstanceId)?
+                .Parameters.FirstOrDefault(parameter => parameter.ParameterId == parameterId)?.Value ?? 0;
+            var value = _audioEffectValues.GetValueOrDefault((effectInstanceId, parameterId), authored);
+            PublishAudioEffect(effectInstanceId, parameterId, value, TimeSpan.FromMilliseconds(10));
             return true;
         }
 

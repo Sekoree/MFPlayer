@@ -10,6 +10,7 @@
 #include <stdio.h>    /* snprintf */
 #include <string.h>   /* memset */
 #include <stdlib.h>   /* atoi */
+#include <stdatomic.h>
 #include <fcntl.h>    /* open */
 #include <unistd.h>   /* close */
 
@@ -324,8 +325,9 @@ static const MfpLayerSurfaceFactoryVTable g_ls_factory_vt = {
     .create = ls_create, .surface_vtable = &g_ls_vt, .destroy = ls_factory_destroy
 };
 
-/* --- audio effect: a fixed 0.5x gain, configured channels recorded for the test ------------------ */
+/* --- audio effect: an automatable gain, configured channels recorded for the test ---------------- */
 static uint32_t g_fx_channels = 0;
+static _Atomic float g_fx_gain = 0.5f;
 static int fx_configure(void* effect, const MfpAudioFormat* format) {
     (void)effect;
     g_fx_channels = format->channels;
@@ -333,22 +335,73 @@ static int fx_configure(void* effect, const MfpAudioFormat* format) {
 }
 static int fx_process(void* effect, float* interleaved, int32_t count, int64_t frame_position) {
     (void)effect; (void)frame_position;
-    for (int32_t i = 0; i < count; i++) interleaved[i] *= 0.5f;
+    float gain = atomic_load(&g_fx_gain);
+    for (int32_t i = 0; i < count; i++) interleaved[i] *= gain;
+    return MFP_OK;
+}
+static int fx_set_parameter(void* effect, const char* id, float value, int64_t smoothing_ticks) {
+    (void)effect; (void)smoothing_ticks;
+    if (!id || strcmp(id, "gain") != 0) return MFP_ERR_NOT_FOUND;
+    if (value < 0.0f) value = 0.0f;
+    if (value > 1.0f) value = 1.0f;
+    atomic_store(&g_fx_gain, value);
     return MFP_OK;
 }
 static void fx_destroy(void* effect) { (void)effect; }
 static const MfpAudioEffectVTable g_fx_vt = {
     MFP_VTABLE(MfpAudioEffectVTable),
-    .configure = fx_configure, .process = fx_process, .destroy = fx_destroy
+    .configure = fx_configure, .process = fx_process, .destroy = fx_destroy,
+    .set_parameter = fx_set_parameter
 };
 static void* fx_create(void* self, const char* config_json) {
     (void)self; (void)config_json;
+    atomic_store(&g_fx_gain, 0.5f);
     return (void*)&g_fx_vt; /* non-null instance handle */
+}
+static int fx_get_parameter_count(void* self, int32_t* out_count) {
+    (void)self;
+    if (!out_count) return MFP_ERR_INVALID_ARG;
+    *out_count = 1;
+    return MFP_OK;
+}
+static int fx_get_parameter_descriptor(
+        void* self, int32_t index, MfpEffectParameterDescriptor* out_descriptor) {
+    (void)self;
+    if (index != 0 || !out_descriptor) return MFP_ERR_INVALID_ARG;
+    out_descriptor->id = "gain";
+    out_descriptor->display_name = "Gain";
+    out_descriptor->unit = "x";
+    out_descriptor->minimum = 0.0f;
+    out_descriptor->maximum = 1.0f;
+    out_descriptor->default_value = 0.5f;
+    out_descriptor->scale = MFP_EFFECT_SCALE_LINEAR;
+    out_descriptor->flags = MFP_EFFECT_PARAMETER_AUTOMATABLE;
+    return MFP_OK;
 }
 static void fx_factory_destroy(void* self) { (void)self; g_capability_destroy_count++; }
 static const MfpAudioEffectFactoryVTable g_fx_factory_vt = {
     MFP_VTABLE(MfpAudioEffectFactoryVTable),
-    .create = fx_create, .effect_vtable = &g_fx_vt, .destroy = fx_factory_destroy
+    .create = fx_create, .effect_vtable = &g_fx_vt, .destroy = fx_factory_destroy,
+    .get_parameter_count = fx_get_parameter_count,
+    .get_parameter_descriptor = fx_get_parameter_descriptor
+};
+
+/* ABI compatibility fixture: advertises exactly the pre-parameter vtable sizes. The host must zero
+ * the unknown trailing fields and retain this runtime-only effect. */
+static const MfpAudioEffectVTable g_legacy_fx_vt = {
+    .abi_version = MFP_PLUGIN_ABI_VERSION,
+    .struct_size = offsetof(MfpAudioEffectVTable, set_parameter),
+    .configure = fx_configure, .process = fx_process, .destroy = fx_destroy
+};
+static void* legacy_fx_create(void* self, const char* config_json) {
+    (void)self; (void)config_json;
+    atomic_store(&g_fx_gain, 0.5f);
+    return (void*)&g_legacy_fx_vt;
+}
+static const MfpAudioEffectFactoryVTable g_legacy_fx_factory_vt = {
+    .abi_version = MFP_PLUGIN_ABI_VERSION,
+    .struct_size = offsetof(MfpAudioEffectFactoryVTable, get_parameter_count),
+    .create = legacy_fx_create, .effect_vtable = &g_legacy_fx_vt, .destroy = fx_factory_destroy
 };
 
 /* --- video effect: inverts every CPU byte in place (asserted exactly by the host test) ---------- */
@@ -399,6 +452,7 @@ int mfp_plugin_register(const MfpHostApi* host, MfpPluginInfo* out_info, MfpRegi
         || reg->add_subtitle_provider(reg->ctx, "testsub", &g_sub_provider_vt, (void*)&g_sub_provider_vt) != MFP_OK
         || reg->add_layer_surface(reg->ctx, "testlayer", &g_ls_factory_vt, (void*)&g_ls_factory_vt) != MFP_OK
         || reg->add_audio_effect(reg->ctx, "test.gain", &g_fx_factory_vt, (void*)&g_fx_factory_vt) != MFP_OK
+        || reg->add_audio_effect(reg->ctx, "test.gain.legacy", &g_legacy_fx_factory_vt, (void*)&g_legacy_fx_factory_vt) != MFP_OK
         || reg->add_video_effect(reg->ctx, "test.invert", &g_vfx_factory_vt, (void*)&g_vfx_factory_vt) != MFP_OK) {
         if (host->set_last_error) host->set_last_error("capability registration failed");
         return MFP_ERR_ABI_MISMATCH;
@@ -408,7 +462,7 @@ int mfp_plugin_register(const MfpHostApi* host, MfpPluginInfo* out_info, MfpRegi
 
 void mfp_plugin_unregister(void) {
     if (g_host && g_host->log)
-        g_host->log(MFP_LOG_INFO, g_capability_destroy_count == 8 ? "unregister:ok" : "unregister:destroy-missing");
+        g_host->log(MFP_LOG_INFO, g_capability_destroy_count == 9 ? "unregister:ok" : "unregister:destroy-missing");
     if (g_dmabuf_fd >= 0) { close(g_dmabuf_fd); g_dmabuf_fd = -1; }
     g_host = 0;
 }

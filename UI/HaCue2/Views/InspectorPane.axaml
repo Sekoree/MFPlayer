@@ -164,6 +164,18 @@
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Level">
               <TextBox Classes="short" Text="{Binding LevelValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
+            <ContentControl Theme="{StaticResource Subhead}" Content="Cue inserts" />
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Gain">
+              <CheckBox IsChecked="{Binding AudioGainOn}" Content="gain insert" />
+            </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Insert gain"
+                                    IsVisible="{Binding HasAudioGain}">
+              <NumericUpDown Minimum="-96" Maximum="12" Increment="0.5" FormatString="0.0"
+                             Value="{Binding AudioGainDb}" />
+            </HeaderedContentControl>
+            <Button Classes="block" Content="AUTOMATE INSERT GAIN"
+                    IsVisible="{Binding HasAudioGain}" IsEnabled="{Binding CanAddAudioGainLane}"
+                    Click="OnAddLane" Tag="audio.effect.parameter.gain.v1.gainDb" />
             <CheckBox Margin="10,2,10,4" IsChecked="{Binding SendToVisualizerValue}"
                       Content="Send to selective visualizer feeds" />
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Fade in">
@@ -431,6 +443,10 @@
                          lane over a WAV both compile to automation the engine has nowhere to apply. -->
                     <MenuItem Header="{Binding VolumeLaneLabel}" Click="OnAddLane" Tag="cue.audio.volume"
                               IsVisible="{Binding CanAddVolumeLane}" />
+                    <MenuItem Header="Gain insert" Click="OnAddLane"
+                              Tag="audio.effect.parameter.gain.v1.gainDb"
+                              IsVisible="{Binding HasAutomationAudioGain}"
+                              IsEnabled="{Binding CanAddAudioGainLane}" />
                     <MenuItem Header="{Binding OpacityLaneLabel}" Click="OnAddLane" Tag="video.placement.opacity"
                               IsVisible="{Binding CanAddOpacityLane}" />
                     <MenuItem Header="Position X" Click="OnAddLane" Tag="video.placement.x"

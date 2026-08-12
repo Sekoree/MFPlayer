@@ -420,11 +420,11 @@ public static class ProjectValidator
             issues.Add(Error("cue", id, $"Q{cue.Number} has duplicate placement ids."));
 
         var effectIds = placements
-            .SelectMany(placement => new Guid?[]
-                { placement.ChromaKey?.Id, placement.ColorAdjust?.Id })
-            .Where(effectId => effectId is not null)
-            .Select(effectId => effectId!.Value)
+            .SelectMany(LayerEffectRack.Effective)
+            .Select(effect => effect.Id)
             .ToList();
+        if (cue is MediaCueNode effectMedia)
+            effectIds.AddRange(effectMedia.AudioEffects.Select(effect => effect.Id));
         if (effectIds.Contains(Guid.Empty))
             issues.Add(Error("cue", id, $"Q{cue.Number} has an effect with no stable id."));
         if (effectIds.Where(effectId => effectId != Guid.Empty)
@@ -434,6 +434,7 @@ public static class ProjectValidator
         switch (cue)
         {
             case MediaCueNode media:
+                ValidateAudioEffects(media, issues);
                 ValidateGain(media.LevelDb, "cue", id, $"Q{cue.Number}", issues);
                 if (media.EndTargetCueId == media.Id)
                     issues.Add(Error("cue", id, $"Q{cue.Number} targets itself at media end."));
@@ -614,6 +615,77 @@ public static class ProjectValidator
         if (placement.Width <= 0 || placement.Height <= 0 || placement.Opacity is < 0 or > 1)
             issues.Add(Error("cue", cue.Id.ToString(),
                 $"Q{cue.Number} has a placement with invalid size or opacity."));
+
+        foreach (var effect in LayerEffectRack.Effective(placement))
+        {
+            if (string.IsNullOrWhiteSpace(effect.EffectTypeId))
+            {
+                issues.Add(Error("cue", cue.Id.ToString(),
+                    $"Q{cue.Number} has a layer effect without a type id."));
+                continue;
+            }
+            if (effect.Parameters.GroupBy(parameter => parameter.ParameterId, StringComparer.Ordinal)
+                .Any(group => string.IsNullOrWhiteSpace(group.Key) || group.Count() > 1))
+                issues.Add(Error("cue", cue.Id.ToString(),
+                    $"Q{cue.Number} has duplicate or empty layer-effect parameters."));
+            if (effect.Parameters.Any(parameter => !double.IsFinite(parameter.Value)))
+                issues.Add(Error("cue", cue.Id.ToString(),
+                    $"Q{cue.Number} has a non-finite layer-effect parameter."));
+            if (LayerEffectCatalog.Get(effect.EffectTypeId) is not { } definition)
+            {
+                issues.Add(Warn("cue", cue.Id.ToString(),
+                    $"Q{cue.Number} preserves layer effect '{effect.EffectTypeId}', which is not in this authoring catalog."));
+                continue;
+            }
+            foreach (var parameter in effect.Parameters)
+            {
+                var descriptor = definition.Parameters.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Id, parameter.ParameterId, StringComparison.Ordinal));
+                if (descriptor is null)
+                    continue; // plugin versions may retain parameters this build does not expose
+                if (!double.IsFinite(parameter.Value)
+                    || parameter.Value < descriptor.Minimum || parameter.Value > descriptor.Maximum)
+                    issues.Add(Error("cue", cue.Id.ToString(),
+                        $"Q{cue.Number} has {definition.DisplayName} {descriptor.DisplayName} outside "
+                        + $"[{descriptor.Minimum}, {descriptor.Maximum}]."));
+            }
+        }
+    }
+
+    private static void ValidateAudioEffects(MediaCueNode cue, List<ShowValidationIssue> issues)
+    {
+        foreach (var effect in cue.AudioEffects)
+        {
+            if (string.IsNullOrWhiteSpace(effect.EffectTypeId))
+            {
+                issues.Add(Error("cue", cue.Id.ToString(),
+                    $"Q{cue.Number} has an audio effect without a type id."));
+                continue;
+            }
+            if (effect.Parameters.GroupBy(parameter => parameter.ParameterId, StringComparer.Ordinal)
+                .Any(group => string.IsNullOrWhiteSpace(group.Key) || group.Count() > 1))
+                issues.Add(Error("cue", cue.Id.ToString(),
+                    $"Q{cue.Number} has duplicate or empty audio-effect parameters."));
+            if (effect.Parameters.Any(parameter => !double.IsFinite(parameter.Value)))
+                issues.Add(Error("cue", cue.Id.ToString(),
+                    $"Q{cue.Number} has a non-finite audio-effect parameter."));
+            if (AudioEffectCatalog.Get(effect.EffectTypeId) is not { } definition)
+            {
+                issues.Add(Warn("cue", cue.Id.ToString(),
+                    $"Q{cue.Number} preserves audio effect '{effect.EffectTypeId}', which is not in this authoring catalog."));
+                continue;
+            }
+            foreach (var value in effect.Parameters)
+            {
+                var parameter = definition.Parameters.FirstOrDefault(candidate => candidate.Id == value.ParameterId);
+                if (parameter is not null
+                    && (!double.IsFinite(value.Value)
+                        || value.Value < parameter.Minimum || value.Value > parameter.Maximum))
+                    issues.Add(Error("cue", cue.Id.ToString(),
+                        $"Q{cue.Number} has audio {definition.DisplayName} {parameter.DisplayName} outside "
+                        + $"[{parameter.Minimum}, {parameter.Maximum}]."));
+            }
+        }
     }
 
     private static void ValidateAutomation(
@@ -660,9 +732,30 @@ public static class ProjectValidator
                 && (track.Target.ObjectId is not { } effectId
                     || propertyOwner is null
                     || CuePlacements.Of(propertyOwner).All(placement =>
-                        placement.ChromaKey?.Id != effectId && placement.ColorAdjust?.Id != effectId)))
+                        LayerEffectRack.Effective(placement).All(effect => effect.Id != effectId))
+                       && (propertyOwner as MediaCueNode)?.AudioEffects.All(effect => effect.Id != effectId) != false))
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} has {descriptor.DisplayName} automation for an effect that no longer exists."));
+            if (descriptor.TargetKind == AutomationTargetKind.EffectInstance
+                && track.Target.ObjectId is { } typedEffectId
+                && propertyOwner is not null
+                && LayerEffectCatalog.TryResolveProperty(
+                    track.Target.PropertyId, out var expectedEffect, out _)
+                && CuePlacements.Of(propertyOwner)
+                    .SelectMany(LayerEffectRack.Effective)
+                    .FirstOrDefault(effect => effect.Id == typedEffectId) is { } actualEffect
+                && !string.Equals(actualEffect.EffectTypeId, expectedEffect.TypeId, StringComparison.Ordinal))
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} targets {descriptor.DisplayName} at a different effect type."));
+            if (descriptor.TargetKind == AutomationTargetKind.EffectInstance
+                && track.Target.ObjectId is { } audioEffectId
+                && propertyOwner is MediaCueNode audioOwner
+                && AudioEffectCatalog.TryResolveProperty(
+                    track.Target.PropertyId, out var expectedAudioEffect, out _)
+                && audioOwner.AudioEffects.FirstOrDefault(effect => effect.Id == audioEffectId) is { } actualAudioEffect
+                && actualAudioEffect.EffectTypeId != expectedAudioEffect.TypeId)
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} targets {descriptor.DisplayName} at a different audio effect type."));
             if (track.Target.PropertyId == AutomationPropertyIds.CueVolume && propertyOwner is not MediaCueNode)
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} targets volume on a cue that has no cue-volume property."));

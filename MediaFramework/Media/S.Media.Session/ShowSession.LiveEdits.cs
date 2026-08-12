@@ -97,12 +97,24 @@ public sealed partial class ShowSession
         string compositionId,
         int layerIndex,
         string effectInstanceId,
-        ShowPlacementEffectProperty property,
+        string parameterId,
         double value,
         bool claim) =>
         InvokeAsync(() => Task.FromResult(
             ActiveVoiceOf(instance)?.ApplyControllerEffect(
-                ownerId, compositionId, layerIndex, effectInstanceId, property, value, claim) ?? false));
+                ownerId, compositionId, layerIndex, effectInstanceId, parameterId, value, claim) ?? false));
+
+    public Task<bool> ApplyControllerPlacementEffectAsync(
+        ShowCueInstance instance,
+        Guid ownerId,
+        string compositionId,
+        int layerIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        double value,
+        bool claim) => ApplyControllerPlacementEffectAsync(
+            instance, ownerId, compositionId, layerIndex, effectInstanceId,
+            ShowEffectParameterIds.FromLegacy(property), value, claim);
 
     public Task<bool> ClearControllerPlacementEffectAsync(
         ShowCueInstance instance,
@@ -110,10 +122,40 @@ public sealed partial class ShowSession
         string compositionId,
         int layerIndex,
         string effectInstanceId,
-        ShowPlacementEffectProperty property) =>
+        string parameterId) =>
         InvokeAsync(() => Task.FromResult(
             ActiveVoiceOf(instance)?.ClearControllerEffect(
-                ownerId, compositionId, layerIndex, effectInstanceId, property) ?? false));
+                ownerId, compositionId, layerIndex, effectInstanceId, parameterId) ?? false));
+
+    public Task<bool> ClearControllerPlacementEffectAsync(
+        ShowCueInstance instance,
+        Guid ownerId,
+        string compositionId,
+        int layerIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property) => ClearControllerPlacementEffectAsync(
+            instance, ownerId, compositionId, layerIndex, effectInstanceId,
+            ShowEffectParameterIds.FromLegacy(property));
+
+    public Task<bool> ApplyControllerAudioEffectAsync(
+        ShowCueInstance instance,
+        Guid ownerId,
+        string effectInstanceId,
+        string parameterId,
+        double value,
+        bool claim) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ApplyControllerAudioEffect(
+                ownerId, effectInstanceId, parameterId, value, claim) ?? false));
+
+    public Task<bool> ClearControllerAudioEffectAsync(
+        ShowCueInstance instance,
+        Guid ownerId,
+        string effectInstanceId,
+        string parameterId) =>
+        InvokeAsync(() => Task.FromResult(
+            ActiveVoiceOf(instance)?.ClearControllerAudioEffect(
+                ownerId, effectInstanceId, parameterId) ?? false));
 
     /// <summary>Live-edit the active cue's absolute authored volume component. The value is the same
     /// linear level carried by <see cref="ShowClipBinding.VolumeEnvelope"/> and therefore continues to
@@ -193,14 +235,39 @@ public sealed partial class ShowSession
         string compositionId,
         int layerIndex,
         string effectInstanceId,
-        ShowPlacementEffectProperty property,
+        string parameterId,
         double value) =>
         InvokeAsync(() =>
         {
             if (ActiveVoiceOf(cueId) is not { } voice)
                 return Task.FromResult(false);
             voice.ApplyPlacementEffectAutomation(
-                compositionId, layerIndex, effectInstanceId, property, value);
+                compositionId, layerIndex, effectInstanceId, parameterId, value);
+            return Task.FromResult(true);
+        });
+
+    public Task<bool> ApplyActivePlacementEffectAutomationAsync(
+        string cueId,
+        string compositionId,
+        int layerIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        double value) => ApplyActivePlacementEffectAutomationAsync(
+            cueId, compositionId, layerIndex, effectInstanceId,
+            ShowEffectParameterIds.FromLegacy(property), value);
+
+    public Task<bool> ClearActivePlacementEffectAutomationAsync(
+        string cueId,
+        string compositionId,
+        int layerIndex,
+        string effectInstanceId,
+        string parameterId) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(cueId) is not { } voice)
+                return Task.FromResult(false);
+            voice.ClearPlacementEffectAutomation(
+                compositionId, layerIndex, effectInstanceId, parameterId);
             return Task.FromResult(true);
         });
 
@@ -209,15 +276,9 @@ public sealed partial class ShowSession
         string compositionId,
         int layerIndex,
         string effectInstanceId,
-        ShowPlacementEffectProperty property) =>
-        InvokeAsync(() =>
-        {
-            if (ActiveVoiceOf(cueId) is not { } voice)
-                return Task.FromResult(false);
-            voice.ClearPlacementEffectAutomation(
-                compositionId, layerIndex, effectInstanceId, property);
-            return Task.FromResult(true);
-        });
+        ShowPlacementEffectProperty property) => ClearActivePlacementEffectAutomationAsync(
+            cueId, compositionId, layerIndex, effectInstanceId,
+            ShowEffectParameterIds.FromLegacy(property));
 
     /// <summary>Live-edit the active cue's composition placement while it plays (the GUI's
     /// <c>UpdateActiveCueVideoPlacement</c>) - repositions / re-opacities its layer. Returns false when the
@@ -592,7 +653,7 @@ public sealed partial class ShowSession
                     var outputId = $"clip{i}";
                     if (!TryAttachRouteOutput(
                             voice.Player, outputId, route.DeviceId, route.ToChannelMap(), rate,
-                            gain: route.Gain * level, newOutputs, route))
+                            gain: route.Gain * level, newOutputs, route, voice.Binding.AudioEffects))
                         continue;
                     routeTargets.Add(new AudioRouteTarget(outputId, route.Gain, route));
                     if (route.DeviceId is { } dev)
@@ -602,6 +663,7 @@ public sealed partial class ShowSession
                 // 3) Swap the voice's tracked set, release the OLD one per ownership, refresh route targets + pumps.
                 foreach (var o in voice.SwapAudioOutputs(newOutputs))
                     ReleaseClipAudioOutput(o);
+                voice.ReapplyAudioEffectAutomation();
                 voice.SetRouteTargets(routeTargets);
                 // 4) One level-composition pass over the rebuilt targets - the same thing the fire path does
                 //    after attaching (CommitClipAsync). The rebuilt routes are the ONLY ones the voice's fade

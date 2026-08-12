@@ -96,7 +96,8 @@ public sealed record VideoPlacementSpec(
     // Optional brightness/contrast applied to the placed layer; null = disabled.
     Compositor.Effects.BrightnessContrastSettings? ColorAdjust = null,
     string? ChromaKeyInstanceId = null,
-    string? ColorAdjustInstanceId = null);
+    string? ColorAdjustInstanceId = null,
+    IReadOnlyList<ShowLayerEffectInstance>? Effects = null);
 
 /// <summary>
 /// What to open and how the host intends to route it. The standby engine owns the open/seek/hold

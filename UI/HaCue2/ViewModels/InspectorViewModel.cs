@@ -187,6 +187,9 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(NumberValue));
         OnPropertyChanged(nameof(LabelValue));
         OnPropertyChanged(nameof(LevelValue));
+        OnPropertyChanged(nameof(HasAudioGain));
+        OnPropertyChanged(nameof(AudioGainOn));
+        OnPropertyChanged(nameof(AudioGainDb));
         OnPropertyChanged(nameof(FadeValue));
         OnPropertyChanged(nameof(FadeOutValue));
         OnPropertyChanged(nameof(LoopValue));
@@ -233,6 +236,7 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(CropTop));
         OnPropertyChanged(nameof(CropRight));
         OnPropertyChanged(nameof(CropBottom));
+        OnPropertyChanged(nameof(EffectRackRows));
         OnPropertyChanged(nameof(HasChromaKey));
         OnPropertyChanged(nameof(ChromaKeyOn));
         OnPropertyChanged(nameof(ChromaColour));
@@ -258,8 +262,10 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(CanAddChromaSpillLane));
         OnPropertyChanged(nameof(CanAddColorBrightnessLane));
         OnPropertyChanged(nameof(CanAddColorContrastLane));
+        OnPropertyChanged(nameof(CanAddAudioGainLane));
         OnPropertyChanged(nameof(HasAutomationChromaKey));
         OnPropertyChanged(nameof(HasAutomationColorAdjust));
+        OnPropertyChanged(nameof(HasAutomationAudioGain));
         OnPropertyChanged(nameof(CanAddOutboundLane));
         OnPropertyChanged(nameof(VolumeLaneLabel));
         OnPropertyChanged(nameof(OpacityLaneLabel));
@@ -540,6 +546,61 @@ public partial class InspectorViewModel : ObservableObject
             PushLiveSends();
         }
     }
+
+    private AudioEffectInstance? AudioGainEffect => Cue is MediaCueNode media
+        ? media.AudioEffects.FirstOrDefault(effect => effect.EffectTypeId == S.Media.Routing.GainAudioEffect.EffectId)
+        : null;
+
+    public bool HasAudioGain => AudioGainEffect is not null;
+
+    public bool AudioGainOn
+    {
+        get => AudioGainEffect is { Enabled: true };
+        set
+        {
+            if (Cue is not MediaCueNode media)
+                return;
+            using (_journal.Composite(value ? "audio insert on" : "audio insert off", "audio"))
+            {
+                if (value && AudioGainEffect is null)
+                    _journal.Do(new AddItemCommand<AudioEffectInstance>(
+                        media.AudioEffects,
+                        AudioEffectCatalog.Create(S.Media.Routing.GainAudioEffect.EffectId),
+                        media.AudioEffects.Count,
+                        "audio",
+                        "add gain insert"));
+                if (AudioGainEffect is { } effect && effect.Enabled != value)
+                    _journal.Do(new SetValueCommand<bool>(
+                        media.Id, $"audioEffect:{effect.Id}:enabled", "audio",
+                        () => effect.Enabled, enabled => effect.Enabled = enabled, value,
+                        value ? "enable gain insert" : "bypass gain insert"));
+            }
+            _journal.CloseGroup();
+            Reload();
+        }
+    }
+
+    public double AudioGainDb
+    {
+        get => AudioGainEffect?.Read(S.Media.Routing.GainAudioEffect.GainParameterId, 0) ?? 0;
+        set
+        {
+            if (AudioGainEffect is not { } effect || !double.IsFinite(value) || Cue is null)
+                return;
+            var parameter = effect.Parameters.First(candidate =>
+                candidate.ParameterId == S.Media.Routing.GainAudioEffect.GainParameterId);
+            var clamped = Math.Clamp(value, -96, 12);
+            if (Math.Abs(parameter.Value - clamped) < .000001)
+                return;
+            Edit($"audioEffect:{effect.Id}:gainDb", "audio",
+                () => parameter.Value, number => parameter.Value = number, clamped, "adjust gain insert");
+        }
+    }
+
+    public bool CanAddAudioGainLane =>
+        CanAddLane(AudioEffectCatalog.PropertyId(
+            S.Media.Routing.GainAudioEffect.EffectId,
+            S.Media.Routing.GainAudioEffect.GainParameterId));
 
     public string FadeValue
     {
@@ -1464,15 +1525,34 @@ public partial class InspectorViewModel : ObservableObject
         Reload();
     }
 
-    // ── the two layer effects ─────────────────────────────────────────────────────────────────
-    // Both follow the app's rule for effects: OFF IS NOT DELETE. Switching a key off keeps the colour
-    // and the tolerances, so checking a shot against an unkeyed one costs nothing to undo.
+    // ── ordered layer-effect rack ─────────────────────────────────────────────────────────────
+    // The built-in focused editors below are projections of the same generic rack shown above them.
 
-    public bool HasChromaKey => Placement?.ChromaKey is not null;
+    private const string ChromaEffectType = S.Media.Compositor.Effects.ChromaKeyVideoEffect.EffectId;
+    private const string ColourEffectType =
+        S.Media.Compositor.Effects.BrightnessContrastVideoEffect.EffectId;
+
+    private LayerEffectInstance? ChromaEffect => LayerEffectRack.Find(Placement, ChromaEffectType);
+    private LayerEffectInstance? ColourEffect => LayerEffectRack.Find(Placement, ColourEffectType);
+
+    public IReadOnlyList<LayerEffectRackRow> EffectRackRows => Placement is not { } placement
+        ? []
+        :
+        [
+            .. placement.Effects.Select((effect, index) => new LayerEffectRackRow(
+                effect.Id,
+                index + 1,
+                LayerEffectCatalog.Get(effect.EffectTypeId)?.DisplayName ?? effect.EffectTypeId,
+                effect.Enabled,
+                index > 0,
+                index + 1 < placement.Effects.Count)),
+        ];
+
+    public bool HasChromaKey => ChromaEffect is not null;
 
     public bool ChromaKeyOn
     {
-        get => Placement is { ChromaKeyEnabled: true, ChromaKey: not null };
+        get => ChromaEffect is { Enabled: true };
         set
         {
             if (Placement is not { } placement || Cue is null)
@@ -1480,17 +1560,19 @@ public partial class InspectorViewModel : ObservableObject
 
             using (_journal.Composite(value ? "chroma key on" : "chroma key off", "video"))
             {
-                // Created on first use, and never destroyed by switching off.
-                if (value && placement.ChromaKey is null)
-                    _journal.Do(new SetValueCommand<ChromaKeySpec?>(
-                        Cue.Id, "chromaKey", "video",
-                        () => placement.ChromaKey, spec => placement.ChromaKey = spec,
-                        new ChromaKeySpec(), "add chroma key"));
+                if (value && ChromaEffect is null)
+                    _journal.Do(new AddItemCommand<LayerEffectInstance>(
+                        placement.Effects,
+                        LayerEffectCatalog.Create(ChromaEffectType),
+                        placement.Effects.Count,
+                        "video",
+                        "add chroma key"));
 
-                _journal.Do(new SetValueCommand<bool>(
-                    Cue.Id, "chromaKeyEnabled", "video",
-                    () => placement.ChromaKeyEnabled, flag => placement.ChromaKeyEnabled = flag, value,
-                    value ? "chroma key on" : "chroma key off"));
+                if (ChromaEffect is { } effect && effect.Enabled != value)
+                    _journal.Do(new SetValueCommand<bool>(
+                        Cue.Id, $"effect:{effect.Id}:enabled", "video",
+                        () => effect.Enabled, flag => effect.Enabled = flag, value,
+                        value ? "chroma key on" : "chroma key off"));
             }
 
             _journal.CloseGroup();
@@ -1500,43 +1582,38 @@ public partial class InspectorViewModel : ObservableObject
 
     public double ChromaSimilarity
     {
-        get => Placement?.ChromaKey?.Similarity ?? 0.4;
-        set => WriteKey("similarity", 0, 1, key => key.Similarity, (key, n) => key.Similarity = n, value);
+        get => ChromaEffect?.Read("similarity", 0.4) ?? 0.4;
+        set => WriteEffectParameter(ChromaEffect, "similarity", 0, 1, value, "adjust key");
     }
 
     public double ChromaSmoothness
     {
-        get => Placement?.ChromaKey?.Smoothness ?? 0.1;
-        set => WriteKey("smoothness", 0, 1, key => key.Smoothness, (key, n) => key.Smoothness = n, value);
+        get => ChromaEffect?.Read("smoothness", 0.1) ?? 0.1;
+        set => WriteEffectParameter(ChromaEffect, "smoothness", 0, 1, value, "adjust key");
     }
 
     public double ChromaSpill
     {
-        get => Placement?.ChromaKey?.SpillReduction ?? 0.1;
-        set => WriteKey("spill", 0, 1,
-            key => key.SpillReduction, (key, n) => key.SpillReduction = n, value);
+        get => ChromaEffect?.Read("spill", 0.1) ?? 0.1;
+        set => WriteEffectParameter(ChromaEffect, "spill", 0, 1, value, "adjust key");
     }
 
     /// <summary>The key colour as "#RRGGBB" — what a designer is given on a call sheet.</summary>
     public string ChromaColour
     {
-        get => Placement?.ChromaKey is { } key
-            ? $"#{Channel(key.Red)}{Channel(key.Green)}{Channel(key.Blue)}"
+        get => ChromaEffect is { } key
+            ? $"#{Channel(key.Read("keyR", 0))}{Channel(key.Read("keyG", 1))}{Channel(key.Read("keyB", 0))}"
             : "#00FF00";
         set
         {
-            if (Placement?.ChromaKey is not { } key || Cue is null || !TryColour(value, out var rgb))
+            if (ChromaEffect is not { } key || Cue is null || !TryColour(value, out var rgb))
                 return;
 
             using (_journal.Composite("chroma key colour", "video"))
             {
-                _journal.Do(new SetValueCommand<double>(
-                    Cue.Id, "keyRed", "video", () => key.Red, n => key.Red = n, rgb.Red, "key colour"));
-                _journal.Do(new SetValueCommand<double>(
-                    Cue.Id, "keyGreen", "video",
-                    () => key.Green, n => key.Green = n, rgb.Green, "key colour"));
-                _journal.Do(new SetValueCommand<double>(
-                    Cue.Id, "keyBlue", "video", () => key.Blue, n => key.Blue = n, rgb.Blue, "key colour"));
+                WriteEffectParameterCommand(key, "keyR", rgb.Red, "key colour");
+                WriteEffectParameterCommand(key, "keyG", rgb.Green, "key colour");
+                WriteEffectParameterCommand(key, "keyB", rgb.Blue, "key colour");
             }
 
             _journal.CloseGroup();
@@ -1560,30 +1637,11 @@ public partial class InspectorViewModel : ObservableObject
         return true;
     }
 
-    private void WriteKey(
-        string property,
-        double minimum,
-        double maximum,
-        Func<ChromaKeySpec, double> read,
-        Action<ChromaKeySpec, double> write,
-        double value)
-    {
-        if (Placement?.ChromaKey is not { } key || !double.IsFinite(value))
-            return;
-
-        var clamped = Math.Clamp(value, minimum, maximum);
-
-        if (Math.Abs(read(key) - clamped) < 0.000001)
-            return;
-
-        Edit(property, "video", () => read(key), number => write(key, number), clamped, "adjust key");
-    }
-
-    public bool HasColorAdjust => Placement?.ColorAdjust is not null;
+    public bool HasColorAdjust => ColourEffect is not null;
 
     public bool ColorAdjustOn
     {
-        get => Placement is { ColorAdjustEnabled: true, ColorAdjust: not null };
+        get => ColourEffect is { Enabled: true };
         set
         {
             if (Placement is not { } placement || Cue is null)
@@ -1591,16 +1649,19 @@ public partial class InspectorViewModel : ObservableObject
 
             using (_journal.Composite(value ? "colour adjust on" : "colour adjust off", "video"))
             {
-                if (value && placement.ColorAdjust is null)
-                    _journal.Do(new SetValueCommand<ColorAdjustSpec?>(
-                        Cue.Id, "colorAdjust", "video",
-                        () => placement.ColorAdjust, spec => placement.ColorAdjust = spec,
-                        new ColorAdjustSpec(), "add colour adjust"));
+                if (value && ColourEffect is null)
+                    _journal.Do(new AddItemCommand<LayerEffectInstance>(
+                        placement.Effects,
+                        LayerEffectCatalog.Create(ColourEffectType),
+                        placement.Effects.Count,
+                        "video",
+                        "add colour adjust"));
 
-                _journal.Do(new SetValueCommand<bool>(
-                    Cue.Id, "colorAdjustEnabled", "video",
-                    () => placement.ColorAdjustEnabled, flag => placement.ColorAdjustEnabled = flag,
-                    value, value ? "colour adjust on" : "colour adjust off"));
+                if (ColourEffect is { } effect && effect.Enabled != value)
+                    _journal.Do(new SetValueCommand<bool>(
+                        Cue.Id, $"effect:{effect.Id}:enabled", "video",
+                        () => effect.Enabled, flag => effect.Enabled = flag,
+                        value, value ? "colour adjust on" : "colour adjust off"));
             }
 
             _journal.CloseGroup();
@@ -1610,36 +1671,110 @@ public partial class InspectorViewModel : ObservableObject
 
     public double LayerBrightness
     {
-        get => Placement?.ColorAdjust?.Brightness ?? 0;
-        set => WriteColour("brightness", -1, 1,
-            colour => colour.Brightness, (colour, n) => colour.Brightness = n, value);
+        get => ColourEffect?.Read("brightness", 0) ?? 0;
+        set => WriteEffectParameter(ColourEffect, "brightness", -1, 1, value, "adjust layer colour");
     }
 
     public double LayerContrast
     {
-        get => Placement?.ColorAdjust?.Contrast ?? 1;
-        set => WriteColour("contrast", 0, 4,
-            colour => colour.Contrast, (colour, n) => colour.Contrast = n, value);
+        get => ColourEffect?.Read("contrast", 1) ?? 1;
+        set => WriteEffectParameter(ColourEffect, "contrast", 0, 4, value, "adjust layer colour");
     }
 
-    private void WriteColour(
-        string property,
+    private void WriteEffectParameter(
+        LayerEffectInstance? effect,
+        string parameterId,
         double minimum,
         double maximum,
-        Func<ColorAdjustSpec, double> read,
-        Action<ColorAdjustSpec, double> write,
-        double value)
+        double value,
+        string description)
     {
-        if (Placement?.ColorAdjust is not { } colour || !double.IsFinite(value))
+        if (effect is null || !double.IsFinite(value))
             return;
 
         var clamped = Math.Clamp(value, minimum, maximum);
-
-        if (Math.Abs(read(colour) - clamped) < 0.000001)
+        var parameter = effect.Parameters.FirstOrDefault(candidate => candidate.ParameterId == parameterId);
+        if (parameter is null || Math.Abs(parameter.Value - clamped) < 0.000001)
             return;
+        Edit($"effect:{effect.Id}:{parameterId}", "video",
+            () => parameter.Value, number => parameter.Value = number, clamped, description);
+    }
 
-        Edit(property, "video", () => read(colour), number => write(colour, number), clamped,
-            "adjust layer colour");
+    private void WriteEffectParameterCommand(
+        LayerEffectInstance effect, string parameterId, double value, string description)
+    {
+        var parameter = effect.Parameters.First(candidate => candidate.ParameterId == parameterId);
+        _journal.Do(new SetValueCommand<double>(
+            Cue!.Id, $"effect:{effect.Id}:{parameterId}", "video",
+            () => parameter.Value, number => parameter.Value = number, value, description));
+    }
+
+    public void AddLayerEffect(string typeId)
+    {
+        if (Placement is not { } placement || Cue is null || LayerEffectCatalog.Get(typeId) is not { } definition)
+            return;
+        _journal.Do(new AddItemCommand<LayerEffectInstance>(
+            placement.Effects,
+            LayerEffectCatalog.Create(typeId),
+            placement.Effects.Count,
+            "video",
+            $"add {definition.DisplayName}"));
+        _journal.CloseGroup();
+        Reload();
+    }
+
+    public void ToggleLayerEffect(Guid effectId)
+    {
+        if (Placement?.Effects.FirstOrDefault(effect => effect.Id == effectId) is not { } effect || Cue is null)
+            return;
+        _journal.Do(new SetValueCommand<bool>(
+            Cue.Id, $"effect:{effect.Id}:enabled", "video",
+            () => effect.Enabled, value => effect.Enabled = value, !effect.Enabled,
+            effect.Enabled ? "bypass effect" : "enable effect"));
+        _journal.CloseGroup();
+        Reload();
+    }
+
+    public void MoveLayerEffect(Guid effectId, int direction)
+    {
+        if (Placement is not { } placement || direction is not (-1 or 1))
+            return;
+        var index = placement.Effects.FindIndex(effect => effect.Id == effectId);
+        var target = index + direction;
+        if (index < 0 || target < 0 || target >= placement.Effects.Count)
+            return;
+        var effect = placement.Effects[index];
+        using (_journal.Composite("reorder layer effects", "video"))
+        {
+            _journal.Do(new RemoveItemCommand<LayerEffectInstance>(
+                placement.Effects, effect, "video", "move layer effect"));
+            _journal.Do(new AddItemCommand<LayerEffectInstance>(
+                placement.Effects, effect, target, "video", "move layer effect"));
+        }
+        _journal.CloseGroup();
+        Reload();
+    }
+
+    public void RemoveLayerEffect(Guid effectId)
+    {
+        if (Placement is not { } placement
+            || placement.Effects.FirstOrDefault(effect => effect.Id == effectId) is not { } effect)
+            return;
+        using (_journal.Composite("remove layer effect", "video"))
+        {
+            foreach (var owner in Project.AllCues())
+            {
+                if (CueAutomation.ListOf(owner) is not { } tracks)
+                    continue;
+                foreach (var track in tracks.Where(track => track.Target.ObjectId == effectId).ToArray())
+                    _journal.Do(new RemoveItemCommand<AutomationTrack>(
+                        tracks, track, "cues", "remove effect automation"));
+            }
+            _journal.Do(new RemoveItemCommand<LayerEffectInstance>(
+                placement.Effects, effect, "video", "remove layer effect"));
+        }
+        _journal.CloseGroup();
+        Reload();
     }
 
     private void Edit<T>(
@@ -3009,9 +3144,9 @@ public partial class InspectorViewModel : ObservableObject
             extras.Add($"{placement.RotationDegrees:0.#}°");
         if (placement is { CropLeft: > 0 } or { CropTop: > 0 } or { CropRight: > 0 } or { CropBottom: > 0 })
             extras.Add("cropped");
-        if (placement is { ChromaKeyEnabled: true, ChromaKey: not null })
+        if (LayerEffectRack.Find(placement, ChromaEffectType) is { Enabled: true })
             extras.Add("keyed");
-        if (placement is { ColorAdjustEnabled: true, ColorAdjust: not null })
+        if (LayerEffectRack.Find(placement, ColourEffectType) is { Enabled: true })
             extras.Add("graded");
         if (placement.HasVideoFx)
             extras.Add("mapped");
@@ -3185,8 +3320,14 @@ public partial class InspectorViewModel : ObservableObject
     public bool CanAddChromaSpillLane => CanAddLane(AutomationPropertyIds.ChromaSpillReduction);
     public bool CanAddColorBrightnessLane => CanAddLane(AutomationPropertyIds.ColorBrightness);
     public bool CanAddColorContrastLane => CanAddLane(AutomationPropertyIds.ColorContrast);
-    public bool HasAutomationChromaKey => AutomationPlacement?.ChromaKey is not null;
-    public bool HasAutomationColorAdjust => AutomationPlacement?.ColorAdjust is not null;
+    public bool HasAutomationChromaKey =>
+        LayerEffectRack.Find(AutomationPlacement, ChromaEffectType) is not null;
+    public bool HasAutomationColorAdjust =>
+        LayerEffectRack.Find(AutomationPlacement, ColourEffectType) is not null;
+    public bool HasAutomationAudioGain => AutomationTargetCue is MediaCueNode media
+        ? media.AudioEffects.Any(effect => effect.EffectTypeId == S.Media.Routing.GainAudioEffect.EffectId)
+        : Cue is MediaCueNode own
+          && own.AudioEffects.Any(effect => effect.EffectTypeId == S.Media.Routing.GainAudioEffect.EffectId);
     public bool CanAddOutboundLane => CanCarryLanes;
     public string VolumeLaneLabel => AutomationTargetCue is GroupCueNode ? "Group audio trim" : "Volume";
     public string OpacityLaneLabel => AutomationTargetCue is GroupCueNode ? "Group video opacity" : "Opacity";
@@ -3305,6 +3446,16 @@ public partial class InspectorViewModel : ObservableObject
         var targetCue = cue is AutomationCueNode ? AutomationTargetCue : cue;
         var targetCueId = cue is AutomationCueNode ? targetCue?.Id : null;
         var placement = AutomationPlacement;
+        if (targetCue is MediaCueNode audioCue
+            && AudioEffectCatalog.TryResolveProperty(propertyId, out var audioEffectType, out _)
+            && audioCue.AudioEffects.FirstOrDefault(effect =>
+                effect.EffectTypeId == audioEffectType.TypeId) is { } audioEffect)
+            return NewPlacementTarget(targetCueId, audioEffect.Id, propertyId);
+        if (placement is not null
+            && LayerEffectCatalog.TryResolveProperty(propertyId, out var effectType, out _)
+            && LayerEffectRack.Effective(placement).FirstOrDefault(effect =>
+                string.Equals(effect.EffectTypeId, effectType.TypeId, StringComparison.Ordinal)) is { } effect)
+            return NewPlacementTarget(targetCueId, effect.Id, propertyId);
         return propertyId switch
         {
             AutomationPropertyIds.CueVolume when targetCue is MediaCueNode => new AutomationTargetRef
@@ -3332,16 +3483,6 @@ public partial class InspectorViewModel : ObservableObject
                 targetCueId, placement.Id, AutomationPropertyIds.PlacementHeight),
             AutomationPropertyIds.PlacementRotation when placement is not null => NewPlacementTarget(
                 targetCueId, placement.Id, AutomationPropertyIds.PlacementRotation),
-            AutomationPropertyIds.ChromaSimilarity when placement?.ChromaKey is { } chroma => NewPlacementTarget(
-                targetCueId, chroma.Id, AutomationPropertyIds.ChromaSimilarity),
-            AutomationPropertyIds.ChromaSmoothness when placement?.ChromaKey is { } chroma => NewPlacementTarget(
-                targetCueId, chroma.Id, AutomationPropertyIds.ChromaSmoothness),
-            AutomationPropertyIds.ChromaSpillReduction when placement?.ChromaKey is { } chroma => NewPlacementTarget(
-                targetCueId, chroma.Id, AutomationPropertyIds.ChromaSpillReduction),
-            AutomationPropertyIds.ColorBrightness when placement?.ColorAdjust is { } color => NewPlacementTarget(
-                targetCueId, color.Id, AutomationPropertyIds.ColorBrightness),
-            AutomationPropertyIds.ColorContrast when placement?.ColorAdjust is { } color => NewPlacementTarget(
-                targetCueId, color.Id, AutomationPropertyIds.ColorContrast),
             _ => null,
         };
     }
@@ -3680,3 +3821,11 @@ public sealed class TargetToggle(string name, bool selected, Action<bool> apply)
 /// <summary>One automation lane, as the Effects pane lists it.</summary>
 /// <param name="Index">Its position in the cue's lane list — what edit and remove act on.</param>
 public sealed record EffectLaneRow(int Index, string Kind, string Detail, bool IsOutbound);
+
+public sealed record LayerEffectRackRow(
+    Guid Id,
+    int Number,
+    string Name,
+    bool Enabled,
+    bool CanMoveUp,
+    bool CanMoveDown);

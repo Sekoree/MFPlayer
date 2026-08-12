@@ -170,8 +170,31 @@ public sealed partial class ShowSession
                     lane.CompositionId,
                     lane.LayerIndex,
                     lane.EffectInstanceId,
-                    lane.Property,
+                    lane.EffectiveParameterId,
                     VolumeEnvelopes.Sample(lane.Points, clipPosition));
+            return Task.FromResult(false);
+        }));
+    }
+
+    private void StartAudioEffectRunner(
+        string groupId,
+        TransportVoice voice,
+        IReadOnlyList<ShowAudioEffectEnvelope> lanes,
+        CancellationToken ct)
+    {
+        FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
+        {
+            if (ct.IsCancellationRequested
+                || _groups.GetValueOrDefault(groupId) is not { } group
+                || !ReferenceEquals(group.ActiveVoice, voice))
+                return Task.FromResult(true);
+            var cueTime = group.Timeline.GetSnapshot().CueTime;
+            foreach (var lane in lanes)
+                voice.ApplyAudioEffectAutomation(
+                    lane.EffectInstanceId,
+                    lane.ParameterId,
+                    VolumeEnvelopes.Sample(lane.Points, cueTime),
+                    FadeStepInterval);
             return Task.FromResult(false);
         }));
     }

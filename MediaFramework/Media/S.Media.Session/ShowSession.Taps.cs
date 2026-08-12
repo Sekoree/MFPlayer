@@ -269,22 +269,52 @@ public sealed partial class ShowSession
         string compositionId,
         int placementIndex,
         string effectInstanceId,
-        ShowPlacementEffectProperty property,
+        string parameterId,
         double value,
         string? visualizerId = null) =>
         InvokeAsync(() => Task.FromResult(_visualizers.ApplyEffectAutomation(
             compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
-            placementIndex, effectInstanceId, property, value)));
+            placementIndex, effectInstanceId, parameterId, value)));
+
+    public Task<bool> ApplyCompositionVisualizerEffectAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        string effectInstanceId,
+        ShowPlacementEffectProperty property,
+        double value,
+        string? visualizerId = null) => ApplyCompositionVisualizerEffectAutomationAsync(
+            compositionId, placementIndex, effectInstanceId,
+            ShowEffectParameterIds.FromLegacy(property), value, visualizerId);
+
+    public Task<bool> ClearCompositionVisualizerEffectAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        string effectInstanceId,
+        string parameterId,
+        string? visualizerId = null) =>
+        InvokeAsync(() => Task.FromResult(_visualizers.ClearEffectAutomation(
+            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
+            placementIndex, effectInstanceId, parameterId)));
 
     public Task<bool> ClearCompositionVisualizerEffectAutomationAsync(
         string compositionId,
         int placementIndex,
         string effectInstanceId,
         ShowPlacementEffectProperty property,
+        string? visualizerId = null) => ClearCompositionVisualizerEffectAutomationAsync(
+            compositionId, placementIndex, effectInstanceId,
+            ShowEffectParameterIds.FromLegacy(property), visualizerId);
+
+    public Task<bool> ApplyCompositionVisualizerControllerEffectAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        string effectInstanceId,
+        string parameterId,
+        double value,
         string? visualizerId = null) =>
-        InvokeAsync(() => Task.FromResult(_visualizers.ClearEffectAutomation(
+        InvokeAsync(() => Task.FromResult(_visualizers.ApplyControllerEffectAutomation(
             compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
-            placementIndex, effectInstanceId, property)));
+            placementIndex, effectInstanceId, parameterId, value)));
 
     public Task<bool> ApplyCompositionVisualizerControllerEffectAutomationAsync(
         string compositionId,
@@ -292,20 +322,28 @@ public sealed partial class ShowSession
         string effectInstanceId,
         ShowPlacementEffectProperty property,
         double value,
+        string? visualizerId = null) => ApplyCompositionVisualizerControllerEffectAutomationAsync(
+            compositionId, placementIndex, effectInstanceId,
+            ShowEffectParameterIds.FromLegacy(property), value, visualizerId);
+
+    public Task<bool> ClearCompositionVisualizerControllerEffectAutomationAsync(
+        string compositionId,
+        int placementIndex,
+        string effectInstanceId,
+        string parameterId,
         string? visualizerId = null) =>
-        InvokeAsync(() => Task.FromResult(_visualizers.ApplyControllerEffectAutomation(
+        InvokeAsync(() => Task.FromResult(_visualizers.ClearControllerEffectAutomation(
             compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
-            placementIndex, effectInstanceId, property, value)));
+            placementIndex, effectInstanceId, parameterId)));
 
     public Task<bool> ClearCompositionVisualizerControllerEffectAutomationAsync(
         string compositionId,
         int placementIndex,
         string effectInstanceId,
         ShowPlacementEffectProperty property,
-        string? visualizerId = null) =>
-        InvokeAsync(() => Task.FromResult(_visualizers.ClearControllerEffectAutomation(
-            compositionId, visualizerId ?? ShowSessionVisualizerService.DefaultVisualizerId,
-            placementIndex, effectInstanceId, property)));
+        string? visualizerId = null) => ClearCompositionVisualizerControllerEffectAutomationAsync(
+            compositionId, placementIndex, effectInstanceId,
+            ShowEffectParameterIds.FromLegacy(property), visualizerId);
 
     /// <summary>Creates + registers a visualizer's audio tap and feeds it from already-playing clips
     /// (dispatcher). The service owns WHEN this happens; the tap list itself stays session-owned.</summary>

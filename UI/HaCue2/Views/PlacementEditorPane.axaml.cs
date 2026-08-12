@@ -37,6 +37,36 @@ public partial class PlacementEditorPane : UserControl
             inspector.AddLane(propertyId);
     }
 
+    private void OnAddEffect(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is string typeId)
+            inspector.AddLayerEffect(typeId);
+    }
+
+    private void OnToggleEffect(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is Guid effectId)
+            inspector.ToggleLayerEffect(effectId);
+    }
+
+    private void OnMoveEffectUp(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is Guid effectId)
+            inspector.MoveLayerEffect(effectId, -1);
+    }
+
+    private void OnMoveEffectDown(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is Guid effectId)
+            inspector.MoveLayerEffect(effectId, 1);
+    }
+
+    private void OnRemoveEffect(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is Guid effectId)
+            inspector.RemoveLayerEffect(effectId);
+    }
+
     private void OnPlacementGesture(object? sender, Controls.PlacementGesture gesture)
     {
         if (DataContext is InspectorViewModel inspector)

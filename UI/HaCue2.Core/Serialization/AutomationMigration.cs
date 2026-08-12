@@ -21,8 +21,10 @@ public static class AutomationMigration
 
         foreach (var cue in project.AllCues())
             foreach (var placement in CuePlacements.Of(cue))
+            {
                 if (placement.Id == Guid.Empty)
                     placement.Id = Guid.NewGuid();
+            }
 
         foreach (var list in project.CueLists)
             foreach (var cue in list.Cues)
