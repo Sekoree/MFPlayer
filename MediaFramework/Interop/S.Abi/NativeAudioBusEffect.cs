@@ -159,7 +159,19 @@ internal sealed unsafe class NativeAudioBusEffect : IAutomatableAudioBusEffect
         _effect = effect;
         Parameters = parameters;
         _lease = lease;
+        // Resolved ONCE. TrySetParameter is called per automation tick per routed copy, and doing the
+        // lookup there meant a LINQ closure plus a string concat plus a fresh byte[] on every write -
+        // pure garbage on the control thread, where the managed gain effect allocates nothing at all.
+        _writable = parameters
+            .Where(parameter => parameter.SupportsAutomation)
+            .ToDictionary(
+                parameter => parameter.Id,
+                parameter => (parameter, Encoding.UTF8.GetBytes(parameter.Id + '\0')),
+                StringComparer.Ordinal);
     }
+
+    /// <summary>Automatable parameters by id, with their NUL-terminated UTF-8 names pre-encoded.</summary>
+    private readonly Dictionary<string, (EffectParameterDescriptor Descriptor, byte[] Utf8Id)> _writable;
 
     public IReadOnlyList<EffectParameterDescriptor> Parameters { get; }
 
@@ -194,15 +206,13 @@ internal sealed unsafe class NativeAudioBusEffect : IAutomatableAudioBusEffect
     {
         if (_disposed || _vt->SetParameter == null || string.IsNullOrWhiteSpace(parameterId))
             return false;
-        var descriptor = Parameters.FirstOrDefault(parameter =>
-            parameter.SupportsAutomation && string.Equals(parameter.Id, parameterId, StringComparison.Ordinal));
-        if (descriptor is null)
+        if (!_writable.TryGetValue(parameterId, out var writable))
             return false;
-        var id = Encoding.UTF8.GetBytes(parameterId + '\0');
         var ticks = Math.Max(0, smoothing.Ticks);
         AbiPluginHost.ClearLastError();
-        fixed (byte* nativeId = id)
-            return _vt->SetParameter(_effect, nativeId, descriptor.Clamp(value), ticks) == (int)MfpStatus.Ok;
+        fixed (byte* nativeId = writable.Utf8Id)
+            return _vt->SetParameter(_effect, nativeId, writable.Descriptor.Clamp(value), ticks)
+                   == (int)MfpStatus.Ok;
     }
 
     public void Dispose()

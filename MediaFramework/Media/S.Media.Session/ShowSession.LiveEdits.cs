@@ -26,6 +26,35 @@ public sealed partial class ShowSession
                 ? (ShowCueInstance?)new ShowCueInstance(cueId, voice.InstanceId)
                 : null));
 
+    /// <summary>Gives up every slot <paramref name="ownerId"/> holds on this cue while LEAVING the values
+    /// where they are - the <c>HoldFinal</c> completion policy. Without this a finished run kept its claim
+    /// forever: the value was correct but nothing could ever write that slot again, so the cue's own
+    /// automation and the operator's own edits were both permanently shadowed by a dead owner.</summary>
+    public Task<bool> RelinquishControllerAsync(ShowCueInstance instance, Guid ownerId) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(instance) is not { } voice)
+                return Task.FromResult(false);
+            voice.RelinquishController(ownerId);
+            return Task.FromResult(true);
+        });
+
+    /// <summary>Drops EVERY controller claim on a cue and restores each slot to its cue-owned/authored
+    /// value - the operator's escape hatch from a held value left behind by a run that has ended.</summary>
+    public Task<bool> ReleaseControllerHoldsAsync(string cueId) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(cueId) is not { } voice)
+                return Task.FromResult(false);
+            voice.ReleaseControllerHolds();
+            return Task.FromResult(true);
+        });
+
+    /// <summary>Whether anything still holds a controller slot on this cue, so a host can offer
+    /// <see cref="ReleaseControllerHoldsAsync"/> only when it would do something.</summary>
+    public Task<bool> HasControllerHoldsAsync(string cueId) =>
+        InvokeAsync(() => Task.FromResult(ActiveVoiceOf(cueId)?.HasControllerHolds ?? false));
+
     public Task<bool> ApplyControllerVolumeAsync(
         ShowCueInstance instance, Guid ownerId, float level, bool claim) =>
         InvokeAsync(() => Task.FromResult(
@@ -35,23 +64,30 @@ public sealed partial class ShowSession
         InvokeAsync(() => Task.FromResult(
             ActiveVoiceOf(instance)?.ClearControllerEnvelope(ownerId) ?? false));
 
+    /// <param name="sourceGroupId">The group this trim belongs to. Contributions from DIFFERENT groups
+    /// multiply, so a trim on an outer group and one on an inner group both reach a shared descendant;
+    /// claims still arbitrate between two runs driving the same group.</param>
     public Task<bool> ApplyControllerAudioModifierAsync(
-        ShowCueInstance instance, Guid ownerId, float level, bool claim) =>
+        ShowCueInstance instance, Guid ownerId, Guid sourceGroupId, float level, bool claim) =>
         InvokeAsync(() => Task.FromResult(
-            ActiveVoiceOf(instance)?.ApplyControllerAudioModifier(ownerId, level, claim) ?? false));
+            ActiveVoiceOf(instance)?.ApplyControllerAudioModifier(ownerId, sourceGroupId, level, claim)
+            ?? false));
 
-    public Task<bool> ClearControllerAudioModifierAsync(ShowCueInstance instance, Guid ownerId) =>
+    public Task<bool> ClearControllerAudioModifierAsync(
+        ShowCueInstance instance, Guid ownerId, Guid sourceGroupId) =>
         InvokeAsync(() => Task.FromResult(
-            ActiveVoiceOf(instance)?.ClearControllerAudioModifier(ownerId) ?? false));
+            ActiveVoiceOf(instance)?.ClearControllerAudioModifier(ownerId, sourceGroupId) ?? false));
 
     public Task<bool> ApplyControllerVideoModifierAsync(
-        ShowCueInstance instance, Guid ownerId, float level, bool claim) =>
+        ShowCueInstance instance, Guid ownerId, Guid sourceGroupId, float level, bool claim) =>
         InvokeAsync(() => Task.FromResult(
-            ActiveVoiceOf(instance)?.ApplyControllerVideoModifier(ownerId, level, claim) ?? false));
+            ActiveVoiceOf(instance)?.ApplyControllerVideoModifier(ownerId, sourceGroupId, level, claim)
+            ?? false));
 
-    public Task<bool> ClearControllerVideoModifierAsync(ShowCueInstance instance, Guid ownerId) =>
+    public Task<bool> ClearControllerVideoModifierAsync(
+        ShowCueInstance instance, Guid ownerId, Guid sourceGroupId) =>
         InvokeAsync(() => Task.FromResult(
-            ActiveVoiceOf(instance)?.ClearControllerVideoModifier(ownerId) ?? false));
+            ActiveVoiceOf(instance)?.ClearControllerVideoModifier(ownerId, sourceGroupId) ?? false));
 
     public Task<bool> ApplyControllerPlacementOpacityAsync(
         ShowCueInstance instance,

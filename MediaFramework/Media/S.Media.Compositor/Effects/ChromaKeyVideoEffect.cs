@@ -45,7 +45,10 @@ public static class ChromaKeyVideoEffect
             [
                 new EffectParameterDescriptor("similarity", "Similarity", 0, 1, .4f, Scale: EffectParameterScale.Percentage),
                 new EffectParameterDescriptor("smoothness", "Smoothness", 0, 1, .1f, Scale: EffectParameterScale.Percentage),
-                new EffectParameterDescriptor("spill", "Spill reduction", 0, 1, 0, Scale: EffectParameterScale.Percentage),
+                // .1f, matching ChromaKeySpec.SpillReduction, the automation catalog and the compiler's
+                // fallback. It read 0 here alone, so a chroma added through the effect rack keyed
+                // differently from an identical one migrated from schema 2.
+                new EffectParameterDescriptor("spill", "Spill reduction", 0, 1, .1f, Scale: EffectParameterScale.Percentage),
             ]),
         ],
         static values => new CpuKernel(values));

@@ -111,11 +111,11 @@
             </StackPanel>
             <Button Grid.Column="2" Classes="tight" Content="ON/OFF" Tag="{Binding Id}"
                     Click="OnToggleEffect" />
-            <Button Grid.Column="3" Classes="tight" Content="↑" Tag="{Binding Id}"
+            <Button Grid.Column="3" Classes="tight" Content="↑" AutomationProperties.Name="Move effect earlier" Tag="{Binding Id}"
                     IsEnabled="{Binding CanMoveUp}" Click="OnMoveEffectUp" />
-            <Button Grid.Column="4" Classes="tight" Content="↓" Tag="{Binding Id}"
+            <Button Grid.Column="4" Classes="tight" Content="↓" AutomationProperties.Name="Move effect later" Tag="{Binding Id}"
                     IsEnabled="{Binding CanMoveDown}" Click="OnMoveEffectDown" />
-            <Button Grid.Column="5" Classes="tight" Content="×" Tag="{Binding Id}"
+            <Button Grid.Column="5" Classes="tight" Content="×" AutomationProperties.Name="Remove effect" Tag="{Binding Id}"
                     Click="OnRemoveEffect" />
           </Grid>
         </DataTemplate>

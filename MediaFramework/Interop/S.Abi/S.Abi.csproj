@@ -15,4 +15,10 @@
     <PropertyGroup>
         <Description>Inbound native plugin host for MFPlayer: load C-ABI plugins (sources, layer surfaces) into a managed host.</Description>
     </PropertyGroup>
+
+    <!-- The struct-layout regression test reflects over the internal mirrors of include/mfp_plugin.h and
+         compares them against the real header compiled by gcc. They stay internal to production code. -->
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Abi.Tests" />
+    </ItemGroup>
 </Project>

@@ -276,11 +276,56 @@ public sealed class AutomationEditorTests
         Assert.Equal(2, track.Keyframes.Count);
     }
 
-    private static (AutomationEditorViewModel Editor, AutomationTrack Track, ProjectJournal Journal) ShortEditor()
+    /// <summary>Shortening a cue never rescales its keys, so keys past the out-point are legitimate and
+    /// preserved - but the ruler stops at the out-point, so they were invisible AND unreachable. They must
+    /// be reported and removable by an explicit command.</summary>
+    [Fact]
+    public void KeysPastTheCueEndAreReportedAndRemovableByAnExplicitCommand()
+    {
+        var inside = new AutomationKeyframe { TimeMs = 10_000, Value = -6 };
+        var beyond = new AutomationKeyframe { TimeMs = 40_000, Value = -12 };
+        var (editor, track, journal) = ShortEditor(inside, beyond);   // 30 s cue
+
+        Assert.True(editor.HasOutOfRangeKeys);
+        Assert.Equal(1, editor.OutOfRangeKeyCount);
+        Assert.Contains("never play", editor.OutOfRangeLabel, StringComparison.Ordinal);
+
+        Assert.True(editor.DeleteOutOfRangeKeys());
+        Assert.Equal([inside.Id], track.Keyframes.Select(key => key.Id));
+        Assert.False(editor.HasOutOfRangeKeys);
+
+        // One undo step, and the preserved key comes back.
+        journal.Undo();
+        Assert.Equal(2, track.Keyframes.Count);
+    }
+
+    /// <summary>A gesture that changes nothing must not journal an undo step or dirty the project - a
+    /// refused add used to push a command whose before and after were identical, so the operator's next
+    /// Undo appeared to do nothing.</summary>
+    [Fact]
+    public void AGestureThatChangesNothingJournalsNothing()
+    {
+        var existing = new AutomationKeyframe { TimeMs = 1_635_100, Value = -6 };
+        var (editor, _, journal) = Editor(existing);
+        editor.ViewStartMs = 1_635_000;
+        editor.ViewLengthMs = 1_000;
+
+        var refused = new CurveGesture(CurveGestureKind.Add, -1, 0.1, 0.9);
+        editor.Apply(refused);
+        editor.EndGesture();
+
+        Assert.False(refused.Accepted);
+        Assert.Empty(journal.Log);
+        Assert.False(journal.IsDirty);
+    }
+
+    private static (AutomationEditorViewModel Editor, AutomationTrack Track, ProjectJournal Journal) ShortEditor(
+        params AutomationKeyframe[] keys)
     {
         var track = new AutomationTrack
         {
             Target = new AutomationTargetRef { PropertyId = AutomationPropertyIds.CueVolume },
+            Keyframes = [.. keys],
         };
         var media = new MediaCueNode { SourceDurationMs = 30_000, AutomationTracks = [track] };
         var project = new HaCueProject { CueLists = [new CueList { Cues = [media] }] };

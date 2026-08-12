@@ -106,6 +106,99 @@ public sealed class MasterTrimTests
         Assert.Equal(0.8f, levels.EffectiveLevel, 3);
     }
 
+    /// <summary>Releasing the newest claim must reveal the owner UNDERNEATH it, not the cue-owned value.
+    /// A single-owner slot deleted the key outright, so an older run that was still going had every later
+    /// write silently refused - it was permanently silenced by a run that finished after it started.</summary>
+    [Fact]
+    public async Task ReleasingTheNewestControllerRevealsTheOlderOneThatIsStillRunning()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(OneCue("fake://x"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        var instance = Assert.IsType<ShowCueInstance>(await session.CaptureActiveCueInstanceAsync("c"));
+        var older = Guid.NewGuid();
+        var newer = Guid.NewGuid();
+
+        Assert.True(await session.ApplyControllerVolumeAsync(instance, older, 0.5f, claim: true));
+        Assert.True(await session.ApplyControllerVolumeAsync(instance, newer, 0.25f, claim: true));
+        Assert.Equal(0.25f,
+            Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).EffectiveLevel, 3);
+
+        // The newer run ends. The older one is still going, so its value comes back.
+        Assert.True(await session.ClearControllerVolumeAsync(instance, newer));
+        Assert.Equal(0.5f,
+            Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).EffectiveLevel, 3);
+
+        // ...and it can write again, which it could not before.
+        Assert.True(await session.ApplyControllerVolumeAsync(instance, older, 0.75f, claim: false));
+        Assert.Equal(0.75f,
+            Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).EffectiveLevel, 3);
+
+        // Only when the last owner goes does the cue-owned/authored value return.
+        Assert.True(await session.ClearControllerVolumeAsync(instance, older));
+        Assert.Equal(1f,
+            Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).EffectiveLevel, 3);
+    }
+
+    /// <summary>HoldFinal keeps the VALUE but must give up the CLAIM. A finished run that keeps its claim
+    /// owns the slot forever, so nothing - not the cue's own automation, not the operator - can ever write
+    /// it again.</summary>
+    [Fact]
+    public async Task RelinquishingAHoldKeepsTheValueButFreesTheSlot()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(OneCue("fake://x"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        var instance = Assert.IsType<ShowCueInstance>(await session.CaptureActiveCueInstanceAsync("c"));
+        var finished = Guid.NewGuid();
+
+        Assert.True(await session.ApplyControllerVolumeAsync(instance, finished, 0.25f, claim: true));
+        Assert.True(await session.RelinquishControllerAsync(instance, finished));
+
+        // The held value is still what sounds...
+        Assert.Equal(0.25f,
+            Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).EffectiveLevel, 3);
+        // ...but the slot is free, so a new run can take it.
+        var next = Guid.NewGuid();
+        Assert.True(await session.ApplyControllerVolumeAsync(instance, next, 0.5f, claim: true));
+        Assert.Equal(0.5f,
+            Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).EffectiveLevel, 3);
+
+        // And the operator has an escape hatch back to the cue-owned value.
+        Assert.True(await session.HasControllerHoldsAsync("c"));
+        Assert.True(await session.ReleaseControllerHoldsAsync("c"));
+        Assert.False(await session.HasControllerHoldsAsync("c"));
+        Assert.Equal(1f,
+            Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).EffectiveLevel, 3);
+    }
+
+    /// <summary>Trims from DIFFERENT groups compose. A nested timeline puts an outer and an inner group
+    /// over the same voice; one shared modifier slot meant latest-owner-wins silently discarded one of
+    /// them, so the operator's outer trim simply stopped working.</summary>
+    [Fact]
+    public async Task NestedGroupTrimsMultiplyInsteadOfOverwritingEachOther()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(OneCue("fake://x"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        var instance = Assert.IsType<ShowCueInstance>(await session.CaptureActiveCueInstanceAsync("c"));
+        var owner = Guid.NewGuid();
+        var outer = Guid.NewGuid();
+        var inner = Guid.NewGuid();
+
+        Assert.True(await session.ApplyControllerAudioModifierAsync(instance, owner, outer, 0.5f, true));
+        Assert.True(await session.ApplyControllerAudioModifierAsync(instance, owner, inner, 0.5f, true));
+
+        // 0.5 × 0.5 - both groups apply.
+        Assert.Equal(0.25f,
+            Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).ModifierLevel, 3);
+
+        // Releasing the inner group leaves the outer group's trim in force.
+        Assert.True(await session.ClearControllerAudioModifierAsync(instance, owner, inner));
+        Assert.Equal(0.5f,
+            Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).ModifierLevel, 3);
+    }
+
     [Fact]
     public async Task CapturedCueInstanceDoesNotFollowARefiredCue()
     {
@@ -134,11 +227,18 @@ public sealed class MasterTrimTests
 
         Assert.True(await session.ApplyControllerVolumeAsync(instance, first, 0.5f, claim: true));
         Assert.True(await session.ApplyControllerVolumeAsync(instance, second, 0.25f, claim: true));
+        // Shadowed: the older owner may not WRITE while a newer one holds the slot.
         Assert.False(await session.ApplyControllerVolumeAsync(instance, first, 0.75f, claim: false));
-        Assert.False(await session.ClearControllerVolumeAsync(instance, first));
+
+        // But it may WITHDRAW - a run that is ending must always be able to drop its own claim. Doing so
+        // changes nothing audible, because the newer owner still holds the slot.
+        Assert.True(await session.ClearControllerVolumeAsync(instance, first));
         Assert.Equal(0.25f,
             Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c")).EffectiveLevel,
             3);
+
+        // A stale release from an owner that holds nothing is refused rather than treated as an error.
+        Assert.False(await session.ClearControllerVolumeAsync(instance, first));
         Assert.True(await session.ClearControllerVolumeAsync(instance, second));
     }
 

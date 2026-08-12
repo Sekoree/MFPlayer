@@ -53,7 +53,7 @@ public sealed class MediaPluginDirectoryTests : IDisposable
 
     /// <summary>Runs only where gcc AND the repo checkout are available (the LibAssFact/RemuxFact
     /// pattern) - the plugin is compiled from the canonical <c>test_plugin.c</c> at test time.</summary>
-    private sealed class GccFactAttribute : FactAttribute
+    internal sealed class GccFactAttribute : FactAttribute
     {
         public GccFactAttribute()
         {
@@ -99,6 +99,9 @@ public sealed class MediaPluginDirectoryTests : IDisposable
         Assert.True(p.ExitCode == 0 && File.Exists(so), $"gcc failed: {p.StandardError.ReadToEnd()}");
         return so;
     }
+
+    /// <summary>The repo checkout root, for tests that need the canonical C sources.</summary>
+    internal static string? RepoRoot() => FindRepoRoot();
 
     private static string? FindRepoRoot()
     {

@@ -384,11 +384,36 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
     {
         var draft = _gestureDraftKeys;
         ClearGestureDraft();
-        if (draft is not null)
+        // Only journal when the gesture actually changed something. A press that was refused (a key
+        // already occupies that time) or a drag that ended exactly where it began used to push an undo
+        // step whose before and after were identical - so the project went dirty and the operator's next
+        // Undo appeared to do nothing at all.
+        if (draft is not null && ChangesAnything(draft))
             Write(draft, "edit automation keyframes");
         _gestureKeyId = null;
         _journal?.CloseGroup();
         Reload();
+    }
+
+    private bool ChangesAnything(IReadOnlyList<AutomationKeyframe> draft)
+    {
+        if (_track is null || draft.Count != _track.Keyframes.Count)
+            return true;
+
+        var before = _track.Keyframes.OrderBy(key => key.TimeMs).ThenBy(key => key.Id).ToList();
+        var after = draft.OrderBy(key => key.TimeMs).ThenBy(key => key.Id).ToList();
+        for (var index = 0; index < after.Count; index++)
+        {
+            var (was, now) = (before[index], after[index]);
+            if (was.Id != now.Id
+                || was.TimeMs != now.TimeMs
+                || was.Value != now.Value
+                || was.Hold != now.Hold
+                || was.Curve != now.Curve)
+                return true;
+        }
+
+        return false;
     }
 
     public void CancelGesture()
@@ -693,6 +718,40 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
     private IReadOnlyList<AutomationKeyframe> EditableKeys() =>
         _gestureDraftKeys ?? _track?.Keyframes ?? [];
 
+    /// <summary>Keys past the cue's end. Absolute time deliberately does not rescale when a cue is
+    /// shortened, so these are legitimate and preserved - but the ruler stops at the out-point, so without
+    /// this they are invisible and unreachable: the tail of a carefully drawn track silently stops playing
+    /// with nothing on screen to say so.</summary>
+    public int OutOfRangeKeyCount => EditableKeys().Count(key => key.TimeMs > DurationMs);
+
+    public bool HasOutOfRangeKeys => OutOfRangeKeyCount > 0;
+
+    public string OutOfRangeLabel => OutOfRangeKeyCount switch
+    {
+        0 => "",
+        1 => "1 keyframe sits past the end of this cue and never plays",
+        var count => $"{count} keyframes sit past the end of this cue and never play",
+    };
+
+    /// <summary>Deletes exactly the keys past the cue's end, in one undo step. The explicit command the
+    /// design asks for, so an operator can resolve the warning without hunting for keys they cannot see.
+    /// </summary>
+    public bool DeleteOutOfRangeKeys()
+    {
+        if (!CanEdit || _track is null || _journal is null || !HasOutOfRangeKeys)
+        {
+            Problem = "no keyframes past the end of this cue";
+            return false;
+        }
+
+        var removed = OutOfRangeKeyCount;
+        Write(_track.Keyframes.Where(key => key.TimeMs <= DurationMs), "delete out-of-range keyframes");
+        _journal.CloseGroup();
+        Problem = $"deleted {removed} keyframe(s) past the cue's end";
+        Reload();
+        return true;
+    }
+
     private void BeginGestureDraft()
     {
         if (_gestureDraftKeys is not null)
@@ -793,11 +852,16 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
 
         var end = ViewStartMs + ViewLengthMs;
         var editableKeys = EditableKeys();
+        // FOUR ticks, one per quarter of the viewport, each labelled with the time at its own LEFT edge -
+        // which is where the template draws its border. Emitting five (0, ¼, ½, ¾, 1) into a five-cell
+        // uniform grid put every label a FIFTH of the width left of the time it named, so the last one was
+        // off by 20 % of the visible span.
+        const int ticks = 4;
         RulerTicks =
         [
-            .. Enumerable.Range(0, 5).Select(index =>
+            .. Enumerable.Range(0, ticks).Select(index =>
                 ClipTimes.Format((int)Math.Clamp(
-                    ViewStartMs + (index / 4d * ViewLengthMs), 0, DurationMs))),
+                    ViewStartMs + ((double)index / ticks * ViewLengthMs), 0, DurationMs))),
         ];
         _visibleKeys = editableKeys
             .Where(key => key.TimeMs >= ViewStartMs && key.TimeMs <= end)
@@ -830,6 +894,9 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectionCount));
         OnPropertyChanged(nameof(HasMultipleSelected));
         OnPropertyChanged(nameof(ViewStartLabel));
+        OnPropertyChanged(nameof(OutOfRangeKeyCount));
+        OnPropertyChanged(nameof(HasOutOfRangeKeys));
+        OnPropertyChanged(nameof(OutOfRangeLabel));
     }
 
     private IReadOnlyList<float> TrimToCue(float[] peaks)

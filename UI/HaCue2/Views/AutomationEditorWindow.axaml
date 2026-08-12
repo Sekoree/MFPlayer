@@ -29,23 +29,25 @@
     <DockPanel Margin="10,6,10,10">
       <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto"
             ColumnSpacing="5" Margin="0,0,0,7">
-        <Button Grid.Column="0" Classes="tight" Content="|◀ KEY" Click="OnPreviousKey" />
-        <Button Grid.Column="1" Classes="tight" Content="KEY ▶|" Click="OnNextKey" />
-        <Button Grid.Column="2" Classes="tight primary" Content="＋ KEY" Click="OnAddKey"
+        <Button Grid.Column="0" Classes="tight" Content="|◀ KEY" Click="OnPreviousKey" AutomationProperties.Name="Previous keyframe" />
+        <Button Grid.Column="1" Classes="tight" Content="KEY ▶|" Click="OnNextKey" AutomationProperties.Name="Next keyframe" />
+        <Button Grid.Column="2" Classes="tight primary" Content="＋ KEY" Click="OnAddKey" AutomationProperties.Name="Add keyframe at cursor"
                 IsEnabled="{Binding CanEdit}"
                 ToolTip.Tip="Add a keyframe at the cursor" />
-        <Button Grid.Column="3" Classes="tight" Content="−" Click="OnZoomOut" ToolTip.Tip="Zoom out" />
-        <Button Grid.Column="4" Classes="tight" Content="+" Click="OnZoomIn" ToolTip.Tip="Zoom in" />
+        <Button Grid.Column="3" Classes="tight" Content="−" Click="OnZoomOut" AutomationProperties.Name="Zoom out" ToolTip.Tip="Zoom out" />
+        <Button Grid.Column="4" Classes="tight" Content="+" Click="OnZoomIn" AutomationProperties.Name="Zoom in" ToolTip.Tip="Zoom in" />
         <ComboBox Grid.Column="5" Width="78" ItemsSource="{Binding SnapTimeOptions}"
+                  AutomationProperties.Name="Time snap in milliseconds"
                   SelectedItem="{Binding SnapTimeMs, Mode=TwoWay}"
                   ToolTip.Tip="Time snap in milliseconds; Alt bypasses snap while dragging" />
-        <Slider Grid.Column="6" Minimum="0" Maximum="{Binding DurationMs}"
+        <Slider Grid.Column="6" AutomationProperties.Name="Playhead position"
+                Minimum="0" Maximum="{Binding DurationMs}"
                 Value="{Binding CursorMs, Mode=TwoWay}" />
         <TextBlock Grid.Column="7" Classes="mono small" VerticalAlignment="Center"
                    MinWidth="82" Text="{Binding CursorLabel}" />
-        <Button Grid.Column="8" Classes="tight" Content="SEEK" Click="OnSeek"
+        <Button Grid.Column="8" Classes="tight" Content="SEEK" Click="OnSeek" AutomationProperties.Name="Seek this cue to the cursor"
                 ToolTip.Tip="Seek this cue when it is currently sounding" />
-        <Button Grid.Column="9" Classes="tight" Content="FIT" Click="OnFit" />
+        <Button Grid.Column="9" Classes="tight" Content="FIT" Click="OnFit" AutomationProperties.Name="Fit the whole cue in view" />
       </Grid>
 
       <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto" Margin="0,7,0,0">
@@ -54,18 +56,21 @@
                    ViewportSize="{Binding ViewLengthMs}"
                    Value="{Binding ViewStartMs, Mode=TwoWay}" />
         <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="5" Margin="0,4,0,0">
-          <Button Grid.Column="0" Classes="tight" Content="◀ PAGE" Click="OnPanLeft" />
+          <Button Grid.Column="0" Classes="tight" Content="◀ PAGE" Click="OnPanLeft" AutomationProperties.Name="Page left" />
           <TextBlock Grid.Column="1" Classes="mono dim3 micro" HorizontalAlignment="Center"
                      Text="scroll through the cue; zoom keeps the cursor in place" />
-          <Button Grid.Column="2" Classes="tight" Content="PAGE ▶" Click="OnPanRight" />
-          <Button Grid.Column="3" Classes="tight" Content="+30 MIN" Click="OnExtend"
+          <Button Grid.Column="2" Classes="tight" Content="PAGE ▶" Click="OnPanRight" AutomationProperties.Name="Page right" />
+          <Button Grid.Column="3" Classes="tight" Content="+30 MIN" Click="OnExtend" AutomationProperties.Name="Extend the authoring ruler by 30 minutes"
                   IsVisible="{Binding CanExtend}" ToolTip.Tip="Extend an open-ended cue's authoring ruler" />
         </Grid>
       </Grid>
 
       <Grid ColumnDefinitions="*,230" RowDefinitions="Auto,*" ColumnSpacing="8">
+        <!-- Margin matches the plot surface's insets exactly (1 px border + 5 px padding + the canvas's
+             own 6 px margin), so a tick's left border sits over the time it names. Each tick owns one
+             quarter of the viewport and is labelled with the time at its LEFT edge - see RulerTicks. -->
         <ItemsControl Grid.Column="0" Grid.Row="0" ItemsSource="{Binding RulerTicks}"
-                      IsHitTestVisible="False" Margin="0,0,0,2">
+                      IsHitTestVisible="False" Margin="12,0,12,2">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate><UniformGrid Rows="1" /></ItemsPanelTemplate>
           </ItemsControl.ItemsPanel>
@@ -114,11 +119,18 @@
           <CheckBox Margin="10,4" Content="hold until next key"
                     IsChecked="{Binding IsHold, Mode=TwoWay}" IsEnabled="{Binding CanEditSelection}" />
           <Grid ColumnDefinitions="*,*" ColumnSpacing="5">
-            <Button Grid.Column="0" Classes="block" Content="COPY" Click="OnCopyPointsClicked" />
-            <Button Grid.Column="1" Classes="block" Content="PASTE" Click="OnPastePointsClicked"
+            <Button Grid.Column="0" Classes="block" Content="COPY" Click="OnCopyPointsClicked" AutomationProperties.Name="Copy selected keyframes" />
+            <Button Grid.Column="1" Classes="block" Content="PASTE" Click="OnPastePointsClicked" AutomationProperties.Name="Paste keyframes at cursor"
                     IsEnabled="{Binding CanEdit}" />
           </Grid>
-          <Button Classes="block" Content="DELETE SELECTED KEY(S)" Click="OnDelete"
+          <!-- Only shown when there is something past the out-point. Absolute time never rescales keys
+               when a cue is shortened, so this is the explicit route to the ones the ruler cannot reach. -->
+          <TextBlock Classes="mono warn micro" Margin="10,6,10,0" TextWrapping="Wrap"
+                     IsVisible="{Binding HasOutOfRangeKeys}" Text="{Binding OutOfRangeLabel}" />
+          <Button Classes="block" Content="DELETE KEYS PAST THE END" Click="OnDeleteOutOfRange"
+                  AutomationProperties.Name="Delete keyframes past the end of the cue"
+                  IsVisible="{Binding HasOutOfRangeKeys}" IsEnabled="{Binding CanEdit}" />
+          <Button Classes="block" Content="DELETE SELECTED KEY(S)" Click="OnDelete" AutomationProperties.Name="Delete selected keyframes"
                   IsEnabled="{Binding CanEditSelection}" />
           <TextBlock Classes="mono dim3 small" Margin="10,8" TextWrapping="Wrap"
                      Text="Values before the first key and after the last key hold. A disabled track falls back to the cue's authored property." />

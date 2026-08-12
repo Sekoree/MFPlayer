@@ -525,13 +525,9 @@ is related to this work: `TimelinePlayheadTests.FromTheTopIsExactlyWhatFiringThe
 (30.035 s vs 30 s) and `CrossfadeSurfaceTests.WithoutACrossfade_TheSurfaceFollowsTheNewClipsSourceCoordinate`
 (−9.5 ms vs a `[0, 10s]` range). Both are worth tightening separately.
 
-## Still open
+## Still open after pass 1
 
-Deliberately not attempted in this pass:
-
-- The three design decisions (`HoldFinal` claims unreleasable; nested group trims overwrite rather than
-  compose; an older controller run silenced by a newer one's release) — these change show semantics and
-  want your call.
+- The three design decisions — resolved in pass 2 below.
 - The live half of the inspector's base-vs-automated readout ("automated now −12.0 dB") needs a playhead
   value from the engine; only the document-side half is wired.
 - Out-of-range keyframes are still unreachable and unindicated in the editor.
@@ -539,3 +535,97 @@ Deliberately not attempted in this pass:
   toolbar/rack buttons; the ruler label offset; no-op gestures still journaling a step.
 - Evaluator hot-path allocation, `FindCue` per tick, and per-tick effect JSON round-tripping.
 - Video-side descriptor publication without an instance, and the un-normalized video-effect nested vtable.
+
+---
+
+# Fix log — pass 2 (2026-08-12)
+
+Breaking changes were explicitly allowed for this branch, so the three parked design decisions were
+resolved properly rather than shimmed.
+
+## Design decisions — resolved
+
+**Controller ownership is now a stack, not a single owner.** `TransportVoice` keeps an ordered list of
+claims per slot, each remembering the last value its owner wrote, plus the writer needed to restore it (so
+release paths never parse a slot key back into a composition/layer/parameter triple). Consequences:
+
+- Releasing the newest claim **reveals the owner underneath** and restores its value. An older run that is
+  still going gets its slot back instead of being permanently silenced.
+- A non-top owner may now **withdraw** its own claim — a run that is ending must always be able to leave —
+  and doing so changes nothing audible. (This flips one assertion in
+  `LatestControllerClaimPreemptsOlderWritersAndRestoresSafely`, updated accordingly.)
+- **`HoldFinal` gives up its claims but keeps the values** (`RelinquishController`), wired at natural
+  completion via `RelinquishAutomationAsync`. A finished run no longer owns a slot forever. The operator
+  also gets an escape hatch: `ReleaseControllerHoldsAsync` / `HasControllerHoldsAsync`.
+- Releasing an audio-effect claim falls back to the **descriptor's declared default**, not a hard-coded 0.
+
+Tests: `ReleasingTheNewestControllerRevealsTheOlderOneThatIsStillRunning`,
+`RelinquishingAHoldKeepsTheValueButFreesTheSlot`.
+
+**Nested group trims compose.** Each group owns its own contribution
+(`SetAudioModifier`/`SetVideoModifier`, keyed by group id) and the effective modifier is their product;
+claims still arbitrate between two runs driving the *same* group. `ApplyControllerAudioModifierAsync` /
+`ApplyControllerVideoModifierAsync` and their Clear counterparts take a `sourceGroupId` — **a breaking
+signature change**. Test: `NestedGroupTrimsMultiplyInsteadOfOverwritingEachOther`.
+
+## Correctness
+
+- **Seek-vs-dispose race fixed.** Both `AutomationRun` and `VisualizerAutomationRun` take a reader lease
+  (`TryLease`/`ReleaseLease`/`Finish`); disposal waits for in-flight readers. A run completing between a
+  seek's lookup and its first touch used to throw `ObjectDisposedException` at the operator.
+- **One evaluator again.** `DuckMath.Sample` delegated to the new `AutomationCurve` instead of shaping
+  segments with `Curve.Law` alone, so ducking no longer computes a restore level the show never played.
+- **Preset delete-safety** now counts automation keyframe curves, so "what uses this preset?" stops
+  reporting zero for a preset a track depends on.
+- **Chroma spill default** aligned to `.1f` in the descriptor; a rack-created chroma now matches a
+  migrated one.
+- **Out-of-range keyframes are reported and removable.** A validator warning names the count per track
+  (preserved, still runnable), and the editor shows it with an explicit **DELETE KEYS PAST THE END**
+  command. Test: `KeysPastTheCueEndAreReportedAndRemovableByAnExplicitCommand`.
+- **No-op gestures journal nothing** (`ChangesAnything`), so a refused add no longer dirties the project
+  or leaves an Undo that does nothing. Test: `AGestureThatChangesNothingJournalsNothing`.
+
+## Performance
+
+`AutomationCurve` prepares a track once — keys filtered and sorted, every segment shape resolved, the
+descriptor looked up — and samples allocation-free. Both 40 Hz drivers now build a plan at fire time
+(`AutomationRun.Plan` / `VisualizerAutomationRun.Plan`) that also resolves each track's target cue once,
+removing the per-tick `FindCue` document flatten. `AutomationEvaluator.Sample` remains as the one-shot
+convenience for editors and tests. `NativeAudioBusEffect.TrySetParameter` pre-encodes its parameter names
+and looks them up in a dictionary, so a control-thread write allocates nothing.
+
+## ABI
+
+- The **video-effect nested vtable is normalized** like the audio one, so the first field ever added to it
+  cannot become an unchecked read past a legacy plugin's shorter struct.
+- **New layout regression test** (`AbiStructLayoutTests`): generates a C probe against the real header,
+  compiles it with gcc, and compares every `sizeof`/`offsetof` with the managed mirrors. It passes today —
+  confirming the mirrors are correct — and will fail on the next hand-sync drift. `S.Abi` gained an
+  `InternalsVisibleTo` for the test project.
+
+## UI
+
+Ruler ticks corrected (four ticks labelled at their own left edge, and the strip inset to match the plot
+surface's border + padding + canvas margin — labels were up to 20 % of the viewport off), accessibility
+names added to every automation-editor and effect-rack button, and the stale "double-click the editor to
+add a key" inspector copy replaced.
+
+## Verification (pass 2)
+
+Full solution builds clean. HaCue2.Core **782**, HaCue2 UI **411**, S.Media.Core **844** (2 skipped),
+S.Abi **9**, S.Media.Session **404** — 0 failures. `AbiSmoke` exits 0.
+
+## Still open
+
+- The live "automated now" inspector readout (needs a playhead value from the engine).
+- The inline timeline lane still journals per pointer motion; it now takes the editor's nudge/no-delete/
+  Escape contract, but the gesture-draft refactor is not done.
+- Per-tick effect JSON round-tripping in `ClipCompositionRuntime` (rebuilds the layer effect chain, parses
+  and re-parses config, reconstructs plugin instances 40×/s).
+- Video-side descriptor publication without a live instance (audio-only today), and native factories still
+  present `displayName = kind` — the ABI has no factory-level display-name field.
+- `ShowPlacementEnvelope` still addresses placements by `(CompositionId, LayerIndex)` rather than
+  `LayerPlacement.Id`; nothing rejects two placements sharing a composition+layer.
+- `Migrate` stamps `SchemaVersion` unconditionally, and `ProjectSnapshot.Copy` re-runs a full migration
+  pass per snapshot.
+- The two pre-existing timing flakes (`TimelinePlayheadTests`, `CrossfadeSurfaceTests`).

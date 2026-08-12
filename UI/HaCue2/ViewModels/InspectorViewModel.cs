@@ -3314,7 +3314,8 @@ public partial class InspectorViewModel : ObservableObject
     private string Describe(AutomationTrack track)
     {
         var detail = track.Keyframes.Count == 0
-            ? "empty — double-click the editor to add a key"
+            // The redesign replaced double-click-only adding: click empty canvas, or press ＋ KEY.
+            ? "empty — click the lane or use ＋ KEY to add one"
             : $"{track.Keyframes.Count} keyframe{(track.Keyframes.Count == 1 ? "" : "s")} · absolute time";
         return AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External
             ? track.Target.EndpointId is null ? detail + " · no endpoint" : detail + $" → {track.Target.Address}"

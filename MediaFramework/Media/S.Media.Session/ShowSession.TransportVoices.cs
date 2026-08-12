@@ -47,7 +47,32 @@ public sealed partial class ShowSession
     /// uniformly instead of special-casing a slot.</summary>
     private sealed class TransportVoice(IArmedClip clip, ShowClipBinding binding, float masterTrim)
     {
-        private readonly Dictionary<string, Guid> _controllerOwners = new(StringComparer.Ordinal);
+        /// <summary>Controller claims per slot, OLDEST first. A stack rather than one owner: run A claims,
+        /// run B preempts it, B ends - and A is still running, so A must get the slot back. Storing one
+        /// owner meant B's release deleted the key outright, permanently silencing A's writes while it
+        /// carried on. Each entry remembers the last value its owner wrote, so revealing an owner restores
+        /// what that owner was holding rather than snapping to the cue-owned value underneath.</summary>
+        private readonly Dictionary<string, ControllerSlot> _controllerOwners =
+            new(StringComparer.Ordinal);
+
+        private sealed class ControllerClaim(Guid owner)
+        {
+            public Guid Owner { get; } = owner;
+            public double Value { get; set; }
+            public bool HasValue { get; set; }
+        }
+
+        /// <summary>One claimable slot: who holds it, and how to write it. The writer is captured when the
+        /// slot is first claimed so release/relinquish paths never have to parse the slot's key back into
+        /// a composition/layer/parameter triple.</summary>
+        private sealed class ControllerSlot
+        {
+            public List<ControllerClaim> Claims { get; } = [];
+
+            /// <summary>Applies a revealed owner's value, or restores the cue-owned/authored value when
+            /// given null.</summary>
+            public Action<double?> Apply { get; set; } = _ => { };
+        }
         private readonly Dictionary<(string InstanceId, string ParameterId), double> _audioEffectValues = [];
         private readonly Dictionary<(string InstanceId, string ParameterId), double>
             _controllerAudioEffectValues = [];
@@ -536,73 +561,128 @@ public sealed partial class ShowSession
 
         public bool ApplyControllerEnvelope(Guid ownerId, float level, bool claim)
         {
-            if (State == VoiceState.Retired || !OwnsController("audio:volume", ownerId, claim))
+            if (State == VoiceState.Retired
+                || !OwnsController("audio:volume", ownerId, claim, level, ApplyVolumeSlot))
                 return false;
-            Level.ControllerEnvelope = Math.Clamp(level, 0f, VolumeEnvelopes.MaxLevel);
-            ApplyAudioScale(RouteTargets, Level.Fade);
+            ApplyVolumeSlot(level);
             return true;
+        }
+
+        private void ApplyVolumeSlot(double? level)
+        {
+            Level.ControllerEnvelope = level is { } value
+                ? Math.Clamp((float)value, 0f, VolumeEnvelopes.MaxLevel)
+                : null;
+            ApplyAudioScale(RouteTargets, Level.Fade);
         }
 
         public bool ClearControllerEnvelope(Guid ownerId)
         {
-            if (!ReleaseController("audio:volume", ownerId))
+            if (!ReleaseController("audio:volume", ownerId, out var revealed))
                 return false;
-            Level.ControllerEnvelope = null;
-            ApplyAudioScale(RouteTargets, Level.Fade);
+            ApplyVolumeSlot(revealed);
             return true;
         }
 
-        /// <summary>Applies a group/controller modifier without overwriting the cue-owned envelope.</summary>
-        public void ApplyModifierLevel(float level)
+        /// <summary>Each GROUP's own contribution to this voice's modifier, keyed by the group that set
+        /// it. The composed modifier is their product, so a trim on an outer group and a trim on an inner
+        /// group both apply - writing one shared slot meant latest-owner-wins silently discarded one of
+        /// them, which is neither the additive-dB nor multiplicative semantics the property table
+        /// describes. <see cref="Guid.Empty"/> is the host's own manual/live modifier.</summary>
+        private readonly Dictionary<Guid, float> _audioModifiers = [];
+        private readonly Dictionary<Guid, float> _videoModifiers = [];
+
+        private static float Product(Dictionary<Guid, float> parts)
+        {
+            var product = 1f;
+            foreach (var part in parts.Values)
+                product *= part;
+            return product;
+        }
+
+        /// <summary>Sets one source's audio modifier contribution and re-composes the product.</summary>
+        public void SetAudioModifier(Guid source, float level)
         {
             if (State == VoiceState.Retired)
                 return;
             level = Math.Clamp(level, 0f, VolumeEnvelopes.MaxLevel);
-            if (level == Level.Modifier)
+            // Unity contributes nothing; dropping it keeps the product exact and the dictionary small.
+            if (level == 1f)
+                _audioModifiers.Remove(source);
+            else
+                _audioModifiers[source] = level;
+
+            var effective = Math.Clamp(Product(_audioModifiers), 0f, VolumeEnvelopes.MaxLevel);
+            if (effective == Level.Modifier)
                 return;
-            Level.Modifier = level;
+            Level.Modifier = effective;
             ApplyAudioScale(RouteTargets, Level.Fade);
         }
 
-        /// <summary>Applies a video group modifier beneath placement automation and fades.</summary>
-        public void ApplyOpacityModifier(float level)
+        /// <summary>Applies a group/controller modifier without overwriting the cue-owned envelope.</summary>
+        public void ApplyModifierLevel(float level) => SetAudioModifier(Guid.Empty, level);
+
+        /// <summary>Sets one source's video modifier contribution and re-composes the product.</summary>
+        public void SetVideoModifier(Guid source, float level)
         {
             if (State == VoiceState.Retired)
                 return;
             level = Math.Clamp(level, 0f, 1f);
+            if (level == 1f)
+                _videoModifiers.Remove(source);
+            else
+                _videoModifiers[source] = level;
+
+            var effective = Math.Clamp(Product(_videoModifiers), 0f, 1f);
             foreach (var placed in Layers)
-                placed.Slot.ModifierLevel = level;
+                placed.Slot.ModifierLevel = effective;
         }
 
-        public bool ApplyControllerAudioModifier(Guid ownerId, float level, bool claim)
+        /// <summary>Applies a video group modifier beneath placement automation and fades.</summary>
+        public void ApplyOpacityModifier(float level) => SetVideoModifier(Guid.Empty, level);
+
+        /// <param name="sourceGroupId">The group whose trim this is. Each group owns its OWN contribution
+        /// and they multiply, so nesting composes; claims still arbitrate between two runs driving the
+        /// SAME group.</param>
+        public bool ApplyControllerAudioModifier(
+            Guid ownerId, Guid sourceGroupId, float level, bool claim)
         {
-            if (State == VoiceState.Retired || !OwnsController("group:audio", ownerId, claim))
+            void Restore(double? revealed) =>
+                SetAudioModifier(sourceGroupId, revealed is { } value ? (float)value : 1f);
+
+            if (State == VoiceState.Retired
+                || !OwnsController($"group:audio:{sourceGroupId}", ownerId, claim, level, Restore))
                 return false;
-            ApplyModifierLevel(level);
+            SetAudioModifier(sourceGroupId, level);
             return true;
         }
 
-        public bool ClearControllerAudioModifier(Guid ownerId)
+        public bool ClearControllerAudioModifier(Guid ownerId, Guid sourceGroupId)
         {
-            if (!ReleaseController("group:audio", ownerId))
+            if (!ReleaseController($"group:audio:{sourceGroupId}", ownerId, out var revealed))
                 return false;
-            ApplyModifierLevel(1f);
+            SetAudioModifier(sourceGroupId, revealed is { } value ? (float)value : 1f);
             return true;
         }
 
-        public bool ApplyControllerVideoModifier(Guid ownerId, float level, bool claim)
+        public bool ApplyControllerVideoModifier(
+            Guid ownerId, Guid sourceGroupId, float level, bool claim)
         {
-            if (State == VoiceState.Retired || !OwnsController("group:video", ownerId, claim))
+            void Restore(double? revealed) =>
+                SetVideoModifier(sourceGroupId, revealed is { } value ? (float)value : 1f);
+
+            if (State == VoiceState.Retired
+                || !OwnsController($"group:video:{sourceGroupId}", ownerId, claim, level, Restore))
                 return false;
-            ApplyOpacityModifier(level);
+            SetVideoModifier(sourceGroupId, level);
             return true;
         }
 
-        public bool ClearControllerVideoModifier(Guid ownerId)
+        public bool ClearControllerVideoModifier(Guid ownerId, Guid sourceGroupId)
         {
-            if (!ReleaseController("group:video", ownerId))
+            if (!ReleaseController($"group:video:{sourceGroupId}", ownerId, out var revealed))
                 return false;
-            ApplyOpacityModifier(1f);
+            SetVideoModifier(sourceGroupId, revealed is { } value ? (float)value : 1f);
             return true;
         }
 
@@ -614,24 +694,39 @@ public sealed partial class ShowSession
             bool claim)
         {
             var key = $"opacity:{compositionId}:{layerIndex}";
-            if (State == VoiceState.Retired || !OwnsController(key, ownerId, claim))
+            void Restore(double? revealed)
+            {
+                foreach (var placed in Layers)
+                    if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                        && placed.LayerIndex == layerIndex)
+                    {
+                        if (revealed is { } value)
+                            placed.Slot.SetControllerAutomationLevel((float)value, absolute: true);
+                        else
+                            placed.Slot.ClearControllerAutomationLevel();
+                    }
+            }
+
+            if (State == VoiceState.Retired || !OwnsController(key, ownerId, claim, level, Restore))
                 return false;
-            foreach (var placed in Layers)
-                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
-                    && placed.LayerIndex == layerIndex)
-                    placed.Slot.SetControllerAutomationLevel(level, absolute: true);
+            Restore(level);
             return true;
         }
 
         public bool ClearControllerOpacity(Guid ownerId, string compositionId, int layerIndex)
         {
             var key = $"opacity:{compositionId}:{layerIndex}";
-            if (!ReleaseController(key, ownerId))
+            if (!ReleaseController(key, ownerId, out var revealed))
                 return false;
             foreach (var placed in Layers)
                 if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
                     && placed.LayerIndex == layerIndex)
-                    placed.Slot.ClearControllerAutomationLevel();
+                {
+                    if (revealed is { } value)
+                        placed.Slot.SetControllerAutomationLevel((float)value, absolute: true);
+                    else
+                        placed.Slot.ClearControllerAutomationLevel();
+                }
             return true;
         }
 
@@ -644,12 +739,22 @@ public sealed partial class ShowSession
             bool claim)
         {
             var key = $"placement:{compositionId}:{layerIndex}:{property}";
-            if (State == VoiceState.Retired || !OwnsController(key, ownerId, claim))
+            void Restore(double? revealed)
+            {
+                foreach (var placed in Layers)
+                    if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                        && placed.LayerIndex == layerIndex)
+                    {
+                        if (revealed is { } restored)
+                            placed.Slot.SetControllerPlacementAutomation(property, restored);
+                        else
+                            placed.Slot.ClearControllerPlacementAutomation(property);
+                    }
+            }
+
+            if (State == VoiceState.Retired || !OwnsController(key, ownerId, claim, value, Restore))
                 return false;
-            foreach (var placed in Layers)
-                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
-                    && placed.LayerIndex == layerIndex)
-                    placed.Slot.SetControllerPlacementAutomation(property, value);
+            Restore(value);
             return true;
         }
 
@@ -657,12 +762,17 @@ public sealed partial class ShowSession
             Guid ownerId, string compositionId, int layerIndex, ShowPlacementProperty property)
         {
             var key = $"placement:{compositionId}:{layerIndex}:{property}";
-            if (!ReleaseController(key, ownerId))
+            if (!ReleaseController(key, ownerId, out var revealed))
                 return false;
             foreach (var placed in Layers)
                 if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
                     && placed.LayerIndex == layerIndex)
-                    placed.Slot.ClearControllerPlacementAutomation(property);
+                {
+                    if (revealed is { } restored)
+                        placed.Slot.SetControllerPlacementAutomation(property, restored);
+                    else
+                        placed.Slot.ClearControllerPlacementAutomation(property);
+                }
             return true;
         }
 
@@ -676,12 +786,22 @@ public sealed partial class ShowSession
             bool claim)
         {
             var key = $"effect:{compositionId}:{layerIndex}:{effectInstanceId}:{parameterId}";
-            if (State == VoiceState.Retired || !OwnsController(key, ownerId, claim))
+            void Restore(double? revealed)
+            {
+                foreach (var placed in Layers)
+                    if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                        && placed.LayerIndex == layerIndex)
+                    {
+                        if (revealed is { } restored)
+                            placed.Slot.SetControllerEffectAutomation(effectInstanceId, parameterId, restored);
+                        else
+                            placed.Slot.ClearControllerEffectAutomation(effectInstanceId, parameterId);
+                    }
+            }
+
+            if (State == VoiceState.Retired || !OwnsController(key, ownerId, claim, value, Restore))
                 return false;
-            foreach (var placed in Layers)
-                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
-                    && placed.LayerIndex == layerIndex)
-                    placed.Slot.SetControllerEffectAutomation(effectInstanceId, parameterId, value);
+            Restore(value);
             return true;
         }
 
@@ -693,12 +813,17 @@ public sealed partial class ShowSession
             string parameterId)
         {
             var key = $"effect:{compositionId}:{layerIndex}:{effectInstanceId}:{parameterId}";
-            if (!ReleaseController(key, ownerId))
+            if (!ReleaseController(key, ownerId, out var revealed))
                 return false;
             foreach (var placed in Layers)
                 if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
                     && placed.LayerIndex == layerIndex)
-                    placed.Slot.ClearControllerEffectAutomation(effectInstanceId, parameterId);
+                {
+                    if (revealed is { } restored)
+                        placed.Slot.SetControllerEffectAutomation(effectInstanceId, parameterId, restored);
+                    else
+                        placed.Slot.ClearControllerEffectAutomation(effectInstanceId, parameterId);
+                }
             return true;
         }
 
@@ -710,41 +835,176 @@ public sealed partial class ShowSession
             bool claim)
         {
             var key = $"audio-effect:{effectInstanceId}:{parameterId}";
+            void Restore(double? revealed)
+            {
+                if (revealed is { } restored)
+                {
+                    _controllerAudioEffectValues[(effectInstanceId, parameterId)] = restored;
+                    PublishAudioEffect(effectInstanceId, parameterId, restored, TimeSpan.FromMilliseconds(10));
+                    return;
+                }
+
+                _controllerAudioEffectValues.Remove((effectInstanceId, parameterId));
+                PublishAudioEffect(
+                    effectInstanceId,
+                    parameterId,
+                    CueOwnedAudioEffectValue(effectInstanceId, parameterId),
+                    TimeSpan.FromMilliseconds(10));
+            }
+
             if (State == VoiceState.Retired || !double.IsFinite(value)
-                || !OwnsController(key, ownerId, claim))
+                || !OwnsController(key, ownerId, claim, value, Restore))
                 return false;
             _controllerAudioEffectValues[(effectInstanceId, parameterId)] = value;
             PublishAudioEffect(effectInstanceId, parameterId, value, TimeSpan.FromMilliseconds(10));
             return true;
         }
 
+        /// <summary>What this parameter reads when no controller owns it: the cue's own automation value,
+        /// else the authored value, else the effect's DECLARED default.
+        /// <para>The last step used to be a hard-coded 0, which happens to be unity for the built-in gain
+        /// and is wrong for every descriptor whose default is not zero - releasing a claim snapped such a
+        /// parameter to zero rather than back to where the cue had it.</para></summary>
+        private double CueOwnedAudioEffectValue(string effectInstanceId, string parameterId)
+        {
+            if (_audioEffectValues.TryGetValue((effectInstanceId, parameterId), out var automated))
+                return automated;
+            if (Binding.AudioEffects?
+                    .FirstOrDefault(effect => effect.InstanceId == effectInstanceId)?
+                    .Parameters.FirstOrDefault(parameter => parameter.ParameterId == parameterId)
+                is { } authored)
+                return authored.Value;
+
+            foreach (var control in Outputs.SelectMany(output => output.EffectControls ?? []))
+                if (control.InstanceId == effectInstanceId
+                    && control.Effect.Parameters.FirstOrDefault(
+                        parameter => parameter.Id == parameterId) is { } descriptor)
+                    return descriptor.Default;
+
+            return 0;
+        }
+
         public bool ClearControllerAudioEffect(Guid ownerId, string effectInstanceId, string parameterId)
         {
             var key = $"audio-effect:{effectInstanceId}:{parameterId}";
-            if (!ReleaseController(key, ownerId))
+            if (!ReleaseController(key, ownerId, out var revealed))
                 return false;
+            if (revealed is { } restored)
+            {
+                _controllerAudioEffectValues[(effectInstanceId, parameterId)] = restored;
+                PublishAudioEffect(effectInstanceId, parameterId, restored, TimeSpan.FromMilliseconds(10));
+                return true;
+            }
+
             _controllerAudioEffectValues.Remove((effectInstanceId, parameterId));
-            var authored = Binding.AudioEffects?
-                .FirstOrDefault(effect => effect.InstanceId == effectInstanceId)?
-                .Parameters.FirstOrDefault(parameter => parameter.ParameterId == parameterId)?.Value ?? 0;
-            var value = _audioEffectValues.GetValueOrDefault((effectInstanceId, parameterId), authored);
-            PublishAudioEffect(effectInstanceId, parameterId, value, TimeSpan.FromMilliseconds(10));
+            PublishAudioEffect(
+                effectInstanceId,
+                parameterId,
+                CueOwnedAudioEffectValue(effectInstanceId, parameterId),
+                TimeSpan.FromMilliseconds(10));
             return true;
         }
 
-        private bool OwnsController(string key, Guid ownerId, bool claim)
+        /// <summary>Whether <paramref name="ownerId"/> may write this slot right now. A claim pushes the
+        /// owner to the TOP of the slot's stack (re-claiming just moves it up), so latest-owner-wins is
+        /// unchanged - but the owners it displaced are remembered rather than discarded.</summary>
+        /// <param name="value">The value being written, recorded so this owner can be revealed later.</param>
+        /// <param name="restore">How to write this slot, captured on the claim: called with a revealed
+        /// owner's value, or with null to restore the cue-owned/authored value.</param>
+        private bool OwnsController(
+            string key, Guid ownerId, bool claim, double? value = null, Action<double?>? restore = null)
         {
             if (claim)
-                _controllerOwners[key] = ownerId;
-            return _controllerOwners.GetValueOrDefault(key) == ownerId;
+            {
+                if (!_controllerOwners.TryGetValue(key, out var slot))
+                    _controllerOwners[key] = slot = new ControllerSlot();
+                if (restore is not null)
+                    slot.Apply = restore;
+                var existing = slot.Claims.FirstOrDefault(candidate => candidate.Owner == ownerId);
+                if (existing is not null)
+                    slot.Claims.Remove(existing);
+                slot.Claims.Add(existing ?? new ControllerClaim(ownerId));
+            }
+
+            if (_controllerOwners.GetValueOrDefault(key) is not { Claims.Count: > 0 } owned
+                || owned.Claims[^1].Owner != ownerId)
+                return false;
+
+            if (value is { } written)
+            {
+                owned.Claims[^1].Value = written;
+                owned.Claims[^1].HasValue = true;
+            }
+
+            return true;
         }
 
-        private bool ReleaseController(string key, Guid ownerId)
+        /// <summary>Drops <paramref name="ownerId"/>'s claim on a slot.</summary>
+        /// <param name="revealed">What the caller must now apply: the value of the owner underneath when
+        /// one is revealed, or null when the slot became unowned and the caller should restore its
+        /// cue-owned/authored value.</param>
+        /// <returns>False when this owner never held the slot - a stale release, not an error.</returns>
+        private bool ReleaseController(string key, Guid ownerId, out double? revealed)
         {
-            if (_controllerOwners.GetValueOrDefault(key) != ownerId)
+            revealed = null;
+            if (_controllerOwners.GetValueOrDefault(key) is not { } slot)
                 return false;
-            _controllerOwners.Remove(key);
+            if (slot.Claims.FirstOrDefault(candidate => candidate.Owner == ownerId) is not { } mine)
+                return false;
+
+            slot.Claims.Remove(mine);
+            if (slot.Claims.Count == 0)
+            {
+                _controllerOwners.Remove(key);
+                return true;
+            }
+
+            // An owner is still holding this slot - either one this release revealed, or (when a
+            // non-top owner released) the same one as before, in which case re-applying is a no-op.
+            if (slot.Claims[^1].HasValue)
+                revealed = slot.Claims[^1].Value;
             return true;
+        }
+
+        /// <summary>Gives up every slot this owner holds WITHOUT changing the values in them - the
+        /// completion policy for <c>HoldFinal</c>. Controls stay exactly where the automation left them,
+        /// but the claims no longer belong to a run that has ended, so a later run - or
+        /// <see cref="ReleaseControllerHolds"/> - can take them instead of finding them locked forever by a
+        /// dead owner. Where this release reveals an older live owner, that owner's value is restored.
+        /// </summary>
+        public void RelinquishController(Guid ownerId)
+        {
+            foreach (var key in _controllerOwners.Keys.ToList())
+            {
+                if (_controllerOwners.GetValueOrDefault(key) is not { } slot
+                    || slot.Claims.FirstOrDefault(candidate => candidate.Owner == ownerId) is not { } mine)
+                    continue;
+
+                var wasTop = slot.Claims[^1].Owner == ownerId;
+                slot.Claims.Remove(mine);
+                if (slot.Claims.Count == 0)
+                {
+                    // Nothing underneath: the held value stays put, unowned, until someone claims it.
+                    _controllerOwners.Remove(key);
+                    continue;
+                }
+
+                if (wasTop && slot.Claims[^1].HasValue)
+                    slot.Apply(slot.Claims[^1].Value);
+            }
+        }
+
+        /// <summary>Whether any slot on this voice is still claimed - i.e. whether a host should offer the
+        /// operator a way to drop the hold.</summary>
+        public bool HasControllerHolds => _controllerOwners.Count > 0;
+
+        /// <summary>Drops EVERY claim and restores each slot to its cue-owned/authored value. The operator's
+        /// escape hatch from a <c>HoldFinal</c> value left behind by a run that has ended.</summary>
+        public void ReleaseControllerHolds()
+        {
+            foreach (var slot in _controllerOwners.Values.ToList())
+                slot.Apply(null);
+            _controllerOwners.Clear();
         }
 
         /// <summary>This voice's level/stop-bus trim hook: stores the new session trim and rewrites whatever

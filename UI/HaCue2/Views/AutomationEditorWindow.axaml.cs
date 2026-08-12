@@ -36,6 +36,8 @@ public partial class AutomationEditorWindow : Window
     private void OnGestureCompleted(object? sender, EventArgs e) => Editor?.EndGesture();
     private void OnGestureCancelled(object? sender, EventArgs e) => Editor?.CancelGesture();
     private void OnDelete(object? sender, RoutedEventArgs e) => Editor?.DeleteSelection();
+
+    private void OnDeleteOutOfRange(object? sender, RoutedEventArgs e) => Editor?.DeleteOutOfRangeKeys();
     private void OnZoomIn(object? sender, RoutedEventArgs e) => Editor?.Zoom(0.5);
     private void OnZoomOut(object? sender, RoutedEventArgs e) => Editor?.Zoom(2);
     private void OnPanLeft(object? sender, RoutedEventArgs e) => Editor?.Pan(-0.8);

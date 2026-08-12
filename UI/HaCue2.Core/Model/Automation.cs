@@ -447,58 +447,109 @@ public static class CueAutomation
 /// <summary>Pure keyframe evaluator shared by internal and outbound lowering.</summary>
 public static class AutomationEvaluator
 {
+    /// <summary>Samples a track directly. Convenient for editors, tests and one-shot reads; a driver
+    /// sampling the same track repeatedly should <see cref="AutomationCurve.Prepare"/> once instead.</summary>
     public static double Sample(
         AutomationTrack? track,
         HaCueProject project,
         long timeMs,
-        double authoredValue)
-    {
-        if (track is not { Enabled: true, Keyframes.Count: > 0 })
-            return authoredValue;
+        double authoredValue) =>
+        AutomationCurve.Prepare(track, project) is { } curve
+            ? curve.Sample(timeMs, authoredValue)
+            : authoredValue;
+}
 
-        var descriptor = AutomationPropertyCatalog.Get(track.Target.PropertyId);
+/// <summary>
+/// One track prepared for repeated sampling: keys sorted and filtered once, each segment's shape resolved
+/// once, the descriptor looked up once.
+/// </summary>
+/// <remarks>
+/// The drivers sample every track 40 times a second. Doing that straight off the document meant, per
+/// sample: a <c>Where/OrderBy/ThenBy/ToList</c> over every keyframe (thousands, on a long cue), a linear
+/// scan of the project's curve presets, construction of a fresh <c>CustomFadeCurve</c> - whose constructor
+/// re-validates every point - and, for a malformed inline curve, a thrown-and-caught exception. None of
+/// that changes between ticks: an authored edit goes through the journal and recompiles.
+/// <para>A prepared curve is immutable and does not observe later edits to the track. Prepare a new one
+/// when the document changes.</para>
+/// </remarks>
+public sealed class AutomationCurve
+{
+    private readonly AutomationKeyframe[] _keys;
+
+    /// <summary>The resolved outgoing shape of the segment starting at each key. Parallel to
+    /// <see cref="_keys"/>; the last entry is unused.</summary>
+    private readonly FadeShape[] _shapes;
+
+    private readonly AutomationValueSpec? _value;
+
+    private AutomationCurve(AutomationKeyframe[] keys, FadeShape[] shapes, AutomationValueSpec? value)
+    {
+        _keys = keys;
+        _shapes = shapes;
+        _value = value;
+    }
+
+    public int KeyframeCount => _keys.Length;
+
+    /// <summary>Null when the track is absent, disabled, or has no usable keyframes - the caller then uses
+    /// its authored value.</summary>
+    public static AutomationCurve? Prepare(AutomationTrack? track, HaCueProject project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        if (track is not { Enabled: true, Keyframes.Count: > 0 })
+            return null;
+
         var keys = track.Keyframes
             .Where(key => key.TimeMs >= 0 && double.IsFinite(key.Value))
             .OrderBy(key => key.TimeMs)
             .ThenBy(key => key.Id)
-            .ToList();
-        if (keys.Count == 0)
+            .ToArray();
+        if (keys.Length == 0)
+            return null;
+
+        var shapes = new FadeShape[keys.Length];
+        for (var index = 0; index < keys.Length; index++)
+        {
+            // A malformed inline curve degrades to linear ONCE here rather than throwing on every sample.
+            try { shapes[index] = keys[index].Curve.Resolve(project); }
+            catch (ArgumentException) { shapes[index] = FadeCurve.Linear; }
+        }
+
+        return new AutomationCurve(
+            keys, shapes, AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Value);
+    }
+
+    /// <summary>The track's value at <paramref name="timeMs"/>. Allocation-free.</summary>
+    public double Sample(long timeMs, double authoredValue)
+    {
+        if (_keys.Length == 0)
             return authoredValue;
-        if (timeMs <= keys[0].TimeMs)
-            return descriptor?.Value.Clamp(keys[0].Value) ?? keys[0].Value;
-        if (timeMs >= keys[^1].TimeMs)
-            return descriptor?.Value.Clamp(keys[^1].Value) ?? keys[^1].Value;
+        if (timeMs <= _keys[0].TimeMs)
+            return Clamp(_keys[0].Value);
+        if (timeMs >= _keys[^1].TimeMs)
+            return Clamp(_keys[^1].Value);
 
         var low = 0;
-        var high = keys.Count - 1;
+        var high = _keys.Length - 1;
         while (low + 1 < high)
         {
             var middle = (low + high) / 2;
-            if (keys[middle].TimeMs <= timeMs)
+            if (_keys[middle].TimeMs <= timeMs)
                 low = middle;
             else
                 high = middle;
         }
 
-        var from = keys[low];
-        var to = keys[high];
+        var from = _keys[low];
+        var to = _keys[high];
         if (from.Hold || to.TimeMs <= from.TimeMs)
-            return descriptor?.Value.Clamp(from.Value) ?? from.Value;
+            return Clamp(from.Value);
 
         var progress = Math.Clamp((double)(timeMs - from.TimeMs) / (to.TimeMs - from.TimeMs), 0, 1);
-        double value;
-        try
-        {
-            var shape = from.Curve.Resolve(project);
-            value = FadeCurves.Interpolate(from.Value, to.Value, progress, shape);
-        }
-        catch (ArgumentException)
-        {
-            value = FadeCurves.Interpolate(from.Value, to.Value, progress, FadeCurve.Linear);
-        }
-
-        return descriptor?.Value.Clamp(value) ?? value;
+        return Clamp(FadeCurves.Interpolate(from.Value, to.Value, progress, _shapes[low]));
     }
+
+    private double Clamp(double value) => _value?.Clamp(value) ?? value;
 }
 
 // Schema-1 reader types. New code never creates these; AutomationMigration consumes and clears them.

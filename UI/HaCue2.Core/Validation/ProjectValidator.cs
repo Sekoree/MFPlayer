@@ -788,6 +788,16 @@ public static class ProjectValidator
                 firstKey = false;
             }
 
+            // Shortening a cue never rescales its keys - that is the whole point of absolute time - so
+            // keys can legitimately sit past the out-point. They are PRESERVED and still runnable, but the
+            // operator has to be told: they are past the end of the editor's ruler, so nothing on screen
+            // would otherwise reveal that the tail of a carefully drawn track has stopped playing.
+            if (PlayedLengthMs(cue) is > 0 and var playedMs
+                && track.Keyframes.Count(key => key.TimeMs > playedMs) is > 0 and var beyond)
+                issues.Add(Warn("cue", id,
+                    $"Q{cue.Number} has {beyond} {descriptor.DisplayName} keyframe{(beyond == 1 ? "" : "s")} "
+                    + "past the cue's end; they are preserved but never played."));
+
             if (descriptor.Domain == AutomationDomain.External && track.Target.EndpointId is null)
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} has an outbound {descriptor.DisplayName} track with no endpoint."));
@@ -968,6 +978,20 @@ public static class ProjectValidator
                         $"“{input.Name}” has a binding on {binding.Input} with no live cue."));
             }
     }
+
+    /// <summary>How long the cue actually plays, from what the DOCUMENT knows. Zero when the length is
+    /// unknown (an un-probed file, a live source), which is why out-of-range reporting is skipped there
+    /// rather than guessed at - the same rule migration follows.</summary>
+    private static long PlayedLengthMs(CueNode cue) => cue switch
+    {
+        MediaCueNode media => (long)(media.TrimmedLength(
+            media.SourceDurationMs > 0 ? TimeSpan.FromMilliseconds(media.SourceDurationMs) : null)
+            ?.TotalMilliseconds ?? 0),
+        TextCueNode text => text.DurationMs,
+        VisualizerCueNode visualizer => visualizer.HoldMs,
+        AutomationCueNode automation => automation.DurationMs,
+        _ => 0,
+    };
 
     private static ShowValidationIssue Error(string kind, string? id, string message) =>
         new(ShowValidationSeverity.Error, message, kind, id);

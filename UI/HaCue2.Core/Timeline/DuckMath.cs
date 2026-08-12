@@ -146,38 +146,30 @@ public static class DuckMath
         return result;
     }
 
-    /// <summary>The lane's level at a position, interpolating between points as playback would.</summary>
+    /// <summary>The lane's level at a position, interpolating between points as playback would.
+    /// <para>Delegates to <see cref="AutomationCurve"/> so ducking reads the SAME value the runtime does.
+    /// This used to be a second, subtly different evaluator: it shaped each segment with
+    /// <c>Curve.Law</c> alone, ignoring a segment's preset or inline Bézier, so a duck computed under a
+    /// custom curve restored to a level the show never played.</para></summary>
+    /// <param name="project">Resolves segment curve presets. Pass the project that owns these keyframes;
+    /// an empty project degrades preset segments to their built-in law, as before.</param>
     public static double Sample(
         IReadOnlyList<AutomationKeyframe> points,
         long timeMs,
-        double authoredLevelDb = 0)
+        double authoredLevelDb = 0,
+        HaCueProject? project = null)
     {
         if (points.Count == 0)
             return authoredLevelDb;
 
-        var ordered = points.OrderBy(point => point.TimeMs).ThenBy(point => point.Id).ToList();
-        if (timeMs <= ordered[0].TimeMs)
-            return ordered[0].Value;
-
-        for (var index = 1; index < ordered.Count; index++)
-        {
-            if (timeMs > ordered[index].TimeMs)
-                continue;
-
-            var (previous, next) = (ordered[index - 1], ordered[index]);
-            var span = next.TimeMs - previous.TimeMs;
-            if (previous.Hold)
-                return previous.Value;
-            var progress = span <= 0 ? 1 : (double)(timeMs - previous.TimeMs) / span;
-            var shaped = FadeCurves.ShapeProgress(progress, previous.Curve.Law);
-
-            return span <= 0
-                ? next.Value
-                : previous.Value + ((next.Value - previous.Value) * shaped);
-        }
-
-        return ordered[^1].Value;
+        var track = new AutomationTrack { Keyframes = [.. points] };
+        return AutomationCurve.Prepare(track, project ?? EmptyProject) is { } curve
+            ? curve.Sample(timeMs, authoredLevelDb)
+            : authoredLevelDb;
     }
+
+    /// <summary>Preset-free resolution context for a caller that has no project to hand.</summary>
+    private static readonly HaCueProject EmptyProject = new();
 
     public static double Sample(IReadOnlyList<LanePoint> points, double x)
     {

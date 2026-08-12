@@ -515,6 +515,13 @@ public static unsafe class AbiPluginHost
                 var videoEffect = (MfpVideoEffectFactoryVTable*)main;
                 Require(videoEffect->Create != null, "video-effect must provide create");
                 Require(videoEffect->EffectVTable != null, "video-effect must provide effect_vtable");
+                // Normalize the NESTED table like the audio side does, rather than dereferencing plugin
+                // memory directly. MfpVideoEffectVTable has not been extended yet, so this changes nothing
+                // today - but it is what stops the first field added to it from becoming an unchecked read
+                // past a legacy plugin's shorter struct, which is exactly the bug the audio path had.
+                videoEffect->EffectVTable = (MfpVideoEffectVTable*)NormalizeTable<MfpVideoEffectVTable>(
+                    videoEffect->EffectVTable, nameof(MfpVideoEffectVTable.Destroy),
+                    "video-effect-instance", owned);
                 Require(videoEffect->EffectVTable->Process != null, "video-effect instances must provide process");
                 break;
             case "control-decoder":

@@ -554,6 +554,21 @@ public sealed class ProjectVisualizers : IAsyncDisposable
         return false;
     }
 
+    /// <summary>Gives up every slot <paramref name="ownerId"/> holds on this visualizer instance while
+    /// LEAVING the applied values in place - the <c>HoldFinal</c> completion policy. A finished run that
+    /// keeps its claims owns those slots forever, so nothing could ever drive them again.</summary>
+    internal void RelinquishController(VisualizerCueInstance instance, Guid ownerId)
+    {
+        lock (_gate)
+        {
+            foreach (var key in _controllerOwners
+                         .Where(pair => pair.Key.InstanceId == instance.InstanceId && pair.Value == ownerId)
+                         .Select(pair => pair.Key)
+                         .ToArray())
+                _controllerOwners.Remove(key);
+        }
+    }
+
     internal async Task<bool> ClearControllerAutomationAsync(
         VisualizerCueNode cue,
         AutomationTrack track,

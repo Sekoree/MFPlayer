@@ -211,15 +211,23 @@ public static class ProjectReferences
         return references;
     }
 
-    private static IEnumerable<CurveSpec?> CurvesOf(CueNode cue) => cue switch
-    {
-        MediaCueNode media => [media.FadeInCurve, media.FadeOutCurve],
-        TextCueNode text => [text.FadeInCurve, text.FadeOutCurve],
-        GroupCueNode group => [group.CrossfadeCurve],
-        FadeCueNode fade => [fade.Curve],
-        PatchCueNode patch => [patch.FadeCurve],
-        _ => [],
-    };
+    /// <summary>Every curve a cue can reference - fades AND the per-segment shapes of its automation
+    /// keyframes. Omitting the keyframes made "what uses this preset?" report zero references for a preset
+    /// a track depended on, so deleting it looked safe and then raised a hard validator error afterwards.
+    /// </summary>
+    private static IEnumerable<CurveSpec?> CurvesOf(CueNode cue) =>
+    [
+        .. cue switch
+        {
+            MediaCueNode media => (CurveSpec?[])[media.FadeInCurve, media.FadeOutCurve],
+            TextCueNode text => [text.FadeInCurve, text.FadeOutCurve],
+            GroupCueNode group => [group.CrossfadeCurve],
+            FadeCueNode fade => [fade.Curve],
+            PatchCueNode patch => [patch.FadeCurve],
+            _ => [],
+        },
+        .. CueAutomation.Of(cue).SelectMany(track => track.Keyframes.Select(key => (CurveSpec?)key.Curve)),
+    ];
 
     private static IReadOnlyList<EffectLane> LegacyLanes(CueNode cue) => cue switch
     {

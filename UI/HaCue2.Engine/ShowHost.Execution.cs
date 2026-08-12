@@ -61,6 +61,82 @@ public sealed partial class ShowHost
 
         public bool Claim(Guid trackId, CapturedAutomationTarget target) =>
             _claimedTargets.Add((trackId, target.InstanceId));
+
+        /// <summary>One internal track resolved ONCE at fire time: its target cue, its prepared curve and
+        /// the instances it captured. The drive loop runs 40 times a second, and re-resolving this per
+        /// tick meant a full document flatten plus linear scan per track (<c>FindCue</c>) and a re-sort of
+        /// every keyframe (<c>AutomationEvaluator.Sample</c>). None of it can change while the run is in
+        /// flight - an authored edit recompiles and restarts the show document.</summary>
+        public readonly record struct PlannedTrack(
+            AutomationTrack Track,
+            CueNode Target,
+            AutomationCurve? Curve,
+            IReadOnlyList<CapturedAutomationTarget> Captured);
+
+        public IReadOnlyList<PlannedTrack> Plan { get; set; } = [];
+
+        // --- reader leases -------------------------------------------------------------------------
+        //
+        // A seek looks the run up under the runs gate, releases it, and only THEN touches Cancellation /
+        // ApplyGate. The drive loop's finally disposed both right after removing the run from that same
+        // dictionary, so a run completing inside that window made the seek throw ObjectDisposedException
+        // straight out to the operator. Disposal now waits for readers that already hold a lease.
+
+        private readonly object _leaseGate = new();
+        private int _leases;
+        private bool _finished;
+        private bool _disposed;
+
+        /// <summary>Takes a reader lease, or fails when the run has already finished. A caller that gets
+        /// true MUST call <see cref="ReleaseLease"/>.</summary>
+        public bool TryLease()
+        {
+            lock (_leaseGate)
+            {
+                if (_finished)
+                    return false;
+                _leases++;
+                return true;
+            }
+        }
+
+        public void ReleaseLease()
+        {
+            lock (_leaseGate)
+            {
+                if (--_leases > 0 || !_finished)
+                    return;
+            }
+
+            DisposeResources();
+        }
+
+        /// <summary>Marks the run finished and disposes its resources once no reader still holds a lease.
+        /// After this no new lease is granted, so a late seek reports "no such run" instead of faulting.</summary>
+        public void Finish()
+        {
+            lock (_leaseGate)
+            {
+                _finished = true;
+                if (_leases > 0)
+                    return;
+            }
+
+            DisposeResources();
+        }
+
+        private void DisposeResources()
+        {
+            lock (_leaseGate)
+            {
+                if (_disposed)
+                    return;
+                _disposed = true;
+            }
+
+            Cancellation.Dispose();
+            ApplyGate.Dispose();
+        }
     }
 
     /// <summary>A visualizer has no session transport, so its cue-owned lanes retain this show-clock
@@ -84,6 +160,63 @@ public sealed partial class ShowHost
         {
             try { Cancellation.Cancel(); }
             catch (ObjectDisposedException) { }
+        }
+
+        /// <summary>Internal tracks with their curves prepared once - see AutomationRun.Plan.</summary>
+        public IReadOnlyList<(AutomationTrack Track, AutomationCurve? Curve)> Plan { get; set; } = [];
+
+        // Same reader-lease discipline as AutomationRun, for the same reason: a seek resolves the run
+        // outside the runs gate and must not have its CTS/gate disposed underneath it.
+        private readonly object _leaseGate = new();
+        private int _leases;
+        private bool _finished;
+        private bool _disposed;
+
+        public bool TryLease()
+        {
+            lock (_leaseGate)
+            {
+                if (_finished)
+                    return false;
+                _leases++;
+                return true;
+            }
+        }
+
+        public void ReleaseLease()
+        {
+            lock (_leaseGate)
+            {
+                if (--_leases > 0 || !_finished)
+                    return;
+            }
+
+            DisposeResources();
+        }
+
+        public void Finish()
+        {
+            lock (_leaseGate)
+            {
+                _finished = true;
+                if (_leases > 0)
+                    return;
+            }
+
+            DisposeResources();
+        }
+
+        private void DisposeResources()
+        {
+            lock (_leaseGate)
+            {
+                if (_disposed)
+                    return;
+                _disposed = true;
+            }
+
+            Cancellation.Dispose();
+            ApplyGate.Dispose();
         }
     }
     /// <summary>
@@ -151,6 +284,7 @@ public sealed partial class ShowHost
         var clock = new AutomationRunClock((ICueExecutionHost)this, start);
         var run = new AutomationRun(
             snapshot, clock, cancellation, await CaptureAutomationTargetsAsync(snapshot).ConfigureAwait(false));
+        run.Plan = PlanInternalTracks(run);
         AutomationRun? previous;
         lock (_automationRunGate)
         {
@@ -192,6 +326,8 @@ public sealed partial class ShowHost
 
             if (run.Cue.Completion == AutomationCompletion.RestoreBase)
                 await RestoreAutomationAsync(run).ConfigureAwait(false);
+            else
+                await RelinquishAutomationAsync(run).ConfigureAwait(false);
             _outbound.Complete(run.Cue.Id);
             completedNaturally = true;
         }
@@ -200,14 +336,16 @@ public sealed partial class ShowHost
             run.Started.TrySetResult(false);
             if (run.Cue.Completion == AutomationCompletion.RestoreBase)
                 await RestoreAutomationAsync(run).ConfigureAwait(false);
+            else
+                await RelinquishAutomationAsync(run).ConfigureAwait(false);
         }
         finally
         {
             lock (_automationRunGate)
                 if (ReferenceEquals(_automationRuns.GetValueOrDefault(run.Cue.Id), run))
                     _automationRuns.Remove(run.Cue.Id);
-            run.Cancellation.Dispose();
-            run.ApplyGate.Dispose();
+            // Disposes only once no in-flight seek still holds a lease on this run.
+            run.Finish();
             run.Started.TrySetResult(false);
             Forget(run.Cue.Id.ToString());
             run.Complete.TrySetResult();
@@ -219,6 +357,25 @@ public sealed partial class ShowHost
                 "automation natural-end follow");
     }
 
+    /// <summary>Resolves every internal track's target and curve ONCE, at fire time.</summary>
+    private IReadOnlyList<AutomationRun.PlannedTrack> PlanInternalTracks(AutomationRun run)
+    {
+        var plan = new List<AutomationRun.PlannedTrack>();
+        foreach (var track in run.Cue.AutomationTracks.Where(track => track.Enabled))
+        {
+            if (AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External)
+                continue; // OutboundEffects owns rate limiting and coalescing on this same clock.
+            if (!run.CapturedTargets.TryGetValue(track.Id, out var capturedTargets)
+                || track.Target.CueId is not { } targetId
+                || _project.FindCue(targetId) is not { } target)
+                continue;
+            plan.Add(new AutomationRun.PlannedTrack(
+                track, target, AutomationCurve.Prepare(track, _project), capturedTargets));
+        }
+
+        return plan;
+    }
+
     private async Task SampleAutomationAsync(AutomationRun run, TimeSpan position)
     {
         await run.ApplyGate.WaitAsync(run.Cancellation.Token).ConfigureAwait(false);
@@ -226,15 +383,10 @@ public sealed partial class ShowHost
         {
             var timeMs = Math.Clamp(
                 (long)position.TotalMilliseconds, 0, Math.Max(1, run.Cue.DurationMs));
-            foreach (var track in run.Cue.AutomationTracks.Where(track => track.Enabled))
+            foreach (var (track, target, curve, capturedTargets) in run.Plan)
             {
-                if (AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External)
-                    continue; // OutboundEffects owns rate limiting and coalescing on this same clock.
-                if (!run.CapturedTargets.TryGetValue(track.Id, out var capturedTargets)
-                    || track.Target.CueId is not { } targetId
-                    || _project.FindCue(targetId) is not { } target)
-                    continue;
-                var value = AutomationEvaluator.Sample(track, _project, timeMs, AuthoredValue(target, track));
+                var authored = AuthoredValue(target, track);
+                var value = curve?.Sample(timeMs, authored) ?? authored;
                 await ApplyAutomationValueAsync(run, target, track, value, capturedTargets).ConfigureAwait(false);
             }
         }
@@ -254,6 +406,39 @@ public sealed partial class ShowHost
                     && track.Target.CueId is { } targetId
                     && _project.FindCue(targetId) is { } target)
                     await RestoreAutomationValueAsync(run, target, track, capturedTargets).ConfigureAwait(false);
+        }
+        finally
+        {
+            run.ApplyGate.Release();
+        }
+    }
+
+    /// <summary>The <c>HoldFinal</c> counterpart of <see cref="RestoreAutomationAsync"/>: the values this
+    /// run drove stay exactly where they are, but its CLAIMS are given up. A finished run that keeps its
+    /// claims owns those slots forever - nothing else can ever write them again, so the target cue's own
+    /// automation and the operator's own edits are both permanently shadowed by an owner that no longer
+    /// exists. Where giving up a claim reveals an older run that is still going, that run's value returns.
+    /// </summary>
+    private async Task RelinquishAutomationAsync(AutomationRun run)
+    {
+        await run.ApplyGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            // Distinct: several tracks of one run commonly target the same cue instance, and relinquishing
+            // is per-owner across every slot, so once per instance is enough.
+            foreach (var instance in run.CapturedTargets.Values
+                         .SelectMany(targets => targets)
+                         .Select(target => target.SessionInstance)
+                         .OfType<ShowCueInstance>()
+                         .Distinct())
+                await _session.RelinquishControllerAsync(instance, run.OwnerId).ConfigureAwait(false);
+
+            foreach (var visualizer in run.CapturedTargets.Values
+                         .SelectMany(targets => targets)
+                         .Select(target => target.VisualizerInstance)
+                         .OfType<VisualizerCueInstance>()
+                         .Distinct())
+                _visualizers.RelinquishController(visualizer, run.OwnerId);
         }
         finally
         {
@@ -352,7 +537,17 @@ public sealed partial class ShowHost
         var run = new VisualizerAutomationRun(
             cue,
             new AutomationRunClock((ICueExecutionHost)this, start),
-            CancellationTokenSource.CreateLinkedTokenSource(_life.Token));
+            CancellationTokenSource.CreateLinkedTokenSource(_life.Token))
+        {
+            Plan =
+            [
+                .. cue.AutomationTracks
+                    .Where(track => track.Enabled
+                        && AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain
+                            != AutomationDomain.External)
+                    .Select(track => (track, AutomationCurve.Prepare(track, _project))),
+            ],
+        };
         VisualizerAutomationRun? previous;
         lock (_automationRunGate)
         {
@@ -406,8 +601,7 @@ public sealed partial class ShowHost
             lock (_automationRunGate)
                 if (ReferenceEquals(_visualizerAutomationRuns.GetValueOrDefault(run.Cue.Id), run))
                     _visualizerAutomationRuns.Remove(run.Cue.Id);
-            run.Cancellation.Dispose();
-            run.ApplyGate.Dispose();
+            run.Finish();
             run.Started.TrySetResult(false);
             run.Complete.TrySetResult();
         }
@@ -421,12 +615,10 @@ public sealed partial class ShowHost
         {
             var timeMs = Math.Clamp(
                 (long)position.TotalMilliseconds, 0, Math.Max(1, run.Cue.HoldMs));
-            foreach (var track in run.Cue.AutomationTracks.Where(track => track.Enabled))
+            foreach (var (track, curve) in run.Plan)
             {
-                if (AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External)
-                    continue;
-                var value = AutomationEvaluator.Sample(
-                    track, _project, timeMs, AuthoredValue(run.Cue, track));
+                var authored = AuthoredValue(run.Cue, track);
+                var value = curve?.Sample(timeMs, authored) ?? authored;
                 await _visualizers.ApplyAutomationAsync(run.Cue, track, value).ConfigureAwait(false);
             }
         }
@@ -463,15 +655,25 @@ public sealed partial class ShowHost
         VisualizerAutomationRun? run;
         lock (_automationRunGate)
             _visualizerAutomationRuns.TryGetValue(cueId, out run);
-        if (run is null || !await run.Started.Task.ConfigureAwait(false))
+        if (run is null || !run.TryLease())
             return false;
 
-        var duration = TimeSpan.FromMilliseconds(Math.Max(1, run.Cue.HoldMs));
-        var sought = position < TimeSpan.Zero ? TimeSpan.Zero : position > duration ? duration : position;
-        var reading = run.Clock.Seek(sought);
-        _outbound.Seek(cueId, reading);
-        await SampleVisualizerAutomationAsync(run, reading.Position).ConfigureAwait(false);
-        return true;
+        try
+        {
+            if (!await run.Started.Task.ConfigureAwait(false))
+                return false;
+
+            var duration = TimeSpan.FromMilliseconds(Math.Max(1, run.Cue.HoldMs));
+            var sought = position < TimeSpan.Zero ? TimeSpan.Zero : position > duration ? duration : position;
+            var reading = run.Clock.Seek(sought);
+            _outbound.Seek(cueId, reading);
+            await SampleVisualizerAutomationAsync(run, reading.Position).ConfigureAwait(false);
+            return true;
+        }
+        finally
+        {
+            run.ReleaseLease();
+        }
     }
 
     private async Task<bool> SeekAutomationRunAsync(Guid cueId, TimeSpan position)
@@ -479,18 +681,27 @@ public sealed partial class ShowHost
         AutomationRun? run;
         lock (_automationRunGate)
             _automationRuns.TryGetValue(cueId, out run);
-        if (run is null)
+        // The lease is what makes the rest of this method safe: without it the run could complete and
+        // dispose its CTS/gate between the lookup above and the first touch below.
+        if (run is null || !run.TryLease())
             return false;
 
-        if (!await run.Started.Task.ConfigureAwait(false)
-            || run.Cancellation.IsCancellationRequested)
-            return false;
-        var duration = TimeSpan.FromMilliseconds(Math.Max(1, run.Cue.DurationMs));
-        var sought = position < TimeSpan.Zero ? TimeSpan.Zero : position > duration ? duration : position;
-        var reading = run.Clock.Seek(sought);
-        _outbound.Seek(cueId, reading);
-        await SampleAutomationAsync(run, reading.Position).ConfigureAwait(false);
-        return true;
+        try
+        {
+            if (!await run.Started.Task.ConfigureAwait(false)
+                || run.Cancellation.IsCancellationRequested)
+                return false;
+            var duration = TimeSpan.FromMilliseconds(Math.Max(1, run.Cue.DurationMs));
+            var sought = position < TimeSpan.Zero ? TimeSpan.Zero : position > duration ? duration : position;
+            var reading = run.Clock.Seek(sought);
+            _outbound.Seek(cueId, reading);
+            await SampleAutomationAsync(run, reading.Position).ConfigureAwait(false);
+            return true;
+        }
+        finally
+        {
+            run.ReleaseLease();
+        }
     }
 
     private IReadOnlyDictionary<Guid, (TimeSpan Position, TimeSpan Duration)> AutomationRunSnapshots()
@@ -612,10 +823,11 @@ public sealed partial class ShowHost
                     await _session.ApplyControllerAudioModifierAsync(
                         captured.SessionInstance!.Value,
                         run.OwnerId,
+                        group.Id,
                         Linear(value),
                         run.Claim(track.Id, captured)).ConfigureAwait(false);
                 break;
-            case AutomationPropertyIds.GroupVideoOpacity when target is GroupCueNode:
+            case AutomationPropertyIds.GroupVideoOpacity when target is GroupCueNode videoGroup:
                 foreach (var captured in capturedTargets)
                 {
                     var claim = run.Claim(track.Id, captured);
@@ -623,6 +835,7 @@ public sealed partial class ShowHost
                         await _session.ApplyControllerVideoModifierAsync(
                             sessionInstance,
                             run.OwnerId,
+                            videoGroup.Id,
                             (float)Math.Clamp(value, 0, 1),
                             claim).ConfigureAwait(false);
                     else if (captured.VisualizerInstance is { } groupVisualizerInstance)
@@ -713,13 +926,15 @@ public sealed partial class ShowHost
                             opacityPlacement.CompositionId.ToString(),
                             opacityPlacement.LayerIndex).ConfigureAwait(false);
                         break;
+                    // The trim is keyed by the GROUP that set it, so releasing clears only this group's
+                    // contribution and leaves an outer group's trim on the same voice intact.
                     case AutomationPropertyIds.GroupAudioTrim:
-                        await _session.ClearControllerAudioModifierAsync(sessionInstance, run.OwnerId)
-                            .ConfigureAwait(false);
+                        await _session.ClearControllerAudioModifierAsync(
+                            sessionInstance, run.OwnerId, target.Id).ConfigureAwait(false);
                         break;
                     case AutomationPropertyIds.GroupVideoOpacity:
-                        await _session.ClearControllerVideoModifierAsync(sessionInstance, run.OwnerId)
-                            .ConfigureAwait(false);
+                        await _session.ClearControllerVideoModifierAsync(
+                            sessionInstance, run.OwnerId, target.Id).ConfigureAwait(false);
                         break;
                 }
             }
