@@ -2176,6 +2176,15 @@ public sealed partial class TimelineViewModel : ObservableObject
     private Guid? _automationGestureLaneId;
     private Guid? _automationGestureKeyId;
     private HashSet<Guid>? _automationGestureSelection;
+
+    /// <summary>The in-flight drag's local keyframe list, mirroring the dedicated editor. A continuous
+    /// drag mutates THIS and re-projects the lane's own points; the document is written once, on release.
+    /// Previously every pointer motion journalled a whole-list replacement and refreshed the entire
+    /// timeline, so a single drag pushed hundreds of commands through the shell's change path (a quiet
+    /// composite kept it one UNDO step, but the work and the churn were real).</summary>
+    private List<AutomationKeyframe>? _automationDraftKeys;
+    private CueNode? _automationDraftCue;
+    private AutomationTrack? _automationDraftTrack;
     private readonly Dictionary<Guid, float[]> _waveforms = [];
     private readonly HashSet<Guid> _waveformLoads = [];
 
@@ -2534,6 +2543,26 @@ public sealed partial class TimelineViewModel : ObservableObject
                 return false;
         }
 
+        // A Move is CONTINUOUS: hold the change locally and re-project only this lane. Everything else is
+        // a one-shot edit, so it writes straight through as before.
+        if (gesture.Kind == CurveGestureKind.Move)
+        {
+            _automationDraftKeys = changed;
+            _automationDraftCue = cue;
+            _automationDraftTrack = track;
+            if (_automationGestureSelection is { } draggedIds)
+            {
+                selected.Clear();
+                foreach (var pair in changed.OrderBy(key => key.TimeMs).ThenBy(key => key.Id)
+                             .Select((key, index) => (key, index)))
+                    if (draggedIds.Contains(pair.key.Id))
+                        selected.Add(pair.index);
+            }
+
+            ProjectAutomationDraft(row, cue, track, changed, descriptor, selected);
+            return true;
+        }
+
         _drag ??= _journal.Composite(description, "cues", quiet: true);
         WriteAutomation(cue, track, changed, description);
         if (gesture.Kind == CurveGestureKind.Move && _automationGestureSelection is { } movedIds)
@@ -2703,14 +2732,64 @@ public sealed partial class TimelineViewModel : ObservableObject
     private static double? ShiftHandle(double? value, double offset) =>
         value is { } number ? number + offset : null;
 
-    /// <summary>Ends the gesture, closing its undo step.</summary>
+    /// <summary>Re-projects one lane's own curve from the in-flight draft, without touching the document
+    /// or rebuilding the rest of the timeline.</summary>
+    private void ProjectAutomationDraft(
+        TimelineLane row,
+        CueNode cue,
+        AutomationTrack track,
+        IReadOnlyList<AutomationKeyframe> keys,
+        AutomationPropertyDescriptor descriptor,
+        HashSet<int> selected)
+    {
+        var durationMs = (double)Math.Max(1, Span(cue).LengthMs);
+        var ordered = keys
+            .Where(key => key.TimeMs >= 0)
+            .OrderBy(key => key.TimeMs)
+            .ThenBy(key => key.Id)
+            .ToList();
+        var knots = ordered
+            .Select(key => new CurveKnot(
+                Math.Clamp(key.TimeMs / durationMs, 0, 1),
+                TimelinePresentation.Normalize(key.Value, descriptor),
+                key.Hold,
+                key.Curve.Law))
+            .ToList();
+
+        row.Points =
+        [
+            .. knots.Select((knot, index) =>
+                new CurvePoint(knot.X, 1 - knot.Y, selected.Contains(index))),
+        ];
+        row.Shape = CurveLibrary.Shape(knots);
+        _ = track;
+    }
+
+    /// <summary>Ends the gesture: commits the draft as ONE undo step and closes it.</summary>
     public void EndGesture()
     {
+        if (_automationDraftKeys is { } draft
+            && _automationDraftCue is { } cue
+            && _automationDraftTrack is { } track)
+        {
+            _drag ??= _journal?.Composite("edit automation keyframes", "cues", quiet: true);
+            WriteAutomation(cue, track, draft, "edit automation keyframes");
+            Refresh();
+        }
+
+        ClearAutomationDraft();
         _drag?.Dispose();
         _drag = null;
         _automationGestureLaneId = null;
         _automationGestureKeyId = null;
         _automationGestureSelection = null;
+    }
+
+    private void ClearAutomationDraft()
+    {
+        _automationDraftKeys = null;
+        _automationDraftCue = null;
+        _automationDraftTrack = null;
     }
 
     /// <summary>Abandons the gesture (Escape). Unlike the dedicated editor - which holds a local draft and
@@ -2719,9 +2798,13 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// </summary>
     public void CancelGesture()
     {
+        // A drag lives in the draft, so cancelling is simply discarding it - nothing reached the document.
+        var hadDraft = _automationDraftKeys is not null;
+        ClearAutomationDraft();
         var hadDrag = _drag is not null;
         EndGesture();
-        if (hadDrag && _journal is { } journal && journal.CanUndo)
+        // A one-shot edit (add/remove) inside this gesture DID write, so undo that.
+        if (!hadDraft && hadDrag && _journal is { } journal && journal.CanUndo)
             journal.Undo();
         Refresh();
     }

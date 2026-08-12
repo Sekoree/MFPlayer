@@ -2559,17 +2559,29 @@ public sealed class ClipCompositionRuntime : IDisposable
         private double? _height;
         private double? _rotation;
 
-        public void Set(ShowPlacementProperty property, double value)
+        /// <returns>Whether the value CHANGED. The automation runner rewrites every property every
+        /// 25 ms regardless of movement, and each write recomposes the placement and re-applies it; a flat
+        /// segment (or a track sitting on its last key) did that work 40 times a second for nothing.</returns>
+        public bool Set(ShowPlacementProperty property, double value)
         {
             if (!double.IsFinite(value))
-                return;
-            switch (property)
+                return false;
+            return property switch
             {
-                case ShowPlacementProperty.DestX: _x = Math.Clamp(value, -1, 2); break;
-                case ShowPlacementProperty.DestY: _y = Math.Clamp(value, -1, 2); break;
-                case ShowPlacementProperty.DestWidth: _width = Math.Clamp(value, 0.001, 2); break;
-                case ShowPlacementProperty.DestHeight: _height = Math.Clamp(value, 0.001, 2); break;
-                case ShowPlacementProperty.RotationDegrees: _rotation = Math.Clamp(value, -360, 360); break;
+                ShowPlacementProperty.DestX => Replace(ref _x, Math.Clamp(value, -1, 2)),
+                ShowPlacementProperty.DestY => Replace(ref _y, Math.Clamp(value, -1, 2)),
+                ShowPlacementProperty.DestWidth => Replace(ref _width, Math.Clamp(value, 0.001, 2)),
+                ShowPlacementProperty.DestHeight => Replace(ref _height, Math.Clamp(value, 0.001, 2)),
+                ShowPlacementProperty.RotationDegrees => Replace(ref _rotation, Math.Clamp(value, -360, 360)),
+                _ => false,
+            };
+
+            static bool Replace(ref double? slot, double value)
+            {
+                if (slot is { } existing && existing.Equals(value))
+                    return false;
+                slot = value;
+                return true;
             }
         }
 
@@ -2600,14 +2612,24 @@ public sealed class ClipCompositionRuntime : IDisposable
     {
         private readonly Dictionary<(string InstanceId, string ParameterId), double> _values = [];
 
-        public void Set(string instanceId, string parameterId, double value)
+        /// <summary>Records a parameter override.</summary>
+        /// <returns>Whether this actually CHANGED anything. Applying an effect parameter rebuilds the
+        /// layer's whole effect chain - allocating a spec, re-serializing and re-parsing the opaque plugin
+        /// config, and reconstructing any registry plugin instance. The automation runner writes every
+        /// parameter every 25 ms whether or not the value moved, so on a flat segment (or a track that has
+        /// simply reached its final key) that entire rebuild ran 40 times a second for nothing.</returns>
+        public bool Set(string instanceId, string parameterId, double value)
         {
             if (instanceId.Length == 0 || parameterId.Length == 0 || !double.IsFinite(value))
-                return;
-            _values[(instanceId, parameterId)] = value;
+                return false;
+            var key = (instanceId, parameterId);
+            if (_values.TryGetValue(key, out var existing) && existing.Equals(value))
+                return false;
+            _values[key] = value;
+            return true;
         }
 
-        public void Clear(string instanceId, string parameterId) =>
+        public bool Clear(string instanceId, string parameterId) =>
             _values.Remove((instanceId, parameterId));
 
         public VideoPlacementSpec Apply(VideoPlacementSpec authored)
@@ -2837,7 +2859,9 @@ public sealed class ClipCompositionRuntime : IDisposable
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _placementAutomation.Set(property, value);
+                // Only recompose when the value moved - see PlacementAutomation.Set.
+                if (!_placementAutomation.Set(property, value))
+                    return;
                 _placement = ApplyAutomatedPlacement(_authoredPlacement);
                 ApplyPlacement(refreshAppearance: false);
             }
@@ -3187,7 +3211,9 @@ public sealed class ClipCompositionRuntime : IDisposable
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _placementAutomation.Set(property, value);
+                // Only recompose when the value moved - see PlacementAutomation.Set.
+                if (!_placementAutomation.Set(property, value))
+                    return;
                 _placement = ApplyAutomatedPlacement(_authoredPlacement);
                 ApplyPlacement(refreshAppearance: false);
             }
@@ -3236,8 +3262,10 @@ public sealed class ClipCompositionRuntime : IDisposable
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _effectAutomation.Set(instanceId, parameterId, value);
-                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
+                // Only rebuild when the value moved - see PlacementEffectAutomation.Set.
+                if (_effectAutomation.Set(instanceId, parameterId, value))
+                    RawSlot.Effects = BuildLayerEffects(
+                        ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
@@ -3247,8 +3275,9 @@ public sealed class ClipCompositionRuntime : IDisposable
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _effectAutomation.Clear(instanceId, parameterId);
-                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
+                if (_effectAutomation.Clear(instanceId, parameterId))
+                    RawSlot.Effects = BuildLayerEffects(
+                        ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
@@ -3259,8 +3288,10 @@ public sealed class ClipCompositionRuntime : IDisposable
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _controllerEffectAutomation.Set(instanceId, parameterId, value);
-                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
+                // Only rebuild when the value moved - see PlacementEffectAutomation.Set.
+                if (_controllerEffectAutomation.Set(instanceId, parameterId, value))
+                    RawSlot.Effects = BuildLayerEffects(
+                        ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 
@@ -3270,8 +3301,9 @@ public sealed class ClipCompositionRuntime : IDisposable
             lock (_owner._gate)
             {
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _controllerEffectAutomation.Clear(instanceId, parameterId);
-                RawSlot.Effects = BuildLayerEffects(ApplyAutomatedEffects(_placement), _owner._effectRegistry);
+                if (_controllerEffectAutomation.Clear(instanceId, parameterId))
+                    RawSlot.Effects = BuildLayerEffects(
+                        ApplyAutomatedEffects(_placement), _owner._effectRegistry);
             }
         }
 

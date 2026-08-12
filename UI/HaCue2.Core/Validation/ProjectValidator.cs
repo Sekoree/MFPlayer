@@ -419,6 +419,19 @@ public static class ProjectValidator
                      .Where(group => group.Key != Guid.Empty && group.Count() > 1))
             issues.Add(Error("cue", id, $"Q{cue.Number} has duplicate placement ids."));
 
+        // Placement automation is lowered addressed by (composition, layer), not by placement id, and the
+        // session fans each envelope to EVERY layer matching that pair. Two placements sharing one slot
+        // therefore collide at runtime whatever their ids say - one placement's opacity track would move
+        // the other, which is exactly what per-placement automation is supposed to make impossible. Reject
+        // it here, where the operator can see and fix it, rather than letting it compile.
+        foreach (var collision in placements
+                     .GroupBy(placement => (placement.CompositionId, placement.LayerIndex))
+                     .Where(group => group.Count() > 1))
+            issues.Add(Error("cue", id,
+                $"Q{cue.Number} has {collision.Count()} placements on the same composition layer "
+                + $"({collision.Key.LayerIndex}); each placement needs its own layer to be independently "
+                + "animatable."));
+
         var effectIds = placements
             .SelectMany(LayerEffectRack.Effective)
             .Select(effect => effect.Id)

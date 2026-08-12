@@ -615,17 +615,73 @@ add a key" inspector copy replaced.
 Full solution builds clean. HaCue2.Core **782**, HaCue2 UI **411**, S.Media.Core **844** (2 skipped),
 S.Abi **9**, S.Media.Session **404** — 0 failures. `AbiSmoke` exits 0.
 
+## Still open after pass 2
+
+Resolved in pass 3 below, except the live inspector readout and the ABI display-name field.
+
+---
+
+# Fix log — pass 3 (2026-08-12)
+
+## The inline timeline lane now drags in a draft
+
+The last of the seven original defects on that surface. A continuous drag mutates a local keyframe list and
+re-projects only its own lane (`ProjectAutomationDraft`); the document is written once, on release. Escape
+simply discards the draft — nothing reached the document, so there is nothing to undo. One-shot edits
+(add/remove) still write straight through, and `CancelGesture` undoes those. Previously every pointer
+motion journalled a whole-list replacement and refreshed the entire timeline; a quiet composite kept it one
+undo step, but the work and the churn were real. Test:
+`TheInlineLaneDragsInADraftAndCommitsOnceOnRelease`.
+
+## Placement collisions are rejected
+
+Placement automation lowers addressed by `(composition, layer)` and the session fans each envelope to every
+layer matching that pair, so two placements sharing one slot collide at runtime whatever their ids say —
+one placement's opacity track would move the other. The validator now errors on it, making the design's
+"one placement's opacity track does not alter another placement of the same decoded cue" a real guarantee
+rather than a document-layer one.
+
+## Automation writes short-circuit when nothing moved
+
+The runner rewrites every parameter every 25 ms whether or not the value moved. `PlacementEffectAutomation.Set`
+and `PlacementAutomation.Set` now report whether they changed anything, and the callers skip the work when
+they did not. That removes, on a flat segment or a track sitting on its last key:
+
+- the whole layer effect-chain rebuild — spec allocation, config JSON re-serialize **and** re-parse, and
+  reconstruction of any registry plugin instance — 40×/s; and
+- the placement recompose + re-apply, 40×/s per property per layer.
+
+## Migration no longer runs on every deserialize
+
+`Migrate` returns early when no cue holds a legacy lane and no earlier pass left one unresolved. This
+matters because `ProjectSnapshot.Copy` is a serialize/deserialize round trip, so every runtime snapshot was
+paying for a full migration walk plus a re-stamp of the migration summary. The guard tests the **lanes**,
+not the stamped schema number — a project built in code carries the current schema by default and may still
+have legacy lanes assigned onto it.
+
+## Both flakes fixed — and one was not what it looked like
+
+- `CrossfadeSurfaceTests` asserted an exact floor of zero on the first composite after a butt splice. The
+  composite pump and the clock advance on different threads, so a few milliseconds either side of the
+  splice is scheduling weather. Now carries one frame of tolerance, with the intent (follows the NEW clip's
+  coordinate, not the outgoing one's) unchanged.
+- `TimelinePlayheadTests` looked like a real defect — a *virtual* clock reporting 30.035 s where the
+  schedule is exact. It is a harness artifact: `FakeCueHost` samples a clock **shared by every timeline
+  branch** at whatever moment its continuation runs, so a concurrent branch's advance can land between the
+  edge release and the read. Production reads a monotonic device clock and would jitter identically. Order
+  and identity are still asserted exactly; only the recorded time carries tolerance.
+
+## Verification (pass 3)
+
+Full solution builds clean. HaCue2.Core **782**, HaCue2 UI **412**, S.Media.Core **844** (2 skipped),
+S.Abi **9**, S.Media.Session **404** — 0 failures, and the Core suite passes 3/3 consecutive runs with the
+former flake in it. `AbiSmoke` exits 0.
+
 ## Still open
 
-- The live "automated now" inspector readout (needs a playhead value from the engine).
-- The inline timeline lane still journals per pointer motion; it now takes the editor's nudge/no-delete/
-  Escape contract, but the gesture-draft refactor is not done.
-- Per-tick effect JSON round-tripping in `ClipCompositionRuntime` (rebuilds the layer effect chain, parses
-  and re-parses config, reconstructs plugin instances 40×/s).
-- Video-side descriptor publication without a live instance (audio-only today), and native factories still
-  present `displayName = kind` — the ABI has no factory-level display-name field.
-- `ShowPlacementEnvelope` still addresses placements by `(CompositionId, LayerIndex)` rather than
-  `LayerPlacement.Id`; nothing rejects two placements sharing a composition+layer.
-- `Migrate` stamps `SchemaVersion` unconditionally, and `ProjectSnapshot.Copy` re-runs a full migration
-  pass per snapshot.
-- The two pre-existing timing flakes (`TimelinePlayheadTests`, `CrossfadeSurfaceTests`).
+- **The live "automated now" inspector readout.** The document-side note is wired (`LevelAutomationNote`
+  says the value is a base and gives the track's range); showing the *current* sampled value needs a
+  playhead reading plumbed from the engine to the inspector, which is a new query path rather than a fix.
+- **Native factories present `displayName = kind`.** The ABI has no factory-level display-name field, so
+  this needs an append-only header addition — worth doing with the next ABI change rather than alone.
+- **Video-side descriptor publication without a live instance** (audio-only today).

@@ -245,7 +245,14 @@ public sealed class CrossfadeSurfaceTests
             s => ReferenceEquals(s.Surface, secondSurface),
             TimeSpan.FromSeconds(20),
             "the replacement surface to composite");
-        Assert.InRange(second.RenderTime, TimeSpan.Zero, TimeSpan.FromSeconds(10));
-        Assert.InRange(second.MasterTime, TimeSpan.Zero, TimeSpan.FromSeconds(10));
+        // What this asserts is that the surface follows the NEW clip's coordinate - near its start -
+        // rather than continuing the outgoing clip's position. The lower bound carries one frame of
+        // tolerance because the first composite after a butt splice can be sampled marginally before the
+        // incoming clip's zero: the composite pump and the clock advance on different threads, so a few
+        // milliseconds either side of the splice is scheduling weather, not a regression. Asserting an
+        // exact floor of zero made this test fail intermittently under parallel load (observed -9.5 ms).
+        var frame = TimeSpan.FromMilliseconds(50);
+        Assert.InRange(second.RenderTime, -frame, TimeSpan.FromSeconds(10));
+        Assert.InRange(second.MasterTime, -frame, TimeSpan.FromSeconds(10));
     }
 }

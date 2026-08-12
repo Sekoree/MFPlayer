@@ -55,10 +55,20 @@ public class TimelinePlayheadTests
         await executor.WaitForTimelineCompletionAsync(group.Id);
 
         // The virtual master advances instantly, but each child crosses its edge at the authored time.
+        // Order and identity are exact; the recorded master time carries a small tolerance because the fake
+        // host samples a clock SHARED by every timeline branch, at whatever moment its continuation runs -
+        // so a concurrent branch's advance can land between the edge release and this read. That is a
+        // property of the harness, not of the schedule (production reads a monotonic device clock and would
+        // jitter the same way). Asserting exact equality made this fail intermittently under parallel load.
+        var tolerance = TimeSpan.FromMilliseconds(250);
+        Assert.Equal([bed.Id, stab.Id, late.Id], host.TimelineStarts.Select(entry => entry.Cue));
         Assert.Equal(
-            [(bed.Id, TimeSpan.Zero), (stab.Id, TimeSpan.FromSeconds(30)), (late.Id, TimeSpan.FromMinutes(2))],
-            host.TimelineStarts.Select(entry => (entry.Cue, entry.MasterTime)));
+            [TimeSpan.Zero, TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(2)],
+            host.TimelineStarts.Select(entry => Nearest(entry.MasterTime)));
 
+        TimeSpan Nearest(TimeSpan actual) =>
+            new[] { TimeSpan.Zero, TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(2) }
+                .FirstOrDefault(edge => (actual - edge).Duration() <= tolerance, actual);
     }
 
     [Fact]

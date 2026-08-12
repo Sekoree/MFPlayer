@@ -17,19 +17,35 @@ public static class AutomationMigration
         IReadOnlyDictionary<Guid, TimeSpan>? durations = null)
     {
         ArgumentNullException.ThrowIfNull(project);
-        var counts = new Counts();
 
+        // Placement id repair is cheap, idempotent and must hold for hand-edited files at any schema.
+        foreach (var cue in project.AllCues())
+            foreach (var placement in CuePlacements.Of(cue))
+            {
+                if (placement.Id == Guid.Empty)
+                    placement.Id = Guid.NewGuid();
+            }
+
+        // Nothing to convert: no schema-1 lane anywhere, and no earlier pass left one waiting on probe
+        // facts. Returning here matters because EVERY deserialize runs this - and ProjectSnapshot.Copy is a
+        // serialize/deserialize round trip, so a runtime snapshot was paying for a full migration walk
+        // (plus a re-stamp of the migration summary) each time one was taken.
+        // The test is the LANES, not the stamped version: a project built in code carries the current
+        // schema number by default and may still have legacy lanes hand-assigned onto it.
+        if (project.LastAutomationMigration is not { UnresolvedLanes: > 0 }
+            && !project.AllCues().Any(cue => LegacyLanes(cue).Count > 0))
+        {
+            project.SchemaVersion = HaCueProject.CurrentSchemaVersion;
+            return new Result(0, 0, 0);
+        }
+
+        var counts = new Counts();
         foreach (var cue in project.AllCues())
         {
             // Track ids are unique PROJECT-wide, so a migrated lane may not collide with a track that is
             // already there - whether hand-authored or minted by an earlier partial migration pass.
             foreach (var existing in CueAutomation.Of(cue))
                 counts.ClaimTrackId(existing.Id);
-            foreach (var placement in CuePlacements.Of(cue))
-            {
-                if (placement.Id == Guid.Empty)
-                    placement.Id = Guid.NewGuid();
-            }
         }
 
         foreach (var list in project.CueLists)

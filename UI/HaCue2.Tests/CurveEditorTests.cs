@@ -267,6 +267,49 @@ public sealed class CurveEditorTests
             Assert.Contains(shell.Project.CurvePresets, item => item.Name == "House fade (2)");
         });
 
+    /// <summary>The inline lane holds a drag in a LOCAL draft, like the dedicated editor: the document is
+    /// untouched until release, and Escape discards without needing an undo. It used to journal a whole
+    /// list replacement and refresh the entire timeline on every pointer motion.</summary>
+    [Fact]
+    public Task TheInlineLaneDragsInADraftAndCommitsOnceOnRelease() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var group = shell.Project.AllCues().OfType<GroupCueNode>()
+                .First(candidate => candidate.FireMode == GroupFireMode.Timeline);
+            var media = group.Children.OfType<MediaCueNode>().First();
+            var lane = VolumeTrack(media, 8, (0.1, 0), (0.5, -6));
+            shell.Runtime.MediaDurations[media.Id] = TimeSpan.FromSeconds(8);
+            shell.Cues.Timeline.Show(group);
+            var row = shell.Cues.Timeline.Lanes.Single(item => item.EffectLaneId == lane.Id);
+            var before = shell.Journal.Log.Count;
+
+            shell.Cues.Timeline.ApplyLaneGesture(
+                row, new CurveGesture(CurveGestureKind.Select, 0, 0, 0));
+            shell.Cues.Timeline.ApplyLaneGesture(
+                row, new CurveGesture(CurveGestureKind.Move, 0, 0.2, 0));
+            shell.Cues.Timeline.ApplyLaneGesture(
+                row, new CurveGesture(CurveGestureKind.Move, 0, 0.3, 0));
+
+            // Mid-drag: nothing has reached the document.
+            Assert.Equal(800, lane.Keyframes[0].TimeMs);
+            Assert.Equal(before, shell.Journal.Log.Count);
+
+            shell.Cues.Timeline.EndGesture();
+            Assert.Equal(2_400, lane.Keyframes[0].TimeMs);
+
+            // And a cancelled drag leaves the document exactly as it was, with nothing to undo.
+            row = shell.Cues.Timeline.Lanes.Single(item => item.EffectLaneId == lane.Id);
+            var committed = shell.Journal.Log.Count;
+            shell.Cues.Timeline.ApplyLaneGesture(
+                row, new CurveGesture(CurveGestureKind.Select, 0, 0, 0));
+            shell.Cues.Timeline.ApplyLaneGesture(
+                row, new CurveGesture(CurveGestureKind.Move, 0, 0.9, 0));
+            shell.Cues.Timeline.CancelGesture();
+
+            Assert.Equal(2_400, lane.Keyframes[0].TimeMs);
+            Assert.Equal(committed, shell.Journal.Log.Count);
+        });
+
     [Fact]
     public Task TimelineKeyframesCanBeMultiSelectedMovedCopiedPastedAndDeleted() =>
         ShellFixture.WithShell(shell =>

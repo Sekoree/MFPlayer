@@ -208,7 +208,9 @@ public static class TimelinePresentation
         _ => "ac",
     };
 
-    private static double Normalize(double value, AutomationPropertyDescriptor? descriptor)
+    /// <summary>A property value as a 0..1 lane height. Shared with the timeline's in-flight drag draft,
+    /// so a dragged lane projects on exactly the same basis the committed one does.</summary>
+    internal static double Normalize(double value, AutomationPropertyDescriptor? descriptor)
     {
         if (descriptor is null || descriptor.Value.Maximum <= descriptor.Value.Minimum)
             return Math.Clamp(value, 0, 1);
