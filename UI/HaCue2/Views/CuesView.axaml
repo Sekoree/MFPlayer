@@ -81,6 +81,7 @@
             <MenuFlyout>
               <MenuItem Header="Group" Click="OnAddCue" Tag="Group" />
               <MenuItem Header="Action" Click="OnAddCue" Tag="Action" />
+              <MenuItem Header="Automation" Click="OnAddCue" Tag="Automation" />
               <MenuItem Header="Fade" Click="OnAddCue" Tag="Fade" />
               <MenuItem Header="Jump" Click="OnAddCue" Tag="Jump" />
               <MenuItem Header="Patch" Click="OnAddCue" Tag="Patch" />

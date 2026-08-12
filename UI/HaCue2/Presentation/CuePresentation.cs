@@ -480,6 +480,7 @@ public static class CuePresentation
         MediaCueNode => ViewModels.CueKind.Media,
         GroupCueNode => ViewModels.CueKind.Group,
         ActionCueNode => ViewModels.CueKind.Action,
+        AutomationCueNode => ViewModels.CueKind.Automation,
         FadeCueNode => ViewModels.CueKind.Fade,
         JumpCueNode => ViewModels.CueKind.Jump,
         VisualizerCueNode => ViewModels.CueKind.Visualizer,
@@ -629,8 +630,10 @@ public static class CuePresentation
                     badges.Add(new Badge("loop"));
                 foreach (var placement in media.Placements)
                     badges.Add(new Badge(CompositionName(project, placement)));
-                foreach (var lane in media.EffectLanes)
-                    badges.Add(LaneBadge(lane));
+                foreach (var track in media.AutomationTracks)
+                    badges.Add(AutomationBadge(track));
+                foreach (var lane in media.LegacyEffectLanes ?? [])
+                    badges.Add(LegacyLaneBadge(lane));
                 break;
 
             case GroupCueNode group:
@@ -642,8 +645,10 @@ public static class CuePresentation
                     badges.Add(new Badge("hold"));
                 foreach (var placement in text.Placements)
                     badges.Add(new Badge(CompositionName(project, placement)));
-                foreach (var lane in text.EffectLanes)
-                    badges.Add(LaneBadge(lane));
+                foreach (var track in text.AutomationTracks)
+                    badges.Add(AutomationBadge(track));
+                foreach (var lane in text.LegacyEffectLanes ?? [])
+                    badges.Add(LegacyLaneBadge(lane));
                 break;
 
             case ActionCueNode action:
@@ -676,11 +681,21 @@ public static class CuePresentation
         return badges;
     }
 
-    private static Badge LaneBadge(EffectLane lane) => lane.Kind switch
+    private static Badge AutomationBadge(AutomationTrack track) => track.Target.PropertyId switch
     {
-        EffectLaneKind.Volume => new Badge($"env {lane.Points.Count}"),
+        AutomationPropertyIds.CueVolume => new Badge($"vol {track.Keyframes.Count}"),
+        AutomationPropertyIds.PlacementOpacity => new Badge($"opac {track.Keyframes.Count}"),
+        AutomationPropertyIds.OscValue => new Badge("OSC auto", Gel.Steel),
+        AutomationPropertyIds.MidiControlValue => new Badge("MIDI auto", Gel.Steel),
+        _ => new Badge($"auto {track.Keyframes.Count}"),
+    };
+
+    private static Badge LegacyLaneBadge(EffectLane lane) => lane.Kind switch
+    {
+        EffectLaneKind.Volume => new Badge($"vol {lane.Points.Count}"),
         EffectLaneKind.Opacity => new Badge($"opac {lane.Points.Count}"),
-        _ => new Badge(lane.Kind == EffectLaneKind.OscRamp ? "OSC ramp" : "MIDI ramp", Gel.Steel),
+        EffectLaneKind.OscRamp => new Badge("OSC auto", Gel.Steel),
+        _ => new Badge("MIDI auto", Gel.Steel),
     };
 
     private static string CompositionName(HaCueProject project, LayerPlacement placement) =>

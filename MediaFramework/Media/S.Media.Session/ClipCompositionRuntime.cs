@@ -2487,7 +2487,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// surface-backed clip behaves exactly like a frame-backed one for transport purposes.
     /// </summary>
     /// <summary>
-    /// The ONE opacity composition for a placed layer: <c>authored x fade x automation</c>.
+    /// The ONE opacity composition for a placed layer: <c>(animated authored or authored x legacy factor) x fade</c>.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -2499,7 +2499,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// </para>
     /// <para>
     /// Each component has exactly one writer - placement applies own <see cref="Base"/>, fade paths own
-    /// <see cref="Fade"/>, the automation lane owns <see cref="Automation"/> - so they compose by
+    /// <see cref="Fade"/>, the automation track owns <see cref="Automation"/> - so they compose by
     /// construction. Writes race only in the sense that two owners can recompute the product in either
     /// order; both land on the same value once both have written, and the worst case is one frame at a
     /// stale product.
@@ -2515,11 +2515,14 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// authored opacity on every step and darken the layer geometrically.</summary>
         public float Fade { get; set; } = 1f;
 
-        /// <summary>The opacity-lane factor (1 = no automation).</summary>
+        /// <summary>The automated opacity value, or a version-1 lane factor when not absolute.</summary>
         public float Automation { get; set; } = 1f;
 
+        /// <summary>When true, automation is the authored opacity rather than a multiplier over Base.</summary>
+        public bool AutomationIsAbsolute { get; set; }
+
         /// <summary>What actually renders.</summary>
-        public float Effective => Math.Clamp(Base * Fade * Automation, 0f, 1f);
+        public float Effective => Math.Clamp((AutomationIsAbsolute ? Automation : Base * Automation) * Fade, 0f, 1f);
     }
 
     public interface IPlacedClipLayer : IDisposable
@@ -2534,8 +2537,11 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// opacity that renders; see <see cref="EffectiveOpacity"/>.</summary>
         float FadeLevel { get; set; }
 
-        /// <summary>The opacity-automation component, driven by an opacity lane. 1 = no automation.</summary>
+        /// <summary>The opacity-automation component, driven by an automation track. 1 = no automation.</summary>
         float AutomationLevel { get; set; }
+
+        /// <summary>Sets either legacy multiplicative automation or an absolute authored opacity.</summary>
+        void SetAutomationLevel(float level, bool absolute);
 
         /// <summary>The composed opacity actually handed to the compositor.</summary>
         float EffectiveOpacity { get; }
@@ -2627,6 +2633,13 @@ public sealed class ClipCompositionRuntime : IDisposable
                 _level.Automation = Math.Clamp(value, 0f, 1f);
                 RawSlot.Opacity = _level.Effective;
             }
+        }
+
+        public void SetAutomationLevel(float level, bool absolute)
+        {
+            _level.Automation = Math.Clamp(level, 0f, 1f);
+            _level.AutomationIsAbsolute = absolute;
+            RawSlot.Opacity = _level.Effective;
         }
 
         public float EffectiveOpacity => _level.Effective;
@@ -2818,6 +2831,13 @@ public sealed class ClipCompositionRuntime : IDisposable
                 _level.Automation = Math.Clamp(value, 0f, 1f);
                 RawSlot.Opacity = _level.Effective;
             }
+        }
+
+        public void SetAutomationLevel(float level, bool absolute)
+        {
+            _level.Automation = Math.Clamp(level, 0f, 1f);
+            _level.AutomationIsAbsolute = absolute;
+            RawSlot.Opacity = _level.Effective;
         }
 
         public float EffectiveOpacity => _level.Effective;

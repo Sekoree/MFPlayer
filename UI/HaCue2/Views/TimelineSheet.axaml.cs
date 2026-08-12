@@ -154,7 +154,7 @@ public partial class TimelineSheet : UserControl
             || this.FindAncestorOfType<Window>() is not { } owner)
             return;
 
-        var window = new CurveEditorWindow(editor);
+        var window = new AutomationEditorWindow(editor);
         window.Closed += (_, _) => timeline.Refresh();
         window.ShowDialog(owner);
     }
@@ -268,7 +268,7 @@ public partial class TimelineSheet : UserControl
         _rulerDragging = false;
 
     /// <summary>A lane label click selects the lane's cue — the same selection the tree, the
-    /// inspector, "+ EFFECT LANE" and DUCK all act on.</summary>
+    /// inspector, "+ AUTOMATION" and DUCK all act on.</summary>
     private void OnLaneLabelPressed(object? sender, PointerPressedEventArgs e)
     {
         if (Timeline is not { Owner: { } cues } timeline
@@ -359,7 +359,7 @@ public partial class TimelineSheet : UserControl
     }
 
     /// <summary>
-    /// Adds an effect lane to the selected cue, from the footer's picker.
+    /// Adds an automation track to the selected cue, from the footer's property picker.
     /// </summary>
     /// <remarks>
     /// Delegates to the inspector's <c>AddLane</c> — the one place that knows which kinds a cue can
@@ -370,12 +370,12 @@ public partial class TimelineSheet : UserControl
     {
         if (Timeline is not { Owner.Inspector: { } inspector } timeline
             || (sender as Control)?.Tag is not string tag
-            || !Enum.TryParse<EffectLaneKind>(tag, out var kind))
+            || !int.TryParse(tag, out var kind))
             return;
 
         // The menu already disables what the selection cannot carry, so reaching here with a refusal
         // means no cue is selected at all — which the menu has no way to grey out.
-        if (!inspector.CanAddLane((int)kind))
+        if (!inspector.CanAddLane(kind))
         {
             timeline.TransportProblem =
                 "select a cue that can carry that lane (and does not have one yet)";
@@ -383,7 +383,7 @@ public partial class TimelineSheet : UserControl
         }
 
         timeline.TransportProblem = "";
-        inspector.AddLane((int)kind);
+        inspector.AddLane(kind);
         timeline.Refresh();
     }
 

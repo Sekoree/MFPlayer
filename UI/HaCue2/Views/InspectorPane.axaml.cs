@@ -80,7 +80,7 @@ public partial class InspectorPane : UserControl
         if (this.FindAncestorOfType<Window>() is not { } owner)
             return;
 
-        var window = new CurveEditorWindow(editor);
+        var window = new AutomationEditorWindow(editor);
         window.Closed += (_, _) => inspector.Reload();
         window.ShowDialog(owner);
     }

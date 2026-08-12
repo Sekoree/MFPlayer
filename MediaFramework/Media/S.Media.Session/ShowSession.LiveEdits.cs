@@ -17,6 +17,30 @@ namespace S.Media.Session;
 public sealed partial class ShowSession
 {
 
+    /// <summary>Live-edit the active cue's absolute authored volume component. The value is the same
+    /// linear level carried by <see cref="ShowClipBinding.VolumeEnvelope"/> and therefore continues to
+    /// compose with fades, master trim and route/send gains.</summary>
+    public Task<bool> ApplyActiveVolumeAsync(string cueId, float level) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(cueId) is not { } voice)
+                return Task.FromResult(false);
+            voice.ApplyEnvelopeLevel(level);
+            return Task.FromResult(true);
+        });
+
+    /// <summary>Live automation for one exact placement. Unlike a placement edit, this changes only
+    /// the automation component and leaves the authored geometry/opacity intact.</summary>
+    public Task<bool> ApplyActivePlacementAutomationAsync(
+        string cueId, string compositionId, int layerIndex, float level, bool absolute = true) =>
+        InvokeAsync(() =>
+        {
+            if (ActiveVoiceOf(cueId) is not { } voice)
+                return Task.FromResult(false);
+            voice.ApplyOpacityAutomation(compositionId, layerIndex, level, absolute);
+            return Task.FromResult(true);
+        });
+
     /// <summary>Live-edit the active cue's composition placement while it plays (the GUI's
     /// <c>UpdateActiveCueVideoPlacement</c>) - repositions / re-opacities its layer. Returns false when the
     /// cue isn't the active clip on any group (or has no composition layer).</summary>

@@ -47,6 +47,14 @@ public sealed record ShowClipPlacement(
     int LayerIndex = 0,
     ShowVideoPlacement? Placement = null);
 
+/// <summary>Opacity automation for one exact video placement. The composition/layer pair is the runtime
+/// identity used by live placement edits and remains stable when a clip fans one decode to several canvases.</summary>
+public sealed record ShowPlacementEnvelope(
+    string CompositionId,
+    int LayerIndex,
+    IReadOnlyList<ShowEnvelopePoint> Points,
+    bool Absolute = false);
+
 /// <summary>One audio output a clip plays on (GUI per-cue audio routing - a group of <c>CueAudioRoute</c>s to
 /// the same output line). Unlike a per-group <see cref="ShowAudioOutput"/>, this is carried on the clip so a
 /// cue plays on exactly its routed outputs. <see cref="ChannelMatrix"/> is the N→M <see cref="ChannelMap"/>
@@ -274,19 +282,24 @@ public sealed record ShowClipBinding(
     /// (<see cref="AudioRoutes"/> / group outputs) unchanged.</summary>
     public IReadOnlyList<ShowClipLogicalSend>? LogicalSends { get; init; }
 
-    /// <summary>Volume-automation keyframes (GUI <c>MediaCueNode.VolumeEnvelope</c>), sorted by time.
+    /// <summary>Volume-automation keyframes, sorted by time.
     /// Times are CLIP positions (post-<see cref="StartOffset"/>), so the envelope survives seeks and
     /// restarts on every loop pass. The envelope factor MULTIPLIES the fade level (fade-in/out, fade
     /// cue, stop fade) - it never replaces it. Null/empty = no automation (and no runner started).</summary>
     public IReadOnlyList<ShowEnvelopePoint>? VolumeEnvelope { get; init; }
 
-    /// <summary>Opacity-automation keyframes for this clip's video layers, sorted by time. Times are CLIP
+    /// <summary>Legacy opacity-factor keyframes for all of this clip's video layers, sorted by time. Times are CLIP
     /// positions on the same basis as <see cref="VolumeEnvelope"/>, and the factor composes the same way:
     /// it MULTIPLIES each layer's authored opacity and whatever a fade has reached, so automation, fades
     /// and live placement edits coexist instead of overwriting one another.
     /// <para>Levels are clamped to [0, 1] - unlike gain there is no headroom above full, so a point above
     /// 1 is a clamp rather than an error. Null/empty = no automation (and no runner started).</para></summary>
     public IReadOnlyList<ShowEnvelopePoint>? OpacityEnvelope { get; init; }
+
+    /// <summary>Placement-addressed opacity automation. Each envelope declares whether its sampled level
+    /// is the absolute authored opacity or a legacy multiplier. This supersedes <see cref="OpacityEnvelope"/>,
+    /// which remains readable for version-1 documents and applies its one factor to every placement.</summary>
+    public IReadOnlyList<ShowPlacementEnvelope>? PlacementOpacityEnvelopes { get; init; }
 }
 
 /// <summary>One volume-envelope keyframe: the clip-relative <paramref name="Time"/>, the LINEAR gain
@@ -352,6 +365,7 @@ public sealed record ShowDocument(
 [JsonSourceGenerationOptions(WriteIndented = true)]
 [JsonSerializable(typeof(ShowDocument))]
 [JsonSerializable(typeof(ShowClipBinding))]
+[JsonSerializable(typeof(ShowPlacementEnvelope))]
 [JsonSerializable(typeof(ShowComposition))]
 // Standalone root for the geometry-effect registry factory (OutputMappingGeometryEffect.FromJson).
 [JsonSerializable(typeof(ClipOutputMappingSpec))]

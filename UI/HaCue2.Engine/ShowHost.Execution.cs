@@ -18,6 +18,8 @@ namespace HaCue2.Engine;
 /// </remarks>
 public sealed partial class ShowHost
 {
+    private readonly Lock _automationRunGate = new();
+    private readonly Dictionary<Guid, CancellationTokenSource> _automationRuns = [];
     /// <summary>
     /// What firing a cue means, for every kind — extracted so it can be tested without devices.
     /// </summary>
@@ -54,6 +56,9 @@ public sealed partial class ShowHost
     async Task ICueExecutionHost.StopCueAsync(Guid cueId)
     {
         _outbound.Interrupt(cueId);
+        lock (_automationRunGate)
+            if (_automationRuns.TryGetValue(cueId, out var automation))
+                automation.Cancel();
         await _visualizers.StopAsync(cueId).ConfigureAwait(false);
         await _session.StopCueAsync(cueId.ToString()).ConfigureAwait(false);
         Executor.OnStopped(cueId);
@@ -61,6 +66,130 @@ public sealed partial class ShowHost
 
     Task<string?> ICueExecutionHost.SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint) =>
         _actions.SendAsync(action, endpoint);
+
+    async Task<bool> ICueExecutionHost.RunAutomationAsync(AutomationCueNode automation, CueList? list)
+    {
+        var duration = TimeSpan.FromMilliseconds(Math.Max(1, automation.DurationMs));
+        CancellationTokenSource cancellation;
+        lock (_automationRunGate)
+        {
+            if (_automationRuns.Remove(automation.Id, out var previous))
+            {
+                previous.Cancel();
+                previous.Dispose();
+            }
+            cancellation = CancellationTokenSource.CreateLinkedTokenSource(_life.Token);
+            _automationRuns[automation.Id] = cancellation;
+        }
+
+        Remember(automation.Id, list?.Id ?? Guid.Empty, groupId: "");
+        _outbound.Start(automation, duration);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try
+        {
+            while (true)
+            {
+                var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+                var at = Math.Min((long)elapsed.TotalMilliseconds, automation.DurationMs);
+                await ApplyAutomationAsync(automation, at).ConfigureAwait(false);
+                if (elapsed >= duration)
+                    break;
+                await Task.Delay(TimeSpan.FromMilliseconds(25), cancellation.Token).ConfigureAwait(false);
+            }
+
+            if (automation.Completion == AutomationCompletion.RestoreBase)
+                await RestoreAutomationAsync(automation).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            if (automation.Completion == AutomationCompletion.RestoreBase)
+                await RestoreAutomationAsync(automation).ConfigureAwait(false);
+            return false;
+        }
+        finally
+        {
+            lock (_automationRunGate)
+                if (_automationRuns.GetValueOrDefault(automation.Id) == cancellation)
+                    _automationRuns.Remove(automation.Id);
+            cancellation.Dispose();
+            Forget(automation.Id.ToString());
+        }
+    }
+
+    private async Task ApplyAutomationAsync(AutomationCueNode automation, long timeMs)
+    {
+        foreach (var track in automation.AutomationTracks.Where(track => track.Enabled))
+        {
+            if (AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External)
+                continue; // OutboundEffects owns rate limiting, coalescing and terminal delivery.
+            if (track.Target.CueId is not { } targetId || _project.FindCue(targetId) is not { } target)
+                continue;
+            var value = AutomationEvaluator.Sample(track, _project, timeMs, AuthoredValue(target, track));
+            await ApplyAutomationValueAsync(target, track, value).ConfigureAwait(false);
+        }
+    }
+
+    private async Task RestoreAutomationAsync(AutomationCueNode automation)
+    {
+        foreach (var track in automation.AutomationTracks.Where(track => track.Enabled))
+            if (track.Target.CueId is { } targetId && _project.FindCue(targetId) is { } target)
+                await ApplyAutomationValueAsync(target, track, AuthoredValue(target, track)).ConfigureAwait(false);
+    }
+
+    private async Task ApplyAutomationValueAsync(CueNode target, AutomationTrack track, double value)
+    {
+        switch (track.Target.PropertyId)
+        {
+            case AutomationPropertyIds.CueVolume when target is MediaCueNode media:
+                await _session.ApplyActiveVolumeAsync(media.Id.ToString(), Linear(value)).ConfigureAwait(false);
+                break;
+            case AutomationPropertyIds.PlacementOpacity
+                when track.Target.ObjectId is { } placementId
+                     && CuePlacements.Of(target).FirstOrDefault(placement => placement.Id == placementId) is { } placement:
+                await _session.ApplyActivePlacementAutomationAsync(
+                    target.Id.ToString(), placement.CompositionId.ToString(), placement.LayerIndex,
+                    (float)Math.Clamp(value, 0, 1)).ConfigureAwait(false);
+                break;
+            case AutomationPropertyIds.GroupAudioTrim when target is GroupCueNode group:
+                foreach (var mediaChild in Descendants(group).OfType<MediaCueNode>())
+                    await _session.ApplyActiveVolumeAsync(
+                        mediaChild.Id.ToString(), Linear(mediaChild.LevelDb + value)).ConfigureAwait(false);
+                break;
+            case AutomationPropertyIds.GroupVideoOpacity when target is GroupCueNode videoGroup:
+                foreach (var child in Descendants(videoGroup))
+                    foreach (var placement in CuePlacements.Of(child))
+                        await _session.ApplyActivePlacementAutomationAsync(
+                            child.Id.ToString(), placement.CompositionId.ToString(), placement.LayerIndex,
+                            (float)Math.Clamp(placement.Opacity * value, 0, 1)).ConfigureAwait(false);
+                break;
+        }
+    }
+
+    private static double AuthoredValue(CueNode target, AutomationTrack track) => track.Target.PropertyId switch
+    {
+        AutomationPropertyIds.CueVolume when target is MediaCueNode media => media.LevelDb,
+        AutomationPropertyIds.PlacementOpacity when track.Target.ObjectId is { } placementId =>
+            CuePlacements.Of(target).FirstOrDefault(placement => placement.Id == placementId)?.Opacity ?? 1,
+        AutomationPropertyIds.GroupAudioTrim => 0,
+        AutomationPropertyIds.GroupVideoOpacity => 1,
+        _ => AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Value.Default ?? 0,
+    };
+
+    private static IEnumerable<CueNode> Descendants(GroupCueNode group)
+    {
+        foreach (var child in group.Children)
+        {
+            yield return child;
+            if (child is GroupCueNode nested)
+                foreach (var descendant in Descendants(nested))
+                    yield return descendant;
+        }
+    }
+
+    private static float Linear(double decibels) => decibels <= GainRange.SilenceFloorDb
+        ? 0f
+        : (float)Math.Pow(10, Math.Clamp(decibels, GainRange.SilenceFloorDb, 12) / 20);
 
     /// <summary>A wait that reports whether it completed, so a cancelled show stops its chains.</summary>
     async Task<bool> ICueExecutionHost.DelayAsync(TimeSpan duration)
@@ -272,16 +401,17 @@ public sealed partial class ShowHost
         if (_project.FindCue(cueId) is not MediaCueNode media)
             return;
 
-        var sends = media.Sends
-            .Select(send => new ShowClipLogicalSend(
-                send.SourceChannel,
-                send.LogicalChannelId.ToString(),
-                send.Muted || levelDb <= GainRange.SilenceFloorDb
+        // Send trims and cue volume are independent authorities. The latter belongs in the voice's
+        // envelope component so fades/master trim keep composing with it, exactly as compiled tracks do.
+        await _session.ApplyActiveLogicalSendsAsync(
+                cueId.ToString(), ShowCompiler.LogicalSends(media))
+            .ConfigureAwait(false);
+        await _session.ApplyActiveVolumeAsync(
+                cueId.ToString(),
+                levelDb <= GainRange.SilenceFloorDb
                     ? 0f
-                    : (float)Math.Pow(10, (send.GainDb + levelDb) / 20)))
-            .ToList();
-
-        await _session.ApplyActiveLogicalSendsAsync(cueId.ToString(), sends).ConfigureAwait(false);
+                    : (float)Math.Pow(10, Math.Clamp(levelDb, GainRange.SilenceFloorDb, 12) / 20))
+            .ConfigureAwait(false);
     }
 
     async Task ICueExecutionHost.FadeCueAsync(

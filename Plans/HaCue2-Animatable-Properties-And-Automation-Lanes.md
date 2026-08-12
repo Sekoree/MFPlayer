@@ -1,10 +1,17 @@
 # HaCue2 animatable properties and automation lanes
 
-Status: proposed architecture
+Status: adopted; schema-2 foundation and primary editor implemented
 
 Date: 2026-08-12
 
 Code inspected: `d72ef7e7` (`next-experiment`)
+
+Implementation update (2026-08-12): phase 1's model, migration, runtime lowering, and primary editor
+are implemented with absolute-time/native-unit tracks, volume and placement-opacity lowering, and a
+scrollable single-cue lane. The schema and runtime foundations for automation cues and multiple
+OSC/MIDI targets are also present. Waveform context, shared pause/seek timing for host-run automation
+cues, group modifiers, placement transforms, and effect-instance parameter racks remain the later
+work described below.
 
 This supersedes the `EffectLaneKind`/shared whole-curve-editor direction in
 `Plans/HaCue-Feature-Ideas.md` and the automation-lane portions of

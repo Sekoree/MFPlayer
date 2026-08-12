@@ -361,6 +361,19 @@ public sealed partial class ShowSession
                 placed.Slot.AutomationLevel = level;
         }
 
+        /// <summary>Applies automation to one addressed placement without disturbing the other layers
+        /// fanned from the same decoded source.</summary>
+        public void ApplyOpacityAutomation(string compositionId, int layerIndex, float level, bool absolute)
+        {
+            if (State == VoiceState.Retired)
+                return;
+            level = Math.Clamp(level, 0f, 1f);
+            foreach (var placed in Layers)
+                if (string.Equals(placed.CompositionId, compositionId, StringComparison.Ordinal)
+                    && placed.LayerIndex == layerIndex)
+                    placed.Slot.SetAutomationLevel(level, absolute);
+        }
+
         /// <summary>Applies one envelope-automation step: stores the factor and rewrites the route gains
         /// through <see cref="ApplyAudioScale"/> so the fade × envelope product stays in that one place. An
         /// unchanged factor (flat segment) skips the router writes entirely. Audio-only - layer opacities

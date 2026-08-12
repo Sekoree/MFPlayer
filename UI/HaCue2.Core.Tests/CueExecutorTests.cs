@@ -1046,4 +1046,20 @@ public class CueExecutorTests
         // The chain must not run on past a cue that did not do its job.
         Assert.Empty(host.Played);
     }
+
+    [Fact]
+    public async Task AnAutomationCueIsDispatchedAsItsOwnCueKind()
+    {
+        var automation = new AutomationCueNode
+        {
+            Number = new CueNumber("1"),
+            Label = "Bring up projection",
+            DurationMs = 2_000,
+        };
+        var (executor, host, _) = Show(automation);
+
+        Assert.True(await executor.FireAsync(automation.Id));
+        Assert.Equal([automation.Id], host.Automations);
+        Assert.Empty(host.Played);
+    }
 }

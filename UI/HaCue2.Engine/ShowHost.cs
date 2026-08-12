@@ -879,6 +879,14 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         return _session.ApplyActiveLogicalSendsAsync(cueId.ToString(), sends);
     }
 
+    /// <summary>Pushes the cue's absolute authored dB property into the live envelope component.</summary>
+    public Task<bool> ApplyActiveVolumeAsync(Guid cueId, double levelDb) =>
+        _session.ApplyActiveVolumeAsync(
+            cueId.ToString(),
+            levelDb <= GainRange.SilenceFloorDb
+                ? 0f
+                : (float)Math.Pow(10, Math.Clamp(levelDb, GainRange.SilenceFloorDb, 12) / 20));
+
     /// <summary>
     /// Pushes the project's patch cells onto the live bay without reloading the document.
     /// </summary>

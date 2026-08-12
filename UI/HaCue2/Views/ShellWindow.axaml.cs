@@ -20,6 +20,13 @@ public partial class ShellWindow : Window
     private readonly EmergencyKeySequence _emergencyKeys = new();
     private S.Media.Source.YouTube.YouTubePreparationQueue? _youTubeDownloads;
 
+    /// <summary>
+    /// Completes once the shell's asynchronous startup work has either succeeded or reported its
+    /// failure. The launch smoke awaits this before requesting shutdown so native compositor probing
+    /// cannot race process teardown under NativeAOT.
+    /// </summary>
+    internal Task StartupTask { get; set; } = Task.CompletedTask;
+
     public ShellWindow() => InitializeComponent();
 
     /// <summary>

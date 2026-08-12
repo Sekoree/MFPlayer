@@ -57,16 +57,14 @@ public static class ProjectValidator
         foreach (var cue in project.AllCues())
         {
             Identity(cue.Id, "cue", cue.Id.ToString());
-            var lanes = cue switch
+            foreach (var placement in CuePlacements.Of(cue))
+                Identity(placement.Id, "placement", cue.Id.ToString());
+            foreach (var track in CueAutomation.Of(cue))
             {
-                MediaCueNode media => media.EffectLanes,
-                TextCueNode text => text.EffectLanes,
-                VisualizerCueNode visualizer => visualizer.EffectLanes,
-                GroupCueNode group => group.EffectLanes,
-                _ => [],
-            };
-            foreach (var lane in lanes)
-                Identity(lane.Id, "effectLane", cue.Id.ToString());
+                Identity(track.Id, "automationTrack", cue.Id.ToString());
+                foreach (var key in track.Keyframes)
+                    Identity(key.Id, "automationKeyframe", cue.Id.ToString());
+            }
         }
         foreach (var channel in project.AudioPatch.LogicalChannels)
             Identity(channel.Id, "logicalOutput", channel.Id.ToString());
@@ -443,7 +441,8 @@ public static class ProjectValidator
 
                 foreach (var placement in media.Placements)
                     ValidatePlacement(project, placement, cue, issues);
-                ValidateLanes(project, media.EffectLanes, cue, issues);
+                ValidateAutomation(project, media.AutomationTracks, cue, issues);
+                ValidateLegacyAutomation(project, media.LegacyEffectLanes, cue, issues);
                 ValidateCurve(project, media.FadeInCurve, cue, issues);
                 ValidateCurve(project, media.FadeOutCurve, cue, issues);
                 ValidateNonNegativeTimes(
@@ -468,7 +467,8 @@ public static class ProjectValidator
                     issues.Add(Error("cue", id, $"Q{cue.Number} uses an unknown text alignment."));
                 foreach (var placement in text.Placements)
                     ValidatePlacement(project, placement, cue, issues);
-                ValidateLanes(project, text.EffectLanes, cue, issues);
+                ValidateAutomation(project, text.AutomationTracks, cue, issues);
+                ValidateLegacyAutomation(project, text.LegacyEffectLanes, cue, issues);
                 ValidateCurve(project, text.FadeInCurve, cue, issues);
                 ValidateCurve(project, text.FadeOutCurve, cue, issues);
                 ValidateNonNegativeTimes(
@@ -480,13 +480,25 @@ public static class ProjectValidator
                 break;
 
             case GroupCueNode group:
-                ValidateLanes(project, group.EffectLanes, cue, issues);
+                ValidateAutomation(project, group.AutomationTracks, cue, issues);
+                ValidateLegacyAutomation(project, group.LegacyEffectLanes, cue, issues);
                 ValidateCurve(project, group.CrossfadeCurve, cue, issues);
                 break;
 
             case ActionCueNode action when action.EndpointId is { } endpointId
                                            && project.ActionEndpoints.All(e => e.Id != endpointId):
                 issues.Add(Error("cue", id, $"Q{cue.Number} sends to an endpoint that no longer exists."));
+                break;
+
+            case AutomationCueNode automation:
+                ValidateNonNegativeTimes(cue, issues, (automation.DurationMs, "automation duration"));
+                if (!Enum.IsDefined(automation.Completion))
+                    issues.Add(Error("cue", id, $"Q{cue.Number} has an unknown automation completion mode."));
+                ValidateAutomation(project, automation.AutomationTracks, cue, issues);
+                foreach (var key in automation.AutomationTracks.SelectMany(track => track.Keyframes)
+                             .Where(key => key.TimeMs > automation.DurationMs))
+                    issues.Add(Warn("cue", id,
+                        $"Q{cue.Number} has an automation key after the cue's duration; it will not be reached."));
                 break;
 
             // A MIDI message that will not parse is found HERE, on a laptop with no interface in it,
@@ -531,7 +543,8 @@ public static class ProjectValidator
                 }
                 foreach (var placement in visualizer.Placements)
                     ValidatePlacement(project, placement, cue, issues);
-                ValidateLanes(project, visualizer.EffectLanes, cue, issues);
+                ValidateAutomation(project, visualizer.AutomationTracks, cue, issues);
+                ValidateLegacyAutomation(project, visualizer.LegacyEffectLanes, cue, issues);
                 break;
 
             case PatchCueNode patchCue:
@@ -585,72 +598,123 @@ public static class ProjectValidator
                 $"Q{cue.Number} has a placement with invalid size or opacity."));
     }
 
-    private static void ValidateLanes(
+    private static void ValidateAutomation(
         HaCueProject project,
-        IReadOnlyList<EffectLane> lanes,
+        IReadOnlyList<AutomationTrack> tracks,
         CueNode cue,
         List<ShowValidationIssue> issues)
     {
         var id = cue.Id.ToString();
-        foreach (var duplicate in lanes.GroupBy(lane => lane.Kind).Where(group => group.Count() > 1))
-            issues.Add(Error("cue", id, $"Q{cue.Number} has more than one {duplicate.Key} lane."));
+        foreach (var duplicate in tracks.GroupBy(track =>
+                     (track.Target.CueId, track.Target.PropertyId, track.Target.ObjectId,
+                         track.Target.EndpointId, track.Target.Address))
+                     .Where(group => group.Count() > 1))
+            issues.Add(Error("cue", id, $"Q{cue.Number} has more than one track for {duplicate.Key.PropertyId}."));
 
+        foreach (var track in tracks)
+        {
+            if (!AutomationPropertyCatalog.TryGet(track.Target.PropertyId, out var descriptor))
+            {
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} automates an unknown property '{track.Target.PropertyId}'."));
+                continue;
+            }
+
+            if (track.Keyframes.Count == 0)
+                issues.Add(Warn("cue", id, $"Q{cue.Number} has an empty {descriptor.DisplayName} track."));
+            var propertyOwner = track.Target.CueId is { } targetCueId ? project.FindCue(targetCueId) : cue;
+            if (track.Target.CueId is { } missingTarget && propertyOwner is null)
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} automates a cue that no longer exists."));
+            if (descriptor.TargetKind == AutomationTargetKind.Placement
+                && (track.Target.ObjectId is not { } objectId
+                    || propertyOwner is null
+                    || CuePlacements.Of(propertyOwner).All(placement => placement.Id != objectId)))
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} has {descriptor.DisplayName} automation for a placement that no longer exists."));
+            if (track.Target.PropertyId == AutomationPropertyIds.CueVolume && propertyOwner is not MediaCueNode)
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} targets volume on a cue that has no cue-volume property."));
+            if (cue is not AutomationCueNode && !descriptor.SupportsCueOwnedTrack)
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} can use {descriptor.DisplayName} only from an automation cue."));
+            if (cue is AutomationCueNode && !descriptor.SupportsAutomationCue)
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} cannot drive {descriptor.DisplayName} from an automation cue."));
+
+            long previousTime = -1;
+            var keyIds = new HashSet<Guid>();
+            foreach (var key in track.Keyframes)
+            {
+                if (!keyIds.Add(key.Id))
+                    issues.Add(Error("cue", id, $"Q{cue.Number} has duplicate automation keyframe ids."));
+                if (key.TimeMs < 0 || !double.IsFinite(key.Value)
+                    || key.Value < descriptor.Value.Minimum || key.Value > descriptor.Value.Maximum)
+                    issues.Add(Error("cue", id,
+                        $"Q{cue.Number} has a {descriptor.DisplayName} key outside its valid time/value range."));
+                if (key.TimeMs < previousTime)
+                    issues.Add(Error("cue", id,
+                        $"Q{cue.Number} has an out-of-order {descriptor.DisplayName} track."));
+                ValidateCurve(project, key.Curve, cue, issues);
+                previousTime = key.TimeMs;
+            }
+
+            if (descriptor.Domain == AutomationDomain.External && track.Target.EndpointId is null)
+                issues.Add(Error("cue", id,
+                    $"Q{cue.Number} has an outbound {descriptor.DisplayName} track with no endpoint."));
+            else if (descriptor.Domain == AutomationDomain.External)
+            {
+                var endpoint = project.ActionEndpoints.FirstOrDefault(candidate => candidate.Id == track.Target.EndpointId);
+                var expected = track.Target.PropertyId == AutomationPropertyIds.OscValue
+                    ? EndpointKind.OscOut : EndpointKind.MidiOut;
+                if (endpoint is null)
+                    issues.Add(Error("cue", id,
+                        $"Q{cue.Number} has an outbound track whose endpoint no longer exists."));
+                else if (endpoint.Kind != expected)
+                    issues.Add(Error("cue", id,
+                        $"Q{cue.Number} has a {descriptor.DisplayName} track pointed at a {endpoint.Kind} endpoint."));
+                if (string.IsNullOrWhiteSpace(track.Target.Address))
+                    issues.Add(Error("cue", id, $"Q{cue.Number} has an outbound track with no address/message."));
+                else if (track.Target.PropertyId == AutomationPropertyIds.MidiControlValue
+                         && MidiActions.TryParse(track.Target.Address, "0", out _) is { } wrong)
+                    issues.Add(Error("cue", id, $"Q{cue.Number} has a MIDI track that sends {wrong}"));
+                if (track.Target.SendRateHz is < 1 or > 120)
+                    issues.Add(Error("cue", id, $"Q{cue.Number} has an outbound send rate outside 1–120 Hz."));
+            }
+        }
+    }
+
+    /// <summary>Schema-1 validation remains active until migration has enough duration facts to consume
+    /// a lane; malformed old data must still be reported rather than silently passing preflight.</summary>
+    private static void ValidateLegacyAutomation(
+        HaCueProject project,
+        IReadOnlyList<EffectLane>? lanes,
+        CueNode cue,
+        List<ShowValidationIssue> issues)
+    {
+        if (lanes is null)
+            return;
+        var id = cue.Id.ToString();
         foreach (var lane in lanes)
         {
-            if (lane.Points.Count < 2)
-                issues.Add(Error("cue", id, $"Q{cue.Number} has a {lane.Kind} lane with fewer than two points."));
-            // Points must advance. A lane whose X went backwards would evaluate differently depending
-            // on how it was walked, which is the kind of ambiguity that shows up once, live.
-            var previousX = double.NegativeInfinity;
-            for (var pointIndex = 0; pointIndex < lane.Points.Count; pointIndex++)
+            var previous = double.NegativeInfinity;
+            foreach (var point in lane.Points)
             {
-                var point = lane.Points[pointIndex];
                 if (!double.IsFinite(point.X) || !double.IsFinite(point.Y)
-                    || point.X < 0 || point.X > 1 || point.Y < 0 || point.Y > 1)
+                    || point.X is < 0 or > 1 || point.Y is < 0 or > 1)
                     issues.Add(Error("cue", id,
                         $"Q{cue.Number} has a {lane.Kind} lane point outside the 0–1 range."));
-                if (point.X < previousX)
+                if (point.X < previous)
                     issues.Add(Error("cue", id, $"Q{cue.Number} has an out-of-order {lane.Kind} lane."));
-                if (!Enum.IsDefined(point.CurveToNext))
-                    issues.Add(Error("cue", id,
-                        $"Q{cue.Number} has a {lane.Kind} lane with an unknown segment curve."));
-                ValidateHandlePair(
-                    point.InHandleX, point.InHandleY, "cue", id,
-                    $"Q{cue.Number} {lane.Kind} incoming tangent", issues);
-                ValidateHandlePair(
-                    point.OutHandleX, point.OutHandleY, "cue", id,
-                    $"Q{cue.Number} {lane.Kind} outgoing tangent", issues);
-                if (pointIndex + 1 < lane.Points.Count)
-                    ValidateBezierSegment(
-                        point.X, point.OutHandleX,
-                        lane.Points[pointIndex + 1].X, lane.Points[pointIndex + 1].InHandleX,
-                        "cue", id, $"Q{cue.Number} {lane.Kind}", issues);
-                previousX = point.X;
+                previous = point.X;
             }
-            if (lane.Points.Count > 0
-                && (lane.Points[0].InHandleX is not null || lane.Points[^1].OutHandleX is not null))
-                issues.Add(Error("cue", id,
-                    $"Q{cue.Number} has a {lane.Kind} tangent pointing outside its endpoints."));
 
             if (lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp && lane.EndpointId is null)
                 issues.Add(Error("cue", id,
                     $"Q{cue.Number} has an outbound {lane.Kind} lane with no endpoint."));
-            else if (lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp)
-            {
-                var endpoint = project.ActionEndpoints.FirstOrDefault(candidate => candidate.Id == lane.EndpointId);
-                var expected = lane.Kind == EffectLaneKind.OscRamp ? EndpointKind.OscOut : EndpointKind.MidiOut;
-                if (endpoint is null)
-                    issues.Add(Error("cue", id,
-                        $"Q{cue.Number} has an outbound lane whose endpoint no longer exists."));
-                else if (endpoint.Kind != expected)
-                    issues.Add(Error("cue", id,
-                        $"Q{cue.Number} has a {lane.Kind} lane pointed at a {endpoint.Kind} endpoint."));
-                if (string.IsNullOrWhiteSpace(lane.Address))
-                    issues.Add(Error("cue", id, $"Q{cue.Number} has an outbound lane with no address/message."));
-                else if (lane.Kind == EffectLaneKind.MidiRamp
-                         && MidiActions.TryParse(lane.Address, "0", out _) is { } wrong)
-                    issues.Add(Error("cue", id, $"Q{cue.Number} has a MIDI ramp that sends {wrong}"));
-            }
+            else if (lane.EndpointId is { } endpointId
+                     && project.ActionEndpoints.All(endpoint => endpoint.Id != endpointId))
+                issues.Add(Error("cue", id, $"Q{cue.Number} has an outbound lane whose endpoint no longer exists."));
         }
     }
 

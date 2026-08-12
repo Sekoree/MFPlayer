@@ -92,17 +92,25 @@ public static class SampleProject
             Sends = [Send(0, mainL), Send(1, mainR, -3), Send(0, foldL, -6), Send(1, foldR, -6)],
             Note = "Storm bed runs under the whole opening. Do not stop it on the scene change — "
                  + "Q14 rides the foldback instead.",
-            EffectLanes =
+            AutomationTracks =
             [
-                new EffectLane
+                new AutomationTrack
                 {
-                    Kind = EffectLaneKind.Volume,
-                    Points = [new(0, 0.1), new(0.08, 0.72), new(0.55, 0.72), new(0.7, 0.36),
-                              new(0.88, 0.36), new(1, 0.1)],
+                    Target = new AutomationTargetRef { PropertyId = AutomationPropertyIds.CueVolume },
+                    Keyframes =
+                    [
+                        new() { TimeMs = 0, Value = -23 },
+                        new() { TimeMs = 10_720, Value = -5.85 },
+                        new() { TimeMs = 73_700, Value = -5.85 },
+                        new() { TimeMs = 93_800, Value = -11.87 },
+                        new() { TimeMs = 117_920, Value = -11.87 },
+                        new() { TimeMs = 134_000, Value = -23 },
+                    ],
                 },
             ],
         };
 
+        var rainPlacement = Place(cyc, layer: 2, 0.06, 0.08, 0.58, 0.78);
         var rain = new MediaCueNode
         {
             Number = "13.2", Label = "Projection · rain", MediaPath = "video/rain-loop.mov",
@@ -111,13 +119,23 @@ public static class SampleProject
             // much of the file it uses are decisions somebody made, so the timeline can draw them
             // before any media has been opened.
             TimelineOffsetMs = 4_000, TrimOutMs = 48_000,
-            Placements = [Place(cyc, layer: 2, 0.06, 0.08, 0.58, 0.78)],
-            EffectLanes =
+            Placements = [rainPlacement],
+            AutomationTracks =
             [
-                new EffectLane
+                new AutomationTrack
                 {
-                    Kind = EffectLaneKind.Opacity,
-                    Points = [new(0.11, 0.9), new(0.16, 0.18), new(0.4, 0.18), new(0.48, 0.9)],
+                    Target = new AutomationTargetRef
+                    {
+                        PropertyId = AutomationPropertyIds.PlacementOpacity,
+                        ObjectId = rainPlacement.Id,
+                    },
+                    Keyframes =
+                    [
+                        new() { TimeMs = 5_280, Value = 0.9 },
+                        new() { TimeMs = 7_680, Value = 0.18 },
+                        new() { TimeMs = 19_200, Value = 0.18 },
+                        new() { TimeMs = 23_040, Value = 0.9 },
+                    ],
                 },
             ],
         };

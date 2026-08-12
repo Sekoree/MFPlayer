@@ -43,6 +43,7 @@ public sealed record CueList
 [JsonDerivedType(typeof(MediaCueNode), "media")]
 [JsonDerivedType(typeof(GroupCueNode), "group")]
 [JsonDerivedType(typeof(ActionCueNode), "action")]
+[JsonDerivedType(typeof(AutomationCueNode), "automation")]
 [JsonDerivedType(typeof(FadeCueNode), "fade")]
 [JsonDerivedType(typeof(JumpCueNode), "jump")]
 [JsonDerivedType(typeof(VisualizerCueNode), "visualizer")]
@@ -285,7 +286,19 @@ public sealed record MediaCueNode : CueNode
     /// </remarks>
     public List<LayerPlacement> Placements { get; set; } = [];
 
-    public List<EffectLane> EffectLanes { get; set; } = [];
+    public List<AutomationTrack> AutomationTracks { get; set; } = [];
+
+    /// <summary>Schema-1 automation. Read only by the schema-2 migration and never authored.</summary>
+    [JsonPropertyName("effectLanes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<EffectLane>? LegacyEffectLanes { get; set; }
+
+    [JsonIgnore]
+    public List<EffectLane> EffectLanes
+    {
+        get => LegacyEffectLanes ??= [];
+        set => LegacyEffectLanes = value;
+    }
 }
 
 /// <summary>A group: several cues fired together, as a playlist, or on a timeline.</summary>
@@ -329,8 +342,20 @@ public sealed record GroupCueNode : CueNode
     public CurveSpec CrossfadeCurve { get; set; } = new();
     public AtListEnd AtEnd { get; set; } = AtListEnd.Hold;
 
-    /// <summary>Group-level lanes scale everything inside; a child's same-kind lane overrides them.</summary>
-    public List<EffectLane> EffectLanes { get; set; } = [];
+    /// <summary>Tracks owned by the group's own clock. Group modifier targets are explicit.</summary>
+    public List<AutomationTrack> AutomationTracks { get; set; } = [];
+
+    /// <summary>Schema-1 per-child inherited lanes, retained only until migration can resolve durations.</summary>
+    [JsonPropertyName("effectLanes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<EffectLane>? LegacyEffectLanes { get; set; }
+
+    [JsonIgnore]
+    public List<EffectLane> EffectLanes
+    {
+        get => LegacyEffectLanes ??= [];
+        set => LegacyEffectLanes = value;
+    }
 }
 
 public enum GroupFireMode
@@ -348,6 +373,20 @@ public sealed record ActionCueNode : CueNode
     public Guid? EndpointId { get; set; }
     public string Address { get; set; } = "";
     public string Arguments { get; set; } = "";
+}
+
+/// <summary>A timed set of property tracks aimed at other sounding cues or external targets.</summary>
+public sealed record AutomationCueNode : CueNode
+{
+    public int DurationMs { get; set; } = 1_000;
+    public AutomationCompletion Completion { get; set; } = AutomationCompletion.HoldFinal;
+    public List<AutomationTrack> AutomationTracks { get; set; } = [];
+}
+
+public enum AutomationCompletion
+{
+    HoldFinal,
+    RestoreBase,
 }
 
 /// <summary>A fade applied to running cues and/or logical outputs.</summary>
@@ -401,7 +440,18 @@ public sealed record VisualizerCueNode : CueNode
     /// <summary>Where the visualizer appears. A list, for the same reason a media cue's is.</summary>
     public List<LayerPlacement> Placements { get; set; } = [];
 
-    public List<EffectLane> EffectLanes { get; set; } = [];
+    public List<AutomationTrack> AutomationTracks { get; set; } = [];
+
+    [JsonPropertyName("effectLanes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<EffectLane>? LegacyEffectLanes { get; set; }
+
+    [JsonIgnore]
+    public List<EffectLane> EffectLanes
+    {
+        get => LegacyEffectLanes ??= [];
+        set => LegacyEffectLanes = value;
+    }
 }
 
 /// <summary>
@@ -500,7 +550,18 @@ public sealed record TextCueNode : CueNode
     public int FadeOutMs { get; set; }
     public CurveSpec FadeOutCurve { get; set; } = new();
 
-    public List<EffectLane> EffectLanes { get; set; } = [];
+    public List<AutomationTrack> AutomationTracks { get; set; } = [];
+
+    [JsonPropertyName("effectLanes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<EffectLane>? LegacyEffectLanes { get; set; }
+
+    [JsonIgnore]
+    public List<EffectLane> EffectLanes
+    {
+        get => LegacyEffectLanes ??= [];
+        set => LegacyEffectLanes = value;
+    }
 
     // There is no render key here any more. It was the cache key for the app-side card renderer,
     // and that renderer is gone: a card compiles to a `text:` URI carrying its whole spec, so the
@@ -526,6 +587,9 @@ public enum TextAnchor
 /// <summary>Where a cue's picture sits on a composition.</summary>
 public sealed record LayerPlacement
 {
+    /// <summary>Stable automation/reference identity; composition/layer can change while this remains.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+
     public Guid CompositionId { get; set; }
     public int LayerIndex { get; set; }
 
@@ -723,51 +787,6 @@ public enum LayerFit
     /// <summary>Match the rectangle's height; the width falls where it falls.</summary>
     FillHeight,
 }
-
-/// <summary>
-/// An automation lane, added per cue or per group and hidden until added (register item 18).
-/// </summary>
-/// <remarks>
-/// One concept, two editors: the inspector and the timeline edit the same points. This replaces the
-/// media cue's separate volume envelope rather than sitting beside it — two envelope concepts is how
-/// an operator ends up with a level nobody can explain.
-/// <para>
-/// An OUTBOUND lane is not undone when its cue stops, the opposite rule from the internal ones,
-/// because it owns a value in another system that HaCue2 does not get to decide has ended.
-/// </para>
-/// </remarks>
-public sealed record EffectLane
-{
-    public Guid Id { get; set; } = Guid.NewGuid();
-    public EffectLaneKind Kind { get; set; } = EffectLaneKind.Volume;
-
-    /// <summary>Normalized: X is 0..1 of the cue's length, Y is 0..1 of the lane's range.</summary>
-    public List<LanePoint> Points { get; set; } = [];
-
-    /// <summary>Outbound lanes only: where the ramp is sent.</summary>
-    public Guid? EndpointId { get; set; }
-
-    public string Address { get; set; } = "";
-}
-
-public enum EffectLaneKind
-{
-    Volume,
-    Opacity,
-    OscRamp,
-    MidiRamp,
-}
-
-/// <summary>One automation keyframe. <paramref name="CurveToNext"/> shapes the segment beginning at
-/// this point; linear is the backward-compatible document default.</summary>
-public readonly record struct LanePoint(
-    double X,
-    double Y,
-    FadeCurve CurveToNext = FadeCurve.Linear,
-    double? OutHandleX = null,
-    double? OutHandleY = null,
-    double? InHandleX = null,
-    double? InHandleY = null);
 
 /// <summary>
 /// How a fade is shaped: a built-in law, a project preset, or an inline custom curve.

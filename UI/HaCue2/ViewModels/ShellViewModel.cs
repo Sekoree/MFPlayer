@@ -435,9 +435,9 @@ public partial class ShellViewModel : ObservableObject
 
         try
         {
-            // Durations go with the document: without them the compiler cannot convert an out-point
-            // into the engine's end-offset, and an effect lane on an untrimmed cue has no length to
-            // stretch over and is dropped.
+            // Durations go with the document: the compiler needs them for end offsets and for the
+            // one-time conversion of an unresolved schema-1 normalized lane. Schema-2 automation is
+            // already absolute and never stretches to a probe result.
             var adopted = await host.TryReloadAsync(Project, CompileContext()).ConfigureAwait(true);
 
             if (!adopted)
@@ -758,7 +758,7 @@ public partial class ShellViewModel : ObservableObject
             Refresh();
 
             // A probe that has just landed changes what the COMPILED document should say — an
-            // out-point becomes convertible and an effect lane gains the length it needs — so the
+            // out-point becomes convertible and an unresolved schema-1 lane can migrate — so the
             // engine has to be told, even though nobody edited anything.
             if (Host is not null)
                 ScheduleReload();

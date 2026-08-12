@@ -93,6 +93,9 @@ public interface ICueExecutionHost
     /// <summary>Sends an action cue. Returns null on success, or the reason it could not.</summary>
     Task<string?> SendActionAsync(ActionCueNode action, ActionEndpoint? endpoint);
 
+    /// <summary>Runs a controller cue against currently sounding target cues.</summary>
+    Task<bool> RunAutomationAsync(AutomationCueNode automation, CueList? list);
+
     /// <summary>Cue ids currently holding a voice — what "fade everything sounding" means.</summary>
     IReadOnlyList<Guid> Sounding { get; }
 

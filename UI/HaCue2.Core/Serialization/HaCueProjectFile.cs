@@ -37,6 +37,7 @@ public static class HaCueProjectFile
         var project = JsonSerializer.Deserialize(json, HaCueProjectJsonContext.Default.HaCueProject)
                       ?? throw new HaCueProjectFormatException("The project file is empty.");
         RepairSplitDestinationWriteback(project);
+        AutomationMigration.Migrate(project);
         return project;
     }
 
@@ -258,6 +259,7 @@ public sealed class HaCueProjectFormatException : Exception
 [JsonSerializable(typeof(MediaCueNode))]
 [JsonSerializable(typeof(GroupCueNode))]
 [JsonSerializable(typeof(ActionCueNode))]
+[JsonSerializable(typeof(AutomationCueNode))]
 [JsonSerializable(typeof(FadeCueNode))]
 [JsonSerializable(typeof(JumpCueNode))]
 [JsonSerializable(typeof(VisualizerCueNode))]

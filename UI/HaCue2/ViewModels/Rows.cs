@@ -23,6 +23,7 @@ public enum CueKind
     Video,
     Group,
     Action,
+    Automation,
     Fade,
     Jump,
     Visualizer,
@@ -718,7 +719,7 @@ public sealed partial class TimelineLane : ObservableObject
     /// <summary>The document lane this row edits. Null on ordinary clip rows.</summary>
     public Guid? EffectLaneId { get; init; }
 
-    public EffectLaneKind? EffectKind { get; init; }
+    public string? EffectKind { get; init; }
 
     /// <summary>
     /// The cue-relative editor's position inside the currently visible group window.
@@ -764,7 +765,7 @@ public sealed partial class TimelineLane : ObservableObject
     [NotifyPropertyChangedFor(nameof(HasWaveform))]
     private IReadOnlyList<float>? _peaks;
 
-    public bool HasWaveform => EffectKind == EffectLaneKind.Volume && Peaks is { Count: > 0 };
+    public bool HasWaveform => EffectKind == AutomationPropertyIds.CueVolume && Peaks is { Count: > 0 };
 
     /// <summary>
     /// The lane's envelope as fractions of the lane; empty on a clip lane.

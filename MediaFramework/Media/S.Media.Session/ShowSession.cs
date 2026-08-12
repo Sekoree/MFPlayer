@@ -448,6 +448,23 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     private readonly record struct PlacedLayer(
         string CompositionId, int LayerIndex, ClipCompositionRuntime.IPlacedClipLayer Slot);
 
+    /// <summary>Resolves the placement-addressed representation used by the runtime. A legacy document's
+    /// one opacity lane is expanded over every placement, preserving its original all-layers meaning.</summary>
+    private static IReadOnlyList<ShowPlacementEnvelope> PlacementOpacityEnvelopes(ShowClipBinding binding)
+    {
+        if (binding.PlacementOpacityEnvelopes is { Count: > 0 } addressed)
+            return addressed;
+        if (binding.OpacityEnvelope is not { Count: > 0 } legacy)
+            return [];
+        return
+        [
+            .. binding.GetPlacements().Select(placement => new ShowPlacementEnvelope(
+                placement.CompositionId,
+                placement.LayerIndex,
+                legacy)),
+        ];
+    }
+
     // Fire sequencing (NXT-03): the fire-lock + in-flight fire cancellation live on the orchestrator (split
     // along its ownership seam - review Part-5 #2); this session's public fire/GO API delegates to it.
     // _showGeneration is bumped on every load so a fire whose open straddled a reload discards its (now-stale)
@@ -1223,6 +1240,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             ? new FadeShape(binding.FadeInCurve, binding.FadeInShape)
             : crossfade?.Curve ?? FadeCurve.Linear;
         cueElapsed = cueElapsed < TimeSpan.Zero ? TimeSpan.Zero : cueElapsed;
+        var opacityEnvelopes = PlacementOpacityEnvelopes(binding);
         var fadeInStartLevel = fadeIn
             ? FadeCurves.LevelUp(cueElapsed, fadeInDuration, fadeInCurve)
             : 1f;
@@ -1282,9 +1300,12 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                         layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, surfaceSlot));
                         timelineClaims.Add(surfaceComp.AcquireTransportTimeline(group.Timeline));
                         surfaceSlot.TimeSelectionOffset = -VideoPlayheadOffset;
-                        if (binding.OpacityEnvelope is { Count: > 0 } surfaceLane)
-                            surfaceSlot.AutomationLevel =
-                                Math.Clamp(VolumeEnvelopes.Sample(surfaceLane, cueElapsed), 0f, 1f);
+                        if (opacityEnvelopes.FirstOrDefault(candidate =>
+                                string.Equals(candidate.CompositionId, placement.CompositionId, StringComparison.Ordinal)
+                                && candidate.LayerIndex == placement.LayerIndex) is { } surfaceLane)
+                            surfaceSlot.SetAutomationLevel(
+                                Math.Clamp(VolumeEnvelopes.Sample(surfaceLane.Points, cueElapsed), 0f, 1f),
+                                surfaceLane.Absolute);
                         MediaDiagnostics.LogInformation(
                             "clip {CueId}: video composites as a GPU layer surface on {Composition} (NXT-10)",
                             binding.ClipId, placement.CompositionId);
@@ -1330,11 +1351,15 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             // Seed the opacity lane before anything composites - the runner's first step does not land until
             // the end of the commit, so a clip whose lane opens below full would flash at full until then
             // (the video twin of the envelope seeding below, and the same clip-relative time basis).
-            if (binding.OpacityEnvelope is { Count: > 0 } seedLane && layers.Count > 0)
+            if (opacityEnvelopes.Count > 0 && layers.Count > 0)
             {
-                var seed = Math.Clamp(VolumeEnvelopes.Sample(seedLane, cueElapsed), 0f, 1f);
                 foreach (var placed in layers)
-                    placed.Slot.AutomationLevel = seed;
+                    if (opacityEnvelopes.FirstOrDefault(candidate =>
+                            string.Equals(candidate.CompositionId, placed.CompositionId, StringComparison.Ordinal)
+                            && candidate.LayerIndex == placed.LayerIndex) is { } seedLane)
+                        placed.Slot.SetAutomationLevel(
+                            Math.Clamp(VolumeEnvelopes.Sample(seedLane.Points, cueElapsed), 0f, 1f),
+                            seedLane.Absolute);
             }
 
             IReadOnlyList<float>? fadeInFullLevels = null;
@@ -1474,7 +1499,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             {
                 // layers is the LIVE voice list, read at run time rather than captured as a count: a
                 // GPU-surface layer attaches in the finalize turn, after this closure was built.
-                var hasOpacityLane = binding.OpacityEnvelope is { Count: > 0 } && layers.Count > 0;
+                var hasOpacityLane = opacityEnvelopes.Count > 0 && layers.Count > 0;
                 if (!fadeIn && !endHandling && !hasEnvelope && !hasOpacityLane)
                     return;
 
@@ -1487,7 +1512,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 if (hasEnvelope)
                     StartEnvelopeRunner(groupId, voice, binding.VolumeEnvelope!, clipCts.Token);
                 if (hasOpacityLane)
-                    StartOpacityLaneRunner(groupId, voice, binding.OpacityEnvelope!, clipCts.Token);
+                    StartOpacityLaneRunner(groupId, voice, opacityEnvelopes, clipCts.Token);
                 if (endHandling)
                     StartEndMonitor(groupId, voice, end, clipCts.Token);
             }

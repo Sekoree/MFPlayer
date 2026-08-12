@@ -34,6 +34,7 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
     public List<(Guid Cue, TimeSpan? StartPosition, TimeSpan MasterTime)> TimelineStarts { get; } = [];
     public List<(Guid Cue, TimeSpan MasterTime)> ControlStarts { get; } = [];
     public List<(ActionCueNode Cue, ActionEndpoint? Endpoint)> Actions { get; } = [];
+    public List<Guid> Automations { get; } = [];
     public List<TimeSpan> Waits { get; } = [];
     public List<string> Problems { get; } = [];
     public List<Guid> Faded { get; } = [];
@@ -168,6 +169,13 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
         Actions.Add((action, endpoint));
         ControlStarts.Add((action.Id, _timelineClock.ElapsedSinceStart));
         return Task.FromResult(ActionFailure);
+    }
+
+    public Task<bool> RunAutomationAsync(AutomationCueNode automation, CueList? list)
+    {
+        Automations.Add(automation.Id);
+        ControlStarts.Add((automation.Id, _timelineClock.ElapsedSinceStart));
+        return Task.FromResult(true);
     }
 
     public void MarkFading(Guid cueId) => Faded.Add(cueId);

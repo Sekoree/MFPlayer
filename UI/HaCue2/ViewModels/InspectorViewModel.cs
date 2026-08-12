@@ -104,6 +104,7 @@ public partial class InspectorViewModel : ObservableObject
             CueKind.Video => "media cue · video",
             CueKind.Group => "group",
             CueKind.Action => "action cue",
+            CueKind.Automation => "automation cue",
             CueKind.Fade => "fade cue",
             CueKind.Jump => "jump cue",
             CueKind.Visualizer => "visualizer cue",
@@ -247,6 +248,10 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(CanAddVolumeLane));
         OnPropertyChanged(nameof(CanAddOpacityLane));
         OnPropertyChanged(nameof(CanAddOutboundLane));
+        OnPropertyChanged(nameof(IsAutomationCue));
+        OnPropertyChanged(nameof(AutomationTargetCues));
+        OnPropertyChanged(nameof(AutomationDuration));
+        OnPropertyChanged(nameof(AutomationRestoreBase));
         OnPropertyChanged(nameof(FadeInCurve));
         OnPropertyChanged(nameof(FadeOutCurve));
         OnPropertyChanged(nameof(CrossfadeCurve));
@@ -341,16 +346,17 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     private static IReadOnlyList<string> TabsFor(CueKind kind) => kind switch
     {
-        CueKind.Media or CueKind.Video => ["GENERAL", "AUDIO", "VIDEO", "EFFECTS", "NOTE", "PREVIEW"],
+        CueKind.Media or CueKind.Video => ["GENERAL", "AUDIO", "VIDEO", "AUTOMATION", "NOTE", "PREVIEW"],
         CueKind.Group => ["GENERAL", "GROUP", "NOTE"],
         CueKind.Action => ["GENERAL", "ACTION", "NOTE"],
+        CueKind.Automation => ["GENERAL", "AUTOMATION", "NOTE"],
         CueKind.Fade => ["GENERAL", "FADE", "NOTE"],
         CueKind.Jump => ["GENERAL", "JUMP", "NOTE"],
-        CueKind.Visualizer => ["GENERAL", "VISUALIZER", "VIDEO", "EFFECTS", "NOTE"],
+        CueKind.Visualizer => ["GENERAL", "VISUALIZER", "VIDEO", "AUTOMATION", "NOTE"],
         CueKind.Patch => ["GENERAL", "PATCH", "NOTE"],
-        // A card is words plus where they sit, so it takes VIDEO for the placement and EFFECTS for
-        // an opacity lane — it is a picture from the moment it is drawn.
-        CueKind.Text => ["GENERAL", "TEXT", "VIDEO", "EFFECTS", "NOTE"],
+        // A card is words plus where they sit, so it takes VIDEO for the placement and AUTOMATION for
+        // an opacity track — it is a picture from the moment it is drawn.
+        CueKind.Text => ["GENERAL", "TEXT", "VIDEO", "AUTOMATION", "NOTE"],
         _ => ["GENERAL", "NOTE"],
     };
 
@@ -373,8 +379,8 @@ public partial class InspectorViewModel : ObservableObject
     /// fires, not about the document.
     /// </para>
     /// <para>
-    /// EFFECTS stays either way: a volume lane is automation an audio-only cue can perfectly well
-    /// carry, and the lane picker itself now offers only the kinds that apply.
+    /// AUTOMATION stays either way: a volume track is something an audio-only cue can perfectly well
+    /// carry, and the property picker itself offers only targets that actually exist.
     /// </para>
     /// </remarks>
     private IReadOnlyList<string> TabsFor(CueNode cue)
@@ -404,7 +410,7 @@ public partial class InspectorViewModel : ObservableObject
     public bool IsGeneralPane => SelectedTab == "GENERAL";
     public bool IsAudioPane => SelectedTab == "AUDIO";
     public bool IsVideoPane => SelectedTab == "VIDEO";
-    public bool IsEffectsPane => SelectedTab == "EFFECTS";
+    public bool IsEffectsPane => SelectedTab == "AUTOMATION";
     public bool IsNotePane => SelectedTab == "NOTE";
     public bool IsPreviewPane => SelectedTab == "PREVIEW";
     public bool IsGroupPane => SelectedTab == "GROUP";
@@ -512,9 +518,8 @@ public partial class InspectorViewModel : ObservableObject
 
             EditMedia("level", media => media.LevelDb, (media, parsed) => media.LevelDb = parsed, db);
 
-            // The level is folded into the compiled sends, so it reaches a PLAYING cue the same way a
-            // send edit does — as a matrix reconciliation on the running voice, not as a reload that
-            // would restart it.
+            // Cue volume is its own runtime component beside per-send trim. Push both snapshots so a
+            // sounding cue changes without a reload while the two gain stages still compose once.
             PushLiveSends();
         }
     }
@@ -1038,7 +1043,9 @@ public partial class InspectorViewModel : ObservableObject
             return;
 
         foreach (var media in Selected.OfType<MediaCueNode>())
-            _liveSends.Offer(new LiveSendKey(host, media.Id), ShowCompiler.LogicalSends(media));
+            _liveSends.Offer(
+                new LiveSendKey(host, media.Id),
+                new LiveCueMix(ShowCompiler.LogicalSends(media), media.LevelDb));
     }
 
     /// <summary>
@@ -1049,14 +1056,19 @@ public partial class InspectorViewModel : ObservableObject
     /// is the same thread playback runs its commands on. Queueing every sample makes the fader lag the
     /// mouse and starves the show; the publisher lets one finish and replaces the rest.
     /// </remarks>
-    private readonly LatestOnlyPublisher<LiveSendKey, IReadOnlyList<ShowClipLogicalSend>> _liveSends =
+    private readonly LatestOnlyPublisher<LiveSendKey, LiveCueMix> _liveSends =
         new(
-            static (key, sends) => key.Host.ApplyActiveSendsAsync(key.CueId, sends),
+            static async (key, mix) =>
+            {
+                await key.Host.ApplyActiveSendsAsync(key.CueId, mix.Sends).ConfigureAwait(false);
+                await key.Host.ApplyActiveVolumeAsync(key.CueId, mix.LevelDb).ConfigureAwait(false);
+            },
             TimeSpan.FromMilliseconds(33),
             static failure => System.Diagnostics.Trace.TraceWarning(
                 $"Live send update failed: {failure.GetType().Name}: {failure.Message}"));
 
     private readonly record struct LiveSendKey(ShowHost Host, Guid CueId);
+    private readonly record struct LiveCueMix(IReadOnlyList<ShowClipLogicalSend> Sends, double LevelDb);
 
     // ── the Video pane ────────────────────────────────────────────────────────────────────────
     public IReadOnlyList<PlacementBox> Placements
@@ -3085,240 +3097,215 @@ public partial class InspectorViewModel : ObservableObject
         return duration is { TotalMilliseconds: > 0 } ? duration : null;
     }
 
-    // ── the Effects pane (register item 18: lanes, hidden until added) ────────────────────────
-    //
-    // The model, the compile path and the curve editor's own EffectLaneTarget all existed before this
-    // landed — what was missing was any way to ADD a lane. Lanes reached the engine only if the fixture
-    // generator or the timeline's duck helper happened to write one.
+    // ── Automation properties ────────────────────────────────────────────────────────────────
 
-    /// <summary>The lanes on the selected cue, or empty for a kind that cannot carry one.</summary>
-    private List<EffectLane>? Lanes => LanesOf(Cue);
+    private List<AutomationTrack>? Lanes => Cue is null ? null : CueAutomation.ListOf(Cue);
 
-    // A text card carries EffectLanes in the model and is given the EFFECTS tab by TabsFor — it was
-    // simply missing here, so its pane always read "this kind cannot carry automation" over a cue that
-    // could. Kept as one lookup so the two cannot disagree again.
-    private static List<EffectLane>? LanesOf(CueNode? cue) => cue switch
-    {
-        MediaCueNode media => media.EffectLanes,
-        GroupCueNode group => group.EffectLanes,
-        VisualizerCueNode visualizer => visualizer.EffectLanes,
-        TextCueNode card => card.EffectLanes,
-        _ => null,
-    };
-
-    /// <summary>Whether this cue kind can carry automation at all.</summary>
     public bool CanCarryLanes => Lanes is not null;
 
     public IReadOnlyList<EffectLaneRow> EffectLanes =>
-        Lanes is not { } lanes
+        Lanes is not { } tracks || Cue is not { } cue
             ? []
-            : [.. lanes.Select((lane, index) => new EffectLaneRow(
+            : [.. tracks.Select((track, index) => new EffectLaneRow(
                 index,
-                lane.Kind.ToString().ToLowerInvariant(),
-                Describe(lane),
-                lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp))];
+                AutomationName(cue, track),
+                Describe(track),
+                AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External))];
 
     public bool HasEffectLanes => EffectLanes.Count > 0;
 
-    /// <summary>
-    /// What a lane will actually do, in a phrase.
-    /// </summary>
-    /// <remarks>
-    /// Says when a lane cannot reach the engine rather than showing a point count that implies it can:
-    /// a lane needs more than one point to be an envelope, and — because the compiler measures it
-    /// against the cue's PLAYED length — a cue whose media has not been probed yet has no length to
-    /// stretch it over.
-    /// </remarks>
-    private string Describe(EffectLane lane)
+    private string Describe(AutomationTrack track)
     {
-        if (lane.Points.Count < 2)
-            return "empty — needs at least two points";
-
-        if (lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp)
-        {
-            return lane.EndpointId is null
-                ? $"{lane.Points.Count} points · no endpoint, so nothing is sent"
-                : $"{lane.Points.Count} points → {lane.Address}";
-        }
-
-        return $"{lane.Points.Count} points";
+        var detail = track.Keyframes.Count == 0
+            ? "empty — double-click the editor to add a key"
+            : $"{track.Keyframes.Count} keyframe{(track.Keyframes.Count == 1 ? "" : "s")} · absolute time";
+        return AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External
+            ? track.Target.EndpointId is null ? detail + " · no endpoint" : detail + $" → {track.Target.Address}"
+            : detail;
     }
 
-    /// <summary>Every lane kind there is, in <see cref="EffectLaneKind"/> order.</summary>
-    private static readonly IReadOnlyList<string> AllLaneKinds =
-        ["volume", "opacity", "osc ramp", "midi ramp"];
+    private string AutomationName(CueNode cue, AutomationTrack track)
+    {
+        var name = AutomationPropertyCatalog.Get(track.Target.PropertyId)?.DisplayName
+                   ?? track.Target.PropertyId;
+        var targetCue = track.Target.CueId is { } cueId ? Project.FindCue(cueId) : cue;
+        if (track.Target.CueId is { } targetId)
+            name = Project.FindCue(targetId) is { } target
+                ? $"Q{CuePresentation.Number(target.Number)} · {name}"
+                : $"missing cue · {name}";
+        if (track.Target.ObjectId is { } objectId
+            && targetCue is not null
+            && CuePlacements.Of(targetCue).FirstOrDefault(placement => placement.Id == objectId) is { } placement)
+            name += $" · layer {placement.LayerIndex}";
+        return name;
+    }
 
-    /// <summary>
-    /// The lane kinds THIS cue can actually carry.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The picker offered all four to everything, so a WAV stem was offered an opacity lane with
-    /// nothing on a canvas to fade, and a visualizer cue was offered a volume lane over a renderer that
-    /// has no audio at all. Both compile to a lane the engine reads and then has nowhere to apply —
-    /// the worst kind of authoring control, because it appears to have worked.
-    /// </para>
-    /// <para>
-    /// The two OUTBOUND kinds are offered to everything on purpose: an osc or midi ramp sends to an
-    /// endpoint over the cue's length and needs nothing from the media at all. That is exactly why a
-    /// comment cue is still the one kind with no lanes — it has no length either.
-    /// </para>
-    /// <para>
-    /// Unknown means allowed, like the Video tab's rule: a file nobody has probed yet must not have its
-    /// authoring narrowed on a guess.
-    /// </para>
-    /// </remarks>
-    public IReadOnlyList<string> LaneKinds => AllLaneKinds;
+    public IReadOnlyList<string> LaneKinds => ["volume", "opacity", "osc value", "midi control"];
 
-    /// <summary>Whether the picker offers a volume lane — audio the cue actually has.</summary>
-    public bool CanAddVolumeLane => KindApplies(EffectLaneKind.Volume, Cue);
+    public bool CanAddVolumeLane => CanAddLane(0);
+    public bool CanAddOpacityLane => CanAddLane(1);
+    public bool CanAddOutboundLane => CanCarryLanes;
 
-    /// <summary>Whether the picker offers an opacity lane — something of the cue's on a canvas.</summary>
-    public bool CanAddOpacityLane => KindApplies(EffectLaneKind.Opacity, Cue);
+    public bool IsAutomationCue => Cue is AutomationCueNode;
 
-    /// <summary>Whether the picker offers the outbound ramps. True for every kind that can carry a lane.</summary>
-    public bool CanAddOutboundLane => KindApplies(EffectLaneKind.OscRamp, Cue);
+    public string AutomationDuration
+    {
+        get => Cue is AutomationCueNode automation
+            ? (automation.DurationMs / 1000d).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+            : "";
+        set
+        {
+            if (double.TryParse(value, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var seconds))
+                Edit(
+                    "automationDuration",
+                    cue => cue is AutomationCueNode automation ? automation.DurationMs : 0,
+                    (cue, milliseconds) =>
+                    {
+                        if (cue is AutomationCueNode automation)
+                            automation.DurationMs = milliseconds;
+                    },
+                    Math.Max(1, (int)Math.Round(seconds * 1000)));
+        }
+    }
 
-    /// <summary>The kind a picker row means, or null when this cue cannot carry it.</summary>
-    private EffectLaneKind? LaneKindAt(int index) =>
-        index >= 0
-        && index < AllLaneKinds.Count
-        && KindApplies((EffectLaneKind)index, Cue)
-            ? (EffectLaneKind)index
+    public bool AutomationRestoreBase
+    {
+        get => Cue is AutomationCueNode { Completion: AutomationCompletion.RestoreBase };
+        set => Edit(
+            "automationCompletion",
+            cue => cue is AutomationCueNode automation ? automation.Completion : AutomationCompletion.HoldFinal,
+            (cue, completion) =>
+            {
+                if (cue is AutomationCueNode automation)
+                    automation.Completion = completion;
+            },
+            value ? AutomationCompletion.RestoreBase : AutomationCompletion.HoldFinal);
+    }
+
+    public IReadOnlyList<string> AutomationTargetCues =>
+        [.. AutomationTargets.Select(target => $"Q{CuePresentation.Number(target.Number)} · {target.Label}")];
+
+    private IReadOnlyList<CueNode> AutomationTargets =>
+        [.. Project.AllCues().Where(candidate => candidate.Id != Cue?.Id
+            && candidate is not CommentCueNode and not ActionCueNode and not AutomationCueNode)];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanAddVolumeLane))]
+    [NotifyPropertyChangedFor(nameof(CanAddOpacityLane))]
+    private int _automationTargetCueIndex;
+
+    private CueNode? AutomationTargetCue => AutomationTargetCueIndex >= 0
+        && AutomationTargetCueIndex < AutomationTargets.Count
+            ? AutomationTargets[AutomationTargetCueIndex]
             : null;
 
-    private bool KindApplies(EffectLaneKind kind, CueNode? cue) => kind switch
+    private AutomationTargetRef? TargetAt(int index)
     {
-        // Audio. A visualizer renders from a feed and has none of its own; a card is silent.
-        EffectLaneKind.Volume => cue switch
+        if (Cue is not { } cue)
+            return null;
+        var targetCue = cue is AutomationCueNode ? AutomationTargetCue : cue;
+        var targetCueId = cue is AutomationCueNode ? targetCue?.Id : null;
+        return index switch
         {
-            MediaCueNode media => SourceUri.IsLive(media.MediaPath)
-                                  || FactsFor(media) is not { IsKnown: true } facts
-                                  || facts.AudioTracks.Count > 0,
-            GroupCueNode => true,
-            _ => false,
-        },
+            0 when targetCue is MediaCueNode => new AutomationTargetRef
+                { CueId = targetCueId, PropertyId = AutomationPropertyIds.CueVolume },
+            1 when (cue is not AutomationCueNode ? Placement : null
+                    ?? (targetCue is null ? null : CuePlacements.Of(targetCue).FirstOrDefault())) is { } placement =>
+                new AutomationTargetRef
+                {
+                    CueId = targetCueId,
+                    PropertyId = AutomationPropertyIds.PlacementOpacity,
+                    ObjectId = placement.Id,
+                },
+            2 => new AutomationTargetRef { PropertyId = AutomationPropertyIds.OscValue },
+            3 => new AutomationTargetRef { PropertyId = AutomationPropertyIds.MidiControlValue },
+            _ => null,
+        };
+    }
 
-        // Something on a canvas. A group's children may be placed even when the group is not.
-        EffectLaneKind.Opacity => cue switch
-        {
-            MediaCueNode media => SourceUri.IsLive(media.MediaPath)
-                                  || FactsFor(media) is not { IsKnown: true } facts
-                                  || facts.HasPlaceableVideo,
-            GroupCueNode or VisualizerCueNode or TextCueNode => true,
-            _ => false,
-        },
-
-        // Outbound: nothing about the media is involved.
-        _ => LanesOf(cue) is not null,
-    };
-
-    /// <summary>
-    /// Adds a lane of the given kind.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Seeded with two points at unity rather than empty, so the editor opens on something the operator
-    /// can grab — the same reason a fade curve opens on a straight line. A flat lane at unity changes
-    /// nothing until it is dragged, so adding one is safe mid-show.
-    /// </para>
-    /// <para>
-    /// One lane per kind: a cue with two volume lanes has no defined answer for what its level is, and
-    /// the compiler takes the first, so the second would be invisible.
-    /// </para>
-    /// </remarks>
     public void AddLane(int kindIndex)
     {
-        // Through LaneKindAt, because the picker now shows only the kinds this cue can carry — its
-        // row 1 is no longer necessarily EffectLaneKind.Opacity. Reading the index as the enum would
-        // add the wrong kind of lane on any cue that had one filtered out above it.
-        if (Lanes is not { } lanes || LaneKindAt(kindIndex) is not { } kind)
+        if (Lanes is not { } tracks || Cue is not { } cue || TargetAt(kindIndex) is not { } target
+            || tracks.Any(track => CueAutomation.SameTarget(track.Target, target)))
             return;
 
-        if (lanes.Any(lane => lane.Kind == kind))
-            return;
-
-        var added = new EffectLane
+        var descriptor = AutomationPropertyCatalog.Get(target.PropertyId)!;
+        var authoredCue = cue is AutomationCueNode ? AutomationTargetCue : cue;
+        var authored = (authoredCue is null ? [] : AutomationPropertyCatalog.ForCue(authoredCue))
+            .FirstOrDefault(option => option.Target.PropertyId == target.PropertyId
+                && option.Target.ObjectId == target.ObjectId)?.AuthoredValue
+            ?? descriptor.Value.Default;
+        var durationMs = Math.Max(1_000, (long)(LaneDuration(cue)?.TotalMilliseconds ?? 30_000));
+        var added = new AutomationTrack
         {
-            Kind = kind,
-            Points = [new LanePoint(0, 1), new LanePoint(1, 1)],
+            Target = target,
+            Keyframes =
+            [
+                new AutomationKeyframe { TimeMs = 0, Value = authored },
+                new AutomationKeyframe { TimeMs = durationMs, Value = authored },
+            ],
         };
 
-        _journal.Do(new AddItemCommand<EffectLane>(
-            lanes, added, lanes.Count, "cues", $"add {LaneKinds[kindIndex]} lane"));
+        _journal.Do(new AddItemCommand<AutomationTrack>(
+            tracks, added, tracks.Count, "cues", $"add {descriptor.DisplayName} automation"));
         _journal.CloseGroup();
-
         Reload();
     }
 
-    /// <summary>Whether a kind can still be added — the picker greys out what is already there.</summary>
     public bool CanAddLane(int kindIndex) =>
-        Lanes is { } lanes
-        && LaneKindAt(kindIndex) is { } kind
-        && lanes.All(lane => lane.Kind != kind);
+        Lanes is { } tracks
+        && TargetAt(kindIndex) is { } target
+        && tracks.All(track => !CueAutomation.SameTarget(track.Target, target));
 
-    /// <summary>Removes a lane. Undoable, like everything else this panel does.</summary>
     public void RemoveLane(int index)
     {
-        if (Lanes is not { } lanes || index < 0 || index >= lanes.Count)
+        if (Lanes is not { } tracks || index < 0 || index >= tracks.Count)
             return;
-
-        _journal.Do(new RemoveItemCommand<EffectLane>(
-            lanes, lanes[index], "cues", $"remove {lanes[index].Kind.ToString().ToLowerInvariant()} lane"));
+        var track = tracks[index];
+        _journal.Do(new RemoveItemCommand<AutomationTrack>(
+            tracks, track, "cues", $"remove {track.Target.PropertyId} automation"));
         _journal.CloseGroup();
-
         Reload();
     }
 
-    /// <summary>
-    /// The editor for one lane — the SAME editor a fade curve uses (register item 18).
-    /// </summary>
-    /// <remarks>
-    /// <c>EffectLaneTarget</c> has existed since the journal was written and was never constructed:
-    /// the two shapes are one sorted list of normalized points, differing only in whether a point can
-    /// hold. One editor was the plan's requirement and is what this returns.
-    /// </remarks>
-    public CurveEditorViewModel? LaneEditor(int index)
+    public AutomationEditorViewModel? LaneEditor(int index)
     {
-        if (Lanes is not { } lanes || Cue is not { } cue || index < 0 || index >= lanes.Count)
+        if (Lanes is not { } tracks || Cue is not { } cue || index < 0 || index >= tracks.Count)
             return null;
-
-        var lane = lanes[index];
-
-        return new CurveEditorViewModel(
-            _journal,
-            new EffectLaneTarget(cue.Id, lane),
-            $"Q{CuePresentation.Number(cue.Number)} · {lane.Kind.ToString().ToLowerInvariant()} lane",
-            LaneDuration(cue));
+        return new AutomationEditorViewModel(
+            _journal, cue, tracks[index], LaneDuration(cue), Host);
     }
 
     private TimeSpan? LaneDuration(CueNode cue) => cue switch
     {
         MediaCueNode => ClipDuration,
         TextCueNode { DurationMs: > 0 } text => TimeSpan.FromMilliseconds(text.DurationMs),
+        VisualizerCueNode { HoldMs: > 0 } visualizer => TimeSpan.FromMilliseconds(visualizer.HoldMs),
+        AutomationCueNode { DurationMs: > 0 } automation => TimeSpan.FromMilliseconds(automation.DurationMs),
         _ => null,
     };
 
-    /// <summary>Configures the endpoint and address for an outbound lane.</summary>
     public PromptViewModel? ConfigureLane(int index)
     {
-        if (Lanes is not { } lanes || Cue is not { } cue || index < 0 || index >= lanes.Count)
+        if (Lanes is not { } tracks || Cue is not { } cue || index < 0 || index >= tracks.Count)
             return null;
 
-        var lane = lanes[index];
-        if (lane.Kind is not (EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp))
+        var track = tracks[index];
+        if (AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain != AutomationDomain.External)
             return null;
 
-        var kind = lane.Kind == EffectLaneKind.OscRamp ? EndpointKind.OscOut : EndpointKind.MidiOut;
+        var kind = track.Target.PropertyId == AutomationPropertyIds.OscValue
+            ? EndpointKind.OscOut : EndpointKind.MidiOut;
         var endpoints = _journal.Project.ActionEndpoints.Where(endpoint => endpoint.Kind == kind).ToList();
         var options = endpoints.Count == 0 ? ["(no compatible endpoints)"] : endpoints.Select(e => e.Name).ToList();
-        var selected = Math.Max(0, endpoints.FindIndex(endpoint => endpoint.Id == lane.EndpointId));
+        var selected = Math.Max(0, endpoints.FindIndex(endpoint => endpoint.Id == track.Target.EndpointId));
 
         return new PromptViewModel(
-            $"Configure {lane.Kind.ToString().ToLowerInvariant()} lane",
+            $"Configure {AutomationName(cue, track)}",
             endpoints.Count == 0
                 ? $"Add a {kind} endpoint in Targets first."
-                : "The lane appends its current value to this address/message.",
+                : "Automation sends its current value at the bounded rate below.",
             [
                 new PromptField
                 {
@@ -3330,10 +3317,16 @@ public partial class InspectorViewModel : ObservableObject
                 new PromptField
                 {
                     Label = "Address",
-                    Value = lane.Address,
-                    Hint = lane.Kind == EffectLaneKind.OscRamp
-                        ? "/osc/address — the normalized value is its argument"
-                        : "cc <channel> <controller> — the lane supplies value 0–127",
+                    Value = track.Target.Address,
+                    Hint = kind == EndpointKind.OscOut
+                        ? "/osc/address — the automated value is its argument"
+                        : "cc <channel> <controller> — automation supplies value 0–127",
+                },
+                new PromptField
+                {
+                    Label = "Send rate (Hz)",
+                    Value = track.Target.SendRateHz.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    Hint = "1–120; 25 is a good default",
                 },
             ],
             prompt =>
@@ -3342,16 +3335,22 @@ public partial class InspectorViewModel : ObservableObject
                     return;
 
                 var endpointIndex = Math.Clamp(prompt["Endpoint"].SelectedIndex, 0, endpoints.Count - 1);
-                using (_journal.Composite("configure outbound lane", "cues"))
+                _ = int.TryParse(prompt["Send rate (Hz)"].Value, out var parsedRate);
+                var rate = Math.Clamp(parsedRate, 1, 120);
+                using (_journal.Composite("configure outbound automation", "cues"))
                 {
                     _journal.Do(new SetValueCommand<Guid?>(
-                        cue.Id, $"lane:{lane.Id}:endpoint", "cues",
-                        () => lane.EndpointId, value => lane.EndpointId = value,
-                        endpoints[endpointIndex].Id, "choose lane endpoint"));
+                        cue.Id, $"automation:{track.Id}:endpoint", "cues",
+                        () => track.Target.EndpointId, value => track.Target.EndpointId = value,
+                        endpoints[endpointIndex].Id, "choose automation endpoint"));
                     _journal.Do(new SetValueCommand<string>(
-                        cue.Id, $"lane:{lane.Id}:address", "cues",
-                        () => lane.Address, value => lane.Address = value,
-                        prompt["Address"].Value.Trim(), "set lane address"));
+                        cue.Id, $"automation:{track.Id}:address", "cues",
+                        () => track.Target.Address, value => track.Target.Address = value,
+                        prompt["Address"].Value.Trim(), "set automation address"));
+                    _journal.Do(new SetValueCommand<int>(
+                        cue.Id, $"automation:{track.Id}:rate", "cues",
+                        () => track.Target.SendRateHz, value => track.Target.SendRateHz = value,
+                        rate, "set automation send rate"));
                 }
                 Reload();
             },

@@ -168,8 +168,11 @@ public class TextCueTests
 
         Assert.Equal(2, clip.LayerIndex);
         Assert.Equal(8, Assert.Single(clip.ExtraPlacements!).LayerIndex);
+        Assert.Equal(2, clip.PlacementOpacityEnvelopes!.Count);
+        var placementEnvelope = clip.PlacementOpacityEnvelopes.Single(envelope => envelope.LayerIndex == 2);
+        Assert.True(placementEnvelope.Absolute);
         Assert.Collection(
-            clip.OpacityEnvelope!,
+            placementEnvelope.Points,
             point => Assert.Equal(TimeSpan.Zero, point.Time),
             point => Assert.Equal(TimeSpan.FromSeconds(4), point.Time));
     }

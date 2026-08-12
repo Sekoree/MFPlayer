@@ -65,6 +65,9 @@ public partial class CurveCanvas : UserControl
     public static readonly StyledProperty<IReadOnlyList<CurveTangent>> TangentsProperty =
         AvaloniaProperty.Register<CurveCanvas, IReadOnlyList<CurveTangent>>(nameof(Tangents), []);
 
+    public static readonly StyledProperty<bool> RemoveWhenDraggedOffCanvasProperty =
+        AvaloniaProperty.Register<CurveCanvas, bool>(nameof(RemoveWhenDraggedOffCanvas), true);
+
     public CurveCanvas()
     {
         InitializeComponent();
@@ -101,6 +104,16 @@ public partial class CurveCanvas : UserControl
     {
         get => GetValue(TangentsProperty);
         set => SetValue(TangentsProperty, value);
+    }
+
+    /// <summary>
+    /// Whether deliberately releasing beyond the canvas deletes the dragged point. Timeline-style
+    /// editors disable this because losing the lane while navigating a long cue must not destroy a key.
+    /// </summary>
+    public bool RemoveWhenDraggedOffCanvas
+    {
+        get => GetValue(RemoveWhenDraggedOffCanvasProperty);
+        set => SetValue(RemoveWhenDraggedOffCanvasProperty, value);
     }
 
     private Panel? Surface =>
@@ -212,7 +225,8 @@ public partial class CurveCanvas : UserControl
         _draggedIndex = -1;
         e.Pointer.Capture(null);
 
-        if (Surface is { Bounds: { Width: > 0, Height: > 0 } bounds } surface
+        if (RemoveWhenDraggedOffCanvas
+            && Surface is { Bounds: { Width: > 0, Height: > 0 } bounds } surface
             && IsOffCanvas(e.GetPosition(surface), bounds))
         {
             // The whole drag is already one coalesced step, so the removal folds into it: undo puts the

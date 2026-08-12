@@ -968,6 +968,7 @@ public partial class CuesViewModel : ObservableObject
         {
             CueKind.Group => new GroupCueNode { Label = "Group" },
             CueKind.Action => new ActionCueNode { Label = "Action" },
+            CueKind.Automation => new AutomationCueNode { Label = "Automation", DurationMs = 1_000 },
             CueKind.Fade => new FadeCueNode { Label = "Fade" },
             CueKind.Jump => new JumpCueNode { Label = "Jump" },
             CueKind.Patch => new PatchCueNode { Label = "Patch" },
@@ -1481,20 +1482,35 @@ public partial class CuesViewModel : ObservableObject
             node.Id = Guid.NewGuid();
             cueIds[oldId] = node.Id;
 
-            var lanes = node switch
+            foreach (var track in CueAutomation.Of(node))
             {
-                MediaCueNode media => media.EffectLanes,
-                TextCueNode text => text.EffectLanes,
-                VisualizerCueNode visualizer => visualizer.EffectLanes,
-                GroupCueNode group => group.EffectLanes,
-                _ => [],
-            };
-            foreach (var lane in lanes)
-                lane.Id = Guid.NewGuid();
+                track.Id = Guid.NewGuid();
+                foreach (var key in track.Keyframes)
+                    key.Id = Guid.NewGuid();
+                if (track.Target.ObjectId is { } oldObject
+                    && CuePlacements.Of(node).FirstOrDefault(placement => placement.Id == oldObject) is { } oldPlacement)
+                    track.Target.ObjectId = oldPlacement.Id;
+            }
+
+            foreach (var legacy in node switch
+                     {
+                         MediaCueNode media => media.LegacyEffectLanes ?? [],
+                         TextCueNode text => text.LegacyEffectLanes ?? [],
+                         VisualizerCueNode visualizer => visualizer.LegacyEffectLanes ?? [],
+                         GroupCueNode group => group.LegacyEffectLanes ?? [],
+                         _ => [],
+                     })
+                legacy.Id = Guid.NewGuid();
 
             foreach (var placement in CuePlacements.Of(node))
+            {
+                var oldPlacementId = placement.Id;
+                placement.Id = Guid.NewGuid();
+                foreach (var track in CueAutomation.Of(node).Where(track => track.Target.ObjectId == oldPlacementId))
+                    track.Target.ObjectId = placement.Id;
                 foreach (var section in placement.VideoFx)
                     section.Id = Guid.NewGuid();
+            }
 
             if (node is GroupCueNode groupNode)
                 foreach (var child in groupNode.Children)
@@ -1511,6 +1527,9 @@ public partial class CuesViewModel : ObservableObject
                 jump.TargetCueIds = [.. jump.TargetCueIds.Select(id => cueIds.GetValueOrDefault(id, id))];
             if (node is FadeCueNode fade)
                 fade.TargetCueIds = [.. fade.TargetCueIds.Select(id => cueIds.GetValueOrDefault(id, id))];
+            foreach (var track in CueAutomation.Of(node))
+                if (track.Target.CueId is { } targetId)
+                    track.Target.CueId = cueIds.GetValueOrDefault(targetId, targetId);
         }
 
         return copy;
@@ -2124,6 +2143,9 @@ public sealed partial class TimelineViewModel : ObservableObject
     private readonly HashSet<Guid> _expandedEffectLanes = [];
     private readonly Dictionary<Guid, HashSet<int>> _selectedEffectPoints = [];
     private readonly Dictionary<Guid, int> _effectSelectionAnchors = [];
+    private Guid? _automationGestureLaneId;
+    private Guid? _automationGestureKeyId;
+    private HashSet<Guid>? _automationGestureSelection;
     private readonly Dictionary<Guid, float[]> _waveforms = [];
     private readonly HashSet<Guid> _waveformLoads = [];
 
@@ -2224,20 +2246,19 @@ public sealed partial class TimelineViewModel : ObservableObject
         "volume · opacity · OSC ramp · MIDI ramp — Ctrl/Shift-click keyframes · Ctrl+wheel zooms, Shift+wheel pans";
 
     /// <summary>
-    /// Which lane kinds the footer's picker may offer for the CURRENT selection.
+    /// Which automation properties the footer's picker may offer for the CURRENT selection.
     /// </summary>
     /// <remarks>
-    /// Delegated to the inspector's <c>CanAddLane</c> — the one place that knows a volume lane needs
-    /// audio, an opacity lane needs placeable video, and a cue carries at most one of each — so the
-    /// menu and the inspector's own picker can never disagree about what a cue can take.
+    /// Delegated to the inspector's <c>CanAddLane</c> — the one place that resolves concrete property
+    /// targets such as a media cue's volume or one placement's opacity — so the menu and inspector
+    /// can never disagree about what the selected cue can animate.
     /// </remarks>
-    public bool CanAddVolumeLane => CanAddLane(EffectLaneKind.Volume);
-    public bool CanAddOpacityLane => CanAddLane(EffectLaneKind.Opacity);
-    public bool CanAddOscLane => CanAddLane(EffectLaneKind.OscRamp);
-    public bool CanAddMidiLane => CanAddLane(EffectLaneKind.MidiRamp);
+    public bool CanAddVolumeLane => CanAddLane(0);
+    public bool CanAddOpacityLane => CanAddLane(1);
+    public bool CanAddOscLane => CanAddLane(2);
+    public bool CanAddMidiLane => CanAddLane(3);
 
-    private bool CanAddLane(EffectLaneKind kind) =>
-        Owner?.Inspector.CanAddLane((int)kind) ?? false;
+    private bool CanAddLane(int kind) => Owner?.Inspector.CanAddLane(kind) ?? false;
 
     /// <summary>The grid picker in the transport row: how fine a drag steps, or free.</summary>
     public IReadOnlyList<string> SnapModes { get; } = ["1 s", "0.5 s", "0.1 s", "free"];
@@ -2347,7 +2368,7 @@ public sealed partial class TimelineViewModel : ObservableObject
             _expandedEffectLanes.Remove(laneId);
 
         row.IsExpanded = _expandedEffectLanes.Contains(laneId);
-        if (row.IsExpanded && row.EffectKind == EffectLaneKind.Volume)
+        if (row.IsExpanded && row.EffectKind == AutomationPropertyIds.CueVolume)
             BeginWaveform(row.SubjectId);
     }
 
@@ -2363,9 +2384,10 @@ public sealed partial class TimelineViewModel : ObservableObject
         if (_journal is null
             || row.EffectLaneId is not { } laneId
             || _project.FindCue(row.SubjectId) is not { } cue
-            || EffectLanes(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } lane)
+            || CueAutomation.Of(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } track)
             return false;
 
+        var keys = track.Keyframes.OrderBy(key => key.TimeMs).ThenBy(key => key.Id).ToList();
         var selected = Selection(laneId);
         if (gesture.Kind == CurveGestureKind.Select)
         {
@@ -2376,7 +2398,7 @@ public sealed partial class TimelineViewModel : ObservableObject
             }
             _effectSelectionAnchors[laneId] = gesture.Index;
             SelectPoints(row, selected);
-            row.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(cue.Id, lane).Read(), selected);
+            row.Tangents = [];
             return false;
         }
         if (gesture.Kind == CurveGestureKind.ToggleSelection)
@@ -2385,7 +2407,7 @@ public sealed partial class TimelineViewModel : ObservableObject
                 selected.Remove(gesture.Index);
             _effectSelectionAnchors[laneId] = gesture.Index;
             SelectPoints(row, selected);
-            row.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(cue.Id, lane).Read(), selected);
+            row.Tangents = [];
             return false;
         }
         if (gesture.Kind == CurveGestureKind.RangeSelection)
@@ -2395,7 +2417,7 @@ public sealed partial class TimelineViewModel : ObservableObject
             for (var index = Math.Min(anchor, gesture.Index); index <= Math.Max(anchor, gesture.Index); index++)
                 selected.Add(index);
             SelectPoints(row, selected);
-            row.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(cue.Id, lane).Read(), selected);
+            row.Tangents = [];
             return false;
         }
         if (gesture.Kind == CurveGestureKind.ClearSelection)
@@ -2406,38 +2428,88 @@ public sealed partial class TimelineViewModel : ObservableObject
             return false;
         }
 
-        var target = new EffectLaneTarget(cue.Id, lane);
-        var x = gesture.X;
-        var y = 1 - gesture.Y;
-        var command = gesture.Kind switch
-        {
-            CurveGestureKind.Move when selected.Count > 1 && selected.Contains(gesture.Index) =>
-                CurveEdits.MoveMany(target, selected, gesture.Index, x, y),
-            CurveGestureKind.Move => CurveEdits.Move(target, gesture.Index, x, y),
-            CurveGestureKind.Add when !CurveEdits.HasPointNear(target, x) => CurveEdits.Add(target, x, y),
-            CurveGestureKind.Remove => CurveEdits.Remove(target, gesture.Index),
-            CurveGestureKind.RemoveSelection => CurveEdits.RemoveMany(target, selected),
-            CurveGestureKind.MoveIncomingTangent =>
-                CurveEdits.MoveTangent(target, gesture.Index, true, x, y),
-            CurveGestureKind.MoveOutgoingTangent =>
-                CurveEdits.MoveTangent(target, gesture.Index, false, x, y),
-            _ => null,
-        };
-        if (command is null)
+        var descriptor = AutomationPropertyCatalog.Get(track.Target.PropertyId);
+        if (descriptor is null)
             return false;
+        var durationMs = Math.Max(1, Span(cue).LengthMs);
+        var timeMs = Math.Clamp((long)Math.Round(gesture.X * durationMs), 0, durationMs);
+        var value = descriptor.Value.Minimum
+                    + ((descriptor.Value.Maximum - descriptor.Value.Minimum) * Math.Clamp(1 - gesture.Y, 0, 1));
+        var changed = keys.Select(CloneKey).ToList();
+        var description = "edit automation keyframes";
+        var gestureIndex = gesture.Index;
+        if (gesture.Kind is CurveGestureKind.Move or CurveGestureKind.Remove
+            && gesture.Index >= 0 && gesture.Index < keys.Count)
+        {
+            if (_automationGestureLaneId != laneId || _automationGestureKeyId is null)
+            {
+                _automationGestureLaneId = laneId;
+                _automationGestureKeyId = keys[gesture.Index].Id;
+                _automationGestureSelection = selected
+                    .Where(index => index >= 0 && index < keys.Count)
+                    .Select(index => keys[index].Id)
+                    .ToHashSet();
+            }
+            gestureIndex = changed.FindIndex(key => key.Id == _automationGestureKeyId);
+        }
 
-        _drag ??= _journal.Composite(command.Description, "cues", quiet: true);
-        _journal.Do(command);
-        if (gesture.Kind is CurveGestureKind.Remove or CurveGestureKind.RemoveSelection)
+        switch (gesture.Kind)
+        {
+            case CurveGestureKind.Move when gestureIndex >= 0 && gestureIndex < changed.Count:
+                if (_automationGestureSelection is { Count: > 1 } selectedIds
+                    && selectedIds.Contains(changed[gestureIndex].Id))
+                {
+                    var deltaTime = timeMs - changed[gestureIndex].TimeMs;
+                    var deltaValue = value - changed[gestureIndex].Value;
+                    foreach (var key in changed.Where(key => selectedIds.Contains(key.Id)))
+                    {
+                        key.TimeMs = Math.Clamp(key.TimeMs + deltaTime, 0, durationMs);
+                        key.Value = descriptor.Value.Clamp(key.Value + deltaValue);
+                    }
+                }
+                else
+                {
+                    changed[gestureIndex].TimeMs = timeMs;
+                    changed[gestureIndex].Value = descriptor.Value.Clamp(value);
+                }
+                break;
+            case CurveGestureKind.Add when changed.All(key => Math.Abs(key.TimeMs - timeMs) > 4):
+                changed.Add(new AutomationKeyframe { TimeMs = timeMs, Value = descriptor.Value.Clamp(value) });
+                description = "add automation keyframe";
+                break;
+            case CurveGestureKind.Remove when gestureIndex >= 0 && gestureIndex < changed.Count:
+                changed.RemoveAt(gestureIndex);
+                description = "remove automation keyframe";
+                break;
+            case CurveGestureKind.RemoveSelection:
+                changed = [.. changed.Where((_, index) => !selected.Contains(index))];
+                description = "remove automation keyframes";
+                break;
+            default:
+                return false;
+        }
+
+        _drag ??= _journal.Composite(description, "cues", quiet: true);
+        WriteAutomation(cue, track, changed, description);
+        if (gesture.Kind == CurveGestureKind.Move && _automationGestureSelection is { } movedIds)
+        {
+            selected.Clear();
+            foreach (var pair in track.Keyframes.OrderBy(key => key.TimeMs).ThenBy(key => key.Id)
+                         .Select((key, index) => (key, index)))
+                if (movedIds.Contains(pair.key.Id))
+                    selected.Add(pair.index);
+        }
+        else if (gesture.Kind is CurveGestureKind.Remove or CurveGestureKind.RemoveSelection)
         {
             selected.Clear();
             _effectSelectionAnchors.Remove(laneId);
         }
         else if (gesture.Kind == CurveGestureKind.Add)
         {
-            var added = lane.Points
-                .Select((point, index) => (point, index))
-                .OrderBy(pair => Math.Abs(pair.point.X - x) + Math.Abs(pair.point.Y - y))
+            var added = track.Keyframes
+                .OrderBy(key => key.TimeMs).ThenBy(key => key.Id)
+                .Select((key, index) => (key, index))
+                .OrderBy(pair => Math.Abs(pair.key.TimeMs - timeMs) + Math.Abs(pair.key.Value - value))
                 .First().index;
             selected.Clear();
             selected.Add(added);
@@ -2448,21 +2520,18 @@ public sealed partial class TimelineViewModel : ObservableObject
     }
 
     /// <summary>The full editor for an inline row: exact clock/value fields and shaped segment laws.</summary>
-    public CurveEditorViewModel? LaneEditor(TimelineLane row)
+    public AutomationEditorViewModel? LaneEditor(TimelineLane row)
     {
         if (_journal is null
             || row.EffectLaneId is not { } laneId
             || _project.FindCue(row.SubjectId) is not { } cue
-            || EffectLanes(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } lane)
+            || CueAutomation.Of(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } track)
             return null;
 
         var span = Span(cue);
         var duration = TimeSpan.FromMilliseconds(Math.Max(0, span.EndMs - span.StartMs));
-        return new CurveEditorViewModel(
-            _journal,
-            new EffectLaneTarget(cue.Id, lane),
-            $"Q{CuePresentation.Number(cue.Number)} · {lane.Kind.ToString().ToLowerInvariant()} lane",
-            duration > TimeSpan.Zero ? duration : null);
+        return new AutomationEditorViewModel(
+            _journal, cue, track, duration > TimeSpan.Zero ? duration : null, Owner?.Engine);
     }
 
     public void SelectAllKeyframes(TimelineLane row)
@@ -2482,7 +2551,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     {
         if (row.EffectLaneId is not { } laneId
             || _project.FindCue(row.SubjectId) is not { } cue
-            || EffectLanes(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } lane
+            || CueAutomation.Of(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } track
             || !_selectedEffectPoints.TryGetValue(laneId, out var selected)
             || selected.Count == 0)
         {
@@ -2491,16 +2560,17 @@ public sealed partial class TimelineViewModel : ObservableObject
         }
 
         KeyframeStatus = $"copied {selected.Count} keyframe(s)";
-        return LaneKeyframeClipboard.Encode(lane.Points, selected);
+        return LaneKeyframeClipboard.Encode(AutomationKnots(cue, track), selected);
     }
 
     public bool PasteKeyframes(TimelineLane row, string? text)
     {
         if (_journal is null
-            || LaneKeyframeClipboard.Decode(text) is not { Count: > 0 } decoded
+            || LaneKeyframeClipboard.DecodeKnots(text) is not { Count: > 0 } decoded
             || row.EffectLaneId is not { } laneId
             || _project.FindCue(row.SubjectId) is not { } cue
-            || EffectLanes(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } lane)
+            || CueAutomation.Of(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } track
+            || AutomationPropertyCatalog.Get(track.Target.PropertyId) is not { } descriptor)
         {
             KeyframeStatus = "clipboard has no HaCue2 keyframes";
             return false;
@@ -2511,25 +2581,25 @@ public sealed partial class TimelineViewModel : ObservableObject
         var cueLength = Math.Max(1, cueSpan.EndMs - cueSpan.StartMs);
         var atPlayhead = (_playheadMs - cue.TimelineOffsetMs) / cueLength;
         var anchor = Math.Clamp(atPlayhead, 0, Math.Max(0, 1 - copiedSpan));
-        var translated = decoded.Select(point => new CurveKnot(
-            anchor + point.X,
-            point.Y,
-            CurveToNext: point.CurveToNext,
-            OutHandleX: ShiftHandle(point.OutHandleX, anchor),
-            OutHandleY: point.OutHandleY,
-            InHandleX: ShiftHandle(point.InHandleX, anchor),
-            InHandleY: point.InHandleY)).ToList();
-
-        var target = new EffectLaneTarget(cue.Id, lane);
+        var translated = decoded.Select(point => point with { X = anchor + point.X }).ToList();
 
         // The pasted span REPLACES what it lands on. Appending piled the copy on top of the existing
         // keyframes, so two points could share an instant — which has no defined shape between them —
         // and the operator saw a tangle rather than the shape they copied.
-        var combined = target.Read()
+        var combined = AutomationKnots(cue, track)
             .Where(knot => knot.X < translated[0].X || knot.X > translated[^1].X)
             .Concat(translated)
+            .OrderBy(knot => knot.X)
             .ToList();
-        _journal.Do(CurveEdits.Replace(target, combined, $"paste {translated.Count} keyframes"));
+        var next = combined.Select(knot => new AutomationKeyframe
+        {
+            TimeMs = Math.Clamp((long)Math.Round(knot.X * cueLength), 0, cueLength),
+            Value = descriptor.Value.Clamp(
+                descriptor.Value.Minimum + ((descriptor.Value.Maximum - descriptor.Value.Minimum) * knot.Y)),
+            Hold = knot.Hold,
+            Curve = new CurveSpec { Law = knot.CurveToNext },
+        }).ToList();
+        WriteAutomation(cue, track, next, $"paste {translated.Count} keyframes");
         _journal.CloseGroup();
 
         var selected = Selection(laneId);
@@ -2537,7 +2607,7 @@ public sealed partial class TimelineViewModel : ObservableObject
         var claimed = new HashSet<int>();
         foreach (var pasted in translated)
         {
-            var match = lane.Points
+            var match = AutomationKnots(cue, track)
                 .Select((point, index) => (point, index))
                 .Where(pair => !claimed.Contains(pair.index))
                 .OrderBy(pair => Math.Abs(pair.point.X - pasted.X) + Math.Abs(pair.point.Y - pasted.Y))
@@ -2560,13 +2630,11 @@ public sealed partial class TimelineViewModel : ObservableObject
         var deleted = ApplyLaneGesture(row, new CurveGesture(CurveGestureKind.RemoveSelection, -1, 0, 0));
         EndGesture();
 
-        // A lane must keep two points, so deleting the whole selection can be refused. Reporting it
-        // as done left the operator looking at keyframes they had been told were gone.
         KeyframeStatus = deleted
             ? $"deleted {count} keyframe(s)"
             : count == 0
                 ? "select one or more keyframes to delete"
-                : "a lane keeps at least two keyframes — deselect one first";
+                : "the selected keyframes could not be deleted";
     }
 
     private static double? ShiftHandle(double? value, double offset) =>
@@ -2577,6 +2645,9 @@ public sealed partial class TimelineViewModel : ObservableObject
     {
         _drag?.Dispose();
         _drag = null;
+        _automationGestureLaneId = null;
+        _automationGestureKeyId = null;
+        _automationGestureSelection = null;
     }
 
     /// <summary>
@@ -2630,35 +2701,39 @@ public sealed partial class TimelineViewModel : ObservableObject
             ],
             prompt =>
             {
-                var lane = bed.EffectLanes.FirstOrDefault(item => item.Kind == EffectLaneKind.Volume);
+                var lane = bed.AutomationTracks.FirstOrDefault(item =>
+                    item.Target.PropertyId == AutomationPropertyIds.CueVolume
+                    && item.Target.ObjectId is null);
                 var span = Span(bed);
 
                 var ducked = DuckMath.ApplyDucks(
-                    lane?.Points ?? [],
+                    lane?.Keyframes ?? [],
                     span.StartMs,
                     span.LengthMs,
                     voices,
                     prompt["Depth"].Decimal(-12),
                     prompt["Ramp"].Number(500),
-                    prompt["Lead"].Number(250));
+                    prompt["Lead"].Number(250),
+                    bed.LevelDb);
 
                 using var scope = _journal.Composite($"duck “{bed.Label}”", "cues");
 
                 if (lane is null)
                 {
-                    // The bed has no volume lane yet. Adding one is part of the same edit — an undo
-                    // that left an empty lane behind would leave the cue changed in a way nobody asked
-                    // for (register item 18: lanes are hidden until added).
-                    var added = new EffectLane { Kind = EffectLaneKind.Volume, Points = [.. ducked] };
-                    _journal.Do(new AddItemCommand<EffectLane>(
-                        bed.EffectLanes, added, bed.EffectLanes.Count, "cues", "add volume lane"));
+                    var added = new AutomationTrack
+                    {
+                        Target = new AutomationTargetRef { PropertyId = AutomationPropertyIds.CueVolume },
+                        Keyframes = [.. ducked],
+                    };
+                    _journal.Do(new AddItemCommand<AutomationTrack>(
+                        bed.AutomationTracks, added, bed.AutomationTracks.Count, "cues", "add volume automation"));
                 }
                 else
                 {
                     var target = lane;
-                    _journal.Do(new SetValueCommand<List<LanePoint>>(
-                        bed.Id, $"lane:{lane.Id}", "cues",
-                        () => target.Points, points => target.Points = points, [.. ducked],
+                    _journal.Do(new SetValueCommand<List<AutomationKeyframe>>(
+                        bed.Id, $"automation:{lane.Id}", "cues",
+                        () => target.Keyframes, points => target.Keyframes = points, [.. ducked],
                         "duck under the voice-over"));
                 }
 
@@ -2703,9 +2778,7 @@ public sealed partial class TimelineViewModel : ObservableObject
             {
                 selected.RemoveWhere(index => index < 0 || index >= lane.Points.Count);
                 SelectPoints(lane, selected);
-                if (_project.FindCue(lane.SubjectId) is { } owner
-                    && EffectLanes(owner).FirstOrDefault(item => item.Id == laneId) is { } effect)
-                    lane.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(owner.Id, effect).Read(), selected);
+                lane.Tangents = [];
             }
             if (_waveforms.TryGetValue(lane.SubjectId, out var peaks)
                 && _project.FindCue(lane.SubjectId) is MediaCueNode media)
@@ -2809,13 +2882,43 @@ public sealed partial class TimelineViewModel : ObservableObject
         return true;
     }
 
-    private static IReadOnlyList<EffectLane> EffectLanes(CueNode cue) => cue switch
+    private IReadOnlyList<CurveKnot> AutomationKnots(CueNode cue, AutomationTrack track)
     {
-        MediaCueNode media => media.EffectLanes,
-        TextCueNode text => text.EffectLanes,
-        GroupCueNode group => group.EffectLanes,
-        VisualizerCueNode visualizer => visualizer.EffectLanes,
-        _ => [],
+        var descriptor = AutomationPropertyCatalog.Get(track.Target.PropertyId);
+        var durationMs = Math.Max(1, Span(cue).LengthMs);
+        return
+        [
+            .. track.Keyframes.OrderBy(key => key.TimeMs).ThenBy(key => key.Id).Select(key => new CurveKnot(
+                Math.Clamp((double)key.TimeMs / durationMs, 0, 1),
+                descriptor is null || descriptor.Value.Maximum <= descriptor.Value.Minimum
+                    ? Math.Clamp(key.Value, 0, 1)
+                    : Math.Clamp((key.Value - descriptor.Value.Minimum)
+                                 / (descriptor.Value.Maximum - descriptor.Value.Minimum), 0, 1),
+                key.Hold,
+                key.Curve.Law)),
+        ];
+    }
+
+    private void WriteAutomation(
+        CueNode cue,
+        AutomationTrack track,
+        IEnumerable<AutomationKeyframe> keys,
+        string description)
+    {
+        if (_journal is null)
+            return;
+        var next = keys.Select(CloneKey).OrderBy(key => key.TimeMs).ThenBy(key => key.Id).ToList();
+        _journal.Do(new SetValueCommand<List<AutomationKeyframe>>(
+            cue.Id, $"automation:{track.Id}", "cues",
+            () => track.Keyframes.Select(CloneKey).ToList(),
+            value => track.Keyframes = value.Select(CloneKey).ToList(),
+            next,
+            description));
+    }
+
+    private static AutomationKeyframe CloneKey(AutomationKeyframe key) => key with
+    {
+        Curve = key.Curve with { Points = key.Curve.Points?.ToList() },
     };
 
     private HashSet<int> Selection(Guid laneId)

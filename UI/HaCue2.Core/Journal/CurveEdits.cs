@@ -19,10 +19,8 @@ public readonly record struct CurveKnot(
 /// Something the curve editor can edit.
 /// </summary>
 /// <remarks>
-/// A fade curve and an automation lane are the same object with different names — a sorted list of
-/// normalized points — which is why the plan insists on one editor for both. They differ in exactly
-/// two ways, both captured here: a lane's points have no hold flag, and the two live on different
-/// document types. Everything else, including every edit below, is shared.
+/// Fade shapes use normalized points. Property automation is intentionally edited in its own absolute
+/// time/value lane and only reuses this target abstraction for per-segment easing shapes.
 /// </remarks>
 public interface ICurveTarget
 {
@@ -156,43 +154,33 @@ public sealed class CurvePresetTarget(CurvePreset preset) : ICurveTarget
     }
 }
 
-/// <summary>An automation lane on a cue (register item 18).</summary>
+/// <summary>Schema-1 test/file adapter. New authoring uses the absolute-time automation editor.</summary>
 public sealed class EffectLaneTarget(Guid subject, EffectLane lane) : ICurveTarget
 {
     public Guid Subject { get; } = subject;
     public string Property { get; } = $"lane:{lane.Id}";
-
-    /// <summary>A lane ramps continuously; there is no step in the model to write a hold into.</summary>
     public bool SupportsHold => false;
-
     public bool HasStored => lane.Points.Count > 1;
-
-    public IReadOnlyList<CurveKnot> Read() =>
-        lane.Points is { Count: > 1 }
-            ? [.. lane.Points.Select(point => new CurveKnot(
-                point.X, point.Y, CurveToNext: point.CurveToNext,
-                OutHandleX: point.OutHandleX, OutHandleY: point.OutHandleY,
-                InHandleX: point.InHandleX, InHandleY: point.InHandleY))]
-            : [new CurveKnot(0, 1), new CurveKnot(1, 1)];
-
-    public void Write(IReadOnlyList<CurveKnot> knots) =>
-        lane.Points = [.. knots.Select(knot => new LanePoint(
+    public IReadOnlyList<CurveKnot> Read() => lane.Points is { Count: > 1 }
+        ? [.. lane.Points.Select(point => new CurveKnot(
+            point.X, point.Y, CurveToNext: point.CurveToNext,
+            OutHandleX: point.OutHandleX, OutHandleY: point.OutHandleY,
+            InHandleX: point.InHandleX, InHandleY: point.InHandleY))]
+        : [new CurveKnot(0, 1), new CurveKnot(1, 1)];
+    public void Write(IReadOnlyList<CurveKnot> knots) => lane.Points =
+    [
+        .. knots.Select(knot => new LanePoint(
             knot.X, knot.Y, knot.CurveToNext,
-            knot.OutHandleX, knot.OutHandleY, knot.InHandleX, knot.InHandleY))];
-
+            knot.OutHandleX, knot.OutHandleY, knot.InHandleX, knot.InHandleY)),
+    ];
     public void Clear() => lane.Points = [];
-
-    /// <summary>A lane is drawn, not chosen. Same reason a preset has no law.</summary>
     public FadeCurve? Law => null;
-
-    public void WriteLaw(FadeCurve law) => throw new NotSupportedException("a lane has no law");
-
+    public void WriteLaw(FadeCurve law) => throw new NotSupportedException("a legacy lane has no law");
     public Guid? PresetId => null;
-
     public void WritePreset(Guid? presetId)
     {
         if (presetId is not null)
-            throw new NotSupportedException("an automation lane cannot select a fade preset");
+            throw new NotSupportedException("a legacy lane cannot select a preset");
     }
 }
 

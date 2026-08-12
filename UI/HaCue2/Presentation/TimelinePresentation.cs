@@ -29,7 +29,7 @@ namespace HaCue2.Presentation;
 /// </remarks>
 public static class TimelinePresentation
 {
-    /// <summary>The lanes for a group: one per child, plus one per effect lane the child carries.</summary>
+    /// <summary>The lanes for a group: one per child, plus one per automation track the child carries.</summary>
     public static IReadOnlyList<TimelineLane> Lanes(
         GroupCueNode group, HaCueProject project, ShowRuntime runtime, TimelineView? view = null)
     {
@@ -39,7 +39,8 @@ public static class TimelinePresentation
         foreach (var child in group.Children)
         {
             var start = window.Fraction(child.TimelineOffsetMs);
-            var width = Duration(child, runtime) / window.LengthMs;
+            var durationMs = Duration(child, runtime);
+            var width = durationMs / window.LengthMs;
 
             lanes.Add(new TimelineLane
             {
@@ -64,21 +65,26 @@ public static class TimelinePresentation
                 ],
             });
 
-            foreach (var lane in EffectLanes(child))
+            foreach (var track in CueAutomation.Of(child))
             {
-                var knots = lane.Points
-                    .Select(point => new CurveKnot(
-                        point.X, point.Y, CurveToNext: point.CurveToNext,
-                        OutHandleX: point.OutHandleX, OutHandleY: point.OutHandleY,
-                        InHandleX: point.InHandleX, InHandleY: point.InHandleY))
+                var descriptor = AutomationPropertyCatalog.Get(track.Target.PropertyId);
+                var knots = track.Keyframes
+                    .Where(key => key.TimeMs >= 0)
+                    .OrderBy(key => key.TimeMs)
+                    .ThenBy(key => key.Id)
+                    .Select(key => new CurveKnot(
+                        Math.Clamp(key.TimeMs / durationMs, 0, 1),
+                        Normalize(key.Value, descriptor),
+                        key.Hold,
+                        key.Curve.Law))
                     .ToList();
                 lanes.Add(new TimelineLane
                 {
-                    Name = $"fx · {Name(lane.Kind)}",
+                    Name = $"auto · {Name(track, descriptor, child)}",
                     SubjectId = child.Id,
                     IsEffect = true,
-                    EffectLaneId = lane.Id,
-                    EffectKind = lane.Kind,
+                    EffectLaneId = track.Id,
+                    EffectKind = track.Target.PropertyId,
                     EffectLeft = start,
                     EffectWidth = Math.Max(width, 0.004),
                     Points =
@@ -90,7 +96,7 @@ public static class TimelinePresentation
                     // an envelope sits over the clip it belongs to rather than across the whole row.
                     Envelope =
                     [
-                        .. lane.Points.Select(point => new CurvePoint(
+                        .. knots.Select(point => new CurvePoint(
                             Math.Clamp(start + (point.X * width), 0, 1),
                             // A lane's Y is a LEVEL; the row draws top-down, so it is inverted here
                             // rather than in the control, which knows nothing about levels.
@@ -182,15 +188,6 @@ public static class TimelinePresentation
         return probed?.TotalMilliseconds ?? 8_000;
     }
 
-    private static IReadOnlyList<EffectLane> EffectLanes(CueNode cue) => cue switch
-    {
-        MediaCueNode media => media.EffectLanes,
-        TextCueNode text => text.EffectLanes,
-        GroupCueNode group => group.EffectLanes,
-        VisualizerCueNode visualizer => visualizer.EffectLanes,
-        _ => [],
-    };
-
     private static string Prefix(CueNode cue) => cue is GroupCueNode ? "▸ " : "▾ ";
 
     private static string ClipLabel(CueNode cue, HaCueProject project) => cue switch
@@ -211,13 +208,23 @@ public static class TimelinePresentation
         _ => "ac",
     };
 
-    private static string Name(EffectLaneKind kind) => kind switch
+    private static double Normalize(double value, AutomationPropertyDescriptor? descriptor)
     {
-        EffectLaneKind.Volume => "volume",
-        EffectLaneKind.Opacity => "opacity",
-        EffectLaneKind.OscRamp => "OSC ramp",
-        _ => "MIDI ramp",
-    };
+        if (descriptor is null || descriptor.Value.Maximum <= descriptor.Value.Minimum)
+            return Math.Clamp(value, 0, 1);
+        return Math.Clamp(
+            (value - descriptor.Value.Minimum) / (descriptor.Value.Maximum - descriptor.Value.Minimum), 0, 1);
+    }
+
+    private static string Name(
+        AutomationTrack track, AutomationPropertyDescriptor? descriptor, CueNode cue)
+    {
+        var name = descriptor?.DisplayName ?? track.Target.PropertyId;
+        if (track.Target.ObjectId is { } objectId
+            && CuePlacements.Of(cue).FirstOrDefault(placement => placement.Id == objectId) is { } placement)
+            name += $" · layer {placement.LayerIndex}";
+        return name;
+    }
 }
 
 /// <summary>

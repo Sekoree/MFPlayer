@@ -110,6 +110,9 @@ public static class ProjectReferences
                 case VisualizerCueNode visualizer when visualizer.FeedCueIds.Contains(id):
                     found.Add(CueRef(cue, "uses its audio in the visualizer feed"));
                     break;
+                case AutomationCueNode automation when automation.AutomationTracks.Any(track => track.Target.CueId == id):
+                    found.Add(CueRef(cue, "automates it"));
+                    break;
             }
 
         foreach (var list in project.CueLists.Where(list => list.StandbyCueId == id))
@@ -157,16 +160,9 @@ public static class ProjectReferences
             if (cue is ActionCueNode action && action.EndpointId == id)
                 found.Add(CueRef(cue, "sends to it"));
 
-            var lanes = cue switch
-            {
-                MediaCueNode media => media.EffectLanes,
-                TextCueNode text => text.EffectLanes,
-                GroupCueNode group => group.EffectLanes,
-                VisualizerCueNode visualizer => visualizer.EffectLanes,
-                _ => [],
-            };
-
-            if (lanes.Any(lane => lane.EndpointId == id))
+            if (CueAutomation.Of(cue).Any(track => track.Target.EndpointId == id))
+                found.Add(CueRef(cue, "automates a value on it"));
+            if (LegacyLanes(cue).Any(lane => lane.EndpointId == id))
                 found.Add(CueRef(cue, "ramps a value on it"));
         }
 
@@ -222,6 +218,15 @@ public static class ProjectReferences
         GroupCueNode group => [group.CrossfadeCurve],
         FadeCueNode fade => [fade.Curve],
         PatchCueNode patch => [patch.FadeCurve],
+        _ => [],
+    };
+
+    private static IReadOnlyList<EffectLane> LegacyLanes(CueNode cue) => cue switch
+    {
+        MediaCueNode media => media.LegacyEffectLanes ?? [],
+        TextCueNode text => text.LegacyEffectLanes ?? [],
+        GroupCueNode group => group.LegacyEffectLanes ?? [],
+        VisualizerCueNode visualizer => visualizer.LegacyEffectLanes ?? [],
         _ => [],
     };
 

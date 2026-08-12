@@ -303,6 +303,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
             PatchCueNode patch => await PatchAsync(patch).ConfigureAwait(false),
             FadeCueNode fade => await FadeAsync(fade).ConfigureAwait(false),
             ActionCueNode action => await ActAsync(action).ConfigureAwait(false),
+            AutomationCueNode automation => await host.RunAutomationAsync(automation, list).ConfigureAwait(false),
             // A comment cue is its note. Firing one is a no-op that still SUCCEEDS, so an
             // auto-continue chain runs straight through it rather than stopping on a marker.
             _ => true,

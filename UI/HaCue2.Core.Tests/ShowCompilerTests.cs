@@ -126,7 +126,7 @@ public sealed class ShowCompilerTests
     }
 
     [Fact]
-    public void TheCueLevelIsFoldedIntoItsSends()
+    public void CueLevelAndSendTrimCompileAsIndependentGainStages()
     {
         var fixture = new TestProject();
         fixture.Track.LevelDb = -6;
@@ -135,8 +135,10 @@ public sealed class ShowCompilerTests
         var clip = ShowCompiler.Compile(fixture.Project).Clips
             .Single(candidate => candidate.ClipId == fixture.Track.Id.ToString());
 
-        // −6 dB twice is −12 dB, because the two are gain stages in series and dB add.
-        Assert.Equal(Math.Pow(10, -12 / 20d), clip.LogicalSends![0].Gain, 4);
+        // The send route carries its own −6 dB trim; cue volume is the envelope component. Their
+        // runtime product is still −12 dB, while either property can now be automated independently.
+        Assert.Equal(Math.Pow(10, -6 / 20d), clip.LogicalSends![0].Gain, 4);
+        Assert.Equal(Math.Pow(10, -6 / 20d), Assert.Single(clip.VolumeEnvelope!).Level, 4);
     }
 
     [Fact]
@@ -226,7 +228,8 @@ public sealed class ShowCompilerTests
         // TrimOutMs is zero on every untrimmed cue, so keying the lane's length off the trim window
         // alone silently dropped it from the commonest case in the app.
         var blind = ShowCompiler.Compile(fixture.Project);
-        Assert.Null(Clip(blind, fixture.Track).VolumeEnvelope);
+        // With no duration, schema-1 data waits for probe facts while static volume still compiles.
+        Assert.Single(Clip(blind, fixture.Track).VolumeEnvelope!);
 
         var probed = ShowCompiler.Compile(
             fixture.Project,
@@ -259,7 +262,9 @@ public sealed class ShowCompilerTests
         var envelope = Clip(document, fixture.Track).VolumeEnvelope!;
 
         Assert.Equal(33, envelope.Count);
-        Assert.Equal(0.75f, envelope[16].Level, 3);
+        // The migrated curve is absolute volume: the fixture's −6 dB base multiplied by the legacy
+        // curve's 0.75 midpoint.
+        Assert.Equal((float)(Math.Pow(10, -6 / 20d) * 0.75), envelope[16].Level, 3);
         Assert.All(envelope, point => Assert.Equal(FadeCurve.Linear, point.CurveToNext));
     }
 

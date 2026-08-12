@@ -1,5 +1,6 @@
 using HaCue2.Core.Model;
 using HaCue2.Core.Media;
+using HaCue2.Core.Serialization;
 using S.Media.Core.Video;
 using S.Media.Session;
 using S.Media.Source.Text;
@@ -52,6 +53,10 @@ public static class ShowCompiler
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(context);
+
+        // Loading can only migrate normalized schema-1 lanes when their duration is persisted. Compilation
+        // also has probe facts, so give unresolved legacy lanes one final deterministic conversion here.
+        AutomationMigration.Migrate(project, context.Durations);
 
         var cues = new List<CueDefinition>();
         var clips = new List<ShowClipBinding>();
@@ -124,8 +129,7 @@ public static class ShowCompiler
             string groupId,
             TimeSpan preEndNotify,
             bool playlistOwned = false,
-            GroupCueNode? layering = null,
-            IReadOnlyList<EffectLane>? inheritedLanes = null)
+            GroupCueNode? layering = null)
         {
             foreach (var node in nodes)
             {
@@ -157,8 +161,7 @@ public static class ShowCompiler
                                 ? TimeSpan.FromMilliseconds(group.CrossfadeMs)
                                 : TimeSpan.Zero,
                             group.FireMode == GroupFireMode.Playlist,
-                            LayersChildren(group) ? group : null,
-                            MergeLanes(group.EffectLanes, inheritedLanes));
+                            LayersChildren(group) ? group : null);
                         break;
 
                     case MediaCueNode media:
@@ -180,8 +183,7 @@ public static class ShowCompiler
                                 project,
                                 media,
                                 Duration(context.Durations, media),
-                                context,
-                                inheritedLanes) with
+                                context) with
                             {
                                 PreEndNotify = playlistOwned
                                     ? preEndNotify
@@ -198,7 +200,7 @@ public static class ShowCompiler
                         // media cue with no file, and the state every text cue is in between being
                         // added and typed into.
                         if (text.Text.Trim().Length > 0)
-                            clips.Add(TextClip(project, text, inheritedLanes));
+                            clips.Add(TextClip(project, text));
 
                         break;
 
@@ -282,8 +284,7 @@ public static class ShowCompiler
         HaCueProject project,
         MediaCueNode media,
         TimeSpan? fileLength,
-        ShowCompileContext context,
-        IReadOnlyList<EffectLane>? inheritedLanes = null)
+        ShowCompileContext context)
     {
         // The FIRST placement is the primary; the rest ride along as ExtraPlacements, which is how the
         // engine fans one DECODED source to several canvases. Playing the file again for a mirror
@@ -350,8 +351,10 @@ public static class ShowCompiler
                     extra.LayerIndex,
                     VideoPlacement(extra)))],
             LogicalSends = [.. Sends(media)],
-            VolumeEnvelope = Envelope(media, EffectLaneKind.Volume, fileLength, inheritedLanes),
-            OpacityEnvelope = Envelope(media, EffectLaneKind.Opacity, fileLength, inheritedLanes),
+            // Cue volume is authored in absolute dB. It lives in the envelope component (including the
+            // static one-point case), leaving send gains as independent route trims.
+            VolumeEnvelope = VolumeEnvelope(project, media),
+            PlacementOpacityEnvelopes = PlacementOpacityEnvelopes(project, media, placements),
         };
     }
 
@@ -430,7 +433,7 @@ public static class ShowCompiler
             .. media.Sends.Select(send => new ShowClipLogicalSend(
                 send.SourceChannel,
                 send.LogicalChannelId.ToString(),
-                send.Muted ? 0f : Linear(send.GainDb + media.LevelDb))),
+                send.Muted ? 0f : Linear(send.GainDb))),
         ];
     }
 
@@ -450,8 +453,7 @@ public static class ShowCompiler
     /// </remarks>
     private static ShowClipBinding TextClip(
         HaCueProject project,
-        TextCueNode text,
-        IReadOnlyList<EffectLane>? inheritedLanes = null)
+        TextCueNode text)
     {
         var placements = text.Placements.OrderBy(item => item.LayerIndex).ToList();
         var placement = placements.FirstOrDefault();
@@ -483,13 +485,7 @@ public static class ShowCompiler
                     extra.CompositionId.ToString(),
                     extra.LayerIndex,
                     VideoPlacement(extra)))],
-            // An indefinite card has no honest time span for an envelope. Timed cards do, and inherit
-            // their nearest group lane just like media cues.
-            OpacityEnvelope = Envelope(
-                text.EffectLanes,
-                EffectLaneKind.Opacity,
-                text.DurationMs > 0 ? TimeSpan.FromMilliseconds(text.DurationMs) : null,
-                inheritedLanes),
+            PlacementOpacityEnvelopes = PlacementOpacityEnvelopes(project, text, placements),
         };
     }
 
@@ -650,112 +646,110 @@ public static class ShowCompiler
         return points;
     }
 
-    /// <summary>
-    /// One automation lane as engine keyframes, or null when the cue has none.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Lane X is a fraction of the cue; the engine wants clip TIME, so the lane is compiled against the
-    /// cue's PLAYED length — its trim window when it has one, otherwise the probed file length less the
-    /// in-point.
-    /// </para>
-    /// <para>
-    /// The probed length matters more than it looks: <see cref="MediaCueNode.TrimOutMs"/> is zero on
-    /// every untrimmed cue, so keying only off the trim window silently dropped the lane from the
-    /// common case — the operator drew an envelope, the timeline drew it back, and the engine never
-    /// received it. With no length from either source the lane is still skipped, because a lane
-    /// stretched over a guessed duration automates the wrong moments.
-    /// </para>
-    /// </remarks>
-    private static IReadOnlyList<ShowEnvelopePoint>? Envelope(
-        MediaCueNode media,
-        EffectLaneKind kind,
-        TimeSpan? fileLength,
-        IReadOnlyList<EffectLane>? inheritedLanes = null) =>
-        Envelope(media.EffectLanes, kind, media.TrimmedLength(fileLength), inheritedLanes);
-
-    private static IReadOnlyList<ShowEnvelopePoint>? Envelope(
-        IReadOnlyList<EffectLane> ownLanes,
-        EffectLaneKind kind,
-        TimeSpan? span,
-        IReadOnlyList<EffectLane>? inheritedLanes = null)
+    /// <summary>The cue's absolute dB property lowered to the session's linear envelope component.</summary>
+    private static IReadOnlyList<ShowEnvelopePoint> VolumeEnvelope(HaCueProject project, MediaCueNode media)
     {
-        var lane = ownLanes.FirstOrDefault(candidate => candidate.Kind == kind)
-                   ?? inheritedLanes?.FirstOrDefault(candidate => candidate.Kind == kind);
-        if (lane is not { Points.Count: > 1 })
-            return null;
+        var track = media.AutomationTracks.FirstOrDefault(candidate =>
+            candidate.Target.PropertyId == AutomationPropertyIds.CueVolume
+            && candidate.Target.ObjectId is null);
+        return Envelope(project, track, media.LevelDb, Linear);
+    }
 
-        if (span is not { } duration || duration <= TimeSpan.Zero)
-            return null;
-
-        IReadOnlyList<ShowEnvelopePoint> Laws() =>
-        [
-            .. lane.Points.Select(point => new ShowEnvelopePoint(
-                point.X * duration,
-                (float)Math.Clamp(point.Y, 0, 1),
-                point.CurveToNext)),
-        ];
-
-        if (!lane.Points.Any(point => point.OutHandleX is not null || point.InHandleX is not null))
-            return Laws();
-
-        // The runtime envelope document predates tangent metadata. Compile a Bézier lane into 32
-        // linear subdivisions per authored segment: this is additive-safe for every show-document
-        // consumer, while bounding the geometric approximation independently of cue duration.
-        CustomFadeCurve curve;
-        try
+    /// <summary>One independently-addressed opacity envelope per placement that owns a track.</summary>
+    private static IReadOnlyList<ShowPlacementEnvelope>? PlacementOpacityEnvelopes(
+        HaCueProject project,
+        CueNode cue,
+        IReadOnlyList<LayerPlacement> placements)
+    {
+        var result = new List<ShowPlacementEnvelope>();
+        foreach (var placement in placements)
         {
-            curve = new CustomFadeCurve([
-                .. lane.Points.Select(point => new FadeCurvePoint(
-                    point.X, point.Y, CurveToNext: point.CurveToNext,
-                    OutHandleX: point.OutHandleX, OutHandleLevel: point.OutHandleY,
-                    InHandleX: point.InHandleX, InHandleLevel: point.InHandleY)),
-            ]);
+            var track = CueAutomation.Of(cue).FirstOrDefault(candidate =>
+                candidate.Target.PropertyId == AutomationPropertyIds.PlacementOpacity
+                && candidate.Target.ObjectId == placement.Id);
+            if (track is not { Enabled: true, Keyframes.Count: > 0 })
+                continue;
+            result.Add(new ShowPlacementEnvelope(
+                placement.CompositionId.ToString(),
+                placement.LayerIndex,
+                Envelope(project, track, placement.Opacity, value => (float)Math.Clamp(value, 0, 1)),
+                Absolute: true));
         }
-        catch (ArgumentException)
-        {
-            // Malformed authored tangents are reported by ProjectValidator. Compilation drops to the
-            // per-segment laws rather than throwing, so a show with one bad lane still goes up and
-            // the operator can repair it — the same fallback DuckMath and CurveLibrary take.
-            return Laws();
-        }
+        return result.Count == 0 ? null : result;
+    }
 
-        var sampled = new List<ShowEnvelopePoint>();
-        for (var index = 0; index + 1 < lane.Points.Count; index++)
-        {
-            var from = lane.Points[index];
-            var to = lane.Points[index + 1];
+    /// <summary>Lowers absolute-time property keys. Built-in segment laws remain exact; custom curves
+    /// and holds are expanded to linear document points because the runtime wire type intentionally
+    /// remains small and compatible with existing ShowDocument readers.</summary>
+    private static IReadOnlyList<ShowEnvelopePoint> Envelope(
+        HaCueProject project,
+        AutomationTrack? track,
+        double authoredValue,
+        Func<double, float> valueMap)
+    {
+        if (track is not { Enabled: true, Keyframes.Count: > 0 })
+            return [new ShowEnvelopePoint(TimeSpan.Zero, valueMap(authoredValue))];
 
-            // Only a Bézier segment needs subdividing. A segment carrying a plain law stays ONE
-            // document segment: the runtime evaluates that law exactly, so approximating it with 32
-            // chords would be both bigger and less accurate.
-            if (from.OutHandleX is null || to.InHandleX is null)
+        var descriptor = AutomationPropertyCatalog.Get(track.Target.PropertyId);
+        var keys = track.Keyframes
+            .Where(key => key.TimeMs >= 0 && double.IsFinite(key.Value))
+            .OrderBy(key => key.TimeMs)
+            .ThenBy(key => key.Id)
+            .ToList();
+        if (keys.Count == 0)
+            return [new ShowEnvelopePoint(TimeSpan.Zero, valueMap(authoredValue))];
+
+        float Mapped(double value) => valueMap(descriptor?.Value.Clamp(value) ?? value);
+        var lowered = new List<ShowEnvelopePoint>();
+        for (var index = 0; index + 1 < keys.Count; index++)
+        {
+            var from = keys[index];
+            var to = keys[index + 1];
+            if (to.TimeMs <= from.TimeMs)
+                continue;
+
+            if (from.Hold)
             {
-                sampled.Add(new ShowEnvelopePoint(
-                    from.X * duration, (float)Math.Clamp(from.Y, 0, 1), from.CurveToNext));
+                lowered.Add(new ShowEnvelopePoint(TimeSpan.FromMilliseconds(from.TimeMs), Mapped(from.Value)));
+                lowered.Add(new ShowEnvelopePoint(
+                    TimeSpan.FromMilliseconds(Math.Max(from.TimeMs, to.TimeMs - 1)),
+                    Mapped(from.Value)));
+                continue;
+            }
+
+            FadeShape shape;
+            try
+            {
+                shape = from.Curve.Resolve(project);
+            }
+            catch (ArgumentException)
+            {
+                shape = FadeCurve.Linear;
+            }
+
+            if (shape.Custom is null)
+            {
+                lowered.Add(new ShowEnvelopePoint(
+                    TimeSpan.FromMilliseconds(from.TimeMs),
+                    Mapped(from.Value),
+                    shape.Law));
                 continue;
             }
 
             const int samples = 32;
             for (var step = 0; step < samples; step++)
             {
-                var x = from.X + ((to.X - from.X) * step / samples);
-                sampled.Add(new ShowEnvelopePoint(x * duration, curve.Evaluate(x)));
+                var progress = (double)step / samples;
+                var time = from.TimeMs + ((to.TimeMs - from.TimeMs) * progress);
+                var value = from.Value + ((to.Value - from.Value) * shape.Custom.Evaluate(progress));
+                lowered.Add(new ShowEnvelopePoint(TimeSpan.FromMilliseconds(time), Mapped(value)));
             }
         }
 
-        sampled.Add(new ShowEnvelopePoint(
-            lane.Points[^1].X * duration, (float)Math.Clamp(lane.Points[^1].Y, 0, 1)));
-        return sampled;
+        var last = keys[^1];
+        lowered.Add(new ShowEnvelopePoint(TimeSpan.FromMilliseconds(last.TimeMs), Mapped(last.Value)));
+        return lowered;
     }
-
-    private static IReadOnlyList<EffectLane> MergeLanes(
-        IReadOnlyList<EffectLane> nearest,
-        IReadOnlyList<EffectLane>? inherited) =>
-        [
-            .. nearest,
-            .. (inherited ?? []).Where(parent => nearest.All(lane => lane.Kind != parent.Kind)),
-        ];
 
     /// <summary>
     /// The canvas rate as an exact ratio.

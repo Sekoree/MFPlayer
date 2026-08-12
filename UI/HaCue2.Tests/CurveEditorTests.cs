@@ -92,12 +92,7 @@ public sealed class CurveEditorTests
             var group = project.AllCues().OfType<GroupCueNode>()
                 .First(candidate => candidate.FireMode == GroupFireMode.Timeline);
             var media = group.Children.OfType<MediaCueNode>().First();
-            var lane = new EffectLane
-            {
-                Kind = EffectLaneKind.Volume,
-                Points = [new LanePoint(0, 1), new LanePoint(1, 1)],
-            };
-            media.EffectLanes.Add(lane);
+            var lane = VolumeTrack(media, 8, (0, 0), (1, 0));
             shell.Runtime.MediaDurations[media.Id] = TimeSpan.FromSeconds(8);
             shell.Cues.Timeline.Show(group);
 
@@ -110,19 +105,19 @@ public sealed class CurveEditorTests
                 row,
                 new CurveGesture(CurveGestureKind.Add, -1, 0.5, 0.75));
             shell.Cues.Timeline.EndGesture();
-            Assert.Contains(lane.Points, point => Math.Abs(point.X - 0.5) < 0.001
-                                                  && Math.Abs(point.Y - 0.25) < 0.001);
+            Assert.Contains(lane.Keyframes, key => key.TimeMs == 4_000
+                                                   && Math.Abs(key.Value - -42) < 0.001);
 
             row = shell.Cues.Timeline.Lanes.Single(candidate => candidate.EffectLaneId == lane.Id);
             var detail = shell.Cues.Timeline.LaneEditor(row)!;
             detail.Apply(new CurveGesture(CurveGestureKind.Select, 1, 0, 0));
-            detail.PointTime = "2";
-            detail.PointValue = "-6 dB";
-            detail.Segment = "s-curve";
+            detail.CommitPointTime("2");
+            detail.CommitPointValue("-6");
+            detail.Segment = "S-curve";
 
-            Assert.Equal(0.25, lane.Points[1].X, 3);
-            Assert.Equal(Math.Pow(10, -6d / 20), lane.Points[1].Y, 3);
-            Assert.Equal(FadeCurve.SCurve, lane.Points[1].CurveToNext);
+            Assert.Equal(2_000, lane.Keyframes[1].TimeMs);
+            Assert.Equal(-6, lane.Keyframes[1].Value, 3);
+            Assert.Equal(FadeCurve.SCurve, lane.Keyframes[1].Curve.Law);
         });
 
     [Fact]
@@ -154,12 +149,7 @@ public sealed class CurveEditorTests
             var group = shell.Project.AllCues().OfType<GroupCueNode>()
                 .First(candidate => candidate.FireMode == GroupFireMode.Timeline);
             var media = group.Children.OfType<MediaCueNode>().First();
-            var lane = new EffectLane
-            {
-                Kind = EffectLaneKind.Volume,
-                Points = [new LanePoint(0, 1), new LanePoint(1, 0.5)],
-            };
-            media.EffectLanes.Add(lane);
+            var lane = VolumeTrack(media, 8, (0, 0), (1, -6));
             shell.Cues.Timeline.Show(group);
 
             var row = shell.Cues.Timeline.Lanes.Single(candidate => candidate.EffectLaneId == lane.Id);
@@ -284,12 +274,7 @@ public sealed class CurveEditorTests
             var group = shell.Project.AllCues().OfType<GroupCueNode>()
                 .First(candidate => candidate.FireMode == GroupFireMode.Timeline);
             var media = group.Children.OfType<MediaCueNode>().First();
-            var lane = new EffectLane
-            {
-                Kind = EffectLaneKind.Volume,
-                Points = [new LanePoint(0.1, 1), new LanePoint(0.3, 0.5), new LanePoint(0.8, 1)],
-            };
-            media.EffectLanes.Add(lane);
+            var lane = VolumeTrack(media, 8, (0.1, 0), (0.3, -6), (0.8, 0));
             shell.Runtime.MediaDurations[media.Id] = TimeSpan.FromSeconds(8);
             shell.Cues.Timeline.Show(group);
             var row = shell.Cues.Timeline.Lanes.Single(item => item.EffectLaneId == lane.Id);
@@ -301,8 +286,8 @@ public sealed class CurveEditorTests
             shell.Cues.Timeline.ApplyLaneGesture(
                 row, new CurveGesture(CurveGestureKind.Move, 0, 0.2, 0));
             shell.Cues.Timeline.EndGesture();
-            Assert.Equal(0.2, lane.Points[0].X, 3);
-            Assert.Equal(0.4, lane.Points[1].X, 3);
+            Assert.Equal(1_600, lane.Keyframes[0].TimeMs);
+            Assert.Equal(3_200, lane.Keyframes[1].TimeMs);
 
             row = shell.Cues.Timeline.Lanes.Single(item => item.EffectLaneId == lane.Id);
             var clipboard = shell.Cues.Timeline.CopySelectedKeyframes(row);
@@ -312,21 +297,20 @@ public sealed class CurveEditorTests
             // puts it at the clip's start, so the keyframe already at 0.2 is consumed rather than
             // doubled — 0.4 and 0.8 are outside the span and survive.
             Assert.True(shell.Cues.Timeline.PasteKeyframes(row, clipboard));
-            Assert.Equal(4, lane.Points.Count);
-            Assert.Equal([0, 0.2, 0.4, 0.8], lane.Points.Select(point => Math.Round(point.X, 3)));
+            Assert.Equal(4, lane.Keyframes.Count);
+            Assert.Equal([0L, 1_600L, 3_200L, 6_400L], lane.Keyframes.Select(key => key.TimeMs));
 
             row = shell.Cues.Timeline.Lanes.Single(item => item.EffectLaneId == lane.Id);
             Assert.Equal(2, row.Points.Count(point => point.IsSelected));
             shell.Cues.Timeline.DeleteSelectedKeyframes(row);
-            Assert.Equal(2, lane.Points.Count);
+            Assert.Equal(2, lane.Keyframes.Count);
 
-            // A lane keeps two keyframes, so deleting the rest is refused — and SAYS so rather than
-            // reporting a deletion that did not happen.
+            // Zero keys is a valid inert track and falls back to the authored property.
             row = shell.Cues.Timeline.Lanes.Single(item => item.EffectLaneId == lane.Id);
             shell.Cues.Timeline.SelectAllKeyframes(row);
             shell.Cues.Timeline.DeleteSelectedKeyframes(row);
-            Assert.Equal(2, lane.Points.Count);
-            Assert.Contains("at least two", shell.Cues.Timeline.KeyframeStatus);
+            Assert.Empty(lane.Keyframes);
+            Assert.Contains("deleted 2", shell.Cues.Timeline.KeyframeStatus);
         });
 
     /// <summary>
@@ -340,13 +324,7 @@ public sealed class CurveEditorTests
             var group = shell.Project.AllCues().OfType<GroupCueNode>()
                 .First(candidate => candidate.FireMode == GroupFireMode.Timeline);
             var media = group.Children.OfType<MediaCueNode>().First();
-            var lane = new EffectLane
-            {
-                Kind = EffectLaneKind.Volume,
-                Points = [new LanePoint(0, 1), new LanePoint(0.25, 0.5), new LanePoint(0.5, 1),
-                          new LanePoint(1, 1)],
-            };
-            media.EffectLanes.Add(lane);
+            var lane = VolumeTrack(media, 8, (0, 0), (0.25, -6), (0.5, 0), (1, 0));
             shell.Runtime.MediaDurations[media.Id] = TimeSpan.FromSeconds(8);
             shell.Cues.Timeline.Show(group);
 
@@ -363,8 +341,8 @@ public sealed class CurveEditorTests
             // Dragging one of them moves the GROUP, spacing preserved.
             editor.Apply(new CurveGesture(CurveGestureKind.Move, 1, 0.35, 0));
             editor.EndGesture();
-            Assert.Equal(0.35, lane.Points[1].X, 3);
-            Assert.Equal(0.6, lane.Points[2].X, 3);
+            Assert.Equal(2_800, lane.Keyframes[1].TimeMs);
+            Assert.Equal(4_800, lane.Keyframes[2].TimeMs);
 
             var text = editor.Copy();
             Assert.StartsWith(LaneKeyframeClipboard.Header, text);
@@ -374,17 +352,39 @@ public sealed class CurveEditorTests
             // beyond 0.25 alone. Nothing is doubled onto an instant that already had a keyframe.
             editor.Apply(new CurveGesture(CurveGestureKind.Select, 0, 0, 0));
             Assert.True(editor.Paste(text));
-            Assert.Equal([0, 0.25, 0.35, 0.6, 1], lane.Points.Select(point => Math.Round(point.X, 3)));
+            Assert.Equal([0L, 2_000L, 2_800L, 4_800L, 8_000L], lane.Keyframes.Select(key => key.TimeMs));
             Assert.Equal(2, editor.SelectionCount);
 
             // Delete acts on the whole selection, not just the primary.
             editor.Apply(new CurveGesture(CurveGestureKind.RemoveSelection, -1, 0, 0));
             editor.EndGesture();
-            Assert.Equal(3, lane.Points.Count);
+            Assert.Equal(3, lane.Keyframes.Count);
 
             editor.SelectAll();
             Assert.Equal(3, editor.SelectionCount);
         });
+
+    private static AutomationTrack VolumeTrack(
+        MediaCueNode media,
+        int durationSeconds,
+        params (double Fraction, double ValueDb)[] keys)
+    {
+        var durationMs = durationSeconds * 1_000L;
+        var track = new AutomationTrack
+        {
+            Target = new AutomationTargetRef { PropertyId = AutomationPropertyIds.CueVolume },
+            Keyframes =
+            [
+                .. keys.Select(key => new AutomationKeyframe
+                {
+                    TimeMs = (long)Math.Round(key.Fraction * durationMs),
+                    Value = key.ValueDb,
+                }),
+            ],
+        };
+        media.AutomationTracks.Add(track);
+        return track;
+    }
 
     /// <summary>A fade knot holds; a lane point cannot. The clipboard is shared by both editors, so
     /// the format has to carry the richer of the two — and still read what version 1 wrote.</summary>

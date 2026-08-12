@@ -106,7 +106,7 @@ public sealed partial class ShowSession
     private void StartOpacityLaneRunner(
         string groupId,
         TransportVoice voice,
-        IReadOnlyList<ShowEnvelopePoint> lane,
+        IReadOnlyList<ShowPlacementEnvelope> lanes,
         CancellationToken ct)
     {
         FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
@@ -116,7 +116,12 @@ public sealed partial class ShowSession
                 !ReferenceEquals(group.ActiveVoice, voice))
                 return Task.FromResult(true);
             var clipPosition = group.Timeline.GetSnapshot().CueTime;
-            voice.ApplyOpacityAutomation(VolumeEnvelopes.Sample(lane, clipPosition));
+            foreach (var lane in lanes)
+                voice.ApplyOpacityAutomation(
+                    lane.CompositionId,
+                    lane.LayerIndex,
+                    VolumeEnvelopes.Sample(lane.Points, clipPosition),
+                    lane.Absolute);
             return Task.FromResult(false);
         }));
     }

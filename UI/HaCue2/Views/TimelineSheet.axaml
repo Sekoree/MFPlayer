@@ -8,7 +8,7 @@
 
   <!-- Screen 05. A bottom sheet by default, undockable to its own window (mode remembered per
        machine). Envelopes are not a fixed overlay: volume, opacity and outbound OSC/MIDI ramps are
-       effect LANES added per cue or per group and hidden until added (register item 18). -->
+       AUTOMATION TRACKS added per cue or per group and hidden until added (register item 18). -->
 
   <!-- No fixed height: docked, the host row (and its splitter) decide; floating, the window does.
        A hard Height here was why the undocked editor ignored its window being resized and why the
@@ -18,22 +18,21 @@
     <c:PanelBox.Footer>
       <Border Classes="chain">
         <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="7">
-          <Button Grid.Column="0" Classes="icon" Content="+ EFFECT LANE ▾">
+          <Button Grid.Column="0" Classes="icon" Content="+ AUTOMATION ▾">
             <Button.Flyout>
-              <!-- Tags are enum NAMES, not ordinals: a reordered EffectLaneKind would silently make
-                   these add the wrong kind. Each item is disabled rather than hidden when the
+              <!-- Tags address the four stable picker choices. Each item is disabled rather than hidden when the
                    selected cue cannot carry it (volume needs audio, opacity needs placeable video,
-                   and one lane per kind), so the rule is visible instead of arriving as a refusal
+                   and one track per concrete target), so the rule is visible instead of arriving as a refusal
                    after the click. -->
               <MenuFlyout>
-                <MenuItem Header="Volume" Click="OnAddLane" Tag="Volume"
+                <MenuItem Header="Volume" Click="OnAddLane" Tag="0"
                           IsEnabled="{Binding CanAddVolumeLane}" />
-                <MenuItem Header="Opacity" Click="OnAddLane" Tag="Opacity"
+                <MenuItem Header="Opacity" Click="OnAddLane" Tag="1"
                           IsEnabled="{Binding CanAddOpacityLane}" />
                 <Separator />
-                <MenuItem Header="OSC ramp" Click="OnAddLane" Tag="OscRamp"
+                <MenuItem Header="OSC value" Click="OnAddLane" Tag="2"
                           IsEnabled="{Binding CanAddOscLane}" />
-                <MenuItem Header="MIDI ramp" Click="OnAddLane" Tag="MidiRamp"
+                <MenuItem Header="MIDI control" Click="OnAddLane" Tag="3"
                           IsEnabled="{Binding CanAddMidiLane}" />
               </MenuFlyout>
             </Button.Flyout>

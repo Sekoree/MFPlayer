@@ -32,7 +32,7 @@ public sealed record HaCueProject
     /// is the correct outcome, and bumping for every addition would refuse documents that are perfectly
     /// readable. Only a change in the meaning of an existing field earns a bump.
     /// </remarks>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     /// <summary>The oldest schema this build can still read.</summary>
     public const int MinimumSupportedSchemaVersion = 1;

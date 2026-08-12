@@ -11,10 +11,8 @@ namespace HaCue2.Core.Timeline;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The exchange type is <see cref="CurveKnot"/> rather than <see cref="LanePoint"/> because BOTH
-/// curve editors share this clipboard — the inline automation lane and the standalone fade editor —
-/// and a fade knot carries a <c>Hold</c> an automation lane has no field for. Encoding the poorer of
-/// the two types would silently drop holds on the way through the clipboard.
+/// The exchange type is <see cref="CurveKnot"/>. Automation keyframes convert their absolute time and
+/// property value to the active editor viewport before using this portable normalized representation.
 /// </para>
 /// <para>
 /// <b>Version 2 appends a field; it never redefines one.</b> A v1 line is still read (its knots
@@ -58,7 +56,10 @@ public static class LaneKeyframeClipboard
     }
 
     public static string Encode(IReadOnlyList<LanePoint> points, IReadOnlySet<int> selected) =>
-        Encode([.. points.Select(ToKnot)], selected);
+        Encode([.. points.Select(point => new CurveKnot(
+            point.X, point.Y, CurveToNext: point.CurveToNext,
+            OutHandleX: point.OutHandleX, OutHandleY: point.OutHandleY,
+            InHandleX: point.InHandleX, InHandleY: point.InHandleY))], selected);
 
     public static IReadOnlyList<CurveKnot>? DecodeKnots(string? text)
     {
@@ -108,10 +109,6 @@ public static class LaneKeyframeClipboard
                 knot.X, knot.Y, knot.CurveToNext,
                 knot.OutHandleX, knot.OutHandleY, knot.InHandleX, knot.InHandleY))]
             : null;
-
-    private static CurveKnot ToKnot(LanePoint point) => new(
-        point.X, point.Y, false, point.CurveToNext,
-        point.OutHandleX, point.OutHandleY, point.InHandleX, point.InHandleY);
 
     private static string Number(double value) => value.ToString("R", CultureInfo.InvariantCulture);
     private static string Optional(double? value) => value is { } number ? Number(number) : "";

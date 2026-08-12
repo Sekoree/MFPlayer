@@ -111,12 +111,20 @@ public partial class App : Application
             // RequestAnimationFrame fires after a compositor frame actually renders - "a window opened"
             // is not the same claim, and it is the weaker one.
             Avalonia.Controls.TopLevel.GetTopLevel(window)?.RequestAnimationFrame(_ =>
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
                 {
+                    // The shell deliberately starts its engine after showing the window. AOT startup
+                    // can still be inside SDL/EGL probing when the first Avalonia frame lands, and
+                    // tearing native libraries down underneath that probe is a process crash rather
+                    // than a useful launch result. Await the real startup boundary; the watchdog still
+                    // turns a wedged engine into an exit 2.
+                    if (window is ShellWindow shellWindow)
+                        await shellWindow.StartupTask.ConfigureAwait(true);
+
                     if (Interlocked.Exchange(ref exited, 1) != 0)
                         return;
                     MediaDiagnostics.LogInformation(
-                        "HACUE2_SMOKE: first frame rendered - shutting down (exit 0)");
+                        "HACUE2_SMOKE: first frame rendered and startup settled - shutting down (exit 0)");
                     // TryShutdown, NOT Shutdown: the forced path skips ShutdownRequested, and the smoke
                     // has to exercise the app's real teardown.
                     desktop.TryShutdown(0);
@@ -285,7 +293,10 @@ public partial class App : Application
         var shutdownStarted = false;
         var shutdownComplete = false;
 
-        window.Opened += async (_, _) =>
+        window.Opened += (_, _) =>
+            window.StartupTask = StartShellAsync();
+
+        async Task StartShellAsync()
         {
             try
             {
@@ -302,7 +313,7 @@ public partial class App : Application
             {
                 shell.FileMessage = $"the show engine could not start — {failure.Message}";
             }
-        };
+        }
 
         window.Closing += async (_, closing) =>
         {

@@ -374,13 +374,27 @@
             </HeaderedContentControl>
           </StackPanel>
 
-          <!-- ══ EFFECTS — lanes, hidden until added (register item 18) ═════════════════════ -->
+          <!-- ══ AUTOMATION — property tracks, hidden until added (register item 18) ═══════ -->
           <StackPanel IsVisible="{Binding IsEffectsPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="6" IsVisible="{Binding IsAutomationCue}">
+              <HeaderedContentControl Grid.Column="0" Theme="{StaticResource Field}" Header="Duration (s)">
+                <TextBox Text="{Binding AutomationDuration}" />
+              </HeaderedContentControl>
+              <HeaderedContentControl Grid.Column="1" Theme="{StaticResource Field}" Header="At completion">
+                <CheckBox Margin="10,7" Content="restore authored values"
+                          IsChecked="{Binding AutomationRestoreBase, Mode=TwoWay}" />
+              </HeaderedContentControl>
+            </Grid>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="Target cue"
+                                    IsVisible="{Binding IsAutomationCue}">
+              <ComboBox ItemsSource="{Binding AutomationTargetCues}"
+                        SelectedIndex="{Binding AutomationTargetCueIndex, Mode=TwoWay}" />
+            </HeaderedContentControl>
             <!-- Hidden until added (register item 18): a cue with no automation shows none, rather
                  than four empty lanes implying it has some. -->
             <TextBlock Margin="10,4" Classes="mono dim3 small" IsVisible="{Binding !HasEffectLanes}"
-                       Text="no lanes on this cue" />
+                       Text="no automation tracks on this cue" />
 
             <ItemsControl ItemsSource="{Binding EffectLanes}">
               <ItemsControl.ItemTemplate>
@@ -391,15 +405,13 @@
                         <TextBlock Classes="mono small" Text="{Binding Kind}" />
                         <TextBlock Classes="mono dim3 micro" Text="{Binding Detail}" />
                       </StackPanel>
-                      <!-- The SAME editor a fade curve uses: a lane and a curve are one sorted list of
-                           normalized points, which is why the plan asks for one editor. -->
                       <Button Grid.Column="1" Classes="icon" Content="✎" Click="OnEditLane"
-                              Tag="{Binding Index}" ToolTip.Tip="Edit this lane's points" />
+                              Tag="{Binding Index}" ToolTip.Tip="Open the scrollable absolute-time automation editor" />
                       <Button Grid.Column="2" Classes="icon" Content="⚙" Click="OnConfigureLane"
                               IsVisible="{Binding IsOutbound}" Tag="{Binding Index}"
                               ToolTip.Tip="Choose endpoint and address" />
                       <Button Grid.Column="3" Classes="icon" Content="×" Click="OnRemoveLane"
-                              Tag="{Binding Index}" ToolTip.Tip="Remove this lane" />
+                              Tag="{Binding Index}" ToolTip.Tip="Remove this automation track" />
                     </Grid>
                   </Border>
                 </DataTemplate>
@@ -407,7 +419,7 @@
             </ItemsControl>
 
             <ContentControl Theme="{StaticResource FieldWide}" Margin="0,6,0,0">
-              <Button Classes="block" Content="+ ADD EFFECT LANE ▾" IsEnabled="{Binding CanCarryLanes}">
+              <Button Classes="block" Content="+ ADD AUTOMATION ▾" IsEnabled="{Binding CanCarryLanes}">
                 <Button.Flyout>
                   <MenuFlyout>
                     <!-- Only what this cue can carry. A volume lane over a visualizer and an opacity
@@ -417,16 +429,16 @@
                     <MenuItem Header="Opacity" Click="OnAddLane" Tag="1"
                               IsVisible="{Binding CanAddOpacityLane}" />
                     <Separator IsVisible="{Binding CanAddOutboundLane}" />
-                    <MenuItem Header="OSC ramp" Click="OnAddLane" Tag="2"
+                    <MenuItem Header="OSC value" Click="OnAddLane" Tag="2"
                               IsVisible="{Binding CanAddOutboundLane}" />
-                    <MenuItem Header="MIDI ramp" Click="OnAddLane" Tag="3"
+                    <MenuItem Header="MIDI control" Click="OnAddLane" Tag="3"
                               IsVisible="{Binding CanAddOutboundLane}" />
                   </MenuFlyout>
                 </Button.Flyout>
               </Button>
             </ContentControl>
             <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
-                       Text="One lane per kind. Volume and opacity reach the engine; outbound ramps are authored but not yet sent. A child's lane overrides the group's same-kind lane." />
+                       Text="Tracks target concrete cue properties and use absolute cue time. Open one to zoom, scroll and seek through long media." />
           </StackPanel>
 
           <!-- ══ NOTE — one tab on every kind; stays writable under Lock ════════════════════ -->

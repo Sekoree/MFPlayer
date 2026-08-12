@@ -35,43 +35,41 @@ internal sealed class OutboundEffects : IAsyncDisposable
             return;
 
         var project = _project();
-        var lanes = EffectiveLanes(project, cue)
-            .Where(lane => lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp)
-            .Where(lane => lane.Points.Count >= 2)
+        var tracks = Tracks(cue)
+            .Where(track => track.Enabled)
+            .Where(track => track.Target.PropertyId is AutomationPropertyIds.OscValue
+                or AutomationPropertyIds.MidiControlValue)
+            .Where(track => track.Keyframes.Count > 0)
             .ToList();
-        if (lanes.Count == 0)
+        if (tracks.Count == 0)
             return;
 
         var runs = new List<Run>();
-        foreach (var lane in lanes)
+        foreach (var track in tracks)
         {
-            if (lane.EndpointId is not { } endpointId
+            if (track.Target.EndpointId is not { } endpointId
                 || project.ActionEndpoints.FirstOrDefault(endpoint => endpoint.Id == endpointId) is not { } endpoint)
             {
-                _report($"“{cue.Label}” has a {lane.Kind} lane with no live endpoint");
+                _report($"“{cue.Label}” has an automation track with no live endpoint");
                 continue;
             }
 
-            var expected = lane.Kind == EffectLaneKind.OscRamp ? EndpointKind.OscOut : EndpointKind.MidiOut;
+            var expected = track.Target.PropertyId == AutomationPropertyIds.OscValue
+                ? EndpointKind.OscOut : EndpointKind.MidiOut;
             if (endpoint.Kind != expected)
             {
-                _report($"“{cue.Label}” has a {lane.Kind} lane pointed at {endpoint.Kind}");
+                _report($"“{cue.Label}” has automation pointed at {endpoint.Kind}");
                 continue;
             }
 
-            var points = lane.Points
-                .OrderBy(point => point.X)
-                .Select(point => new OutboundRampPoint(
-                    TimeSpan.FromTicks((long)(duration.Ticks * Math.Clamp(point.X, 0, 1))),
-                    lane.Kind == EffectLaneKind.MidiRamp
-                        ? Math.Round(Math.Clamp(point.Y, 0, 1) * 127, MidpointRounding.AwayFromZero)
-                        : Math.Clamp(point.Y, 0, 1),
-                    FadeCurve.Linear))
-                .ToList();
+            var points = Points(project, track);
+            if (points.Count == 0)
+                continue;
 
             var runner = new OutboundRampRunner(
                 points,
-                (value, _) => SendAsync(cue, lane, endpoint, value));
+                (value, _) => SendAsync(cue, track, endpoint, value),
+                Math.Clamp(track.Target.SendRateHz, 1, 120));
             var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
             var run = new Run(runner, cancellation);
             run.Task = DriveAsync(cue.Id, run);
@@ -129,14 +127,15 @@ internal sealed class OutboundEffects : IAsyncDisposable
         }
     }
 
-    private async ValueTask SendAsync(CueNode cue, EffectLane lane, ActionEndpoint endpoint, double value)
+    private async ValueTask SendAsync(CueNode cue, AutomationTrack track, ActionEndpoint endpoint, double value)
     {
+        var midi = track.Target.PropertyId == AutomationPropertyIds.MidiControlValue;
         var action = new ActionCueNode
         {
-            Label = $"{cue.Label} · {lane.Kind}",
+            Label = $"{cue.Label} · automation",
             EndpointId = endpoint.Id,
-            Address = lane.Address,
-            Arguments = lane.Kind == EffectLaneKind.MidiRamp
+            Address = track.Target.Address,
+            Arguments = midi
                 ? ((int)value).ToString(CultureInfo.InvariantCulture)
                 : value.ToString("0.######", CultureInfo.InvariantCulture),
         };
@@ -148,50 +147,52 @@ internal sealed class OutboundEffects : IAsyncDisposable
         }
     }
 
-    private static IReadOnlyList<EffectLane> EffectiveLanes(HaCueProject project, CueNode cue)
+    private static IReadOnlyList<AutomationTrack> Tracks(CueNode cue) => CueAutomation.Of(cue);
+
+    private static IReadOnlyList<OutboundRampPoint> Points(HaCueProject project, AutomationTrack track)
     {
-        var inherited = Ancestors(project, cue.Id)
-            .SelectMany(group => group.EffectLanes)
-            .Where(lane => lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp)
-            .GroupBy(lane => lane.Kind)
-            .ToDictionary(group => group.Key, group => group.First());
-
-        var own = cue switch
+        var keys = track.Keyframes
+            .Where(key => key.TimeMs >= 0 && double.IsFinite(key.Value))
+            .OrderBy(key => key.TimeMs)
+            .ThenBy(key => key.Id)
+            .ToList();
+        var points = new List<OutboundRampPoint>();
+        for (var index = 0; index + 1 < keys.Count; index++)
         {
-            MediaCueNode media => media.EffectLanes,
-            TextCueNode text => text.EffectLanes,
-            VisualizerCueNode visualizer => visualizer.EffectLanes,
-            GroupCueNode group => group.EffectLanes,
-            _ => [],
-        };
-
-        foreach (var lane in own.Where(lane => lane.Kind is EffectLaneKind.OscRamp or EffectLaneKind.MidiRamp))
-            inherited[lane.Kind] = lane;
-        return [.. inherited.Values];
-    }
-
-    private static IEnumerable<GroupCueNode> Ancestors(HaCueProject project, Guid cueId)
-    {
-        foreach (var list in project.CueLists)
-        {
-            var stack = new Stack<(IReadOnlyList<CueNode> Cues, List<GroupCueNode> Parents)>();
-            stack.Push((list.Cues, []));
-            while (stack.Count > 0)
+            var from = keys[index];
+            var to = keys[index + 1];
+            if (to.TimeMs <= from.TimeMs)
+                continue;
+            if (from.Hold)
             {
-                var (cues, parents) = stack.Pop();
-                foreach (var candidate in cues)
-                {
-                    if (candidate.Id == cueId)
-                    {
-                        foreach (var parent in parents.AsEnumerable().Reverse())
-                            yield return parent;
-                        yield break;
-                    }
-                    if (candidate is GroupCueNode group)
-                        stack.Push((group.Children, [.. parents, group]));
-                }
+                points.Add(new OutboundRampPoint(TimeSpan.FromMilliseconds(from.TimeMs), from.Value));
+                points.Add(new OutboundRampPoint(
+                    TimeSpan.FromMilliseconds(Math.Max(from.TimeMs, to.TimeMs - 1)), from.Value));
+                continue;
+            }
+
+            FadeShape shape;
+            try { shape = from.Curve.Resolve(project); }
+            catch (ArgumentException) { shape = FadeCurve.Linear; }
+            if (shape.Custom is null)
+            {
+                points.Add(new OutboundRampPoint(
+                    TimeSpan.FromMilliseconds(from.TimeMs), from.Value, shape.Law));
+                continue;
+            }
+
+            const int samples = 32;
+            for (var step = 0; step < samples; step++)
+            {
+                var progress = (double)step / samples;
+                var time = from.TimeMs + ((to.TimeMs - from.TimeMs) * progress);
+                var value = from.Value + ((to.Value - from.Value) * shape.Custom.Evaluate(progress));
+                points.Add(new OutboundRampPoint(TimeSpan.FromMilliseconds(time), value));
             }
         }
+        if (keys.Count > 0)
+            points.Add(new OutboundRampPoint(TimeSpan.FromMilliseconds(keys[^1].TimeMs), keys[^1].Value));
+        return points;
     }
 
     public async ValueTask DisposeAsync()

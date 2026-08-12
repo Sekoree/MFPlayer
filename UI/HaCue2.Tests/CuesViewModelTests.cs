@@ -202,7 +202,23 @@ public class CuesViewModelTests
         {
             Number = "90.2", Label = "Again", TargetCueIds = [child.Id],
         };
-        group.Children = [child, jump];
+        var automation = new AutomationCueNode
+        {
+            Number = "90.3",
+            Label = "Turn down",
+            AutomationTracks =
+            [
+                new AutomationTrack
+                {
+                    Target = new AutomationTargetRef
+                    {
+                        CueId = child.Id,
+                        PropertyId = AutomationPropertyIds.CueVolume,
+                    },
+                },
+            ],
+        };
+        group.Children = [child, jump, automation];
         shell.Cues.Refresh();
         ShellFixture.Select(shell.Cues, group.Id);
 
@@ -213,9 +229,11 @@ public class CuesViewModelTests
             candidate => candidate.Id != group.Id && candidate.Label == group.Label);
         var copiedChild = Assert.IsType<MediaCueNode>(copy.Children[0]);
         var copiedJump = Assert.IsType<JumpCueNode>(copy.Children[1]);
+        var copiedAutomation = Assert.IsType<AutomationCueNode>(copy.Children[2]);
 
         Assert.NotEqual(child.Id, copiedChild.Id);
         Assert.Equal([copiedChild.Id], copiedJump.TargetCueIds);
+        Assert.Equal(copiedChild.Id, Assert.Single(copiedAutomation.AutomationTracks).Target.CueId);
     });
 
     [Fact]

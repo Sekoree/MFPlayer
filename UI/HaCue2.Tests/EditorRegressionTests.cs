@@ -140,7 +140,7 @@ public class EditorRegressionTests
     });
 
     [Fact]
-    public Task AVisualizerIsNotOfferedAVolumeLane() => ShellFixture.WithShell(shell =>
+    public Task AVisualizerOffersOpacityOnlyForAConcretePlacement() => ShellFixture.WithShell(shell =>
     {
         var list = shell.Project.CueLists[0];
         var visualizer = new VisualizerCueNode { Number = "821", Label = "Viz" };
@@ -149,6 +149,14 @@ public class EditorRegressionTests
         shell.Cues.Inspector.Show([visualizer.Id]);
 
         Assert.False(shell.Cues.Inspector.CanAddVolumeLane);
+        Assert.False(shell.Cues.Inspector.CanAddOpacityLane);
+
+        visualizer.Placements.Add(new LayerPlacement
+        {
+            CompositionId = shell.Project.Compositions[0].Id,
+            LayerIndex = 2,
+        });
+        shell.Cues.Inspector.Reload();
         Assert.True(shell.Cues.Inspector.CanAddOpacityLane);
     });
 
@@ -157,21 +165,34 @@ public class EditorRegressionTests
         => ShellFixture.WithShell(shell =>
         {
             var list = shell.Project.CueLists[0];
-            var visualizer = new VisualizerCueNode { Number = "822", Label = "Viz" };
+            var visualizer = new VisualizerCueNode
+            {
+                Number = "822",
+                Label = "Viz",
+                Placements =
+                [
+                    new LayerPlacement
+                    {
+                        CompositionId = shell.Project.Compositions[0].Id,
+                        LayerIndex = 2,
+                    },
+                ],
+            };
             list.Cues.Add(visualizer);
 
             shell.Cues.Inspector.Show([visualizer.Id]);
 
-            // Row 1 is "Opacity" in EffectLaneKind order, and stays so even though row 0 is hidden —
-            // reading the picker index as a position in the filtered list would add the wrong kind.
+            // The command index is a UI property slot, not a position in the filtered list.
             shell.Cues.Inspector.AddLane(1);
 
-            Assert.Equal([EffectLaneKind.Opacity], visualizer.EffectLanes.Select(lane => lane.Kind));
+            Assert.Equal(
+                [AutomationPropertyIds.PlacementOpacity],
+                visualizer.AutomationTracks.Select(track => track.Target.PropertyId));
 
             // And the kind that does not apply is refused outright rather than silently added.
             shell.Cues.Inspector.Show([visualizer.Id]);
             shell.Cues.Inspector.AddLane(0);
-            Assert.Single(visualizer.EffectLanes);
+            Assert.Single(visualizer.AutomationTracks);
         });
 
     [Fact]

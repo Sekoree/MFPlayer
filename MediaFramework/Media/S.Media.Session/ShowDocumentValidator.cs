@@ -210,6 +210,17 @@ public static class ShowDocumentValidator
                 errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an unknown fade-out curve.");
             ValidateEnvelope(errors, clip.ClipId, "volume", clip.VolumeEnvelope, opacity: false);
             ValidateEnvelope(errors, clip.ClipId, "opacity", clip.OpacityEnvelope, opacity: true);
+            foreach (var placementEnvelope in clip.PlacementOpacityEnvelopes ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(placementEnvelope.CompositionId) || placementEnvelope.LayerIndex < 0)
+                    errors.Add("clip", clip.ClipId, $"the clip for cue '{clip.ClipId}' has an invalid placement opacity target.");
+                if (!clip.GetPlacements().Any(placement =>
+                        string.Equals(placement.CompositionId, placementEnvelope.CompositionId, StringComparison.Ordinal)
+                        && placement.LayerIndex == placementEnvelope.LayerIndex))
+                    errors.Add("clip", clip.ClipId,
+                        $"the clip for cue '{clip.ClipId}' has opacity automation for a placement it does not use.");
+                ValidateEnvelope(errors, clip.ClipId, "placement opacity", placementEnvelope.Points, opacity: true);
+            }
 
             // Logical sends (HaCue two-matrix model): cell sanity only - whether a LogicalChannelId
             // exists is a PROJECT question the session cannot answer from the document alone (the
