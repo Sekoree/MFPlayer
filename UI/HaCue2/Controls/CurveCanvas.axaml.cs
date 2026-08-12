@@ -223,6 +223,30 @@ public partial class CurveCanvas : UserControl
         GestureCompleted?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// A capture that ends any other way — the window deactivated, the lane torn out of the tree —
+    /// must still complete the gesture: the view-model's journal composite stays open until
+    /// <see cref="GestureCompleted"/>, and an unclosed one folds every later edit into the drag's undo
+    /// step. Leaving the drag fields set is the second half of the same bug: the next pointer MOVE
+    /// would keep editing with no button held.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately NOT the off-canvas removal <see cref="OnPointerReleased"/> performs. Losing a
+    /// capture is not the operator letting go somewhere, so it ends the drag where it stands rather
+    /// than deleting the point they were holding.
+    /// </remarks>
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        base.OnPointerCaptureLost(e);
+
+        if (_draggedIndex < 0 && _draggedTangent is null)
+            return;
+
+        _draggedIndex = -1;
+        _draggedTangent = null;
+        GestureCompleted?.Invoke(this, EventArgs.Empty);
+    }
+
     /// <summary>Arrow keys nudge the selected point, for the precision a mouse cannot give.</summary>
     protected override void OnKeyDown(KeyEventArgs e)
     {

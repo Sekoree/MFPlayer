@@ -688,39 +688,64 @@ public static class ShowCompiler
         if (span is not { } duration || duration <= TimeSpan.Zero)
             return null;
 
+        IReadOnlyList<ShowEnvelopePoint> Laws() =>
+        [
+            .. lane.Points.Select(point => new ShowEnvelopePoint(
+                point.X * duration,
+                (float)Math.Clamp(point.Y, 0, 1),
+                point.CurveToNext)),
+        ];
+
         if (!lane.Points.Any(point => point.OutHandleX is not null || point.InHandleX is not null))
-            return
-            [
-                .. lane.Points.Select(point => new ShowEnvelopePoint(
-                    point.X * duration,
-                    (float)Math.Clamp(point.Y, 0, 1),
-                    point.CurveToNext)),
-            ];
+            return Laws();
 
         // The runtime envelope document predates tangent metadata. Compile a Bézier lane into 32
         // linear subdivisions per authored segment: this is additive-safe for every show-document
         // consumer, while bounding the geometric approximation independently of cue duration.
-        var curve = new CustomFadeCurve([
-            .. lane.Points.Select(point => new FadeCurvePoint(
-                point.X, point.Y, CurveToNext: point.CurveToNext,
-                OutHandleX: point.OutHandleX, OutHandleLevel: point.OutHandleY,
-                InHandleX: point.InHandleX, InHandleLevel: point.InHandleY)),
-        ]);
-        var sampled = new List<ShowEnvelopePoint>
+        CustomFadeCurve curve;
+        try
         {
-            new(lane.Points[0].X * duration, (float)lane.Points[0].Y),
-        };
+            curve = new CustomFadeCurve([
+                .. lane.Points.Select(point => new FadeCurvePoint(
+                    point.X, point.Y, CurveToNext: point.CurveToNext,
+                    OutHandleX: point.OutHandleX, OutHandleLevel: point.OutHandleY,
+                    InHandleX: point.InHandleX, InHandleLevel: point.InHandleY)),
+            ]);
+        }
+        catch (ArgumentException)
+        {
+            // Malformed authored tangents are reported by ProjectValidator. Compilation drops to the
+            // per-segment laws rather than throwing, so a show with one bad lane still goes up and
+            // the operator can repair it — the same fallback DuckMath and CurveLibrary take.
+            return Laws();
+        }
+
+        var sampled = new List<ShowEnvelopePoint>();
         for (var index = 0; index + 1 < lane.Points.Count; index++)
         {
             var from = lane.Points[index];
             var to = lane.Points[index + 1];
+
+            // Only a Bézier segment needs subdividing. A segment carrying a plain law stays ONE
+            // document segment: the runtime evaluates that law exactly, so approximating it with 32
+            // chords would be both bigger and less accurate.
+            if (from.OutHandleX is null || to.InHandleX is null)
+            {
+                sampled.Add(new ShowEnvelopePoint(
+                    from.X * duration, (float)Math.Clamp(from.Y, 0, 1), from.CurveToNext));
+                continue;
+            }
+
             const int samples = 32;
-            for (var step = 1; step <= samples; step++)
+            for (var step = 0; step < samples; step++)
             {
                 var x = from.X + ((to.X - from.X) * step / samples);
                 sampled.Add(new ShowEnvelopePoint(x * duration, curve.Evaluate(x)));
             }
         }
+
+        sampled.Add(new ShowEnvelopePoint(
+            lane.Points[^1].X * duration, (float)Math.Clamp(lane.Points[^1].Y, 0, 1)));
         return sampled;
     }
 

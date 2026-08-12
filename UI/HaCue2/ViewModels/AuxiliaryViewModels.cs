@@ -4,6 +4,7 @@ using HaCue2.Controls;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Media;
 using HaCue2.Core.Model;
+using HaCue2.Core.Timeline;
 using HaCue2.Core.Validation;
 using HaCue2.Engine;
 using HaCue2.Machine;
@@ -352,12 +353,27 @@ public partial class CurveEditorViewModel : ObservableObject
     public IReadOnlyList<CurvePoint> Points =>
     [
         .. _knots.Select((knot, index) => new CurvePoint(
-            knot.X, 1 - knot.Y, index == SelectedIndex, knot.Hold)),
+            knot.X, 1 - knot.Y, _selection.Contains(index), knot.Hold)),
     ];
 
-    public IReadOnlyList<CurveTangent> Tangents => HasSelection
-        ? CurveLibrary.Tangents(_knots, new HashSet<int> { SelectedIndex })
-        : [];
+    public IReadOnlyList<CurveTangent> Tangents => CurveLibrary.Tangents(_knots, _selection);
+
+    /// <summary>
+    /// Every selected keyframe. <see cref="SelectedIndex"/> is the PRIMARY one within it — the numeric
+    /// fields and the segment picker edit a single keyframe, so they need one to name.
+    /// </summary>
+    /// <remarks>
+    /// The canvas raises Ctrl/Shift-click and Ctrl+A in both hosts. Until this existed only the inline
+    /// timeline lane acted on them, so the same control silently did less in the window that presents
+    /// itself as the fuller editor.
+    /// </remarks>
+    private readonly HashSet<int> _selection = [];
+
+    private int _anchor = -1;
+
+    public int SelectionCount => _selection.Count;
+
+    public bool HasMultipleSelected => _selection.Count > 1;
 
     /// <summary>
     /// The polyline. A held point gets a corner the point list does not contain.
@@ -380,28 +396,55 @@ public partial class CurveEditorViewModel : ObservableObject
     [ObservableProperty] private string _presetStatus = "";
     [ObservableProperty] private string _managedPresetName = "";
 
-    public IReadOnlyList<CurvePresetRow> Presets => _journal is null
-        ? []
-        : [.. _journal.Project.CurvePresets.Select(preset => new CurvePresetRow(
-            preset.Id, preset.Name, CurveBindings(_journal.Project)
-                .Count(binding => binding.Spec.PresetId == preset.Id)))];
+    /// <summary>
+    /// The preset library with a use count each.
+    /// </summary>
+    /// <remarks>
+    /// The whole-project walk is hoisted OUT of the per-preset projection and its counts tallied in
+    /// one pass: it used to run once per preset, and this list is read again by
+    /// <see cref="SelectedPresetIndex"/> and <see cref="HasManagedPreset"/>, so a library of ten
+    /// presets re-walked every cue in the show thirty times per bind.
+    /// </remarks>
+    public IReadOnlyList<CurvePresetRow> Presets
+    {
+        get
+        {
+            if (_journal is null)
+                return [];
+
+            var uses = new Dictionary<Guid, int>();
+            foreach (var binding in CurveBindings(_journal.Project))
+                if (binding.Spec.PresetId is { } id)
+                    uses[id] = uses.GetValueOrDefault(id) + 1;
+
+            return
+            [
+                .. _journal.Project.CurvePresets.Select(preset => new CurvePresetRow(
+                    preset.Id, preset.Name, uses.GetValueOrDefault(preset.Id))),
+            ];
+        }
+    }
 
     public int SelectedPresetIndex
     {
         get
         {
-            for (var index = 0; index < Presets.Count; index++)
-                if (Presets[index].Id == _managedPresetId)
+            var presets = Presets;
+            for (var index = 0; index < presets.Count; index++)
+                if (presets[index].Id == _managedPresetId)
                     return index;
             return -1;
         }
         set
         {
-            if (value < 0 || value >= Presets.Count || Presets[value].Id == _managedPresetId)
+            var presets = Presets;
+            if (value < 0 || value >= presets.Count || presets[value].Id == _managedPresetId)
                 return;
-            _managedPresetId = Presets[value].Id;
-            ManagedPresetName = Presets[value].Name;
-            PresetStatus = $"{Presets[value].ReferenceLabel}";
+
+            var picked = presets[value];
+            _managedPresetId = picked.Id;
+            ManagedPresetName = picked.Name;
+            PresetStatus = $"{picked.Name} · {picked.ReferenceLabel}";
             OnPropertyChanged(nameof(SelectedPresetIndex));
             OnPropertyChanged(nameof(HasManagedPreset));
         }
@@ -483,12 +526,18 @@ public partial class CurveEditorViewModel : ObservableObject
                 _ => CurveEdits.SetSegment(_target, SelectedIndex, SegmentCurve(value)),
             };
 
-            if (command is not null)
+            if (command is null)
             {
-                _journal.Do(command);
-                _journal.CloseGroup();
-                Reload();
+                // The picker has already moved itself to what was clicked. Nothing was written — most
+                // often "bezier" on the LAST knot, which has no following segment to shape — so the
+                // list has to be told to go back, or it displays a law the document does not have.
+                OnPropertyChanged(nameof(Segment));
+                return;
             }
+
+            _journal.Do(command);
+            _journal.CloseGroup();
+            Reload();
         }
     }
 
@@ -516,6 +565,7 @@ public partial class CurveEditorViewModel : ObservableObject
             .ToList();
         var existing = _journal.Project.CurvePresets.FirstOrDefault(
             preset => string.Equals(preset.Name, name, StringComparison.OrdinalIgnoreCase));
+        var selected = false;
 
         using (_journal.Composite(existing is null ? "save curve preset" : "update curve preset", "cues"))
         {
@@ -544,10 +594,18 @@ public partial class CurveEditorViewModel : ObservableObject
 
             if (_target.Law is not null
                 && CurveEdits.PickPreset(_target, existing.Id, existing.Name) is { } pick)
+            {
                 _journal.Do(pick);
+                selected = true;
+            }
         }
 
-        PresetStatus = existing.Name + " saved and selected";
+        // Only a fade spec can point AT a preset; an automation lane stores its own points, so saving
+        // from one is a copy into the library and nothing more. Saying "and selected" there described
+        // a link that was never made.
+        PresetStatus = selected
+            ? $"{existing.Name} saved and selected"
+            : $"{existing.Name} saved to the library";
         _managedPresetId = existing.Id;
         ManagedPresetName = existing.Name;
         OnPropertyChanged(nameof(Curves));
@@ -736,16 +794,40 @@ public partial class CurveEditorViewModel : ObservableObject
 
         if (gesture.Kind == CurveGestureKind.Select)
         {
+            // A press on an ALREADY selected keyframe keeps the group, so a multi-selection can be
+            // dragged. Anywhere else it becomes the selection, matching every other list in the app.
+            if (!_selection.Contains(gesture.Index))
+            {
+                _selection.Clear();
+                _selection.Add(gesture.Index);
+            }
+            _anchor = gesture.Index;
             SelectedIndex = gesture.Index;
             return;
         }
-        if (gesture.Kind is CurveGestureKind.ToggleSelection or CurveGestureKind.RangeSelection)
+        if (gesture.Kind == CurveGestureKind.ToggleSelection)
         {
+            if (!_selection.Add(gesture.Index))
+                _selection.Remove(gesture.Index);
+            _anchor = gesture.Index;
+            SelectedIndex = _selection.Contains(gesture.Index)
+                ? gesture.Index
+                : _selection.Count > 0 ? _selection.Min() : -1;
+            return;
+        }
+        if (gesture.Kind == CurveGestureKind.RangeSelection)
+        {
+            var anchor = _anchor < 0 ? gesture.Index : _anchor;
+            _selection.Clear();
+            for (var index = Math.Min(anchor, gesture.Index); index <= Math.Max(anchor, gesture.Index); index++)
+                _selection.Add(index);
             SelectedIndex = gesture.Index;
             return;
         }
         if (gesture.Kind == CurveGestureKind.ClearSelection)
         {
+            _selection.Clear();
+            _anchor = -1;
             SelectedIndex = -1;
             return;
         }
@@ -756,9 +838,15 @@ public partial class CurveEditorViewModel : ObservableObject
 
         var command = gesture.Kind switch
         {
+            // A drag on one of several selected keyframes moves the whole group, spacing and tangents
+            // preserved — the same edit the inline timeline lane performs.
+            CurveGestureKind.Move when _selection.Count > 1 && _selection.Contains(gesture.Index) =>
+                CurveEdits.MoveMany(_target, _selection, gesture.Index, x, y),
             CurveGestureKind.Move => CurveEdits.Move(_target, gesture.Index, x, y),
             CurveGestureKind.Add when !CurveEdits.HasPointNear(_target, x) => CurveEdits.Add(_target, x, y),
             CurveGestureKind.Remove => CurveEdits.Remove(_target, gesture.Index),
+            CurveGestureKind.RemoveSelection when _selection.Count > 1 =>
+                CurveEdits.RemoveMany(_target, _selection),
             CurveGestureKind.RemoveSelection when HasSelection => CurveEdits.Remove(_target, SelectedIndex),
             CurveGestureKind.MoveIncomingTangent =>
                 CurveEdits.MoveTangent(_target, gesture.Index, incoming: true, x, y),
@@ -774,13 +862,109 @@ public partial class CurveEditorViewModel : ObservableObject
         _journal.Do(command);
 
         if (gesture.Kind is CurveGestureKind.Remove or CurveGestureKind.RemoveSelection)
+        {
+            _selection.Clear();
+            _anchor = -1;
             SelectedIndex = -1;
+        }
+        else if (gesture.Kind == CurveGestureKind.Add)
+        {
+            // Select what was just added, so the numeric fields describe it without a second click.
+            var added = NearestIndex(x, y);
+            _selection.Clear();
+            _selection.Add(added);
+            _anchor = added;
+            SelectedIndex = added;
+        }
 
         Reload();
     }
 
+    /// <summary>Selects every keyframe — the canvas's Ctrl+A.</summary>
+    public void SelectAll()
+    {
+        _selection.Clear();
+        for (var index = 0; index < _knots.Count; index++)
+            _selection.Add(index);
+        _anchor = 0;
+        SelectedIndex = _knots.Count > 0 ? 0 : -1;
+        PresetStatus = $"selected {_selection.Count} keyframe(s)";
+        Reload();
+    }
+
+    /// <summary>The selected keyframes as clipboard text, or null when nothing is selected.</summary>
+    public string? Copy()
+    {
+        if (_selection.Count == 0)
+        {
+            PresetStatus = "select one or more keyframes to copy";
+            return null;
+        }
+
+        PresetStatus = $"copied {_selection.Count} keyframe(s)";
+        return LaneKeyframeClipboard.Encode(_knots, _selection);
+    }
+
+    /// <summary>
+    /// Pastes keyframes after the primary selection, or at the start when nothing is selected.
+    /// </summary>
+    /// <remarks>
+    /// The pasted span REPLACES what it lands on rather than piling on top of it: two keyframes at the
+    /// same instant have no defined shape between them, and the operator asked for the copied shape to
+    /// be here — not for it to be interleaved with whatever was.
+    /// </remarks>
+    public bool Paste(string? text)
+    {
+        if (_target is null || _journal is null
+            || LaneKeyframeClipboard.DecodeKnots(text) is not { Count: > 0 } decoded)
+        {
+            PresetStatus = "clipboard has no HaCue2 keyframes";
+            return false;
+        }
+
+        var span = decoded[^1].X - decoded[0].X;
+        var at = Math.Clamp(HasSelection ? _knots[SelectedIndex].X : 0, 0, Math.Max(0, 1 - span));
+        var placed = decoded
+            .Select(knot => knot with
+            {
+                X = at + knot.X,
+                OutHandleX = knot.OutHandleX is { } outX ? at + outX : null,
+                InHandleX = knot.InHandleX is { } inX ? at + inX : null,
+            })
+            .ToList();
+
+        var kept = _knots
+            .Where(knot => knot.X < placed[0].X || knot.X > placed[^1].X)
+            .ToList();
+        _journal.Do(CurveEdits.Replace(
+            _target, kept.Concat(placed), $"paste {placed.Count} keyframes"));
+        _journal.CloseGroup();
+
+        _knots = _target.Read();
+        _selection.Clear();
+        foreach (var knot in placed)
+            _selection.Add(NearestIndex(knot.X, knot.Y));
+        _anchor = _selection.Count > 0 ? _selection.Min() : -1;
+        SelectedIndex = _anchor;
+        PresetStatus = $"pasted {placed.Count} keyframe(s)";
+        Reload();
+        return true;
+    }
+
+    /// <summary>The stored knot closest to a point, for re-finding one an edit has just re-sorted.</summary>
+    private int NearestIndex(double x, double y) =>
+        _knots
+            .Select((knot, index) => (Distance: Math.Abs(knot.X - x) + Math.Abs(knot.Y - y), index))
+            .OrderBy(candidate => candidate.Distance)
+            .Select(candidate => candidate.index)
+            .FirstOrDefault(-1);
+
     public void ToggleHold(int index)
     {
+        // A right-click acts on the ONE keyframe under it, so it replaces any group selection rather
+        // than joining it — otherwise hold would toggle on a point nowhere near the pointer.
+        _selection.Clear();
+        _anchor = index;
         SelectedIndex = index;
         Segment = HasSelection && _knots[index].Hold ? "smooth" : "hold";
     }
@@ -798,6 +982,12 @@ public partial class CurveEditorViewModel : ObservableObject
         if (_target is not null)
             _knots = _target.Read();
 
+        // An undo can shorten the curve under a selection made against the longer one. Indices that
+        // no longer exist would draw handles off the end and delete the wrong keyframes.
+        _selection.RemoveWhere(index => index < 0 || index >= _knots.Count);
+        if (_anchor >= _knots.Count)
+            _anchor = -1;
+
         OnPropertyChanged(nameof(Points));
         OnPropertyChanged(nameof(Shape));
         OnPropertyChanged(nameof(Tangents));
@@ -806,6 +996,8 @@ public partial class CurveEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(Segment));
         OnPropertyChanged(nameof(PointTime));
         OnPropertyChanged(nameof(PointValue));
+        OnPropertyChanged(nameof(SelectionCount));
+        OnPropertyChanged(nameof(HasMultipleSelected));
         // Drawing on the canvas moves the picker to "custom" on its own: the drawn points are now what
         // the engine will play, and a picker still highlighting "eq-power" would be describing a curve
         // the show no longer has.
@@ -814,6 +1006,12 @@ public partial class CurveEditorViewModel : ObservableObject
 
     partial void OnSelectedIndexChanged(int value)
     {
+        // The primary is always IN the selection: the canvas routes plain clicks through Apply, but
+        // ToggleHold and the tests set it directly, and a primary outside the group would edit a
+        // keyframe the canvas is not drawing as selected.
+        if (value >= 0 && _selection.Add(value))
+            _anchor = value;
+
         OnPropertyChanged(nameof(Points));
         OnPropertyChanged(nameof(Tangents));
         OnPropertyChanged(nameof(SelectedPoint));
@@ -821,6 +1019,8 @@ public partial class CurveEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(Segment));
         OnPropertyChanged(nameof(PointTime));
         OnPropertyChanged(nameof(PointValue));
+        OnPropertyChanged(nameof(SelectionCount));
+        OnPropertyChanged(nameof(HasMultipleSelected));
     }
 
     partial void OnScaleChanged(string value)
@@ -833,8 +1033,18 @@ public partial class CurveEditorViewModel : ObservableObject
     {
         if (_journal is null || _target is null || !HasSelection)
             return;
+
         _journal.Do(CurveEdits.Move(_target, SelectedIndex, x, y));
         _journal.CloseGroup();
+        _knots = _target.Read();
+
+        // Typing a time can move the keyframe PAST a neighbour, and the store is kept sorted — so the
+        // index it had is now somebody else's. Follow the keyframe to where it landed, or the next
+        // edit in these fields would silently be applied to the wrong one.
+        _selection.Clear();
+        var moved = NearestIndex(x, y);
+        _anchor = moved;
+        SelectedIndex = moved;
         Reload();
     }
 

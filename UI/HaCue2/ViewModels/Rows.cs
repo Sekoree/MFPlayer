@@ -720,9 +720,19 @@ public sealed partial class TimelineLane : ObservableObject
 
     public EffectLaneKind? EffectKind { get; init; }
 
-    /// <summary>The cue-relative editor's position inside the currently visible group window.</summary>
-    public double EffectLeft { get; init; }
-    public double EffectWidth { get; init; } = 1;
+    /// <summary>
+    /// The cue-relative editor's position inside the currently visible group window.
+    /// </summary>
+    /// <remarks>
+    /// Observable, not <c>init</c>: a clip drag refreshes the lanes IN PLACE (see
+    /// <c>TimelineViewModel.Refresh</c>), so an expanded lane whose span could not be written would
+    /// sit at the cue's OLD position while its clip moved, until the gesture ended.
+    /// </remarks>
+    [ObservableProperty]
+    private double _effectLeft;
+
+    [ObservableProperty]
+    private double _effectWidth = 1;
 
     public bool IsGroup { get; init; }
 

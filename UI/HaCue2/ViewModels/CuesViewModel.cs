@@ -2215,9 +2215,29 @@ public sealed partial class TimelineViewModel : ObservableObject
     [ObservableProperty]
     private IReadOnlyList<TimelineLane> _lanes = [];
 
+    /// <summary>The footer's help-or-result line. It returns to <see cref="KeyframeHelp"/> whenever
+    /// the selection moves, so a stale "copied 3 keyframe(s)" cannot describe a different cue.</summary>
     [ObservableProperty]
-    private string _keyframeStatus =
-        "volume · opacity · OSC ramp · MIDI ramp — Ctrl/Shift-click keyframes to select";
+    private string _keyframeStatus = KeyframeHelp;
+
+    private const string KeyframeHelp =
+        "volume · opacity · OSC ramp · MIDI ramp — Ctrl/Shift-click keyframes · Ctrl+wheel zooms, Shift+wheel pans";
+
+    /// <summary>
+    /// Which lane kinds the footer's picker may offer for the CURRENT selection.
+    /// </summary>
+    /// <remarks>
+    /// Delegated to the inspector's <c>CanAddLane</c> — the one place that knows a volume lane needs
+    /// audio, an opacity lane needs placeable video, and a cue carries at most one of each — so the
+    /// menu and the inspector's own picker can never disagree about what a cue can take.
+    /// </remarks>
+    public bool CanAddVolumeLane => CanAddLane(EffectLaneKind.Volume);
+    public bool CanAddOpacityLane => CanAddLane(EffectLaneKind.Opacity);
+    public bool CanAddOscLane => CanAddLane(EffectLaneKind.OscRamp);
+    public bool CanAddMidiLane => CanAddLane(EffectLaneKind.MidiRamp);
+
+    private bool CanAddLane(EffectLaneKind kind) =>
+        Owner?.Inspector.CanAddLane((int)kind) ?? false;
 
     /// <summary>The grid picker in the transport row: how fine a drag steps, or free.</summary>
     public IReadOnlyList<string> SnapModes { get; } = ["1 s", "0.5 s", "0.1 s", "free"];
@@ -2333,13 +2353,18 @@ public sealed partial class TimelineViewModel : ObservableObject
 
     /// <summary>Edits the points directly on the timeline. X/Y are cue-relative because the canvas is
     /// arranged exactly over the cue's own span inside the larger group window.</summary>
-    public void ApplyLaneGesture(TimelineLane row, CurveGesture gesture)
+    /// <returns>
+    /// Whether a document edit was journaled. A pure selection change, and an edit the rules refused
+    /// (a delete that would leave fewer than two points), both report false — the buttons report what
+    /// happened, and a refusal that announced itself as a deletion is worse than a silent one.
+    /// </returns>
+    public bool ApplyLaneGesture(TimelineLane row, CurveGesture gesture)
     {
         if (_journal is null
             || row.EffectLaneId is not { } laneId
             || _project.FindCue(row.SubjectId) is not { } cue
             || EffectLanes(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } lane)
-            return;
+            return false;
 
         var selected = Selection(laneId);
         if (gesture.Kind == CurveGestureKind.Select)
@@ -2352,7 +2377,7 @@ public sealed partial class TimelineViewModel : ObservableObject
             _effectSelectionAnchors[laneId] = gesture.Index;
             SelectPoints(row, selected);
             row.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(cue.Id, lane).Read(), selected);
-            return;
+            return false;
         }
         if (gesture.Kind == CurveGestureKind.ToggleSelection)
         {
@@ -2361,7 +2386,7 @@ public sealed partial class TimelineViewModel : ObservableObject
             _effectSelectionAnchors[laneId] = gesture.Index;
             SelectPoints(row, selected);
             row.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(cue.Id, lane).Read(), selected);
-            return;
+            return false;
         }
         if (gesture.Kind == CurveGestureKind.RangeSelection)
         {
@@ -2371,14 +2396,14 @@ public sealed partial class TimelineViewModel : ObservableObject
                 selected.Add(index);
             SelectPoints(row, selected);
             row.Tangents = CurveLibrary.Tangents(new EffectLaneTarget(cue.Id, lane).Read(), selected);
-            return;
+            return false;
         }
         if (gesture.Kind == CurveGestureKind.ClearSelection)
         {
             selected.Clear();
             row.Points = [.. row.Points.Select(point => point with { IsSelected = false })];
             row.Tangents = [];
-            return;
+            return false;
         }
 
         var target = new EffectLaneTarget(cue.Id, lane);
@@ -2399,7 +2424,7 @@ public sealed partial class TimelineViewModel : ObservableObject
             _ => null,
         };
         if (command is null)
-            return;
+            return false;
 
         _drag ??= _journal.Composite(command.Description, "cues", quiet: true);
         _journal.Do(command);
@@ -2419,6 +2444,7 @@ public sealed partial class TimelineViewModel : ObservableObject
             _effectSelectionAnchors[laneId] = added;
         }
         Refresh();
+        return true;
     }
 
     /// <summary>The full editor for an inline row: exact clock/value fields and shaped segment laws.</summary>
@@ -2495,7 +2521,14 @@ public sealed partial class TimelineViewModel : ObservableObject
             InHandleY: point.InHandleY)).ToList();
 
         var target = new EffectLaneTarget(cue.Id, lane);
-        var combined = target.Read().Concat(translated).ToList();
+
+        // The pasted span REPLACES what it lands on. Appending piled the copy on top of the existing
+        // keyframes, so two points could share an instant — which has no defined shape between them —
+        // and the operator saw a tangle rather than the shape they copied.
+        var combined = target.Read()
+            .Where(knot => knot.X < translated[0].X || knot.X > translated[^1].X)
+            .Concat(translated)
+            .ToList();
         _journal.Do(CurveEdits.Replace(target, combined, $"paste {translated.Count} keyframes"));
         _journal.CloseGroup();
 
@@ -2521,9 +2554,19 @@ public sealed partial class TimelineViewModel : ObservableObject
 
     public void DeleteSelectedKeyframes(TimelineLane row)
     {
-        ApplyLaneGesture(row, new CurveGesture(CurveGestureKind.RemoveSelection, -1, 0, 0));
+        var count = row.EffectLaneId is { } laneId
+            ? _selectedEffectPoints.GetValueOrDefault(laneId)?.Count ?? 0
+            : 0;
+        var deleted = ApplyLaneGesture(row, new CurveGesture(CurveGestureKind.RemoveSelection, -1, 0, 0));
         EndGesture();
-        KeyframeStatus = "selected keyframes deleted";
+
+        // A lane must keep two points, so deleting the whole selection can be refused. Reporting it
+        // as done left the operator looking at keyframes they had been told were gone.
+        KeyframeStatus = deleted
+            ? $"deleted {count} keyframe(s)"
+            : count == 0
+                ? "select one or more keyframes to delete"
+                : "a lane keeps at least two keyframes — deselect one first";
     }
 
     private static double? ShiftHandle(double? value, double offset) =>
@@ -2685,6 +2728,10 @@ public sealed partial class TimelineViewModel : ObservableObject
                 Lanes[i].Tangents = lanes[i].Tangents;
                 Lanes[i].Peaks = lanes[i].Peaks;
                 Lanes[i].IsExpanded = lanes[i].IsExpanded;
+                // The cue's SPAN moves with it. Without these two an expanded lane's point editor
+                // stayed where the cue used to be for the whole drag, then jumped on release.
+                Lanes[i].EffectLeft = lanes[i].EffectLeft;
+                Lanes[i].EffectWidth = lanes[i].EffectWidth;
             }
         }
         else
@@ -2701,6 +2748,17 @@ public sealed partial class TimelineViewModel : ObservableObject
         OnPropertyChanged(nameof(ViewStartMs));
         OnPropertyChanged(nameof(ViewLengthMs));
         OnPropertyChanged(nameof(ViewMaxStartMs));
+        RefreshLaneOffers();
+    }
+
+    /// <summary>Re-reads what the footer's picker may offer. The answer depends on the SELECTED cue,
+    /// so it changes without anything on the sheet itself changing.</summary>
+    private void RefreshLaneOffers()
+    {
+        OnPropertyChanged(nameof(CanAddVolumeLane));
+        OnPropertyChanged(nameof(CanAddOpacityLane));
+        OnPropertyChanged(nameof(CanAddOscLane));
+        OnPropertyChanged(nameof(CanAddMidiLane));
     }
 
     /// <summary>The cue whose lane reads as selected — follows the tree's selection.</summary>
@@ -2712,8 +2770,18 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// </summary>
     public void SyncSelection(Guid? cueId)
     {
+        var moved = _selectedCueId != cueId;
         _selectedCueId = cueId;
         ApplySelection();
+        RefreshLaneOffers();
+
+        // Both footer lines describe the SELECTION. Once it moves they are describing something the
+        // operator is no longer looking at, so a refusal or a result reverts to the ordinary help.
+        if (!moved)
+            return;
+
+        KeyframeStatus = KeyframeHelp;
+        TransportProblem = "";
     }
 
     private void ApplySelection()
@@ -2785,9 +2853,11 @@ public sealed partial class TimelineViewModel : ObservableObject
             WaveformCache.Write(CacheRoot, path, peaks, WaveformCacheBytes);
             Refresh();
         }
-        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        catch (Exception)
         {
-            // A waveform is authoring context, never a prerequisite for editing the envelope.
+            // A waveform is authoring context, never a prerequisite for editing the envelope — and
+            // this is an async void, so ANY escape takes the app down over a decorative backdrop.
+            // Scanning arbitrary media reaches a decoder, so the failure set is not just I/O.
         }
         finally
         {
@@ -2919,10 +2989,15 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// from just before that hit" is exactly the kind of position the grid would round away. A drag
     /// follows the pointer smoothly for the same reason.
     /// </remarks>
-    public void PlacePlayhead(double fractionOfWindow)
+    /// <param name="toGrid">
+    /// Opt IN to the grid for this placement — the ruler passes the Shift modifier. Free is the right
+    /// default for a rehearsal cursor, but "start exactly at that cue" is a real ask, and without a
+    /// way to say it the grid picker sitting right there is no help to the playhead at all.
+    /// </param>
+    public void PlacePlayhead(double fractionOfWindow, bool toGrid = false)
     {
-        _playheadMs = Math.Clamp(
-            Math.Round(_view.At(Math.Clamp(fractionOfWindow, 0, 1))), 0, SpanMs);
+        var at = _view.At(Math.Clamp(fractionOfWindow, 0, 1));
+        _playheadMs = Math.Clamp(toGrid ? Snap(at) : Math.Round(at), 0, SpanMs);
 
         OnPropertyChanged(nameof(Playhead));
         OnPropertyChanged(nameof(PlayheadLabel));

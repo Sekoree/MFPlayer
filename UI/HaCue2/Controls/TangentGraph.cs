@@ -34,13 +34,15 @@ public sealed class TangentGraph : Control
             || Bounds.Width <= 0 || Bounds.Height <= 0)
             return;
 
+        // One pen for the whole pass: the arm and its handle are drawn identically, and a selection
+        // can carry two handles per keyframe.
         var pen = new Pen(stroke, 1);
         foreach (var tangent in tangents)
         {
             var anchor = new Point(tangent.AnchorX * Bounds.Width, tangent.AnchorY * Bounds.Height);
             var handle = new Point(tangent.X * Bounds.Width, tangent.Y * Bounds.Height);
             context.DrawLine(pen, anchor, handle);
-            context.DrawEllipse(stroke, new Pen(stroke, 1), handle, 3.5, 3.5);
+            context.DrawEllipse(stroke, pen, handle, 3.5, 3.5);
         }
     }
 }

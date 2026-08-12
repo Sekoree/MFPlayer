@@ -1,5 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="using:HaCue2.Controls"
         xmlns:conv="using:HaCue2.Converters"
         xmlns:vm="using:HaCue2.ViewModels">
 
@@ -667,6 +668,13 @@
          placements use a surrounding work area so an overhang remains visible and grabbable. -->
     <Setter Property="ClipToBounds" Value="True" />
   </Style>
+  <!-- The curve canvas takes focus on a press and owns Ctrl+A/C/V, Delete and the arrow-key nudge
+       while it has it. Those shortcuts are advertised in tooltips, so whether the canvas is listening
+       has to be VISIBLE — clicking a button beside it moves focus away and silently disarms them. -->
+  <Style Selector="c|CurveCanvas:focus-within Border.vidcanvas">
+    <Setter Property="BorderBrush" Value="{DynamicResource GelAmber}" />
+  </Style>
+
   <Style Selector="Border.placement">
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Padding" Value="5,2" />

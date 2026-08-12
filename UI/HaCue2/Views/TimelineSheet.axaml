@@ -20,12 +20,21 @@
         <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="7">
           <Button Grid.Column="0" Classes="icon" Content="+ EFFECT LANE ▾">
             <Button.Flyout>
+              <!-- Tags are enum NAMES, not ordinals: a reordered EffectLaneKind would silently make
+                   these add the wrong kind. Each item is disabled rather than hidden when the
+                   selected cue cannot carry it (volume needs audio, opacity needs placeable video,
+                   and one lane per kind), so the rule is visible instead of arriving as a refusal
+                   after the click. -->
               <MenuFlyout>
-                <MenuItem Header="Volume" Click="OnAddLane" Tag="0" />
-                <MenuItem Header="Opacity" Click="OnAddLane" Tag="1" />
+                <MenuItem Header="Volume" Click="OnAddLane" Tag="Volume"
+                          IsEnabled="{Binding CanAddVolumeLane}" />
+                <MenuItem Header="Opacity" Click="OnAddLane" Tag="Opacity"
+                          IsEnabled="{Binding CanAddOpacityLane}" />
                 <Separator />
-                <MenuItem Header="OSC ramp" Click="OnAddLane" Tag="2" />
-                <MenuItem Header="MIDI ramp" Click="OnAddLane" Tag="3" />
+                <MenuItem Header="OSC ramp" Click="OnAddLane" Tag="OscRamp"
+                          IsEnabled="{Binding CanAddOscLane}" />
+                <MenuItem Header="MIDI ramp" Click="OnAddLane" Tag="MidiRamp"
+                          IsEnabled="{Binding CanAddMidiLane}" />
               </MenuFlyout>
             </Button.Flyout>
           </Button>
@@ -75,6 +84,7 @@
                           PointerPressed="OnRulerPressed"
                           PointerMoved="OnRulerMoved"
                           PointerReleased="OnRulerReleased"
+                          PointerCaptureLost="OnRulerCaptureLost"
                           BorderBrush="{DynamicResource BoothRule}">
               <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate><UniformGrid Rows="1" /></ItemsPanelTemplate>

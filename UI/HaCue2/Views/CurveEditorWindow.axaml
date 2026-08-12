@@ -45,9 +45,24 @@
                        Tangents="{Binding Tangents}"
                        Gesture="OnCurveGesture"
                        GestureCompleted="OnCurveGestureCompleted"
+                       SelectAllRequested="OnSelectAllPoints"
+                       CopyRequested="OnCopyPoints"
+                       PasteRequested="OnPastePoints"
                        HoldToggled="OnHoldToggled" />
 
         <StackPanel Grid.Column="1" Spacing="4">
+          <!-- The same three verbs the timeline lane offers. Buttons as well as the canvas shortcuts,
+               because the shortcuts only fire while the canvas itself holds focus. -->
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Selection">
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="tight" Content="ALL" Click="OnSelectAllPointsClicked"
+                      ToolTip.Tip="Select every point (Ctrl+A on the canvas)" />
+              <Button Classes="tight" Content="COPY" Click="OnCopyPointsClicked"
+                      ToolTip.Tip="Copy the selected points (Ctrl+C on the canvas)" />
+              <Button Classes="tight" Content="PASTE" Click="OnPastePointsClicked"
+                      ToolTip.Tip="Paste at the selected point, replacing that span (Ctrl+V)" />
+            </WrapPanel>
+          </HeaderedContentControl>
           <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Time">
             <TextBox Text="{Binding PointTime}" IsEnabled="{Binding HasSelection}"
                      ToolTip.Tip="Clock time when the duration is known; otherwise enter a percentage." />

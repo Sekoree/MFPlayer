@@ -5,6 +5,7 @@ using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.VisualTree;
 using HaCue2.Controls;
+using HaCue2.Core.Model;
 using HaCue2.ViewModels;
 
 namespace HaCue2.Views;
@@ -209,10 +210,16 @@ public partial class TimelineSheet : UserControl
     /// </remarks>
     private void OnRulerPressed(object? sender, PointerPressedEventArgs e)
     {
-        if (Timeline is not { } timeline || sender is not Control ruler || ruler.Bounds.Width <= 0)
+        // LEFT button only. A right-press scrubbing the playhead is not what the gesture means, and
+        // handling it would also swallow any context menu the ruler grows later.
+        if (Timeline is not { } timeline
+            || sender is not Control ruler
+            || ruler.Bounds.Width <= 0
+            || !e.GetCurrentPoint(ruler).Properties.IsLeftButtonPressed)
             return;
 
-        timeline.PlacePlayhead(e.GetPosition(ruler).X / ruler.Bounds.Width);
+        timeline.PlacePlayhead(
+            e.GetPosition(ruler).X / ruler.Bounds.Width, e.KeyModifiers.HasFlag(KeyModifiers.Shift));
 
         // Captured so the press becomes a DRAG: the playhead follows the pointer smoothly until
         // release, even when it leaves the ruler's strip.
@@ -231,7 +238,17 @@ public partial class TimelineSheet : UserControl
             || ruler.Bounds.Width <= 0)
             return;
 
-        timeline.PlacePlayhead(e.GetPosition(ruler).X / ruler.Bounds.Width);
+        // The button is re-checked per move rather than trusted from the press: a capture can end
+        // without a release reaching us, and a latched flag would scrub on a plain hover afterwards.
+        if (!e.GetCurrentPoint(ruler).Properties.IsLeftButtonPressed)
+        {
+            _rulerDragging = false;
+            return;
+        }
+
+        // Shift is re-read per move, so the grid can be picked up or dropped mid-drag.
+        timeline.PlacePlayhead(
+            e.GetPosition(ruler).X / ruler.Bounds.Width, e.KeyModifiers.HasFlag(KeyModifiers.Shift));
         e.Handled = true;
     }
 
@@ -244,6 +261,11 @@ public partial class TimelineSheet : UserControl
         e.Pointer.Capture(null);
         e.Handled = true;
     }
+
+    /// <summary>The drag ended without a release — window deactivated, or something else took the
+    /// pointer. Same reset, so a later hover cannot resume scrubbing.</summary>
+    private void OnRulerCaptureLost(object? sender, PointerCaptureLostEventArgs e) =>
+        _rulerDragging = false;
 
     /// <summary>A lane label click selects the lane's cue — the same selection the tree, the
     /// inspector, "+ EFFECT LANE" and DUCK all act on.</summary>
@@ -348,10 +370,12 @@ public partial class TimelineSheet : UserControl
     {
         if (Timeline is not { Owner.Inspector: { } inspector } timeline
             || (sender as Control)?.Tag is not string tag
-            || !int.TryParse(tag, out var kind))
+            || !Enum.TryParse<EffectLaneKind>(tag, out var kind))
             return;
 
-        if (!inspector.CanAddLane(kind))
+        // The menu already disables what the selection cannot carry, so reaching here with a refusal
+        // means no cue is selected at all — which the menu has no way to grey out.
+        if (!inspector.CanAddLane((int)kind))
         {
             timeline.TransportProblem =
                 "select a cue that can carry that lane (and does not have one yet)";
@@ -359,7 +383,7 @@ public partial class TimelineSheet : UserControl
         }
 
         timeline.TransportProblem = "";
-        inspector.AddLane(kind);
+        inspector.AddLane((int)kind);
         timeline.Refresh();
     }
 
