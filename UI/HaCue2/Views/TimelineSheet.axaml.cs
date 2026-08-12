@@ -73,6 +73,33 @@ public partial class TimelineSheet : UserControl
 
     private void OnClipGestureCompleted(object? sender, EventArgs e) => Timeline?.EndGesture();
 
+    private void OnLaneGesture(object? sender, CurveGesture e)
+    {
+        if (Timeline is { } timeline && (sender as Control)?.DataContext is TimelineLane lane)
+            timeline.ApplyLaneGesture(lane, e);
+    }
+
+    private void OnLaneGestureCompleted(object? sender, EventArgs e) => Timeline?.EndGesture();
+
+    private void OnToggleEffectLane(object? sender, RoutedEventArgs e)
+    {
+        if (Timeline is { } timeline && (sender as Control)?.DataContext is TimelineLane lane)
+            timeline.ToggleEffectLane(lane);
+    }
+
+    private void OnOpenLaneEditor(object? sender, RoutedEventArgs e)
+    {
+        if (Timeline is not { } timeline
+            || (sender as Control)?.DataContext is not TimelineLane lane
+            || timeline.LaneEditor(lane) is not { } editor
+            || this.FindAncestorOfType<Window>() is not { } owner)
+            return;
+
+        var window = new CurveEditorWindow(editor);
+        window.Closed += (_, _) => timeline.Refresh();
+        window.ShowDialog(owner);
+    }
+
     /// <summary>
     /// Runs the group from the playhead — the rehearsal verb.
     /// </summary>

@@ -267,6 +267,25 @@ public sealed class CurveEditTests
     }
 
     [Fact]
+    public void ShapedCustomSegmentsAreEvaluatedAndUndoable()
+    {
+        var fixture = new TestProject();
+        var journal = new ProjectJournal(fixture.Project);
+        var target = new CurveSpecTarget(fixture.Track.Id, "fadeIn", fixture.Track.FadeInCurve);
+
+        journal.Do(CurveEdits.SetSegment(target, 0, FadeCurve.SCurve)!);
+        journal.CloseGroup();
+
+        Assert.Equal(FadeCurve.SCurve, fixture.Track.FadeInCurve.Points![0].CurveToNext);
+        var curve = new CustomFadeCurve(fixture.Track.FadeInCurve.Points);
+        Assert.NotEqual(curve.Evaluate(0.25), new CustomFadeCurve(
+            [new FadeCurvePoint(0, 0), new FadeCurvePoint(1, 1)]).Evaluate(0.25));
+
+        journal.Undo();
+        Assert.Null(fixture.Track.FadeInCurve.Points);
+    }
+
+    [Fact]
     public void EveryPickerThumbnailNamesTheLawItDraws() =>
         // The thumbnails are drawings of these. Out of step, the picker's pictures and its effects
         // would disagree — the one failure nobody would think to look for.

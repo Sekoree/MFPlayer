@@ -346,9 +346,14 @@
                          SelectedItem="{Binding ListEndPolicy}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Stop fade">
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                <Grid ColumnDefinitions="62,*,Auto" ColumnSpacing="6">
                   <TextBox Grid.Column="0" Classes="short" Text="{Binding ProjectStopFade}" />
-                  <TextBox Grid.Column="1" Classes="ro" Text="{Binding StopFadeCurveName}" />
+                  <ComboBox Grid.Column="1" ItemsSource="{Binding StopFadeCurveChoices}"
+                            SelectedIndex="{Binding StopFadeCurveIndex, Mode=TwoWay}"
+                            ItemTemplate="{StaticResource CurveItemTemplate}"
+                            SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
+                  <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditStopFade"
+                          ToolTip.Tip="Edit exact points, shaped segments and project presets" />
                 </Grid>
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Panic fade">
@@ -395,7 +400,7 @@
                 </Grid>
               </HeaderedContentControl>
               <CheckBox Margin="10,3" IsChecked="{Binding AutoRenumber}"
-                        Content="Auto-renumber on insert — inherited on (app default) · step 1, children .1" />
+                        Content="Auto-renumber on insert · step 1, children .1" />
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Media root">
                 <TextBox Text="{Binding ProjectMediaRoot}" PlaceholderText="relative paths resolve against this folder" />
               </HeaderedContentControl>

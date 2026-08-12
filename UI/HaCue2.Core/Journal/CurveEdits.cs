@@ -5,7 +5,11 @@ namespace HaCue2.Core.Journal;
 
 /// <summary>One point of an editable curve, in normalized space.</summary>
 /// <param name="Hold">Flat until the next point instead of ramping toward it. Curves only.</param>
-public readonly record struct CurveKnot(double X, double Y, bool Hold = false);
+public readonly record struct CurveKnot(
+    double X,
+    double Y,
+    bool Hold = false,
+    FadeCurve CurveToNext = FadeCurve.Linear);
 
 /// <summary>
 /// Something the curve editor can edit.
@@ -46,6 +50,12 @@ public interface ICurveTarget
     /// <summary>Writes the named law. Only reached when <see cref="Law"/> is not null.</summary>
     void WriteLaw(FadeCurve law);
 
+    /// <summary>The reusable project shape currently winning over the law/inline points.</summary>
+    Guid? PresetId { get; }
+
+    /// <summary>Writes or clears the reusable project shape. Non-spec targets ignore null.</summary>
+    void WritePreset(Guid? presetId);
+
     IReadOnlyList<CurveKnot> Read();
 
     void Write(IReadOnlyList<CurveKnot> knots);
@@ -62,7 +72,12 @@ public interface ICurveTarget
 }
 
 /// <summary>A cue's fade curve, held inline on its <see cref="CurveSpec"/>.</summary>
-public sealed class CurveSpecTarget(Guid subject, string property, CurveSpec spec) : ICurveTarget
+public sealed class CurveSpecTarget(
+    Guid subject,
+    string property,
+    CurveSpec spec,
+    HaCueProject? project = null,
+    IReadOnlyList<CurveKnot>? emptyShape = null) : ICurveTarget
 {
     public Guid Subject { get; } = subject;
     public string Property { get; } = property;
@@ -71,19 +86,31 @@ public sealed class CurveSpecTarget(Guid subject, string property, CurveSpec spe
 
     public IReadOnlyList<CurveKnot> Read() =>
         spec.Points is { Count: > 1 } points
-            ? [.. points.Select(point => new CurveKnot(point.Progress, point.Level, point.Hold))]
-            // A spec that has never been drawn on opens as the straight line between the ends, so the
-            // editor always has something to grab. Nothing is written until an edit happens.
-            : [new CurveKnot(0, 0), new CurveKnot(1, 1)];
+            ? [.. points.Select(point => new CurveKnot(
+                point.Progress, point.Level, point.Hold, point.CurveToNext))]
+            : spec.PresetId is { } presetId
+              && project?.CurvePresets.FirstOrDefault(candidate => candidate.Id == presetId) is { Points.Count: > 1 } preset
+                ? [.. preset.Points.Select(point => new CurveKnot(
+                    point.Progress, point.Level, point.Hold, point.CurveToNext))]
+            // A spec that has never been drawn on opens with the owning control's natural direction.
+            // Fade-ins rise while fade-outs and stops fall. Nothing is written until an edit happens.
+            : emptyShape is { Count: > 1 }
+                ? emptyShape
+                : [new CurveKnot(0, 0), new CurveKnot(1, 1)];
 
     public void Write(IReadOnlyList<CurveKnot> knots) =>
-        spec.Points = [.. knots.Select(knot => new FadeCurvePoint(knot.X, knot.Y, knot.Hold))];
+        spec.Points = [.. knots.Select(knot => new FadeCurvePoint(
+            knot.X, knot.Y, knot.Hold, knot.CurveToNext))];
 
     public void Clear() => spec.Points = null;
 
     public FadeCurve? Law => spec.Law;
 
     public void WriteLaw(FadeCurve law) => spec.Law = law;
+
+    public Guid? PresetId => spec.PresetId;
+
+    public void WritePreset(Guid? presetId) => spec.PresetId = presetId;
 }
 
 /// <summary>A named project curve preset.</summary>
@@ -96,11 +123,13 @@ public sealed class CurvePresetTarget(CurvePreset preset) : ICurveTarget
 
     public IReadOnlyList<CurveKnot> Read() =>
         preset.Points is { Count: > 1 }
-            ? [.. preset.Points.Select(point => new CurveKnot(point.Progress, point.Level, point.Hold))]
+            ? [.. preset.Points.Select(point => new CurveKnot(
+                point.Progress, point.Level, point.Hold, point.CurveToNext))]
             : [new CurveKnot(0, 0), new CurveKnot(1, 1)];
 
     public void Write(IReadOnlyList<CurveKnot> knots) =>
-        preset.Points = [.. knots.Select(knot => new FadeCurvePoint(knot.X, knot.Y, knot.Hold))];
+        preset.Points = [.. knots.Select(knot => new FadeCurvePoint(
+            knot.X, knot.Y, knot.Hold, knot.CurveToNext))];
 
     public void Clear() => preset.Points = [];
 
@@ -108,6 +137,14 @@ public sealed class CurvePresetTarget(CurvePreset preset) : ICurveTarget
     public FadeCurve? Law => null;
 
     public void WriteLaw(FadeCurve law) => throw new NotSupportedException("a preset has no law");
+
+    public Guid? PresetId => null;
+
+    public void WritePreset(Guid? presetId)
+    {
+        if (presetId is not null)
+            throw new NotSupportedException("a preset cannot select another preset");
+    }
 }
 
 /// <summary>An automation lane on a cue (register item 18).</summary>
@@ -123,11 +160,12 @@ public sealed class EffectLaneTarget(Guid subject, EffectLane lane) : ICurveTarg
 
     public IReadOnlyList<CurveKnot> Read() =>
         lane.Points is { Count: > 1 }
-            ? [.. lane.Points.Select(point => new CurveKnot(point.X, point.Y))]
+            ? [.. lane.Points.Select(point => new CurveKnot(
+                point.X, point.Y, CurveToNext: point.CurveToNext))]
             : [new CurveKnot(0, 1), new CurveKnot(1, 1)];
 
     public void Write(IReadOnlyList<CurveKnot> knots) =>
-        lane.Points = [.. knots.Select(knot => new LanePoint(knot.X, knot.Y))];
+        lane.Points = [.. knots.Select(knot => new LanePoint(knot.X, knot.Y, knot.CurveToNext))];
 
     public void Clear() => lane.Points = [];
 
@@ -135,6 +173,14 @@ public sealed class EffectLaneTarget(Guid subject, EffectLane lane) : ICurveTarg
     public FadeCurve? Law => null;
 
     public void WriteLaw(FadeCurve law) => throw new NotSupportedException("a lane has no law");
+
+    public Guid? PresetId => null;
+
+    public void WritePreset(Guid? presetId)
+    {
+        if (presetId is not null)
+            throw new NotSupportedException("an automation lane cannot select a fade preset");
+    }
 }
 
 /// <summary>
@@ -154,12 +200,15 @@ public sealed class SetCurveCommand : ICoalescingCommand
     /// <summary>Whether there WAS a curve before this command — see <see cref="ICurveTarget.Clear"/>.</summary>
     private readonly bool _existed;
 
+    private readonly Guid? _presetBefore;
+
     private IReadOnlyList<CurveKnot> _after;
 
     public SetCurveCommand(ICurveTarget target, IReadOnlyList<CurveKnot> knots, string description)
     {
         _target = target;
         _existed = target.HasStored;
+        _presetBefore = target.PresetId;
         _before = target.Read();
         _after = knots;
         Key = new CoalesceKey(target.Subject, target.Property);
@@ -170,7 +219,13 @@ public sealed class SetCurveCommand : ICoalescingCommand
     public string Domain => "cues";
     public string Description { get; }
 
-    public void Apply(HaCueProject project) => _target.Write(_after);
+    public void Apply(HaCueProject project)
+    {
+        // Drawing detaches a cue from a named preset. Otherwise the preset continues to win in
+        // CurveSpec.Resolve and the canvas edit is saved but never heard.
+        _target.WritePreset(null);
+        _target.Write(_after);
+    }
 
     public void Revert(HaCueProject project)
     {
@@ -178,6 +233,8 @@ public sealed class SetCurveCommand : ICoalescingCommand
             _target.Write(_before);
         else
             _target.Clear();
+
+        _target.WritePreset(_presetBefore);
     }
 
     public void MergeFrom(ICoalescingCommand newer)
@@ -203,6 +260,7 @@ public sealed class SetCurveLawCommand : IProjectCommand
     private readonly IReadOnlyList<CurveKnot> _points;
     private readonly bool _existed;
     private readonly FadeCurve _after;
+    private readonly Guid? _presetBefore;
 
     public SetCurveLawCommand(ICurveTarget target, FadeCurve law, string description)
     {
@@ -213,6 +271,7 @@ public sealed class SetCurveLawCommand : IProjectCommand
         _existed = target.HasStored;
         _points = target.Read();
         _after = law;
+        _presetBefore = target.PresetId;
         Description = description;
     }
 
@@ -222,6 +281,7 @@ public sealed class SetCurveLawCommand : IProjectCommand
     public void Apply(HaCueProject project)
     {
         _target.WriteLaw(_after);
+        _target.WritePreset(null);
         _target.Clear();
     }
 
@@ -235,6 +295,47 @@ public sealed class SetCurveLawCommand : IProjectCommand
             _target.Write(_points);
         else
             _target.Clear();
+
+        _target.WritePreset(_presetBefore);
+    }
+}
+
+/// <summary>Selects a reusable project curve, clearing inline points that would otherwise be hidden
+/// underneath it. Undo restores the complete former source of the curve.</summary>
+public sealed class SetCurvePresetCommand : IProjectCommand
+{
+    private readonly ICurveTarget _target;
+    private readonly Guid? _beforePreset;
+    private readonly IReadOnlyList<CurveKnot> _beforePoints;
+    private readonly bool _hadPoints;
+    private readonly Guid _afterPreset;
+
+    public SetCurvePresetCommand(ICurveTarget target, Guid presetId, string description)
+    {
+        _target = target;
+        _beforePreset = target.PresetId;
+        _beforePoints = target.Read();
+        _hadPoints = target.HasStored;
+        _afterPreset = presetId;
+        Description = description;
+    }
+
+    public string Domain => "cues";
+    public string Description { get; }
+
+    public void Apply(HaCueProject project)
+    {
+        _target.Clear();
+        _target.WritePreset(_afterPreset);
+    }
+
+    public void Revert(HaCueProject project)
+    {
+        if (_hadPoints)
+            _target.Write(_beforePoints);
+        else
+            _target.Clear();
+        _target.WritePreset(_beforePreset);
     }
 }
 
@@ -347,6 +448,28 @@ public static class CurveEdits
 
         knots[index] = knots[index] with { Hold = hold };
         return new SetCurveCommand(target, Normalize(knots), hold ? "hold segment" : "ramp segment");
+    }
+
+    /// <summary>Shapes the segment beginning at one point. A lane and a fade use the same laws all the
+    /// way through compilation and runtime evaluation.</summary>
+    public static SetCurveCommand? SetSegment(ICurveTarget target, int index, FadeCurve curve)
+    {
+        var knots = target.Read().ToList();
+        if (index < 0 || index >= knots.Count)
+            return null;
+
+        knots[index] = knots[index] with { Hold = false, CurveToNext = curve };
+        return new SetCurveCommand(target, Normalize(knots), $"use {Name(curve)} segment");
+    }
+
+    /// <summary>Chooses one of the project's reusable shapes for a cue curve.</summary>
+    public static SetCurvePresetCommand? PickPreset(ICurveTarget target, Guid presetId, string name)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        if (target.Law is null || target.PresetId == presetId)
+            return null;
+
+        return new SetCurvePresetCommand(target, presetId, $"use curve preset {name}");
     }
 
     /// <summary>

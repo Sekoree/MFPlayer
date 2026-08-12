@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
+using HaCue2.Core.Model;
+using S.Media.Session;
 
 namespace HaCue2.ViewModels;
 
@@ -713,7 +715,39 @@ public sealed partial class TimelineLane : ObservableObject
     /// <summary>An effect lane (volume / opacity / OSC ramp), drawn shorter and indented.</summary>
     public bool IsEffect { get; init; }
 
+    /// <summary>The document lane this row edits. Null on ordinary clip rows.</summary>
+    public Guid? EffectLaneId { get; init; }
+
+    public EffectLaneKind? EffectKind { get; init; }
+
+    /// <summary>The cue-relative editor's position inside the currently visible group window.</summary>
+    public double EffectLeft { get; init; }
+    public double EffectWidth { get; init; } = 1;
+
     public bool IsGroup { get; init; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Height))]
+    [NotifyPropertyChangedFor(nameof(ExpandLabel))]
+    private bool _isExpanded;
+
+    public double Height => IsEffect ? IsExpanded ? 132 : 30 : 34;
+    public string ExpandLabel => IsExpanded ? "COLLAPSE" : "EDIT";
+
+    /// <summary>The authored handles, local to the cue rather than the whole visible group.</summary>
+    [ObservableProperty]
+    private IReadOnlyList<CurvePoint> _points = [];
+
+    /// <summary>The sampled shaped path, local to the cue.</summary>
+    [ObservableProperty]
+    private IReadOnlyList<CurvePoint> _shape = [];
+
+    /// <summary>Audio peaks behind an expanded volume lane.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasWaveform))]
+    private IReadOnlyList<float>? _peaks;
+
+    public bool HasWaveform => EffectKind == EffectLaneKind.Volume && Peaks is { Count: > 0 };
 
     /// <summary>
     /// The lane's envelope as fractions of the lane; empty on a clip lane.
@@ -770,7 +804,12 @@ public sealed record TimelineClip
 /// Re-parsing per access costs nothing at five curves read once per bind.
 /// </para>
 /// </remarks>
-public sealed record CurveOption(string Name, string PathData)
+public sealed record CurveOption(
+    string Name,
+    string PathData,
+    FadeCurve? Law = null,
+    Guid? PresetId = null,
+    bool IsCustom = false)
 {
     public Geometry Shape => Geometry.Parse(PathData);
 }

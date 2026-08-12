@@ -220,7 +220,7 @@ public sealed class ShowCompilerTests
         fixture.Track.EffectLanes.Add(new EffectLane
         {
             Kind = EffectLaneKind.Volume,
-            Points = [new LanePoint(0, 1), new LanePoint(1, 0)],
+            Points = [new LanePoint(0, 1, FadeCurve.SCurve), new LanePoint(1, 0)],
         });
 
         // TrimOutMs is zero on every untrimmed cue, so keying the lane's length off the trim window
@@ -236,6 +236,7 @@ public sealed class ShowCompilerTests
         Assert.NotNull(envelope);
         Assert.Equal(TimeSpan.Zero, envelope[0].Time);
         Assert.Equal(TimeSpan.FromSeconds(30), envelope[^1].Time);
+        Assert.Equal(FadeCurve.SCurve, envelope[0].CurveToNext);
     }
 
     [Fact]

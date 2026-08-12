@@ -692,7 +692,8 @@ public static class ShowCompiler
         [
             .. lane.Points.Select(point => new ShowEnvelopePoint(
                 point.X * duration,
-                (float)Math.Clamp(point.Y, 0, 1))),
+                (float)Math.Clamp(point.Y, 0, 1),
+                point.CurveToNext)),
         ];
     }
 

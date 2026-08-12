@@ -6,8 +6,9 @@
         x:DataType="vm:CurveEditorViewModel"
         x:CompileBindings="True"
         Title="Fade curve"
-        Width="700" Height="340"
-        CanResize="False"
+        Width="780" Height="430"
+        MinWidth="620" MinHeight="360"
+        CanResize="True"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource BoothBg}"
         Foreground="{DynamicResource BoothInk}"
@@ -19,7 +20,7 @@
       <!-- The picker and the editor are the same strip: choosing "custom" is just selecting the last
            thumbnail, so there is never a mode the operator has to find. -->
       <ListBox DockPanel.Dock="Top" Theme="{StaticResource CurveOptions}" Classes="curves"
-               Margin="10,4" SelectedIndex="{Binding SelectedCurve}"
+               Margin="10,4" SelectedIndex="{Binding SelectedCurve, Mode=TwoWay}"
                IsEnabled="{Binding CanPickLaw}"
                ItemsSource="{Binding Curves}">
         <ListBox.ItemTemplate>
@@ -46,22 +47,31 @@
                        HoldToggled="OnHoldToggled" />
 
         <StackPanel Grid.Column="1" Spacing="4">
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Point">
-            <TextBox Classes="ro" IsReadOnly="True" Text="{Binding SelectedPoint}" />
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Time">
+            <TextBox Text="{Binding PointTime}" IsEnabled="{Binding HasSelection}"
+                     ToolTip.Tip="Clock time when the duration is known; otherwise enter a percentage." />
+          </HeaderedContentControl>
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Value">
+            <TextBox Text="{Binding PointValue}" IsEnabled="{Binding HasSelection}"
+                     ToolTip.Tip="Enter dB in dB scale, or a normalized 0–1 value in linear scale." />
           </HeaderedContentControl>
           <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Scale">
             <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Scales}"
-                     SelectedItem="{Binding Scale}" />
+                     SelectedItem="{Binding Scale, Mode=TwoWay}" />
           </HeaderedContentControl>
           <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Segment"
-                                  IsEnabled="{Binding HasSelection}"
-                                  IsVisible="{Binding SupportsHold}">
+                                  IsEnabled="{Binding HasSelection}">
             <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Segments}"
-                     SelectedItem="{Binding Segment}" />
+                     SelectedItem="{Binding Segment, Mode=TwoWay}" />
           </HeaderedContentControl>
           <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Save as">
-            <TextBox Text="{Binding PresetName}" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="5">
+              <TextBox Grid.Column="0" Text="{Binding PresetName}" />
+              <Button Grid.Column="1" Classes="tight" Content="SAVE" Click="OnSavePreset" />
+            </Grid>
           </HeaderedContentControl>
+          <TextBlock Margin="10,0" Classes="mono dim2 micro" TextWrapping="Wrap"
+                     Text="{Binding PresetStatus}" />
           <TextBlock Margin="10,4" Classes="mono dim3 micro" TextWrapping="Wrap"
                      Text="{Binding EditHint}" />
           <ContentControl Theme="{StaticResource FieldWide}">

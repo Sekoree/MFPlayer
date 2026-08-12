@@ -76,6 +76,9 @@ public partial class ShellViewModel : ObservableObject
         };
         Cues.Inspector.CacheRoot = MediaCache.RootFor(Settings);
         Cues.Inspector.WaveformCacheBytes = MediaCache.ParseBudget(Settings.WaveformBudget);
+        Cues.Timeline.CacheRoot = Cues.Inspector.CacheRoot;
+        Cues.Timeline.WaveformCacheBytes = Cues.Inspector.WaveformCacheBytes;
+        Cues.Timeline.ResolveMediaPath = Cues.Inspector.ResolveClipPath;
         // Resolve lazily through the current queue: changing the cache root replaces the shared queue,
         // and a method group captured here would keep the disposed old one for the rest of the project.
         Cues.Inspector.PreparedMediaPath = source => YouTubeRuntime.Downloads.PreparedAssetPath(source);

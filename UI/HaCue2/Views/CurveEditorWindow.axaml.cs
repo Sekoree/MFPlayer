@@ -29,6 +29,8 @@ public partial class CurveEditorWindow : Window
 
     private void OnHoldToggled(object? sender, int index) => Editor?.ToggleHold(index);
 
+    private void OnSavePreset(object? sender, RoutedEventArgs e) => Editor?.SavePreset();
+
     private void OnDone(object? sender, RoutedEventArgs e) => Close();
 
     private CurveEditorViewModel? Editor => DataContext as CurveEditorViewModel;

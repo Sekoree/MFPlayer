@@ -169,8 +169,8 @@
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Fade in">
               <Grid ColumnDefinitions="62,*,Auto" ColumnSpacing="6">
                 <TextBox Grid.Column="0" Text="{Binding FadeValue}" LostFocus="OnFieldCommitted" />
-                <ComboBox Grid.Column="1" ItemsSource="{Binding FadeInCurve.Curves}"
-                          SelectedIndex="{Binding FadeInCurve.SelectedIndex}"
+                <ComboBox Grid.Column="1" ItemsSource="{Binding CurveChoices}"
+                          SelectedIndex="{Binding FadeInCurveIndex, Mode=TwoWay}"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
                           SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
                 <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" Tag="fadeIn"
@@ -180,8 +180,8 @@
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Fade out">
               <Grid ColumnDefinitions="62,*,Auto" ColumnSpacing="6">
                 <TextBox Grid.Column="0" Text="{Binding FadeOutValue}" LostFocus="OnFieldCommitted" />
-                <ComboBox Grid.Column="1" ItemsSource="{Binding FadeOutCurve.Curves}"
-                          SelectedIndex="{Binding FadeOutCurve.SelectedIndex}"
+                <ComboBox Grid.Column="1" ItemsSource="{Binding CurveChoices}"
+                          SelectedIndex="{Binding FadeOutCurveIndex, Mode=TwoWay}"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
                           SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
                 <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" Tag="fadeOut" />
@@ -493,10 +493,14 @@
                   <TextBox Classes="short" Text="{Binding CrossfadeValue}" LostFocus="OnFieldCommitted" />
                 </HeaderedContentControl>
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Curve">
-                  <ComboBox ItemsSource="{Binding CrossfadeCurve.Curves}"
-                            SelectedIndex="{Binding CrossfadeCurve.SelectedIndex}"
-                            ItemTemplate="{StaticResource CurveItemTemplate}"
-                            SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                    <ComboBox Grid.Column="0" ItemsSource="{Binding CurveChoices}"
+                              SelectedIndex="{Binding CrossfadeCurveIndex, Mode=TwoWay}"
+                              ItemTemplate="{StaticResource CurveItemTemplate}"
+                              SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
+                    <Button Grid.Column="1" Classes="icon" Content="✎" Click="OnEditCurve"
+                            Tag="crossfade" ToolTip.Tip="Edit exact points and shaped segments" />
+                  </Grid>
                 </HeaderedContentControl>
               </StackPanel>
             </StackPanel>
@@ -508,7 +512,7 @@
                        SelectedIndex="{Binding AtEndIndex}" />
             </HeaderedContentControl>
             <TextBlock Margin="10,6" Classes="mono dim3 small"
-                       Text="per-transition overrides: set on a child's General tab · 2 set" />
+                       Text="per-item fade-in overrides are set on each child's Audio tab" />
           </StackPanel>
 
           <!-- ══ PATCH — snapshot recall AND inline level changes (register item 12) ════════ -->
@@ -519,12 +523,14 @@
                         SelectedIndex="{Binding PatchSnapshotIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Fade">
-              <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+              <Grid ColumnDefinitions="62,*,Auto" ColumnSpacing="6">
                 <TextBox Grid.Column="0" Text="{Binding PatchFadeValue}" LostFocus="OnFieldCommitted" />
-                <ComboBox Grid.Column="1" ItemsSource="{Binding PatchCurve.Curves}"
-                          SelectedIndex="{Binding PatchCurve.SelectedIndex}"
+                <ComboBox Grid.Column="1" ItemsSource="{Binding CurveChoices}"
+                          SelectedIndex="{Binding PatchCurveIndex, Mode=TwoWay}"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
                           SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
+                <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" Tag="patch"
+                        ToolTip.Tip="Edit exact points and shaped segments" />
               </Grid>
             </HeaderedContentControl>
 
@@ -567,8 +573,8 @@
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Duration">
               <Grid ColumnDefinitions="62,*,Auto" ColumnSpacing="6">
                 <TextBox Grid.Column="0" Text="{Binding FadeDurationValue}" LostFocus="OnFieldCommitted" />
-                <ComboBox Grid.Column="1" ItemsSource="{Binding FadeCurve.Curves}"
-                          SelectedIndex="{Binding FadeCurve.SelectedIndex}"
+                <ComboBox Grid.Column="1" ItemsSource="{Binding CurveChoices}"
+                          SelectedIndex="{Binding FadeCurveIndex, Mode=TwoWay}"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
                           SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
                 <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" Tag="fade" />

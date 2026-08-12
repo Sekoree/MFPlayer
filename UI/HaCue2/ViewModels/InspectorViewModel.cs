@@ -2810,6 +2810,10 @@ public partial class InspectorViewModel : ObservableObject
         _ => null,
     };
 
+    /// <summary>The same resolved asset the clip editor opens, shared with the timeline waveform so
+    /// the two editors cannot scan different files for one cue.</summary>
+    public string? ResolveClipPath(MediaCueNode media) => ClipPath(media);
+
     public TrackPickerViewModel AudioTrack => Track(TrackKind.Audio);
     public TrackPickerViewModel VideoTrack => Track(TrackKind.Video);
 
@@ -3018,8 +3022,19 @@ public partial class InspectorViewModel : ObservableObject
     public CurvePickerViewModel FadeCurve => Picker("fade");
     public CurvePickerViewModel PatchCurve => Picker("patch");
 
+    /// <summary>Direct binding endpoints for Avalonia. A two-way binding through a getter-only,
+    /// newly-created nested picker can read but cannot reliably write the leaf; that was the preset
+    /// selector which visibly snapped back. These properties put the setter on the inspector object
+    /// the view actually owns.</summary>
+    public IReadOnlyList<CurveOption> CurveChoices => CurveLibrary.Choices(Project);
+    public int FadeInCurveIndex { get => FadeInCurve.SelectedIndex; set => FadeInCurve.SelectedIndex = value; }
+    public int FadeOutCurveIndex { get => FadeOutCurve.SelectedIndex; set => FadeOutCurve.SelectedIndex = value; }
+    public int CrossfadeCurveIndex { get => CrossfadeCurve.SelectedIndex; set => CrossfadeCurve.SelectedIndex = value; }
+    public int FadeCurveIndex { get => FadeCurve.SelectedIndex; set => FadeCurve.SelectedIndex = value; }
+    public int PatchCurveIndex { get => PatchCurve.SelectedIndex; set => PatchCurve.SelectedIndex = value; }
+
     private CurvePickerViewModel Picker(string which) =>
-        new(_journal, Cue, SpecOf(which).Spec, Reload);
+        new(_journal, Cue, SpecOf(which).Spec, which, Reload);
 
     private (CurveSpec? Spec, string Label) SpecOf(string which) => (which, Cue) switch
     {
@@ -3051,8 +3066,23 @@ public partial class InspectorViewModel : ObservableObject
 
         return new CurveEditorViewModel(
             _journal,
-            new CurveSpecTarget(cue.Id, which, spec),
-            $"Q{CuePresentation.Number(cue.Number)} · {label}");
+            new CurveSpecTarget(cue.Id, which, spec, Project, CurveLibrary.EmptyShape(which)),
+            $"Q{CuePresentation.Number(cue.Number)} · {label}",
+            CurveDuration(which, cue));
+    }
+
+    private static TimeSpan? CurveDuration(string which, CueNode cue)
+    {
+        TimeSpan? duration = (which, cue) switch
+        {
+            ("fadeIn", MediaCueNode media) => TimeSpan.FromMilliseconds(media.FadeInMs),
+            ("fadeOut", MediaCueNode media) => TimeSpan.FromMilliseconds(media.FadeOutMs),
+            ("crossfade", GroupCueNode group) => TimeSpan.FromMilliseconds(group.CrossfadeMs),
+            ("fade", FadeCueNode fade) => TimeSpan.FromMilliseconds(fade.DurationMs),
+            ("patch", PatchCueNode patch) => TimeSpan.FromMilliseconds(patch.FadeMs),
+            _ => null,
+        };
+        return duration is { TotalMilliseconds: > 0 } ? duration : null;
     }
 
     // ── the Effects pane (register item 18: lanes, hidden until added) ────────────────────────
@@ -3258,8 +3288,16 @@ public partial class InspectorViewModel : ObservableObject
         return new CurveEditorViewModel(
             _journal,
             new EffectLaneTarget(cue.Id, lane),
-            $"Q{CuePresentation.Number(cue.Number)} · {lane.Kind.ToString().ToLowerInvariant()} lane");
+            $"Q{CuePresentation.Number(cue.Number)} · {lane.Kind.ToString().ToLowerInvariant()} lane",
+            LaneDuration(cue));
     }
+
+    private TimeSpan? LaneDuration(CueNode cue) => cue switch
+    {
+        MediaCueNode => ClipDuration,
+        TextCueNode { DurationMs: > 0 } text => TimeSpan.FromMilliseconds(text.DurationMs),
+        _ => null,
+    };
 
     /// <summary>Configures the endpoint and address for an outbound lane.</summary>
     public PromptViewModel? ConfigureLane(int index)
@@ -3392,48 +3430,62 @@ public partial class InspectorViewModel : ObservableObject
 /// nothing else, and the picker would be describing a fade that does not happen.
 /// </remarks>
 public sealed class CurvePickerViewModel(
-    ProjectJournal journal, CueNode? cue, CurveSpec? spec, Action reload)
+    ProjectJournal journal, CueNode? cue, CurveSpec? spec, string which, Action reload)
 {
-    /// <summary>The index the list shows for a drawn shape — one past the last law.</summary>
-    public const int CustomIndex = 4;
+    public IReadOnlyList<CurveOption> Curves { get; } = CurveLibrary.Choices(journal.Project);
 
-    public IReadOnlyList<CurveOption> Curves { get; } = CurveLibrary.Curves;
+    private int CustomIndex => Curves.Count - 1;
 
     public bool HasCurve => spec is not null && cue is not null;
 
     public int SelectedIndex
     {
-        get => spec is null
-            ? -1
-            : spec.Points is { Count: > 1 }
-                ? CustomIndex
-                : (int)spec.Law;
+        get
+        {
+            if (spec is null)
+                return -1;
+
+            if (spec.PresetId is { } presetId)
+                return IndexOf(option => option.PresetId == presetId);
+
+            if (spec.Points is { Count: > 1 })
+                return CustomIndex;
+
+            return IndexOf(option => option.Law == spec.Law);
+        }
 
         set
         {
-            // Selecting "custom" is not an edit: it is where the ✎ lives, and the shape arrives when
-            // the editor is used. Choosing it without drawing anything would store a straight line.
-            if (spec is null || cue is null || value is < 0 or >= CustomIndex || value == SelectedIndex)
+            if (spec is null || cue is null || value < 0 || value >= Curves.Count || value == SelectedIndex)
                 return;
 
-            using (journal.Composite("set fade curve", "cues"))
+            var target = new CurveSpecTarget(
+                cue.Id, "curvePicker", spec, journal.Project, CurveLibrary.EmptyShape(which));
+            var option = Curves[value];
+            IProjectCommand? command = option switch
             {
-                journal.Do(new SetValueCommand<FadeCurve>(
-                    cue.Id, "curveLaw", "cues",
-                    () => spec.Law, law => spec.Law = law, (FadeCurve)value,
-                    $"set curve {Curves[value].Name}"));
+                { Law: { } law } => CurveEdits.PickLaw(target, law),
+                { PresetId: { } presetId } => CurveEdits.PickPreset(target, presetId, option.Name),
+                { IsCustom: true } => new SetCurveCommand(target, target.Read(), "draw a custom curve"),
+                _ => null,
+            };
 
-                if (spec.Points is { Count: > 1 })
-                {
-                    journal.Do(new SetValueCommand<List<FadeCurvePoint>?>(
-                        cue.Id, "curvePoints", "cues",
-                        () => spec.Points, points => spec.Points = points, null,
-                        "drop the custom shape"));
-                }
-            }
+            if (command is null)
+                return;
+
+            journal.Do(command);
+            journal.CloseGroup();
 
             reload();
         }
+    }
+
+    private int IndexOf(Func<CurveOption, bool> predicate)
+    {
+        for (var index = 0; index < Curves.Count; index++)
+            if (predicate(Curves[index]))
+                return index;
+        return -1;
     }
 }
 

@@ -2121,6 +2121,10 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// <summary>Which group the sheet is showing. Settable so the operator can point it somewhere.</summary>
     private GroupCueNode? _group;
     private IDisposable? _drag;
+    private readonly HashSet<Guid> _expandedEffectLanes = [];
+    private readonly Dictionary<Guid, int> _selectedEffectPoints = [];
+    private readonly Dictionary<Guid, float[]> _waveforms = [];
+    private readonly HashSet<Guid> _waveformLoads = [];
 
     /// <summary>
     /// The WINDOW's length as it was when the drag started, held for the whole gesture.
@@ -2198,6 +2202,12 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// cue view can answer.
     /// </remarks>
     public CuesViewModel? Owner { get; init; }
+
+    /// <summary>Machine-local waveform settings supplied by the shell. Timeline authoring remains
+    /// usable when these are absent; it simply has no audio backdrop.</summary>
+    public string CacheRoot { get; set; } = "";
+    public long? WaveformCacheBytes { get; set; }
+    public Func<MediaCueNode, string?> ResolveMediaPath { get; set; } = static _ => null;
     [ObservableProperty]
     private IReadOnlyList<string> _ruler = [];
 
@@ -2299,6 +2309,76 @@ public sealed partial class TimelineViewModel : ObservableObject
         }
 
         Refresh();
+    }
+
+    /// <summary>Expands an effect row into an inline point editor. Expansion is working state, not
+    /// project data, and survives redraws while this timeline is open.</summary>
+    public void ToggleEffectLane(TimelineLane row)
+    {
+        if (row.EffectLaneId is not { } laneId)
+            return;
+
+        if (!_expandedEffectLanes.Add(laneId))
+            _expandedEffectLanes.Remove(laneId);
+
+        row.IsExpanded = _expandedEffectLanes.Contains(laneId);
+        if (row.IsExpanded && row.EffectKind == EffectLaneKind.Volume)
+            BeginWaveform(row.SubjectId);
+    }
+
+    /// <summary>Edits the points directly on the timeline. X/Y are cue-relative because the canvas is
+    /// arranged exactly over the cue's own span inside the larger group window.</summary>
+    public void ApplyLaneGesture(TimelineLane row, CurveGesture gesture)
+    {
+        if (_journal is null
+            || row.EffectLaneId is not { } laneId
+            || _project.FindCue(row.SubjectId) is not { } cue
+            || EffectLanes(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } lane)
+            return;
+
+        if (gesture.Kind == CurveGestureKind.Select)
+        {
+            _selectedEffectPoints[laneId] = gesture.Index;
+            SelectPoint(row, gesture.Index);
+            return;
+        }
+
+        var target = new EffectLaneTarget(cue.Id, lane);
+        var x = gesture.X;
+        var y = 1 - gesture.Y;
+        var command = gesture.Kind switch
+        {
+            CurveGestureKind.Move => CurveEdits.Move(target, gesture.Index, x, y),
+            CurveGestureKind.Add when !CurveEdits.HasPointNear(target, x) => CurveEdits.Add(target, x, y),
+            CurveGestureKind.Remove => CurveEdits.Remove(target, gesture.Index),
+            _ => null,
+        };
+        if (command is null)
+            return;
+
+        _drag ??= _journal.Composite(command.Description, "cues", quiet: true);
+        _journal.Do(command);
+        if (gesture.Kind == CurveGestureKind.Remove)
+            _selectedEffectPoints.Remove(laneId);
+        Refresh();
+    }
+
+    /// <summary>The full editor for an inline row: exact clock/value fields and shaped segment laws.</summary>
+    public CurveEditorViewModel? LaneEditor(TimelineLane row)
+    {
+        if (_journal is null
+            || row.EffectLaneId is not { } laneId
+            || _project.FindCue(row.SubjectId) is not { } cue
+            || EffectLanes(cue).FirstOrDefault(candidate => candidate.Id == laneId) is not { } lane)
+            return null;
+
+        var span = Span(cue);
+        var duration = TimeSpan.FromMilliseconds(Math.Max(0, span.EndMs - span.StartMs));
+        return new CurveEditorViewModel(
+            _journal,
+            new EffectLaneTarget(cue.Id, lane),
+            $"Q{CuePresentation.Number(cue.Number)} · {lane.Kind.ToString().ToLowerInvariant()} lane",
+            duration > TimeSpan.Zero ? duration : null);
     }
 
     /// <summary>Ends the gesture, closing its undo step.</summary>
@@ -2424,6 +2504,16 @@ public sealed partial class TimelineViewModel : ObservableObject
         _view = Clamp(_view);
 
         var lanes = TimelinePresentation.Lanes(_group, _project, _runtime, _view);
+        foreach (var lane in lanes.Where(candidate => candidate.EffectLaneId is not null))
+        {
+            var laneId = lane.EffectLaneId!.Value;
+            lane.IsExpanded = _expandedEffectLanes.Contains(laneId);
+            if (_selectedEffectPoints.TryGetValue(laneId, out var selected))
+                SelectPoint(lane, selected);
+            if (_waveforms.TryGetValue(lane.SubjectId, out var peaks)
+                && _project.FindCue(lane.SubjectId) is MediaCueNode media)
+                lane.Peaks = TrimmedPeaks(media, peaks);
+        }
 
         // Mid-gesture the lane CONTAINERS must survive: replacing the Lanes list unrealizes every
         // ClipLane, and Avalonia releases pointer capture on detach — the drag would die on its first
@@ -2436,6 +2526,10 @@ public sealed partial class TimelineViewModel : ObservableObject
             {
                 Lanes[i].Clips = lanes[i].Clips;
                 Lanes[i].Envelope = lanes[i].Envelope;
+                Lanes[i].Points = lanes[i].Points;
+                Lanes[i].Shape = lanes[i].Shape;
+                Lanes[i].Peaks = lanes[i].Peaks;
+                Lanes[i].IsExpanded = lanes[i].IsExpanded;
             }
         }
         else
@@ -2484,11 +2578,77 @@ public sealed partial class TimelineViewModel : ObservableObject
             if (current[i].SubjectId != fresh[i].SubjectId
                 || current[i].Name != fresh[i].Name
                 || current[i].IsEffect != fresh[i].IsEffect
+                || current[i].EffectLaneId != fresh[i].EffectLaneId
                 || current[i].IsGroup != fresh[i].IsGroup)
                 return false;
         }
 
         return true;
+    }
+
+    private static IReadOnlyList<EffectLane> EffectLanes(CueNode cue) => cue switch
+    {
+        MediaCueNode media => media.EffectLanes,
+        TextCueNode text => text.EffectLanes,
+        GroupCueNode group => group.EffectLanes,
+        VisualizerCueNode visualizer => visualizer.EffectLanes,
+        _ => [],
+    };
+
+    private static void SelectPoint(TimelineLane lane, int selected) =>
+        lane.Points =
+        [
+            .. lane.Points.Select((point, index) => point with { IsSelected = index == selected }),
+        ];
+
+    private async void BeginWaveform(Guid cueId)
+    {
+        if (_waveforms.ContainsKey(cueId)
+            || !_waveformLoads.Add(cueId)
+            || _project.FindCue(cueId) is not MediaCueNode media
+            || ResolveMediaPath(media) is not { Length: > 0 } path)
+        {
+            _waveformLoads.Remove(cueId);
+            return;
+        }
+
+        try
+        {
+            var peaks = WaveformCache.Read(CacheRoot, path)
+                        ?? await MediaScan.WaveformAsync(path).ConfigureAwait(true);
+            if (peaks is not { Length: > 0 })
+                return;
+
+            _waveforms[cueId] = peaks;
+            WaveformCache.Write(CacheRoot, path, peaks, WaveformCacheBytes);
+            Refresh();
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            // A waveform is authoring context, never a prerequisite for editing the envelope.
+        }
+        finally
+        {
+            _waveformLoads.Remove(cueId);
+        }
+    }
+
+    private IReadOnlyList<float> TrimmedPeaks(MediaCueNode media, float[] peaks)
+    {
+        if (!_runtime.MediaDurations.TryGetValue(media.Id, out var duration)
+            || duration.TotalMilliseconds <= 0)
+            return peaks;
+
+        var from = Math.Clamp(
+            (int)Math.Floor(media.TrimInMs / duration.TotalMilliseconds * peaks.Length),
+            0,
+            peaks.Length - 1);
+        var outMs = media.TrimOutMs > 0 ? media.TrimOutMs : duration.TotalMilliseconds;
+        var to = Math.Clamp(
+            (int)Math.Ceiling(outMs / duration.TotalMilliseconds * peaks.Length),
+            from + 1,
+            peaks.Length);
+        return peaks[from..to];
     }
 
     // ── the view window (screen 05's zoom controls) ───────────────────────────────────────────

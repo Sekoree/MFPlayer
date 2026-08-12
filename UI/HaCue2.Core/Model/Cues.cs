@@ -758,7 +758,12 @@ public enum EffectLaneKind
     MidiRamp,
 }
 
-public readonly record struct LanePoint(double X, double Y);
+/// <summary>One automation keyframe. <paramref name="CurveToNext"/> shapes the segment beginning at
+/// this point; linear is the backward-compatible document default.</summary>
+public readonly record struct LanePoint(
+    double X,
+    double Y,
+    FadeCurve CurveToNext = FadeCurve.Linear);
 
 /// <summary>
 /// How a fade is shaped: a built-in law, a project preset, or an inline custom curve.

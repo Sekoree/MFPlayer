@@ -11,6 +11,7 @@ using HaCue2.Presentation;
 using HaCue2.Sample;
 using HaCue2.Session;
 using S.Media.Core.Diagnostics;
+using S.Media.Session;
 using S.Media.Source.YouTube;
 
 namespace HaCue2.ViewModels;
@@ -237,6 +238,7 @@ public partial class CurveEditorViewModel : ObservableObject
 {
     private readonly ProjectJournal? _journal;
     private readonly ICurveTarget? _target;
+    private readonly TimeSpan? _duration;
     private IDisposable? _drag;
 
     /// <summary>The dummy editor, for a preview with no document behind it.</summary>
@@ -247,14 +249,21 @@ public partial class CurveEditorViewModel : ObservableObject
         _knots = [new CurveKnot(0, 1), new CurveKnot(0.35, 0.55), new CurveKnot(1, 0)];
     }
 
-    public CurveEditorViewModel(ProjectJournal journal, ICurveTarget target, string title)
+    public CurveEditorViewModel(
+        ProjectJournal journal,
+        ICurveTarget target,
+        string title,
+        TimeSpan? duration = null)
     {
         _journal = journal;
         _target = target;
         Title = title;
-        Hint = "same control everywhere a curve is picked";
+        Hint = duration is { TotalMilliseconds: > 0 }
+            ? $"{ClipTimes.Format((int)duration.Value.TotalMilliseconds)} · double-click to add a timed point"
+            : "double-click to add a point · exact percentages are editable beside the canvas";
         _knots = target.Read();
         _supportsHold = target.SupportsHold;
+        _duration = duration is { TotalMilliseconds: > 0 } ? duration : null;
     }
 
     public string Title { get; }
@@ -263,10 +272,12 @@ public partial class CurveEditorViewModel : ObservableObject
     private IReadOnlyList<CurveKnot> _knots;
     private readonly bool _supportsHold = true;
 
-    public IReadOnlyList<CurveOption> Curves { get; } = CurveLibrary.Curves;
+    public IReadOnlyList<CurveOption> Curves => _journal is { } journal
+        ? CurveLibrary.Choices(journal.Project)
+        : CurveLibrary.Curves;
 
     /// <summary>The index the picker's last entry sits at — "custom ✎".</summary>
-    private static int CustomIndex => CurveLibrary.Curves.Count - 1;
+    private int CustomIndex => Curves.Count - 1;
 
     /// <summary>
     /// Which curve the picker is showing, and picking one is what CHOOSES it.
@@ -288,25 +299,31 @@ public partial class CurveEditorViewModel : ObservableObject
     {
         get
         {
-            if (_target is not { } target || target.HasStored || target.Law is not { } law)
+            if (_target is not { } target)
                 return CustomIndex;
 
-            var index = CurveEdits.LawIndex(law);
-            return index < 0 ? CustomIndex : index;
+            if (target.PresetId is { } presetId)
+                return IndexOf(option => option.PresetId == presetId);
+
+            if (target.HasStored || target.Law is not { } law)
+                return CustomIndex;
+
+            return IndexOf(option => option.Law == law);
         }
         set
         {
-            if (_target is null || _journal is null || value < 0 || value > CustomIndex)
+            if (_target is null || _journal is null || value < 0 || value >= Curves.Count)
                 return;
 
-            // "custom ✎" is not a law — it is the decision to start drawing. It stores what the canvas
-            // is already showing, so the shape does not jump and the next drag edits rather than
-            // replaces. Without this the picker would bounce straight back off the last thumbnail.
-            IProjectCommand? command = value == CustomIndex
-                ? _target.HasStored
-                    ? null
-                    : new SetCurveCommand(_target, _target.Read(), "draw a custom curve")
-                : CurveEdits.PickLaw(_target, CurveEdits.Laws[value]);
+            var option = Curves[value];
+            IProjectCommand? command = option switch
+            {
+                { Law: { } law } => CurveEdits.PickLaw(_target, law),
+                { PresetId: { } presetId } => CurveEdits.PickPreset(_target, presetId, option.Name),
+                { IsCustom: true } when !_target.HasStored || _target.PresetId is not null =>
+                    new SetCurveCommand(_target, _target.Read(), "draw a custom curve"),
+                _ => null,
+            };
 
             if (command is null)
                 return;
@@ -342,30 +359,17 @@ public partial class CurveEditorViewModel : ObservableObject
     /// would show the operator a fade that the engine will not play.
     /// </remarks>
     public IReadOnlyList<CurvePoint> Shape
-    {
-        get
-        {
-            var shape = new List<CurvePoint>();
-
-            for (var index = 0; index < _knots.Count; index++)
-            {
-                var knot = _knots[index];
-                shape.Add(new CurvePoint(knot.X, 1 - knot.Y));
-
-                if (knot.Hold && index + 1 < _knots.Count)
-                    shape.Add(new CurvePoint(_knots[index + 1].X, 1 - knot.Y));
-            }
-
-            return shape;
-        }
-    }
+        => CurveLibrary.Shape(_knots);
 
     public IReadOnlyList<string> Scales { get; } = ["dB", "linear"];
-    public IReadOnlyList<string> Segments { get; } = ["smooth", "hold"];
+    public IReadOnlyList<string> Segments => _supportsHold
+        ? ["linear", "equal-power", "exponential", "s-curve", "hold"]
+        : ["linear", "equal-power", "exponential", "s-curve"];
 
     [ObservableProperty] private string _scale = "dB";
     [ObservableProperty] private int _selectedIndex = -1;
     [ObservableProperty] private string _presetName = "";
+    [ObservableProperty] private string _presetStatus = "";
 
     public bool HasSelection => SelectedIndex >= 0 && SelectedIndex < _knots.Count;
 
@@ -373,19 +377,70 @@ public partial class CurveEditorViewModel : ObservableObject
 
     /// <summary>The selected point's position, as the numeric route onto the same edit.</summary>
     public string SelectedPoint => HasSelection
-        ? $"{_knots[SelectedIndex].X * 100:0.#} % · {_knots[SelectedIndex].Y * 100:0.#} %"
+        ? $"{PointTime} · {PointValue}"
         : "—";
+
+    /// <summary>The selected keyframe's exact time. With a known cue/fade duration this is a clock
+    /// value; otherwise it is a normalized percentage.</summary>
+    public string PointTime
+    {
+        get
+        {
+            if (!HasSelection)
+                return "—";
+            return _duration is { } duration
+                ? ClipTimes.Format((int)Math.Round(_knots[SelectedIndex].X * duration.TotalMilliseconds))
+                : $"{_knots[SelectedIndex].X * 100:0.###} %";
+        }
+        set
+        {
+            if (!HasSelection || ParseTime(value) is not { } x)
+                return;
+            MoveSelected(x, _knots[SelectedIndex].Y);
+        }
+    }
+
+    /// <summary>The selected value in the chosen scale. dB is useful for volume fades; linear is the
+    /// direct normalized value used by opacity and outbound lanes.</summary>
+    public string PointValue
+    {
+        get
+        {
+            if (!HasSelection)
+                return "—";
+            var level = _knots[SelectedIndex].Y;
+            if (Scale == "linear")
+                return level.ToString("0.###", CultureInfo.InvariantCulture);
+            if (level <= 0.001)
+                return "−60 dB";
+            return $"{20 * Math.Log10(level):0.##} dB".Replace('-', '−');
+        }
+        set
+        {
+            if (!HasSelection || ParseValue(value) is not { } y)
+                return;
+            MoveSelected(_knots[SelectedIndex].X, y);
+        }
+    }
 
     /// <summary>Whether the selected point holds. Bound to the smooth/hold segment picker.</summary>
     public string Segment
     {
-        get => HasSelection && _knots[SelectedIndex].Hold ? "hold" : "smooth";
+        get => !HasSelection
+            ? "linear"
+            : _knots[SelectedIndex].Hold
+                ? "hold"
+                : SegmentName(_knots[SelectedIndex].CurveToNext);
         set
         {
             if (_target is null || _journal is null || !HasSelection)
                 return;
 
-            if (CurveEdits.SetHold(_target, SelectedIndex, value == "hold") is { } command)
+            var command = value == "hold"
+                ? CurveEdits.SetHold(_target, SelectedIndex, hold: true)
+                : CurveEdits.SetSegment(_target, SelectedIndex, SegmentCurve(value));
+
+            if (command is not null)
             {
                 _journal.Do(command);
                 _journal.CloseGroup();
@@ -395,7 +450,63 @@ public partial class CurveEditorViewModel : ObservableObject
     }
 
     public string EditHint =>
-        "double-click adds a point · drag off the canvas removes · right-click holds the segment";
+        "double-click adds · drag moves · drag off removes · right-click toggles hold";
+
+    /// <summary>Saves the current drawing into the project and immediately uses it on this cue. This
+    /// is the action the old “Save as” textbox promised but never performed.</summary>
+    public void SavePreset()
+    {
+        if (_journal is null || _target is null)
+            return;
+
+        var name = PresetName.Trim();
+        if (name.Length == 0)
+        {
+            PresetStatus = "name the preset first";
+            return;
+        }
+
+        var points = _target.Read()
+            .Select(knot => new FadeCurvePoint(
+                knot.X, knot.Y, knot.Hold, knot.CurveToNext))
+            .ToList();
+        var existing = _journal.Project.CurvePresets.FirstOrDefault(
+            preset => string.Equals(preset.Name, name, StringComparison.OrdinalIgnoreCase));
+
+        using (_journal.Composite(existing is null ? "save curve preset" : "update curve preset", "cues"))
+        {
+            if (existing is null)
+            {
+                existing = new CurvePreset { Name = name, Points = points };
+                _journal.Do(new AddItemCommand<CurvePreset>(
+                    _journal.Project.CurvePresets,
+                    existing,
+                    _journal.Project.CurvePresets.Count,
+                    "cues",
+                    $"save curve preset {name}"));
+            }
+            else
+            {
+                var preset = existing;
+                _journal.Do(new SetValueCommand<List<FadeCurvePoint>>(
+                    preset.Id,
+                    "curvePresetPoints",
+                    "cues",
+                    () => preset.Points,
+                    value => preset.Points = value,
+                    points,
+                    $"update curve preset {name}"));
+            }
+
+            if (_target.Law is not null
+                && CurveEdits.PickPreset(_target, existing.Id, existing.Name) is { } pick)
+                _journal.Do(pick);
+        }
+
+        PresetStatus = existing.Name + " saved and selected";
+        OnPropertyChanged(nameof(Curves));
+        Reload();
+    }
 
     /// <summary>A drag, a nudge, an add or a remove — every route ends in one command.</summary>
     public void Apply(CurveGesture gesture)
@@ -457,6 +568,8 @@ public partial class CurveEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedPoint));
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(Segment));
+        OnPropertyChanged(nameof(PointTime));
+        OnPropertyChanged(nameof(PointValue));
         // Drawing on the canvas moves the picker to "custom" on its own: the drawn points are now what
         // the engine will play, and a picker still highlighting "eq-power" would be describing a curve
         // the show no longer has.
@@ -469,7 +582,81 @@ public partial class CurveEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedPoint));
         OnPropertyChanged(nameof(HasSelection));
         OnPropertyChanged(nameof(Segment));
+        OnPropertyChanged(nameof(PointTime));
+        OnPropertyChanged(nameof(PointValue));
     }
+
+    partial void OnScaleChanged(string value)
+    {
+        OnPropertyChanged(nameof(PointValue));
+        OnPropertyChanged(nameof(SelectedPoint));
+    }
+
+    private void MoveSelected(double x, double y)
+    {
+        if (_journal is null || _target is null || !HasSelection)
+            return;
+        _journal.Do(CurveEdits.Move(_target, SelectedIndex, x, y));
+        _journal.CloseGroup();
+        Reload();
+    }
+
+    private double? ParseTime(string text)
+    {
+        var trimmed = text.Trim().Replace('−', '-');
+        if (trimmed.EndsWith('%')
+            && double.TryParse(trimmed[..^1], NumberStyles.Float, CultureInfo.InvariantCulture, out var percent))
+            return Math.Clamp(percent / 100, 0, 1);
+
+        if (_duration is { TotalMilliseconds: > 0 } duration
+            && ClipTimes.Parse(trimmed, duration) is { } milliseconds)
+            return Math.Clamp(milliseconds / duration.TotalMilliseconds, 0, 1);
+
+        return double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var fraction)
+            ? Math.Clamp(fraction, 0, 1)
+            : null;
+    }
+
+    private double? ParseValue(string text)
+    {
+        var trimmed = text.Trim().Replace('−', '-');
+        if (trimmed.EndsWith('%')
+            && double.TryParse(trimmed[..^1], NumberStyles.Float, CultureInfo.InvariantCulture, out var percent))
+            return Math.Clamp(percent / 100, 0, 1);
+
+        var isDb = trimmed.Contains("db", StringComparison.OrdinalIgnoreCase) || Scale == "dB";
+        trimmed = trimmed.Replace("dB", "", StringComparison.OrdinalIgnoreCase).Trim();
+        if (!double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+            return null;
+
+        return isDb
+            ? Math.Clamp(Math.Pow(10, parsed / 20), 0, 1)
+            : Math.Clamp(parsed, 0, 1);
+    }
+
+    private int IndexOf(Func<CurveOption, bool> predicate)
+    {
+        for (var index = 0; index < Curves.Count; index++)
+            if (predicate(Curves[index]))
+                return index;
+        return CustomIndex;
+    }
+
+    private static string SegmentName(FadeCurve curve) => curve switch
+    {
+        FadeCurve.EqualPower => "equal-power",
+        FadeCurve.Exponential => "exponential",
+        FadeCurve.SCurve => "s-curve",
+        _ => "linear",
+    };
+
+    private static FadeCurve SegmentCurve(string name) => name switch
+    {
+        "equal-power" => FadeCurve.EqualPower,
+        "exponential" => FadeCurve.Exponential,
+        "s-curve" => FadeCurve.SCurve,
+        _ => FadeCurve.Linear,
+    };
 }
 
 /// <summary>Screens 12 and 13 — application scope (not journaled) and project scope (journaled).</summary>
@@ -1233,6 +1420,77 @@ public partial class SettingsViewModel : ObservableObject
             S.Media.Session.FadeCurve.SCurve => "s-curve",
             _ => "equal-power",
         };
+
+    public IReadOnlyList<CurveOption> StopFadeCurveChoices => CurveLibrary.Choices(_project);
+
+    /// <summary>The project stop fade uses the same picker and editor as cue fades. It used to be a
+    /// read-only name even though the document stored a full CurveSpec.</summary>
+    public int StopFadeCurveIndex
+    {
+        get
+        {
+            var choices = StopFadeCurveChoices;
+            for (var index = 0; index < choices.Count; index++)
+            {
+                var choice = choices[index];
+                if (_settings.StopFadeCurve.PresetId is { } presetId
+                    ? choice.PresetId == presetId
+                    : _settings.StopFadeCurve.Points is { Count: > 1 }
+                        ? choice.IsCustom
+                        : choice.Law == _settings.StopFadeCurve.Law)
+                    return index;
+            }
+            return -1;
+        }
+        set
+        {
+            if (_journal is null
+                || value < 0
+                || value >= StopFadeCurveChoices.Count
+                || value == StopFadeCurveIndex)
+                return;
+
+            var target = StopFadeTarget();
+            var choice = StopFadeCurveChoices[value];
+            IProjectCommand? command = choice switch
+            {
+                { Law: { } law } => CurveEdits.PickLaw(target, law),
+                { PresetId: { } presetId } => CurveEdits.PickPreset(target, presetId, choice.Name),
+                { IsCustom: true } => new SetCurveCommand(target, target.Read(), "draw a custom stop fade"),
+                _ => null,
+            };
+            if (command is null)
+                return;
+
+            _journal.Do(command);
+            _journal.CloseGroup();
+            OnPropertyChanged(nameof(StopFadeCurveIndex));
+            OnPropertyChanged(nameof(StopFadeCurveName));
+        }
+    }
+
+    public CurveEditorViewModel? StopFadeEditor() => _journal is null
+        ? null
+        : new CurveEditorViewModel(
+            _journal,
+            StopFadeTarget(),
+            "Project · stop fade",
+            _settings.StopFadeMs > 0 ? TimeSpan.FromMilliseconds(_settings.StopFadeMs) : null);
+
+    public void RefreshStopFade()
+    {
+        OnPropertyChanged(nameof(StopFadeCurveChoices));
+        OnPropertyChanged(nameof(StopFadeCurveIndex));
+        OnPropertyChanged(nameof(StopFadeCurveName));
+    }
+
+    private CurveSpecTarget StopFadeTarget() =>
+        new(
+            Guid.Empty,
+            "projectStopFade",
+            _settings.StopFadeCurve,
+            _project,
+            CurveLibrary.EmptyShape("projectStopFade"));
 
     /// <summary>The nav's project heading — the show's own name, not a fixture's.</summary>
     public string ProjectScopeHeading => $"PROJECT · {_project.Title.ToUpperInvariant()}";

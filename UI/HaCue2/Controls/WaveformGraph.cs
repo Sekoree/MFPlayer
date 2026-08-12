@@ -64,10 +64,16 @@ public class WaveformGraph : Control
     public static readonly StyledProperty<IBrush?> PlayheadBrushProperty =
         AvaloniaProperty.Register<WaveformGraph, IBrush?>(nameof(PlayheadBrush));
 
+    /// <summary>False when the graph is a read-only backdrop under automation rather than a trim
+    /// editor. Peaks still draw; trim grips, washes and the playhead do not.</summary>
+    public static readonly StyledProperty<bool> ShowMarkersProperty =
+        AvaloniaProperty.Register<WaveformGraph, bool>(nameof(ShowMarkers), true);
+
     static WaveformGraph() =>
         AffectsRender<WaveformGraph>(
             PeaksProperty, TrimInProperty, TrimOutProperty, PlayheadProperty,
-            WaveBrushProperty, TrimmedBrushProperty, HandleBrushProperty, PlayheadBrushProperty);
+            WaveBrushProperty, TrimmedBrushProperty, HandleBrushProperty, PlayheadBrushProperty,
+            ShowMarkersProperty);
 
     public IReadOnlyList<float>? Peaks
     {
@@ -117,6 +123,12 @@ public class WaveformGraph : Control
         set => SetValue(PlayheadBrushProperty, value);
     }
 
+    public bool ShowMarkers
+    {
+        get => GetValue(ShowMarkersProperty);
+        set => SetValue(ShowMarkersProperty, value);
+    }
+
     /// <summary>Raised while a handle or the playhead is being dragged.</summary>
     public event EventHandler<TrimGesture>? Gesture;
 
@@ -130,6 +142,9 @@ public class WaveformGraph : Control
         base.OnPointerPressed(e);
 
         if (Bounds.Width <= 0)
+            return;
+
+        if (!ShowMarkers)
             return;
 
         var x = e.GetPosition(this).X;
@@ -146,10 +161,11 @@ public class WaveformGraph : Control
     {
         base.OnPointerMoved(e);
 
-        if (_dragging is not null)
+        if (ShowMarkers && _dragging is not null)
             Raise(e.GetPosition(this).X);
 
-        UpdateCursor(e.GetPosition(this).X);
+        if (ShowMarkers)
+            UpdateCursor(e.GetPosition(this).X);
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -235,6 +251,9 @@ public class WaveformGraph : Control
         }
 
         var handles = HandleBrush ?? Brushes.Orange;
+
+        if (!ShowMarkers)
+            return;
 
         // The cut regions get a wash as well as dimmed bars: a file whose trimmed part is silent has no
         // bars to dim, and the window has to be visible on one of those too.

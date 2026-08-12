@@ -605,6 +605,9 @@ public static class ProjectValidator
                         $"Q{cue.Number} has a {lane.Kind} lane point outside the 0–1 range."));
                 if (point.X < previousX)
                     issues.Add(Error("cue", id, $"Q{cue.Number} has an out-of-order {lane.Kind} lane."));
+                if (!Enum.IsDefined(point.CurveToNext))
+                    issues.Add(Error("cue", id,
+                        $"Q{cue.Number} has a {lane.Kind} lane with an unknown segment curve."));
                 previousX = point.X;
             }
 
@@ -668,6 +671,8 @@ public static class ProjectValidator
                 issues.Add(Error(kind, id, $"{label} curve has a point outside the finite 0–1 range."));
             if (point.Progress < previous)
                 issues.Add(Error(kind, id, $"{label} curve points are out of order."));
+            if (!Enum.IsDefined(point.CurveToNext))
+                issues.Add(Error(kind, id, $"{label} curve has an unknown segment law."));
             previous = point.Progress;
         }
     }

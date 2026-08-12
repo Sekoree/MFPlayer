@@ -38,6 +38,16 @@ public partial class SettingsWindow : Window
     private void OnResetHotkeys(object? sender, RoutedEventArgs e) =>
         (DataContext as SettingsViewModel)?.ResetHotkeys();
 
+    private void OnEditStopFade(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not SettingsViewModel settings || settings.StopFadeEditor() is not { } editor)
+            return;
+
+        var window = new CurveEditorWindow(editor);
+        window.Closed += (_, _) => settings.RefreshStopFade();
+        window.ShowDialog(this);
+    }
+
     /// <summary>Clears one part of the media cache. Everything here re-derives from the media.</summary>
     private void OnClearCache(object? sender, RoutedEventArgs e)
     {

@@ -1,3 +1,4 @@
+using HaCue2.Core.Journal;
 using HaCue2.Core.Media;
 using HaCue2.Core.Model;
 using HaCue2.Session;
@@ -64,11 +65,25 @@ public static class TimelinePresentation
             });
 
             foreach (var lane in EffectLanes(child))
+            {
+                var knots = lane.Points
+                    .Select(point => new CurveKnot(
+                        point.X, point.Y, CurveToNext: point.CurveToNext))
+                    .ToList();
                 lanes.Add(new TimelineLane
                 {
                     Name = $"fx · {Name(lane.Kind)}",
                     SubjectId = child.Id,
                     IsEffect = true,
+                    EffectLaneId = lane.Id,
+                    EffectKind = lane.Kind,
+                    EffectLeft = start,
+                    EffectWidth = Math.Max(width, 0.004),
+                    Points =
+                    [
+                        .. knots.Select(knot => new CurvePoint(knot.X, 1 - knot.Y)),
+                    ],
+                    Shape = CurveLibrary.Shape(knots),
                     // Lane points are already fractions of the CUE; scale them into the group's span so
                     // an envelope sits over the clip it belongs to rather than across the whole row.
                     Envelope =
@@ -80,6 +95,7 @@ public static class TimelinePresentation
                             Math.Clamp(1 - point.Y, 0, 1))),
                     ],
                 });
+            }
         }
 
         return lanes;

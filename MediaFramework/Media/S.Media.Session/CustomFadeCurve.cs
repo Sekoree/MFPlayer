@@ -5,7 +5,13 @@ namespace S.Media.Session;
 /// <param name="Level">Gain multiplier at that position, 0 to 1.</param>
 /// <param name="Hold">When true the level stays flat until the next point instead of interpolating
 /// toward it - a step rather than a ramp.</param>
-public readonly record struct FadeCurvePoint(double Progress, double Level, bool Hold = false);
+/// <param name="CurveToNext">The interpolation law from this point to the next. The default preserves
+/// every document written before shaped custom segments were introduced.</param>
+public readonly record struct FadeCurvePoint(
+    double Progress,
+    double Level,
+    bool Hold = false,
+    FadeCurve CurveToNext = FadeCurve.Linear);
 
 /// <summary>
 /// A user-drawn fade shape: a normalized point list evaluated the same way a volume envelope is.
@@ -80,11 +86,12 @@ public sealed record CustomFadeCurve
                 return (float)to.Level;
 
             // Same interpolation the envelope sampler uses, so a shape drawn in the editor behaves
-            // identically whether it is applied as a fade or as automation.
+            // identically whether it is applied as a fade or as automation. Linear remains the
+            // serialized default, so old custom curves keep their exact shape.
             var t = (progress - from.Progress) / span;
             return FadeCurves.LevelBetween(
                 (float)from.Level, (float)to.Level, TimeSpan.FromSeconds(t), TimeSpan.FromSeconds(1),
-                FadeCurve.Linear);
+                from.CurveToNext);
         }
 
         return (float)_points[^1].Level;

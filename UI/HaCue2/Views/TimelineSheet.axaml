@@ -109,7 +109,8 @@
                     <Border Classes="tllane"
                             Classes.fx="{Binding IsEffect}"
                             Classes.grp="{Binding IsGroup}"
-                            Classes.sel="{Binding IsSelected}">
+                            Classes.sel="{Binding IsSelected}"
+                            Height="{Binding Height}">
                       <Grid ColumnDefinitions="168,*">
                         <!-- Clicking a lane's label selects its cue, the same selection the tree and
                              the inspector act on — how "+ EFFECT LANE" and DUCK know which cue. -->
@@ -117,21 +118,50 @@
                                 BorderThickness="0,0,1,0" Padding="8,8,8,0"
                                 Background="Transparent"
                                 PointerPressed="OnLaneLabelPressed">
-                          <TextBlock Classes="mono dim2 small ellipsis" Text="{Binding Name}" />
+                          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                            <TextBlock Grid.Column="0" Classes="mono dim2 small ellipsis"
+                                       VerticalAlignment="Center" Text="{Binding Name}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="3"
+                                        IsVisible="{Binding IsEffect}">
+                              <Button Classes="icon" Content="{Binding ExpandLabel}"
+                                      Click="OnToggleEffectLane"
+                                      ToolTip.Tip="Expand this lane into an inline point editor" />
+                              <Button Classes="icon" Content="CURVE…" Click="OnOpenLaneEditor"
+                                      ToolTip.Tip="Edit exact time/value fields and segment curves" />
+                            </StackPanel>
+                          </Grid>
                         </Border>
 
-                        <Panel Grid.Column="1">
-                          <!-- Fractions of the lane, not a stretched geometry: an envelope that
-                               covers only part of a cue must be drawn only over that part. -->
-                          <c:EnvelopeGraph Points="{Binding Envelope}"
-                                           IsVisible="{Binding HasEnvelope}"
-                                           Stroke="{DynamicResource GelAmber}" StrokeThickness="1"
-                                           Margin="0,4" />
-
+                        <Panel Grid.Column="1" ClipToBounds="True">
                           <c:ClipLane Clips="{Binding Clips}"
                                       IsEditable="{Binding IsEditable}"
+                                      IsVisible="{Binding !IsEffect}"
                                       Gesture="OnClipGesture"
                                       GestureCompleted="OnClipGestureCompleted" />
+
+                          <!-- The editor is arranged over the owning cue's exact span, so its local
+                               0..1 X remains cue-relative while the surrounding ruler stays group-time. -->
+                          <c:FractionPanel IsVisible="{Binding IsEffect}" ClipToBounds="True">
+                            <Grid c:Fraction.Left="{Binding EffectLeft}"
+                                  c:Fraction.Width="{Binding EffectWidth}"
+                                  c:Fraction.Height="1">
+                              <c:WaveformGraph Peaks="{Binding Peaks}"
+                                               IsVisible="{Binding HasWaveform}"
+                                               IsHitTestVisible="False"
+                                               ShowMarkers="False"
+                                               Opacity="0.28"
+                                               WaveBrush="{DynamicResource BoothInk2}" />
+                              <c:EnvelopeGraph Points="{Binding Shape}"
+                                               IsVisible="{Binding !IsExpanded}"
+                                               IsHitTestVisible="False"
+                                               Stroke="{DynamicResource GelAmber}"
+                                               StrokeThickness="1.4" Margin="0,4" />
+                              <c:CurveCanvas Points="{Binding Points}" Shape="{Binding Shape}"
+                                             IsVisible="{Binding IsExpanded}"
+                                             Gesture="OnLaneGesture"
+                                             GestureCompleted="OnLaneGestureCompleted" />
+                            </Grid>
+                          </c:FractionPanel>
                         </Panel>
                       </Grid>
                     </Border>
