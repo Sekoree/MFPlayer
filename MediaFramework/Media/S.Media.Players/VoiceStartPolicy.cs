@@ -149,9 +149,12 @@ internal sealed class VoiceStartPolicy
         if (_appliedGenlock is not null)
             return GenlockResume(router, clock, videoOnlyMaster ?? _appliedGenlock);
 
+        // Resolved THROUGH decorators (AudioOutputCapabilities): a cue-local audio insert wraps the
+        // producer, and a direct type-test on the wrapper silently fell back to PlainStart - losing the
+        // sibling-alignment pre-roll for every cue that had an effect on it.
         if (router.PrimaryOutputId is { } primaryId
             && router.TryGetOutput(primaryId, out var primaryOutput)
-            && primaryOutput is IPreRollableOutput preRollable)
+            && AudioOutputCapabilities.Find<IPreRollableOutput>(primaryOutput) is { } preRollable)
         {
             return PreRollRelease(router, clock, preRollable);
         }

@@ -15,9 +15,15 @@ namespace S.Media.Decode.FFmpeg.Audio;
 /// </para>
 /// </remarks>
 public class ResamplingAudioOutput
-    : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IAudioOutputLatency, IDisposable
+    : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IAudioOutputLatency,
+      IAudioOutputDecorator, IDisposable
 {
     protected readonly IAudioOutput Inner;
+
+    /// <summary>Lets <see cref="AudioOutputCapabilities"/> resolve the sink's faces through this
+    /// resampler instead of every caller having to know it is here.</summary>
+    IAudioOutput IAudioOutputDecorator.InnerOutput => Inner;
+
     protected readonly AudioFormat RouterFormat;
     private readonly object _gate = new();
     private AudioResampler? _swr;

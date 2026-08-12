@@ -104,6 +104,71 @@ public sealed class BusEffectTests
             Assert.True(samples[i] <= samples[i - 1] + 1e-6f, "gain-down ramp must be monotonic");
     }
 
+    /// <summary>An insert must OPEN at its authored value, not glide to it from unity. Configure runs when
+    /// the insert is built (cue fire, route rebuild), where there is nothing to glide from - a cue authored
+    /// at −20 dB used to emit ~9 ms of near-full audio at the head of every fire.</summary>
+    [Fact]
+    public void GainAudioEffect_OpensAtItsConfiguredValueInsteadOfSlewingDownFromUnity()
+    {
+        var gain = new GainAudioEffect { GainDb = -20 };
+        gain.Configure(new AudioFormat(48_000, 1));
+
+        var samples = new float[64];
+        Array.Fill(samples, 1f);
+        gain.Process(samples, 0);
+
+        var expected = (float)Math.Pow(10, -20 / 20d);
+        Assert.Equal(expected, samples[0], 4); // the FIRST sample is already at level
+        Assert.Equal(expected, samples[^1], 4);
+    }
+
+    /// <summary>Smoothing is a DURATION, not a slew rate. A fixed per-frame step crossed a full 0→1 swing
+    /// in the requested time but a small change far faster and a boost slower - so a 10 ms request for
+    /// 0→+12 dB overran the 25 ms automation tick and the effect lagged its own envelope.</summary>
+    [Fact]
+    public void GainAudioEffect_SmoothingTakesTheRequestedTimeRegardlessOfDistance()
+    {
+        static int FramesToSettle(double fromDb, double toDb)
+        {
+            var gain = new GainAudioEffect { GainDb = fromDb };
+            gain.Configure(new AudioFormat(48_000, 1));
+            IAutomatableAudioBusEffect automatable = gain;
+            Assert.True(automatable.TrySetParameter(
+                GainAudioEffect.GainParameterId, (float)toDb, TimeSpan.FromMilliseconds(10)));
+
+            var target = (float)Math.Pow(10, toDb / 20d);
+            var samples = new float[48_000];
+            Array.Fill(samples, 1f);
+            gain.Process(samples, 0);
+            for (var i = 0; i < samples.Length; i++)
+                if (Math.Abs(samples[i] - target) < 1e-4f)
+                    return i;
+            return samples.Length;
+        }
+
+        // 10 ms at 48 kHz = 480 frames. Both a small cut and a large boost land near it.
+        var small = FramesToSettle(-6, -3);
+        var large = FramesToSettle(0, 12);
+        Assert.InRange(small, 400, 560);
+        Assert.InRange(large, 400, 560);
+    }
+
+    /// <summary>−inf dB is an explicit MUTE. Clamping non-finite input to the descriptor default answered
+    /// it with 0 dB - turning a mute into full level, the worst possible direction for an audio failure.</summary>
+    [Fact]
+    public void GainAudioEffect_NegativeInfinityMutesInsteadOfFallingBackToUnity()
+    {
+        IAutomatableAudioBusEffect gain = new GainAudioEffect();
+        Assert.True(gain.TrySetParameter(
+            GainAudioEffect.GainParameterId, float.NegativeInfinity, TimeSpan.Zero));
+
+        var descriptor = Assert.Single(gain.Parameters);
+        Assert.Equal(descriptor.Minimum, descriptor.Clamp(float.NegativeInfinity));
+        Assert.Equal(descriptor.Maximum, descriptor.Clamp(float.PositiveInfinity));
+        // NaN carries no direction, so it is the one case that may fall back to the default.
+        Assert.Equal(descriptor.Default, descriptor.Clamp(float.NaN));
+    }
+
     [Fact]
     public void GainAudioEffect_PublishesStableAutomatableMetadataAndClampsUpdates()
     {
@@ -155,6 +220,56 @@ public sealed class BusEffectTests
         Assert.False(plain is IPlaybackClock);
         Assert.False(plain is IAudioOutputPlaybackStats);
         plain.Dispose();
+    }
+
+    /// <summary>A capability the wrapper does not re-expose must still be reachable THROUGH it.
+    /// Regression: inserting one gain effect in front of a program-bus producer made
+    /// <c>output as IGrantPacedOutput</c> return null, so every dropped chunk burned pacing credit until
+    /// the voice went permanently silent - and made the pre-roll type-test fail, losing sibling start
+    /// alignment. Wrappers declare what they wrap; lookups resolve through the chain.</summary>
+    [Fact]
+    public void AudioEffectOutput_Wrap_ResolvesCapabilitiesItDoesNotItselfImplement()
+    {
+        var inner = new PreRollableAudioOutput(new AudioFormat(48_000, 2));
+        using var wrapped = AudioEffectOutput.Wrap(inner, [new ScaleEffect(0.5f)]);
+
+        // The wrapper deliberately does not implement the face...
+        Assert.False(wrapped is IPreRollableOutput);
+        // ...but it declares its inner sink, so the capability is still resolvable.
+        Assert.Same(inner, AudioOutputCapabilities.Find<IPreRollableOutput>(wrapped));
+        Assert.Same(inner, ((IAudioOutputDecorator)wrapped).InnerOutput);
+
+        // Nothing is invented for a sink that genuinely lacks the face.
+        using var plain = AudioEffectOutput.Wrap(new CapturingAudioOutput(new AudioFormat(48_000, 2)), []);
+        Assert.Null(AudioOutputCapabilities.Find<IPreRollableOutput>(plain));
+    }
+
+    /// <summary>Capability resolution walks a MULTI-level chain and cannot be hung by a cyclic one.</summary>
+    [Fact]
+    public void CapabilityLookupWalksNestedWrappersAndSurvivesACycle()
+    {
+        var inner = new PreRollableAudioOutput(new AudioFormat(48_000, 2));
+        using var once = AudioEffectOutput.Wrap(inner, [new ScaleEffect(0.5f)]);
+        using var twice = AudioEffectOutput.Wrap(once, [new ScaleEffect(0.5f)]);
+
+        Assert.Same(inner, AudioOutputCapabilities.Find<IPreRollableOutput>(twice));
+        Assert.Null(AudioOutputCapabilities.Find<IPreRollableOutput>(new SelfWrappingOutput()));
+        Assert.Null(AudioOutputCapabilities.Find<IPreRollableOutput>(null));
+    }
+
+    private sealed class PreRollableAudioOutput(AudioFormat format) : IAudioOutput, IPreRollableOutput
+    {
+        public AudioFormat Format => format;
+        public void Submit(ReadOnlySpan<float> packedSamples) { }
+        public void BeginPreRoll() { }
+        public void EndPreRoll() { }
+    }
+
+    private sealed class SelfWrappingOutput : IAudioOutput, IAudioOutputDecorator
+    {
+        public AudioFormat Format => new(48_000, 2);
+        public void Submit(ReadOnlySpan<float> packedSamples) { }
+        public IAudioOutput InnerOutput => this;
     }
 
     [Fact]

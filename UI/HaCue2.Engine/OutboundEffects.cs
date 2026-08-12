@@ -71,7 +71,7 @@ internal sealed class OutboundEffects : IAsyncDisposable
                     continue;
                 }
 
-                var points = Points(project, track);
+                var points = Points(project, track, duration);
                 if (points.Count == 0)
                     continue;
 
@@ -241,7 +241,14 @@ internal sealed class OutboundEffects : IAsyncDisposable
 
     private static IReadOnlyList<AutomationTrack> Tracks(CueNode cue) => CueAutomation.Of(cue);
 
-    private static IReadOnlyList<OutboundRampPoint> Points(HaCueProject project, AutomationTrack track)
+    /// <summary>Lowers a track to ramp points, TRUNCATED at the run's authored duration.
+    /// <para>Keys beyond the cue's duration are preserved in the document but must never be played, and in
+    /// particular must never be jumped to on completion: the runner's "land exactly on the final value"
+    /// rule would otherwise slam a desk to a value the show never reached (a 1 s automation cue whose track
+    /// is keyed out to 5 s sent 0.0…0.2 and then hard-jumped to 1.0). Truncating here means the terminal
+    /// value IS the value at the cue's end, so landing on it stays correct.</para></summary>
+    private static IReadOnlyList<OutboundRampPoint> Points(
+        HaCueProject project, AutomationTrack track, TimeSpan duration)
     {
         var keys = track.Keyframes
             .Where(key => key.TimeMs >= 0 && double.IsFinite(key.Value))
@@ -284,7 +291,33 @@ internal sealed class OutboundEffects : IAsyncDisposable
         }
         if (keys.Count > 0)
             points.Add(new OutboundRampPoint(TimeSpan.FromMilliseconds(keys[^1].TimeMs), keys[^1].Value));
-        return points;
+
+        return Truncate(points, project, track, duration);
+    }
+
+    /// <summary>Drops everything past <paramref name="duration"/> and lands the ramp on the track's value
+    /// AT that instant (sampled through the one shared evaluator, so the truncated endpoint agrees with
+    /// what every other actuator reads at the same time).</summary>
+    private static IReadOnlyList<OutboundRampPoint> Truncate(
+        List<OutboundRampPoint> points,
+        HaCueProject project,
+        AutomationTrack track,
+        TimeSpan duration)
+    {
+        if (points.Count == 0 || duration <= TimeSpan.Zero || points[^1].Time <= duration)
+            return points;
+
+        var kept = points.Where(point => point.Time < duration).ToList();
+        var endValue = AutomationEvaluator.Sample(
+            track, project, (long)duration.TotalMilliseconds, points[0].Value);
+
+        // Carry the outgoing law of the segment the truncation lands inside, so the final approach keeps
+        // its authored shape instead of silently becoming linear.
+        var law = kept.Count > 0 ? kept[^1].CurveToNext : FadeCurve.Linear;
+        if (kept.Count == 0)
+            kept.Add(new OutboundRampPoint(TimeSpan.Zero, points[0].Value, law));
+        kept.Add(new OutboundRampPoint(duration, endValue));
+        return kept;
     }
 
     public async ValueTask DisposeAsync()

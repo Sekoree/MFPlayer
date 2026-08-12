@@ -127,13 +127,16 @@ public sealed unsafe class NativeAudioEffectFactory : IDisposable
         ? ""
         : System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)value) ?? "";
 
+    /// <summary>Releases this adapter's lease. It deliberately does NOT destroy the native factory: the
+    /// registered capability is plugin-owned and <c>AbiLoadedPlugin</c> destroys it exactly once during
+    /// unload (the rule the constructor's failure path already states). Destroying here as well was a
+    /// double-destroy waiting for the first caller to dispose a factory - and, because nothing disposed
+    /// them, it also meant a plugin that registered any effect could never be unloaded at all.</summary>
     public void Dispose()
     {
         if (_disposed)
             return;
         _disposed = true;
-        if (_vt->Destroy != null)
-            _vt->Destroy(_self);
         _lease.Dispose();
     }
 }

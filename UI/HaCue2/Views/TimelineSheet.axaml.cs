@@ -83,6 +83,8 @@ public partial class TimelineSheet : UserControl
 
     private void OnLaneGestureCompleted(object? sender, EventArgs e) => Timeline?.EndGesture();
 
+    private void OnLaneGestureCancelled(object? sender, EventArgs e) => Timeline?.CancelGesture();
+
     private void OnSelectAllKeyframes(object? sender, RoutedEventArgs e) => SelectAllKeyframes(sender);
 
     private void OnCanvasSelectAllKeyframes(object? sender, EventArgs e) => SelectAllKeyframes(sender);

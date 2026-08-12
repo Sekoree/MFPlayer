@@ -90,7 +90,10 @@ public sealed partial class AudioRouter
             _router = router;
             _sinkId = outputId;
             _sink = output;
-            _grantSink = output as IGrantPacedOutput;
+            // Resolved THROUGH decorators: an effect insert in front of a program-bus producer is the
+            // normal shape for a HaCue2 cue, and a plain `as` test returned null for it - every dropped
+            // chunk then burned pacing credit until the voice went permanently silent.
+            _grantSink = AudioOutputCapabilities.Find<IGrantPacedOutput>(output);
             _floatsPerChunk = floatsPerChunk;
             _pumpCapacityChunks = capacityChunks;
             _ready = new BlockingCollection<float[]>(boundedCapacity: capacityChunks);

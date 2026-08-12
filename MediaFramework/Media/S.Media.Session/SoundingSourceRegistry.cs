@@ -64,8 +64,16 @@ internal sealed class SoundingLevel
     /// voices, crossfade tails - starts from this.</summary>
     public float Fade { get; set; } = 1f;
 
-    /// <summary>The volume-envelope factor (1 = no automation).</summary>
-    public float Envelope { get; set; } = 1f;
+    /// <summary>The cue's AUTHORED volume, live-editable while it sounds. Held SEPARATE from
+    /// <see cref="Envelope"/> so an operator's fader move and the envelope runner are not two writers to
+    /// one slot - the defect this replaces: the runner re-sampled the compiled static level every 25 ms and
+    /// silently reverted every live volume edit. Mirrors the video side's authored/automation split.</summary>
+    public float Base { get; set; } = 1f;
+
+    /// <summary>The cue-owned volume automation at the current clip position, or null when the cue has no
+    /// volume track. <c>cue.audio.volume</c> composes as REPLACE-AUTHORED, so a sampled value SHADOWS
+    /// <see cref="Base"/> rather than multiplying it, and clearing it reveals the authored value again.</summary>
+    public float? Envelope { get; set; }
 
     /// <summary>An automation-cue override. Null exposes the continuously sampled cue-owned envelope.</summary>
     public float? ControllerEnvelope { get; set; }
@@ -77,8 +85,12 @@ internal sealed class SoundingLevel
     /// fades always compose from the operator-authored level, never from a trimmed product.</summary>
     public float Master { get; set; } = 1f;
 
+    /// <summary>The cue-volume component alone: automation when a track owns it, else the authored base.
+    /// Excludes the controller override so an observer can still see what a claim is shadowing.</summary>
+    public float CueVolume => Envelope ?? Base;
+
     /// <summary>The gain actually written to the routes.</summary>
-    public float Effective => Source * Fade * (ControllerEnvelope ?? Envelope) * Modifier * Master;
+    public float Effective => Source * Fade * (ControllerEnvelope ?? CueVolume) * Modifier * Master;
 }
 
 /// <summary>One registered sounding source. <see cref="SoundingSourceRole.Program"/> sources MUST supply the

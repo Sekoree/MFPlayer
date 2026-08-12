@@ -18,6 +18,14 @@ namespace S.Media.Routing;
 /// implemented on this class unconditionally, for the reason set out on
 /// <see cref="AudioOutputLatency"/>.</para>
 ///
+/// <para>The subclass matrix covers only the faces a caller may reasonably type-test on the WRAPPER. For
+/// everything else - pacing credit, pre-roll, the pipeline lead clock - this type declares
+/// <see cref="IAudioOutputDecorator"/> and callers resolve through
+/// <see cref="AudioOutputCapabilities.Find{T}"/>. Enumerating faces here does not scale and has failed
+/// before: <see cref="ProgramBusProducer"/> alone carries six of them, and inserting one gain effect in
+/// front of it silently dropped the pacing-credit face (8 leaked chunks wedge the voice) and the
+/// pre-roll face (0-180 ms of sibling start scatter).</para>
+///
 /// <para><strong>Ownership (review H4):</strong> the wrapper always owns its EFFECTS;
 /// <paramref name="disposeInner"/> says whether disposing the wrapper also disposes the terminal sink
 /// (session-owned device) or leaves it alone (borrowed carrier - the host releases it separately).</para>
@@ -28,7 +36,8 @@ namespace S.Media.Routing;
 /// nothing can be inside them by then) or, if no further submit comes, in <see cref="Dispose"/>.</para>
 /// </summary>
 public class AudioEffectOutput
-    : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IAudioOutputLatency, IDisposable
+    : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IAudioOutputLatency,
+      IAudioOutputDecorator, IDisposable
 {
     private readonly IAudioOutput _inner;
     private readonly bool _disposeInner;
@@ -251,6 +260,7 @@ public sealed class GainAudioEffect : IAutomatableAudioBusEffect
             if (double.IsNegativeInfinity(value))
             {
                 Volatile.Write(ref _targetLinear, 0f);
+                RefreshRamp();
                 return;
             }
 
@@ -260,6 +270,9 @@ public sealed class GainAudioEffect : IAutomatableAudioBusEffect
             if (!double.IsFinite(linear) || linear > float.MaxValue)
                 return;
             Volatile.Write(ref _targetLinear, (float)linear);
+            // The step is sized from the distance to the NEW target, so every route to a value change -
+            // this property, TrySetParameter, or a config load - honours the smoothing duration.
+            RefreshRamp();
         }
     }
 
@@ -268,6 +281,10 @@ public sealed class GainAudioEffect : IAutomatableAudioBusEffect
         _channels = Math.Max(1, format.Channels);
         _sampleRate = Math.Max(1, format.SampleRate);
         RefreshRamp();
+        // SETTLE on the configured target rather than ramping to it from unity. Configure runs when the
+        // insert is built (cue fire, route rebuild), where there is no previous value to glide from: a cue
+        // authored at -20 dB used to emit ~9 ms of near-FULL audio at the head of every fire.
+        _currentLinear = Volatile.Read(ref _targetLinear);
     }
 
     public bool TrySetParameter(string parameterId, float value, TimeSpan smoothing)
@@ -280,15 +297,23 @@ public sealed class GainAudioEffect : IAutomatableAudioBusEffect
             ? Math.Clamp(smoothing.TotalSeconds, 0, 10)
             : .01;
         Volatile.Write(ref _requestedSmoothingSeconds, (float)seconds);
-        RefreshRamp();
+        // The setter re-sizes the step from the distance to the new target, so the transition takes the
+        // requested DURATION rather than running at a fixed slew rate.
         GainDb = descriptor.Clamp(value);
         return true;
     }
 
+    /// <summary>Sizes the per-frame step so the CURRENT distance is crossed in the requested time.
+    /// <para>A fixed <c>1/(rate×seconds)</c> step is a slew RATE, not a duration: it crossed a full 0→1
+    /// swing in the requested time but a small change far quicker and a >1 boost slower - a 10 ms request
+    /// for −6→−3 dB finished in ~2 ms, while 0→+12 dB took ~30 ms, overrunning the 25 ms automation tick so
+    /// the effect lagged its own envelope.</para></summary>
     private void RefreshRamp()
     {
-        var frames = Math.Max(1, _sampleRate * Volatile.Read(ref _requestedSmoothingSeconds));
-        Volatile.Write(ref _rampPerFrame, 1f / frames);
+        var seconds = Volatile.Read(ref _requestedSmoothingSeconds);
+        var distance = Math.Abs(Volatile.Read(ref _targetLinear) - _currentLinear);
+        var frames = Math.Max(1f, _sampleRate * seconds);
+        Volatile.Write(ref _rampPerFrame, Math.Max(distance / frames, 1e-7f));
     }
 
     public void Process(Span<float> interleaved, long samplePosition)

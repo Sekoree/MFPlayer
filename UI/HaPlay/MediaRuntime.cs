@@ -128,8 +128,10 @@ internal static class MediaRuntime
                     S.Media.Present.SDL3.SDL3OffscreenGlContext.TryCreate;
             }
 
-            // Plugin audio effects register LAST (same rule as the media registries: a plugin extends but
-            // never silently pre-empts a built-in kind - AddAudioEffect throws on a duplicate kind).
+            // Plugin audio effects register LAST. NOTE: unlike the media registries this is last-wins -
+            // BusRegistryBuilder.AddAudioEffect assigns by kind, so a plugin registering a built-in kind
+            // REPLACES it silently. Registering last is what makes that the plugin author's explicit
+            // override rather than an ordering accident; it is not a duplicate-kind guard.
             if (_plugins is { } plugins)
             {
                 try

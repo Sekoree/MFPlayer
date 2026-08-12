@@ -38,7 +38,15 @@ public sealed record CurveGesture(
     bool BypassSnap = false,
     bool ConstrainAxis = false,
     bool IsNudge = false,
-    bool Accelerated = false);
+    bool Accelerated = false)
+{
+    /// <summary>Set by the handler when an <see cref="CurveGestureKind.Add"/> actually created a keyframe.
+    /// A refused add (one already sits at this time) must NOT leave the canvas dragging: it used to arm its
+    /// "resolve the new point on the first move" sentinel unconditionally, and that sentinel then resolved
+    /// to whatever was previously SELECTED - so a press on empty canvas near an existing key dragged an
+    /// unrelated keyframe to the pointer.</summary>
+    public bool Accepted { get; set; }
+}
 
 /// <summary>
 /// Draws a curve and turns drags on its points into edits.
@@ -196,13 +204,22 @@ public partial class CurveCanvas : UserControl
 
         if (index < 0 && AddOnEmptyPointerPress)
         {
-            Gesture?.Invoke(this, new CurveGesture(
+            var add = new CurveGesture(
                 CurveGestureKind.Add,
                 -1,
                 position.X / bounds.Width,
                 position.Y / bounds.Height,
                 e.KeyModifiers.HasFlag(KeyModifiers.Alt),
-                e.KeyModifiers.HasFlag(KeyModifiers.Shift)));
+                e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+            Gesture?.Invoke(this, add);
+            if (!add.Accepted)
+            {
+                // Refused (a key already occupies this time). Take no capture and arm no sentinel, so the
+                // gesture is inert rather than turning into a drag of the previous selection.
+                e.Handled = true;
+                return;
+            }
+
             // The binding projection of the newly-selected key may update after this handler returns.
             // Keep a sentinel until the first move can resolve the selected point from the new list.
             _draggedIndex = int.MaxValue;

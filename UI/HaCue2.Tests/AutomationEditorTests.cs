@@ -228,6 +228,66 @@ public sealed class AutomationEditorTests
         }
     }
 
+    /// <summary>Copy/paste must carry NATIVE milliseconds. It used to normalize through the source cue's
+    /// DurationMs and re-multiply by the destination's, so keys 500 ms apart copied out of a 45-minute cue
+    /// collapsed to ~5 ms when pasted into a 30-second one - re-introducing the very defect absolute-time
+    /// automation exists to remove.</summary>
+    [Fact]
+    public void CopiedKeyframesKeepTheirMillisecondSpacingInAMuchShorterCue()
+    {
+        var first = new AutomationKeyframe { TimeMs = 1_635_000, Value = -6 };
+        var second = new AutomationKeyframe { TimeMs = 1_635_500, Value = -12 };
+        var (source, _, _) = Editor(first, second);
+        source.SelectAll();
+        var text = source.Copy();
+        Assert.NotNull(text);
+
+        var (destination, shortTrack, _) = ShortEditor();
+        destination.CursorMs = 2_000;
+        Assert.True(destination.Paste(text));
+
+        // 500 ms apart before, 500 ms apart after - anchored at the playhead, not rescaled.
+        Assert.Equal([2_000L, 2_500L], shortTrack.Keyframes.OrderBy(key => key.TimeMs).Select(key => key.TimeMs));
+        // Native dB values survive too; they are not remapped through the descriptor's range.
+        Assert.Equal([-6d, -12d], shortTrack.Keyframes.OrderBy(key => key.TimeMs).Select(key => key.Value));
+    }
+
+    /// <summary>A refused add (a key already occupies that time) must not report acceptance: the canvas
+    /// takes capture on acceptance alone, and an unconditional "accept" armed a sentinel that resolved to
+    /// the PREVIOUS selection - so pressing empty canvas near an existing key dragged an unrelated key.</summary>
+    [Fact]
+    public void ARefusedAddIsNotReportedAsAccepted()
+    {
+        var existing = new AutomationKeyframe { TimeMs = 1_635_100, Value = -6 };
+        var (editor, track, _) = Editor(existing);
+        editor.ViewStartMs = 1_635_000;
+        editor.ViewLengthMs = 1_000;
+
+        // Same snap cell as the existing key, but well away from it vertically.
+        var refused = new CurveGesture(CurveGestureKind.Add, -1, 0.1, 0.9);
+        editor.Apply(refused);
+        Assert.False(refused.Accepted);
+        Assert.Single(track.Keyframes);
+
+        var accepted = new CurveGesture(CurveGestureKind.Add, -1, 0.5, 0.5);
+        editor.Apply(accepted);
+        Assert.True(accepted.Accepted);
+        editor.EndGesture();
+        Assert.Equal(2, track.Keyframes.Count);
+    }
+
+    private static (AutomationEditorViewModel Editor, AutomationTrack Track, ProjectJournal Journal) ShortEditor()
+    {
+        var track = new AutomationTrack
+        {
+            Target = new AutomationTargetRef { PropertyId = AutomationPropertyIds.CueVolume },
+        };
+        var media = new MediaCueNode { SourceDurationMs = 30_000, AutomationTracks = [track] };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [media] }] };
+        var journal = new ProjectJournal(project);
+        return (new AutomationEditorViewModel(journal, media, track, TimeSpan.FromSeconds(30)), track, journal);
+    }
+
     private static (AutomationEditorViewModel Editor, AutomationTrack Track, ProjectJournal Journal) Editor(
         params AutomationKeyframe[] keys)
     {

@@ -298,13 +298,29 @@ public static unsafe class AbiPluginHost
         return result;
     }
 
+    /// <summary>Binds every audio-effect capability the plugin registered.
+    /// <para>The factory ctor READS AND VALIDATES the plugin's parameter descriptors, so it can throw on a
+    /// malformed one. Each factory holds a lease that keeps the library mapped, so a throw part-way through
+    /// must not abandon the leases already taken: that pinned the <c>.so</c> for the life of the process
+    /// (<c>TryUnload</c> could never fire) while the caller - which only logs - lost every effect the
+    /// plugin offered, audio and video alike.</para></summary>
     public static IReadOnlyList<(string Kind, NativeAudioEffectFactory Factory)> BindAudioEffects(AbiLoadedPlugin plugin)
     {
         ArgumentNullException.ThrowIfNull(plugin);
         var result = new List<(string, NativeAudioEffectFactory)>();
-        foreach (var cap in plugin.Registered)
-            if (cap.Capability == "audio-effect")
-                result.Add((cap.Id, new NativeAudioEffectFactory(cap.VTable, cap.Self, plugin.AcquireLease())));
+        try
+        {
+            foreach (var cap in plugin.Registered)
+                if (cap.Capability == "audio-effect")
+                    result.Add((cap.Id, new NativeAudioEffectFactory(cap.VTable, cap.Self, plugin.AcquireLease())));
+        }
+        catch
+        {
+            foreach (var (_, factory) in result)
+                factory.Dispose();
+            throw;
+        }
+
         return result;
     }
 

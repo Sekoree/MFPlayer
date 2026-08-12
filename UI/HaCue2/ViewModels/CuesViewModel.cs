@@ -2559,6 +2559,8 @@ public sealed partial class TimelineViewModel : ObservableObject
             selected.Clear();
             selected.Add(added);
             _effectSelectionAnchors[laneId] = added;
+            // Only reached when the Add passed its proximity guard, so the canvas may begin dragging it.
+            gesture.Accepted = true;
         }
         Refresh();
         return true;
@@ -2709,6 +2711,19 @@ public sealed partial class TimelineViewModel : ObservableObject
         _automationGestureLaneId = null;
         _automationGestureKeyId = null;
         _automationGestureSelection = null;
+    }
+
+    /// <summary>Abandons the gesture (Escape). Unlike the dedicated editor - which holds a local draft and
+    /// simply discards it - this lane applies each motion as it goes, so cancelling means closing the
+    /// gesture's composite and undoing it. Either way Escape leaves the document as it was before the drag.
+    /// </summary>
+    public void CancelGesture()
+    {
+        var hadDrag = _drag is not null;
+        EndGesture();
+        if (hadDrag && _journal is { } journal && journal.CanUndo)
+            journal.Undo();
+        Refresh();
     }
 
     /// <summary>

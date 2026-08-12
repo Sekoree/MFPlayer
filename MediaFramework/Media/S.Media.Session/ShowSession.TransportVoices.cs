@@ -105,9 +105,13 @@ public sealed partial class ShowSession
         /// and a stop fade's capture keeps composing on top.</summary>
         public float ClipLevel => Level.Fade;
 
-        /// <summary>The clip's current volume-envelope factor (1 = no automation). Held SEPARATE from the
-        /// fade level so the envelope multiplies fades instead of polluting the level fades compose from.</summary>
-        public float EnvelopeLevel => Level.Envelope;
+        /// <summary>The clip's current cue-volume component: its volume automation when a track owns one,
+        /// else its authored (live-editable) level. Held SEPARATE from the fade level so cue volume composes
+        /// with fades instead of polluting the level fades compose from.</summary>
+        public float EnvelopeLevel => Level.CueVolume;
+
+        /// <summary>The clip's AUTHORED volume, whether or not automation is currently shadowing it.</summary>
+        public float BaseLevel => Level.Base;
 
         /// <summary>The live controller/group modifier, independent of cue-owned automation.</summary>
         public float ModifierLevel => Level.Modifier;
@@ -245,13 +249,39 @@ public sealed partial class ShowSession
         // monitor - under one cancellation, cancelled when the voice leaves the transport.
         private CancellationTokenSource? _clipWorkCts;
 
-        public void SetClipWorkCts(CancellationTokenSource cts) => _clipWorkCts = cts;
+        public void SetClipWorkCts(CancellationTokenSource cts)
+        {
+            _clipWorkCts = cts;
+            // The seeders belong to the clip work they were registered alongside: a replaced clip's lanes
+            // must not be re-applied by the next clip's seek.
+            _automationSeeders.Clear();
+        }
 
         public void CancelClipWork()
         {
             _clipWorkCts?.Cancel();
             _clipWorkCts?.Dispose();
             _clipWorkCts = null;
+            _automationSeeders.Clear();
+        }
+
+        /// <summary>Every automation lane running on this clip, as a function that applies its value at a
+        /// given clip position. Each runner registers its OWN step body here, so seeding and the 25 ms
+        /// steady-state loop can never drift apart.</summary>
+        private readonly List<Action<TimeSpan>> _automationSeeders = [];
+
+        public void RegisterAutomationSeeder(Action<TimeSpan> apply) => _automationSeeders.Add(apply);
+
+        /// <summary>Applies every lane at <paramref name="clipPosition"/> immediately. Called after a seek,
+        /// BEFORE playback resumes: the runners only tick every 25 ms, so without this a scrub landed in
+        /// the middle of a fade resumed at the PRE-seek value and audibly/visibly corrected a tick later
+        /// (a burst at full level when seeking backwards into a quiet passage).</summary>
+        public void SeedAutomationAt(TimeSpan clipPosition)
+        {
+            if (State == VoiceState.Retired)
+                return;
+            foreach (var apply in _automationSeeders)
+                apply(clipPosition);
         }
 
         private CancellationTokenSource? _releaseRampCts;
@@ -472,18 +502,35 @@ public sealed partial class ShowSession
                 PublishAudioEffect(instanceId, parameterId, value, TimeSpan.Zero);
         }
 
-        /// <summary>Applies one envelope-automation step: stores the factor and rewrites the route gains
-        /// through <see cref="ApplyAudioScale"/> so the fade × envelope product stays in that one place. An
-        /// unchanged factor (flat segment) skips the router writes entirely. Audio-only - layer opacities
-        /// belong to the fades.</summary>
+        /// <summary>Applies one envelope-automation step: stores the sampled cue volume and rewrites the
+        /// route gains through <see cref="ApplyAudioScale"/> so the fade × cue-volume product stays in that
+        /// one place. An unchanged value (flat segment) skips the router writes entirely. Audio-only - layer
+        /// opacities belong to the fades.
+        /// <para>Writes the AUTOMATION slot only. A live authored edit goes to
+        /// <see cref="ApplyBaseLevel"/>, so the two cannot revert each other.</para></summary>
         public void ApplyEnvelopeLevel(float level)
         {
             if (State == VoiceState.Retired)
                 return;
             level = Math.Clamp(level, 0f, VolumeEnvelopes.MaxLevel);
-            if (level == Level.Envelope)
+            if (Level.Envelope is { } current && level == current)
                 return;
             Level.Envelope = level;
+            ApplyAudioScale(RouteTargets, Level.Fade);
+        }
+
+        /// <summary>Live-edits the cue's AUTHORED volume. While a volume track owns the cue this is
+        /// shadowed rather than lost (<c>cue.audio.volume</c> is replace-authored), so the edit takes effect
+        /// as soon as the automation stops driving the cue - it is never silently discarded, and it can
+        /// never fight the envelope runner for one slot.</summary>
+        public void ApplyBaseLevel(float level)
+        {
+            if (State == VoiceState.Retired)
+                return;
+            level = Math.Clamp(level, 0f, VolumeEnvelopes.MaxLevel);
+            if (level == Level.Base)
+                return;
+            Level.Base = level;
             ApplyAudioScale(RouteTargets, Level.Fade);
         }
 

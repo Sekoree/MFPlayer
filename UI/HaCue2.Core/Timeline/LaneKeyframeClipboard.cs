@@ -110,6 +110,71 @@ public static class LaneKeyframeClipboard
                 knot.OutHandleX, knot.OutHandleY, knot.InHandleX, knot.InHandleY))]
             : null;
 
+    // --- automation keyframes (native units) --------------------------------------------------------
+
+    /// <summary>The automation format. Unlike the knot formats above it carries ABSOLUTE milliseconds and
+    /// the property's NATIVE value, because normalizing through a cue's duration is exactly the defect the
+    /// automation model exists to remove: copying keys 500 ms apart out of a 45-minute cue and pasting them
+    /// into a 30-second cue collapsed them to ~5 ms, and a dB→% paste rescaled by range ratio.</summary>
+    public const string AutomationHeader = "HaCue2-Automation/1";
+
+    /// <summary>One copied automation keyframe: time RELATIVE to the first copied key, native value.</summary>
+    public readonly record struct AutomationClip(long OffsetMs, double Value, bool Hold, FadeCurve Law);
+
+    public static string EncodeAutomation(
+        IReadOnlyList<AutomationKeyframe> keys, IReadOnlySet<Guid> selected)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        ArgumentNullException.ThrowIfNull(selected);
+        var chosen = keys.Where(key => selected.Contains(key.Id)).OrderBy(key => key.TimeMs).ToList();
+        if (chosen.Count == 0)
+            return "";
+
+        var anchor = chosen[0].TimeMs;
+        var lines = new List<string> { AutomationHeader };
+        lines.AddRange(chosen.Select(key => string.Join(";",
+            (key.TimeMs - anchor).ToString(CultureInfo.InvariantCulture),
+            Number(key.Value),
+            ((int)key.Curve.Law).ToString(CultureInfo.InvariantCulture),
+            key.Hold ? "1" : "0")));
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>Null when <paramref name="text"/> is not automation clipboard text - the caller then falls
+    /// back to the normalized knot formats, so text copied from a curve-shape editor still pastes.</summary>
+    public static IReadOnlyList<AutomationClip>? DecodeAutomation(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+        var lines = text.Replace("\r", "", StringComparison.Ordinal).Split('\n');
+        if (lines.Length < 2 || lines[0] != AutomationHeader)
+            return null;
+
+        var clips = new List<AutomationClip>();
+        foreach (var line in lines.Skip(1).Where(line => line.Length > 0))
+        {
+            var fields = line.Split(';');
+            if (fields.Length != 4
+                || !long.TryParse(fields[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var offset)
+                || !TryNumber(fields[1], out var value)
+                || !int.TryParse(fields[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var lawValue)
+                || !Enum.IsDefined(typeof(FadeCurve), lawValue)
+                || fields[3] is not ("0" or "1"))
+                return null;
+            clips.Add(new AutomationClip(offset, value, fields[3] == "1", (FadeCurve)lawValue));
+        }
+
+        if (clips.Count == 0)
+            return null;
+
+        // Re-anchored on arrival too, so hand-authored text that does not start at zero still pastes as a
+        // shape at the playhead rather than at an absolute position.
+        var first = clips.Min(clip => clip.OffsetMs);
+        return [.. clips
+            .Select(clip => clip with { OffsetMs = clip.OffsetMs - first })
+            .OrderBy(clip => clip.OffsetMs)];
+    }
+
     private static string Number(double value) => value.ToString("R", CultureInfo.InvariantCulture);
     private static string Optional(double? value) => value is { } number ? Number(number) : "";
 

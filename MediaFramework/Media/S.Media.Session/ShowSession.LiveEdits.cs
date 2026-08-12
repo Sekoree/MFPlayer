@@ -158,14 +158,17 @@ public sealed partial class ShowSession
                 ownerId, effectInstanceId, parameterId) ?? false));
 
     /// <summary>Live-edit the active cue's absolute authored volume component. The value is the same
-    /// linear level carried by <see cref="ShowClipBinding.VolumeEnvelope"/> and therefore continues to
-    /// compose with fades, master trim and route/send gains.</summary>
+    /// linear level carried by <see cref="ShowClipBinding.VolumeDb"/> and therefore continues to compose
+    /// with fades, master trim and route/send gains.
+    /// <para>Writes the AUTHORED slot, never the automation slot the envelope runner owns: a cue with a
+    /// volume track re-samples that track every 25 ms, and sharing one slot meant every fader move was
+    /// reverted within a tick. While a track is driving the cue this edit is shadowed rather than lost.</para></summary>
     public Task<bool> ApplyActiveVolumeAsync(string cueId, float level) =>
         InvokeAsync(() =>
         {
             if (ActiveVoiceOf(cueId) is not { } voice)
                 return Task.FromResult(false);
-            voice.ApplyEnvelopeLevel(level);
+            voice.ApplyBaseLevel(level);
             return Task.FromResult(true);
         });
 

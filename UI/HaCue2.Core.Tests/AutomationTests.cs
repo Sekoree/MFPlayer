@@ -165,6 +165,47 @@ public sealed class AutomationTests
         Assert.Equal((float)Math.Pow(10, -30 / 20d), VolumeEnvelopes.Sample(envelope, TimeSpan.FromMilliseconds(500)), 6);
     }
 
+    /// <summary>An un-automated cue must lower its authored level to the AUTHORED slot and emit no
+    /// envelope at all. Emitting a static one-point envelope armed the session's 25 ms envelope runner on
+    /// every cue, and the runner then re-sampled that constant over the operator's live fader edit within a
+    /// tick - the fader appeared dead. The two live in separate slots so they cannot revert each other.</summary>
+    [Fact]
+    public void AnUnautomatedCueLowersItsLevelToTheAuthoredSlotAndArmsNoEnvelopeRunner()
+    {
+        var media = new MediaCueNode { MediaPath = "tone.wav", LevelDb = -6 };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [media] }] };
+
+        var clip = Assert.Single(ShowCompiler.Compile(project).Clips);
+
+        Assert.Null(clip.VolumeEnvelope);
+        Assert.Equal(-6f, clip.VolumeDb, 6);
+    }
+
+    /// <summary>The authored level stays addressable alongside a track, so releasing automation reveals it.</summary>
+    [Fact]
+    public void AnAutomatedCueStillCarriesItsAuthoredLevelBesideTheEnvelope()
+    {
+        var media = new MediaCueNode
+        {
+            MediaPath = "tone.wav",
+            LevelDb = -6,
+            AutomationTracks =
+            [
+                new AutomationTrack
+                {
+                    Target = new AutomationTargetRef { PropertyId = AutomationPropertyIds.CueVolume },
+                    Keyframes = [new AutomationKeyframe { TimeMs = 0, Value = -20 }],
+                },
+            ],
+        };
+        var project = new HaCueProject { CueLists = [new CueList { Cues = [media] }] };
+
+        var clip = Assert.Single(ShowCompiler.Compile(project).Clips);
+
+        Assert.Equal(-6f, clip.VolumeDb, 6);
+        Assert.Equal(-20f, Assert.Single(clip.VolumeEnvelope!).Level, 6);
+    }
+
     [Fact]
     public void SchemaOneVolumeAndOpacityBecomeAbsolutePropertyTracks()
     {
@@ -244,6 +285,123 @@ public sealed class AutomationTests
         Assert.True(resolved.IsComplete);
         Assert.Empty(media.EffectLanes);
         Assert.Equal(1_800_000, Assert.Single(media.AutomationTracks).Keyframes[^1].TimeMs);
+    }
+
+    /// <summary>A legacy GROUP lane is materialized onto every descendant. It is the SAME lane object each
+    /// time, so reusing its id for each child's first track minted duplicate track ids - which the
+    /// project-wide identity map rejects, leaving the entire migrated show un-runnable.</summary>
+    [Fact]
+    public void AMergedGroupLaneGivesEveryDescendantItsOwnTrackId()
+    {
+        var first = new MediaCueNode { MediaPath = "a.wav", SourceDurationMs = 10_000 };
+        var second = new MediaCueNode { MediaPath = "b.wav", SourceDurationMs = 10_000 };
+        var group = new GroupCueNode
+        {
+            Children = [first, second],
+            EffectLanes =
+            [
+                new EffectLane
+                {
+                    Kind = EffectLaneKind.Volume,
+                    Points = [new LanePoint(0, 1), new LanePoint(1, 0)],
+                },
+            ],
+        };
+        var project = new HaCueProject
+        {
+            SchemaVersion = 1,
+            CueLists = [new CueList { Name = "Main", Cues = [group] }],
+        };
+
+        AutomationMigration.Migrate(project);
+
+        var ids = project.AllCues()
+            .SelectMany(CueAutomation.Of)
+            .Select(track => track.Id)
+            .ToList();
+
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+        Assert.True(ProjectValidator.IsRunnable(ProjectValidator.Validate(project)));
+    }
+
+    /// <summary>ADOPTED DIVERGENCE (2026-08-12), not a bug: schema 1 interpolated the linear gain factor,
+    /// while cue volume is now interpolated in dB and converted to gain afterwards. Endpoints still match
+    /// exactly; segment interiors do not. A legacy 0→1 fade-in on a 0 dB cue sampled 0.5 at its midpoint
+    /// and now samples 10^(-30/20). Pinned here so the change cannot regress silently in either direction.
+    /// See Plans/HaCue2-Animatable-Properties-And-Automation-Lanes.md, "Acceptance tests &gt; Migration".</summary>
+    [Fact]
+    public void AShortLegacyVolumeLaneIsInterpolatedInDb()
+    {
+        var media = new MediaCueNode
+        {
+            MediaPath = "a.wav",
+            LevelDb = 0,
+            SourceDurationMs = 1_000,
+            EffectLanes =
+            [
+                new EffectLane
+                {
+                    Kind = EffectLaneKind.Volume,
+                    Points = [new LanePoint(0, 0), new LanePoint(1, 1)],
+                },
+            ],
+        };
+        var project = new HaCueProject
+        {
+            SchemaVersion = 1,
+            CueLists = [new CueList { Name = "Main", Cues = [media] }],
+        };
+
+        AutomationMigration.Migrate(project);
+        var envelope = Assert.Single(ShowCompiler.Compile(project).Clips).VolumeEnvelope!;
+
+        // Endpoints are exactly what schema 1 produced: silence, then unity.
+        Assert.Equal(0f, VolumeEnvelopes.Sample(envelope, TimeSpan.Zero), 6);
+        Assert.Equal(1f, VolumeEnvelopes.Sample(envelope, TimeSpan.FromMilliseconds(1_000)), 6);
+
+        // The interior is the dB-domain value, NOT schema 1's linear 0.5.
+        Assert.Equal(
+            (float)Math.Pow(10, -30 / 20d),
+            VolumeEnvelopes.Sample(envelope, TimeSpan.FromMilliseconds(500)),
+            6);
+    }
+
+    /// <summary>Bezier segments were always subdivided into 32 steps and then rounded to whole
+    /// milliseconds, so any segment shorter than ~32 ms collapsed into a pile of same-time keys - which
+    /// the validator rejects as an error and the compiler silently drops.</summary>
+    [Fact]
+    public void AShortBezierSegmentMigratesToStrictlyIncreasingTimes()
+    {
+        var media = new MediaCueNode
+        {
+            MediaPath = "a.wav",
+            SourceDurationMs = 400,
+            EffectLanes =
+            [
+                new EffectLane
+                {
+                    Kind = EffectLaneKind.Volume,
+                    Points =
+                    [
+                        new LanePoint(0, 1, FadeCurve.Linear, .25, 1, null, null),
+                        new LanePoint(.02, .5, FadeCurve.Linear, null, null, .75, .5),
+                        new LanePoint(1, 0),
+                    ],
+                },
+            ],
+        };
+        var project = new HaCueProject
+        {
+            SchemaVersion = 1,
+            CueLists = [new CueList { Name = "Main", Cues = [media] }],
+        };
+
+        AutomationMigration.Migrate(project);
+
+        var keys = Assert.Single(media.AutomationTracks).Keyframes;
+        Assert.Equal(keys.Select(key => key.TimeMs).Order(), keys.Select(key => key.TimeMs));
+        Assert.Equal(keys.Count, keys.Select(key => key.TimeMs).Distinct().Count());
+        Assert.True(ProjectValidator.IsRunnable(ProjectValidator.Validate(project)));
     }
 
     [Fact]

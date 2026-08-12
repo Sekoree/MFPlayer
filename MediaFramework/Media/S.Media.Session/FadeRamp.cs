@@ -125,6 +125,13 @@ public static class VolumeEnvelopes
     public const float SilenceFloorDb = -60f;
     public const float MaximumDb = 12f;
 
+    /// <summary>The linear gain for an authored dB level, on exactly the same basis as a sampled
+    /// <see cref="ShowEnvelopeValueScale.Decibels"/> point: at or below the silence floor is exact zero.</summary>
+    public static float LinearFromDb(float db) =>
+        !float.IsFinite(db) || db <= SilenceFloorDb
+            ? 0f
+            : Math.Clamp((float)Math.Pow(10d, db / 20d), 0f, MaxLevel);
+
     /// <summary>The envelope factor at <paramref name="position"/>: 1 for an empty envelope, the first
     /// point's level before the first point, the last point's level after the last, and in between the
     /// segment's <see cref="ShowEnvelopePoint.CurveToNext"/>-shaped interpolation (binary search).</summary>

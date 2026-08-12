@@ -81,6 +81,7 @@ public sealed partial class ShowSession
         if (voice.Player.AudioSourceId is null)
             return;
 
+        voice.RegisterAutomationSeeder(Apply);
         FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
         {
             // Active only: the group timeline the envelope samples follows the ACTIVE voice, so a voice
@@ -90,10 +91,12 @@ public sealed partial class ShowSession
                 !ReferenceEquals(group.ActiveVoice, voice) ||
                 voice.Player.AudioRouter is null)
                 return Task.FromResult(true);
-            var clipPosition = group.Timeline.GetSnapshot().CueTime;
-            voice.ApplyEnvelopeLevel(VolumeEnvelopes.Sample(envelope, clipPosition));
+            Apply(group.Timeline.GetSnapshot().CueTime);
             return Task.FromResult(false); // no target to reach - the envelope rides the clip until release
         }));
+
+        void Apply(TimeSpan clipPosition) =>
+            voice.ApplyEnvelopeLevel(VolumeEnvelopes.Sample(envelope, clipPosition));
     }
 
     /// <summary>Per-clip opacity-lane runner: the video twin of <see cref="StartEnvelopeRunner"/>, sharing
@@ -109,21 +112,26 @@ public sealed partial class ShowSession
         IReadOnlyList<ShowPlacementEnvelope> lanes,
         CancellationToken ct)
     {
+        voice.RegisterAutomationSeeder(Apply);
         FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
         {
             if (ct.IsCancellationRequested ||
                 _groups.GetValueOrDefault(groupId) is not { } group ||
                 !ReferenceEquals(group.ActiveVoice, voice))
                 return Task.FromResult(true);
-            var clipPosition = group.Timeline.GetSnapshot().CueTime;
+            Apply(group.Timeline.GetSnapshot().CueTime);
+            return Task.FromResult(false);
+        }));
+
+        void Apply(TimeSpan clipPosition)
+        {
             foreach (var lane in lanes)
                 voice.ApplyOpacityAutomation(
                     lane.CompositionId,
                     lane.LayerIndex,
                     VolumeEnvelopes.Sample(lane.Points, clipPosition),
                     lane.Absolute);
-            return Task.FromResult(false);
-        }));
+        }
     }
 
     /// <summary>Samples all independently-addressed destination geometry lanes from the same clip
@@ -135,21 +143,26 @@ public sealed partial class ShowSession
         IReadOnlyList<ShowPlacementPropertyEnvelope> lanes,
         CancellationToken ct)
     {
+        voice.RegisterAutomationSeeder(Apply);
         FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
         {
             if (ct.IsCancellationRequested
                 || _groups.GetValueOrDefault(groupId) is not { } group
                 || !ReferenceEquals(group.ActiveVoice, voice))
                 return Task.FromResult(true);
-            var clipPosition = group.Timeline.GetSnapshot().CueTime;
+            Apply(group.Timeline.GetSnapshot().CueTime);
+            return Task.FromResult(false);
+        }));
+
+        void Apply(TimeSpan clipPosition)
+        {
             foreach (var lane in lanes)
                 voice.ApplyPlacementAutomation(
                     lane.CompositionId,
                     lane.LayerIndex,
                     lane.Property,
                     VolumeEnvelopes.Sample(lane.Points, clipPosition));
-            return Task.FromResult(false);
-        }));
+        }
     }
 
     private void StartPlacementEffectRunner(
@@ -158,13 +171,19 @@ public sealed partial class ShowSession
         IReadOnlyList<ShowPlacementEffectEnvelope> lanes,
         CancellationToken ct)
     {
+        voice.RegisterAutomationSeeder(Apply);
         FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
         {
             if (ct.IsCancellationRequested
                 || _groups.GetValueOrDefault(groupId) is not { } group
                 || !ReferenceEquals(group.ActiveVoice, voice))
                 return Task.FromResult(true);
-            var clipPosition = group.Timeline.GetSnapshot().CueTime;
+            Apply(group.Timeline.GetSnapshot().CueTime);
+            return Task.FromResult(false);
+        }));
+
+        void Apply(TimeSpan clipPosition)
+        {
             foreach (var lane in lanes)
                 voice.ApplyPlacementEffectAutomation(
                     lane.CompositionId,
@@ -172,8 +191,7 @@ public sealed partial class ShowSession
                     lane.EffectInstanceId,
                     lane.EffectiveParameterId,
                     VolumeEnvelopes.Sample(lane.Points, clipPosition));
-            return Task.FromResult(false);
-        }));
+        }
     }
 
     private void StartAudioEffectRunner(
@@ -182,21 +200,26 @@ public sealed partial class ShowSession
         IReadOnlyList<ShowAudioEffectEnvelope> lanes,
         CancellationToken ct)
     {
+        voice.RegisterAutomationSeeder(Apply);
         FadeRamp.Start(FadeStepInterval, ct, _ => InvokeAsync<bool>(() =>
         {
             if (ct.IsCancellationRequested
                 || _groups.GetValueOrDefault(groupId) is not { } group
                 || !ReferenceEquals(group.ActiveVoice, voice))
                 return Task.FromResult(true);
-            var cueTime = group.Timeline.GetSnapshot().CueTime;
+            Apply(group.Timeline.GetSnapshot().CueTime);
+            return Task.FromResult(false);
+        }));
+
+        void Apply(TimeSpan cueTime)
+        {
             foreach (var lane in lanes)
                 voice.ApplyAudioEffectAutomation(
                     lane.EffectInstanceId,
                     lane.ParameterId,
                     VolumeEnvelopes.Sample(lane.Points, cueTime),
                     FadeStepInterval);
-            return Task.FromResult(false);
-        }));
+        }
     }
 
 

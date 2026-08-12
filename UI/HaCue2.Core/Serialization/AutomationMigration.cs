@@ -20,11 +20,17 @@ public static class AutomationMigration
         var counts = new Counts();
 
         foreach (var cue in project.AllCues())
+        {
+            // Track ids are unique PROJECT-wide, so a migrated lane may not collide with a track that is
+            // already there - whether hand-authored or minted by an earlier partial migration pass.
+            foreach (var existing in CueAutomation.Of(cue))
+                counts.ClaimTrackId(existing.Id);
             foreach (var placement in CuePlacements.Of(cue))
             {
                 if (placement.Id == Guid.Empty)
                     placement.Id = Guid.NewGuid();
             }
+        }
 
         foreach (var list in project.CueLists)
             foreach (var cue in list.Cues)
@@ -181,7 +187,7 @@ public static class AutomationMigration
 
         var track = new AutomationTrack
         {
-            Id = tracks.Count == 0 ? lane.Id : Guid.NewGuid(),
+            Id = counts.ClaimTrackId(lane.Id),
             Target = target,
             // Schema 1 always landed outbound lanes on their terminal value when stopped. Preserve
             // that observable behavior while new schema-2 tracks use the safer Freeze default.
@@ -238,11 +244,18 @@ public static class AutomationMigration
         {
             var from = points[index];
             var to = points[index + 1];
-            var subdivisions = from.OutHandleX is not null && to.InHandleX is not null ? 32 : 1;
+            // Keyframe times are whole milliseconds and must be strictly increasing (the validator rejects
+            // duplicates outright, and the compiler drops them). Never subdivide a segment into more steps
+            // than it has milliseconds, or a short Bezier collapses into a pile of same-time keys and takes
+            // the whole project down with it.
+            var spanMs = At(duration, to.X) - At(duration, from.X);
+            var subdivisions = from.OutHandleX is not null && to.InHandleX is not null
+                ? (int)Math.Clamp(Math.Min(32, spanMs), 1, 32)
+                : 1;
             for (var step = 0; step < subdivisions; step++)
             {
                 var x = from.X + ((to.X - from.X) * step / subdivisions);
-                sampled.Add(new AutomationKeyframe
+                Append(new AutomationKeyframe
                 {
                     TimeMs = At(duration, x),
                     Value = valueMap(curve.Evaluate(x)),
@@ -253,13 +266,23 @@ public static class AutomationMigration
                 });
             }
         }
-        sampled.Add(new AutomationKeyframe
+        Append(new AutomationKeyframe
         {
             TimeMs = At(duration, points[^1].X),
             Value = valueMap(points[^1].Y),
             Curve = new CurveSpec { Law = FadeCurve.Linear },
         });
         return sampled;
+
+        // Rounding can still land two samples on one millisecond at the ends of a very short lane. The
+        // LATER sample wins: it is the one nearer the segment's authored endpoint value.
+        void Append(AutomationKeyframe key)
+        {
+            if (sampled.Count > 0 && sampled[^1].TimeMs >= key.TimeMs)
+                sampled[^1] = key with { Id = sampled[^1].Id, TimeMs = sampled[^1].TimeMs };
+            else
+                sampled.Add(key);
+        }
     }
 
     private static bool HasBezier(IReadOnlyList<LanePoint> points) =>
@@ -320,5 +343,29 @@ public static class AutomationMigration
         public int Tracks;
         public int Keys;
         public int Unresolved;
+
+        /// <summary>Track ids already handed out by this migration pass. A legacy GROUP lane is merged
+        /// into every descendant as the SAME <see cref="EffectLane"/> object, so reusing its id for each
+        /// child's first track minted duplicates - which the project-wide identity map then rejected,
+        /// leaving the whole migrated show un-runnable.</summary>
+        private readonly HashSet<Guid> _claimedTrackIds = [];
+
+        /// <summary>The lane's own id when it is still free (stable identity across the migration), else a
+        /// fresh one.</summary>
+        public Guid ClaimTrackId(Guid preferred) =>
+            preferred != Guid.Empty && _claimedTrackIds.Add(preferred)
+                ? preferred
+                : NewClaimedId();
+
+        private Guid NewClaimedId()
+        {
+            Guid id;
+            do
+            {
+                id = Guid.NewGuid();
+            }
+            while (!_claimedTrackIds.Add(id));
+            return id;
+        }
     }
 }

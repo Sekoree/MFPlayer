@@ -135,12 +135,13 @@ public sealed class ShowCompilerTests
         var clip = ShowCompiler.Compile(fixture.Project).Clips
             .Single(candidate => candidate.ClipId == fixture.Track.Id.ToString());
 
-        // The send route carries its own −6 dB trim; cue volume is the envelope component. Their
+        // The send route carries its own −6 dB trim; cue volume is the authored volume component. Their
         // runtime product is still −12 dB, while either property can now be automated independently.
+        // With no volume track the cue emits NO envelope, so the session arms no envelope runner and a
+        // live fader edit has an uncontested slot to write.
         Assert.Equal(Math.Pow(10, -6 / 20d), clip.LogicalSends![0].Gain, 4);
-        var volume = Assert.Single(clip.VolumeEnvelope!);
-        Assert.Equal(-6, volume.Level, 4);
-        Assert.Equal(ShowEnvelopeValueScale.Decibels, volume.ValueScale);
+        Assert.Equal(-6f, clip.VolumeDb, 4);
+        Assert.Null(clip.VolumeEnvelope);
     }
 
     [Fact]
@@ -230,8 +231,10 @@ public sealed class ShowCompilerTests
         // TrimOutMs is zero on every untrimmed cue, so keying the lane's length off the trim window
         // alone silently dropped it from the commonest case in the app.
         var blind = ShowCompiler.Compile(fixture.Project);
-        // With no duration, schema-1 data waits for probe facts while static volume still compiles.
-        Assert.Single(Clip(blind, fixture.Track).VolumeEnvelope!);
+        // With no duration, schema-1 data waits for probe facts. The unresolved lane produces no track, so
+        // there is no envelope yet - the static level rides the authored slot until the probe lands.
+        Assert.Null(Clip(blind, fixture.Track).VolumeEnvelope);
+        Assert.Equal((float)fixture.Track.LevelDb, Clip(blind, fixture.Track).VolumeDb, 4);
 
         var probed = ShowCompiler.Compile(
             fixture.Project,

@@ -300,7 +300,8 @@ public sealed partial class ShowSession
                 // and tears the deck down - i.e. seek "stops playback" (matches SeekManyAsync's resume).
                 var wasRunning = voice.Player.IsRunning;
                 var masterBeforeSeek = group.Timeline.GetSnapshot().MasterTime;
-                SeekCoordinatedRestoringPlayState(voice.Player, position, group, masterBeforeSeek, resume: wasRunning);
+                SeekCoordinatedRestoringPlayState(
+                    voice.Player, position, group, masterBeforeSeek, resume: wasRunning, voice);
             }
             return Task.CompletedTask;
         });
@@ -314,16 +315,43 @@ public sealed partial class ShowSession
     /// failed seek left it) and still marks the discontinuity (the source position may have partially
     /// moved), THEN rethrows so the caller's task surfaces the fault.
     /// </summary>
+    /// <summary>A SOURCE position expressed on the clip-time basis the automation lanes are drawn against -
+    /// the same <c>sourceTime - TrimStart</c> clamp <see cref="TransportTimeline"/> applies, evaluated for a
+    /// position the timeline has not adopted yet.</summary>
+    private static TimeSpan ClipTimeOf(TransportGroup group, TimeSpan sourcePosition)
+    {
+        var snapshot = group.Timeline.GetSnapshot();
+        var clipTime = sourcePosition - snapshot.TrimStart;
+        if (clipTime < TimeSpan.Zero)
+            clipTime = TimeSpan.Zero;
+        if (snapshot.TrimEnd is { } trimEnd)
+        {
+            var clipEnd = trimEnd - snapshot.TrimStart;
+            if (clipTime > clipEnd)
+                clipTime = clipEnd;
+        }
+
+        return clipTime;
+    }
+
+    /// <param name="voice">When supplied, every automation lane on the clip is re-sampled at the sought
+    /// position BEFORE playback resumes. The lane runners tick only every 25 ms, so without this a scrub
+    /// into the middle of a fade resumed at the PRE-seek value and corrected audibly a tick later.</param>
     private static void SeekCoordinatedRestoringPlayState(
         S.Media.Players.MediaPlayer player,
         TimeSpan position,
         TransportGroup group,
         TimeSpan masterBeforeSeek,
-        bool resume)
+        bool resume,
+        TransportVoice? voice = null)
     {
         try
         {
             player.SeekCoordinated(position);
+            // Derived from the seek TARGET, not from the timeline: the timeline only re-anchors on the
+            // MarkDiscontinuity below, so its snapshot still reports the pre-seek position here. This runs
+            // before Play(), i.e. before any audio or video produced at the new position can reach a device.
+            voice?.SeedAutomationAt(ClipTimeOf(group, position));
         }
         catch (Exception ex)
         {
@@ -366,7 +394,8 @@ public sealed partial class ShowSession
                 S.Media.Players.MediaPlayer Player,
                 TimeSpan Position,
                 bool Resume,
-                TimeSpan MasterBeforeSeek)>(seeks.Count);
+                TimeSpan MasterBeforeSeek,
+                TransportVoice Voice)>(seeks.Count);
             List<Exception>? errors = null;
             foreach (var (groupId, position) in seeks)
             {
@@ -389,18 +418,21 @@ public sealed partial class ShowSession
                         continue;
                     }
                 }
-                targets.Add((group, voice.Player, position, wasRunning, masterBeforeSeek));
+                targets.Add((group, voice.Player, position, wasRunning, masterBeforeSeek, voice));
             }
 
             // 2) Seek all with clocks frozen, then 3) release the running ones together from the shared epoch.
             // A failing seek must not break the barrier: the other groups still seek, and EVERY paused group
             // still resumes (a faulted one from its pre-seek position) - a fault used to leave every
             // not-yet-seeked group stranded paused with no error surfaced.
-            foreach (var (_, player, position, _, _) in targets)
+            foreach (var (group, player, position, _, _, voice) in targets)
             {
                 try
                 {
                     player.SeekCoordinated(position);
+                    // Still inside the barrier, before phase 3 resumes anything: every lane lands on its
+                    // sought value before a sample or frame from the new position can reach a device.
+                    voice.SeedAutomationAt(ClipTimeOf(group, position));
                 }
                 catch (Exception ex)
                 {
@@ -420,7 +452,7 @@ public sealed partial class ShowSession
             //    AvPlaybackCoordinator/VoiceStartPolicy: "every voice queued behind a video sibling
             //    started late by that sibling's present-sync"); the seek path simply never adopted it.
             var starters = new List<(TransportGroup Group, Action? Start, TimeSpan MasterBeforeSeek)>(targets.Count);
-            foreach (var (group, player, _, resume, masterBeforeSeek) in targets)
+            foreach (var (group, player, _, resume, masterBeforeSeek, _) in targets)
             {
                 if (!resume)
                 {
@@ -490,7 +522,8 @@ public sealed partial class ShowSession
         return InvokeAsync(() => Task.FromResult(
             ActiveVoiceOf(cueId) is { } voice
                 ? new ClipAudioLevels(
-                    voice.ClipLevel, voice.EnvelopeLevel, voice.ModifierLevel, voice.EffectiveAudioLevel)
+                    voice.ClipLevel, voice.EnvelopeLevel, voice.ModifierLevel, voice.EffectiveAudioLevel,
+                    voice.BaseLevel)
                 : null));
     }
 

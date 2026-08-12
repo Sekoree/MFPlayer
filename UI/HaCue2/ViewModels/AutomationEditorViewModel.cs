@@ -329,6 +329,8 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
                 PrimaryKeyId = added.Id;
                 _gestureKeyId = added.Id;
                 _gestureOriginalKeys = keys.Select(Clone).ToList();
+                // Tells the canvas a key really was created, so it may take capture and begin dragging it.
+                gesture.Accepted = true;
                 break;
             case CurveGestureKind.Move when GestureKey(gesture.Index) is { } moved:
                 if (!_selection.Contains(moved.Id))
@@ -462,30 +464,37 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             return null;
         }
 
+        // Native milliseconds and native value: normalizing through DurationMs is what made a copy out of a
+        // 45-minute cue collapse when pasted into a short one, and rescaled a dB value into a % range.
         var ordered = _track.Keyframes.OrderBy(key => key.TimeMs).ThenBy(key => key.Id).ToList();
-        var selected = ordered.Select((key, index) => (key, index))
-            .Where(pair => _selection.Contains(pair.key.Id))
-            .Select(pair => pair.index)
-            .ToHashSet();
-        Problem = $"copied {selected.Count} keyframe(s)";
-        return LaneKeyframeClipboard.Encode([.. ordered.Select(ToClipboardKnot)], selected);
+        Problem = $"copied {_selection.Count} keyframe(s)";
+        return LaneKeyframeClipboard.EncodeAutomation(ordered, _selection);
     }
 
     public bool Paste(string? text)
     {
         if (!CanEdit || _track is null || _journal is null
-            || LaneKeyframeClipboard.DecodeKnots(text) is not { Count: > 0 } decoded)
+            || LaneKeyframeClipboard.DecodeAutomation(text) is not { Count: > 0 } decoded)
         {
             Problem = "clipboard has no HaCue2 keyframes";
             return false;
         }
 
-        var span = decoded[^1].X - decoded[0].X;
-        var at = Math.Clamp(CursorMs / DurationMs, 0, Math.Max(0, 1 - span));
-        var placed = decoded.Select(knot => knot with { X = at + knot.X }).ToList();
-        var fromMs = (long)Math.Round(placed[0].X * DurationMs);
-        var toMs = (long)Math.Round(placed[^1].X * DurationMs);
-        var pasted = placed.Select(FromClipboardKnot).ToList();
+        // The shape keeps its authored millisecond spacing; only its ORIGIN moves to the playhead. It is
+        // clamped so the tail lands inside the cue, never squeezed to fit.
+        var span = decoded[^1].OffsetMs - decoded[0].OffsetMs;
+        var at = (long)Math.Round(Math.Clamp(CursorMs, 0, Math.Max(0, DurationMs - span)));
+        var pasted = decoded
+            .Select(clip => new AutomationKeyframe
+            {
+                TimeMs = Math.Clamp(at + clip.OffsetMs, 0, DurationMs),
+                Value = _descriptor.Value.Clamp(clip.Value),
+                Hold = clip.Hold,
+                Curve = new CurveSpec { Law = clip.Law },
+            })
+            .ToList();
+        var fromMs = pasted[0].TimeMs;
+        var toMs = pasted[^1].TimeMs;
         var kept = _track.Keyframes.Where(key => key.TimeMs < fromMs || key.TimeMs > toMs);
         Write(kept.Concat(pasted), $"paste {pasted.Count} automation keyframes");
         _journal.CloseGroup();
@@ -725,26 +734,6 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
                     && option.Target.ObjectId == _track.Target.ObjectId)
                 ?.AuthoredValue ?? _descriptor.Value.Default;
     }
-
-    private CurveKnot ToClipboardKnot(AutomationKeyframe key)
-    {
-        var range = _descriptor.Value.Maximum - _descriptor.Value.Minimum;
-        return new CurveKnot(
-            Math.Clamp((double)key.TimeMs / DurationMs, 0, 1),
-            range <= 0 ? 0 : Math.Clamp((key.Value - _descriptor.Value.Minimum) / range, 0, 1),
-            key.Hold,
-            key.Curve.Law);
-    }
-
-    private AutomationKeyframe FromClipboardKnot(CurveKnot knot) => new()
-    {
-        TimeMs = Math.Clamp((long)Math.Round(knot.X * DurationMs), 0, DurationMs),
-        Value = _descriptor.Value.Clamp(
-            _descriptor.Value.Minimum
-            + ((_descriptor.Value.Maximum - _descriptor.Value.Minimum) * knot.Y)),
-        Hold = knot.Hold,
-        Curve = new CurveSpec { Law = knot.CurveToNext },
-    };
 
     private void ReplaceKey(Guid id, Func<AutomationKeyframe, AutomationKeyframe> replace, string description)
     {

@@ -875,6 +875,8 @@ public partial class CurveEditorViewModel : ObservableObject
             _selection.Add(added);
             _anchor = added;
             SelectedIndex = added;
+            // Only reached when the Add produced a command, i.e. it was not refused as too near a point.
+            gesture.Accepted = true;
         }
 
         Reload();

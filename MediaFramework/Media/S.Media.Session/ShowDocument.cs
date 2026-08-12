@@ -372,10 +372,16 @@ public sealed record ShowClipBinding(
 
     public IReadOnlyList<ShowAudioEffectEnvelope>? AudioEffectEnvelopes { get; init; }
 
+    /// <summary>The clip's AUTHORED cue volume in dB. Held as its own field rather than folded into
+    /// <see cref="VolumeEnvelope"/> so the session has a live-editable authored slot that the envelope
+    /// runner does not own; an operator's fader move lands here and survives.</summary>
+    public float VolumeDb { get; init; }
+
     /// <summary>Volume-automation keyframes, sorted by time.
     /// Times are CLIP positions (post-<see cref="StartOffset"/>), so the envelope survives seeks and
-    /// restarts on every loop pass. The envelope factor MULTIPLIES the fade level (fade-in/out, fade
-    /// cue, stop fade) - it never replaces it. Null/empty = no automation (and no runner started).</summary>
+    /// restarts on every loop pass. The sampled value SHADOWS <see cref="VolumeDb"/> (cue volume is
+    /// replace-authored) and composes multiplicatively with the fade level (fade-in/out, fade cue, stop
+    /// fade) - it never replaces the fade. Null/empty = no automation (and no runner started).</summary>
     public IReadOnlyList<ShowEnvelopePoint>? VolumeEnvelope { get; init; }
 
     /// <summary>Legacy opacity-factor keyframes for all of this clip's video layers, sorted by time. Times are CLIP

@@ -2,6 +2,10 @@
 
 Date: 2026-08-12
 
+**Status: fix pass applied the same day — see the Fix log at the end.** Every blocker and every High
+finding below is now fixed with a regression test; the mediums listed as fixed there are done too. Items
+not in the Fix log are still open.
+
 Audited: `Plans/HaCue2-Animatable-Properties-And-Automation-Lanes.md` against `next-experiment`
 at `aad6c1a3` **plus the uncommitted working tree** (the tree is part of the feature).
 
@@ -434,3 +438,104 @@ Not defects, but the wrong altitude for paths that run at 40 Hz per track:
    current 1,590-test suite**, which is the most useful signal in this audit: the suite tests the
    units well and the seams between them barely at all. In particular, no test drives real pointer or
    key events through `CurveCanvas`, which is exactly why H6 survived.
+
+---
+
+# Fix log — 2026-08-12
+
+All four blockers, all six High findings, and five Mediums are fixed. Each carries a regression test.
+
+## Blockers
+
+**B1 — live volume fader.** Cue volume now lowers to two slots instead of one. `ShowClipBinding.VolumeDb`
+carries the authored level; `VolumeEnvelope` is emitted **only** when a volume track exists
+(`ShowCompiler.cs`), so an un-automated cue arms no envelope runner at all. `SoundingLevel` gained a
+`Base` slot and `Envelope` became nullable, composing as
+`Source × Fade × (ControllerEnvelope ?? Envelope ?? Base) × Modifier × Master` — replace-authored, matching
+the descriptor. `ApplyActiveVolumeAsync` writes `Base` via the new `ApplyBaseLevel`; the runner still owns
+`Envelope`. `ClipAudioLevels.BaseLevel` exposes the authored value so a host can show what automation is
+shadowing. Tests: `AnUnautomatedCueLowersItsLevelToTheAuthoredSlotAndArmsNoEnvelopeRunner`,
+`AnAutomatedCueStillCarriesItsAuthoredLevelBesideTheEnvelope`,
+`ALiveVolumeEditIsNotRevertedByTheEnvelopeRunner`, `AutomationShadowsTheAuthoredLevelWithoutDestroyingIt`.
+
+**B2 — dropped capability faces.** Rather than extend a subclass matrix that cannot scale to six faces,
+capability lookup now sees *through* wrappers: new `IAudioOutputDecorator` (declares the inner sink) and
+`AudioOutputCapabilities.Find<T>` (walks the chain, cycle-bounded). `AudioEffectOutput`,
+`ResamplingAudioOutput` and `AdaptiveRateAudioOutput` declare it; `AudioRouter.OutputPump` and
+`VoiceStartPolicy` resolve through it. This closes the whole recurring bug class, not one instance — a
+wrapper cannot forget to re-expose an interface it never has to implement. Tests:
+`AudioEffectOutput_Wrap_ResolvesCapabilitiesItDoesNotItselfImplement`,
+`CapabilityLookupWalksNestedWrappersAndSurvivesACycle`.
+
+**B3 — duplicate migrated track ids.** `Counts.ClaimTrackId` hands out ids, seeded with every id already
+in the document, so a group lane merged into N descendants yields N distinct tracks and a hand-authored
+track can never be collided with. Test: `AMergedGroupLaneGivesEveryDescendantItsOwnTrackId`.
+
+**B4 — dB migration divergence. Decided: accepted, not shimmed.** One value domain for cue volume
+everywhere beats bit-identical replay of legacy segment interiors. The plan's Migration acceptance
+criterion now states the divergence explicitly, and `AShortLegacyVolumeLaneIsInterpolatedInDb` pins the new
+values (endpoints exact, midpoint `10^(−30/20)`) so it stays intentional rather than drifting back.
+
+## High
+
+- **H1** Bézier subdivision is capped at one step per millisecond and an `Append` guard keeps times
+  strictly increasing. Test: `AShortBezierSegmentMigratesToStrictlyIncreasingTimes`.
+- **H2** Seeks seed automation before playback resumes. Each lane runner registers its own step body as a
+  reseed action on the voice (`RegisterAutomationSeeder`), so seeding and the 25 ms loop are the same code
+  and cannot drift. Both `SeekAsync` and `SeekManyAsync` call it, deriving clip time from the seek target
+  (`ClipTimeOf`) because the timeline only re-anchors at `MarkDiscontinuity`. Test:
+  `SeekingSeedsTheAutomatedVolumeBeforePlaybackResumes`.
+- **H3** A visualizer's outbound run now shares the visualizer run's `AutomationRunClock`
+  (`StartVisualizerAutomationAsync` returns it; `StartClockedOutboundAsync` takes `sharedClock`), so one
+  seek moves one clock. It also inherits `keepAliveAfterEnd`, so a later backward seek can reopen a
+  completed ramp.
+- **H4** `OutboundEffects.Points` truncates at the run's duration and lands on the value sampled at that
+  instant, so "land exactly on the final value" can no longer jump a desk to a key the show never reached.
+- **H5** Automation copy/paste uses a new native-unit clipboard format (`HaCue2-Automation/1`) carrying
+  absolute milliseconds and native values; the normalized knot formats stay readable. Test:
+  `CopiedKeyframesKeepTheirMillisecondSpacingInAMuchShorterCue`.
+- **H6** `CurveGesture.Accepted` reports whether an add really happened; the canvas takes capture only then,
+  so a refused add is inert instead of dragging the previous selection. Test:
+  `ARefusedAddIsNotReportedAsAccepted`.
+
+## Medium
+
+- The inline timeline lane took the dedicated editor's contract: `LogicalNudges`,
+  `RemoveWhenDraggedOffCanvas="False"`, and `GestureCancelled` → `CuesViewModel.CancelGesture` (closes the
+  composite and undoes it, since that surface applies per motion).
+- `EffectParameterDescriptor.Clamp` resolves ±inf toward the nearest **bound**; only NaN falls back to the
+  default. −inf dB is a mute again, not full gain.
+- `GainAudioEffect.Configure` settles on its configured value instead of slewing from unity.
+- Gain smoothing is a **duration**: the per-frame step is sized from the distance to the new target.
+- `AbiPluginHost.BindAudioEffects` disposes already-taken leases if a later factory throws, and
+  `NativeAudioEffectFactory.Dispose` no longer destroys the plugin-owned factory (double-destroy; it also
+  meant a plugin registering any effect could never be unloaded).
+- `MediaRuntime`'s stale "AddAudioEffect throws on a duplicate kind" comment now states the real last-wins
+  rule.
+- The inspector shows a note beside Level when a volume track owns it, so the static box no longer looks
+  authoritative (`LevelIsAutomated` / `LevelAutomationNote`).
+
+## Verification
+
+Full solution builds clean. Suites after the pass: HaCue2.Core **782**, HaCue2 UI **409**,
+S.Media.Session **401**, S.Media.Core **844** (2 skipped), S.Abi **8** — 0 failures. `AbiSmoke` exits 0.
+
+Two **pre-existing** timing flakes surfaced under parallel load and pass repeatedly in isolation; neither
+is related to this work: `TimelinePlayheadTests.FromTheTopIsExactlyWhatFiringTheGroupAlwaysDid`
+(30.035 s vs 30 s) and `CrossfadeSurfaceTests.WithoutACrossfade_TheSurfaceFollowsTheNewClipsSourceCoordinate`
+(−9.5 ms vs a `[0, 10s]` range). Both are worth tightening separately.
+
+## Still open
+
+Deliberately not attempted in this pass:
+
+- The three design decisions (`HoldFinal` claims unreleasable; nested group trims overwrite rather than
+  compose; an older controller run silenced by a newer one's release) — these change show semantics and
+  want your call.
+- The live half of the inspector's base-vs-automated readout ("automated now −12.0 dB") needs a playhead
+  value from the engine; only the document-side half is wired.
+- Out-of-range keyframes are still unreachable and unindicated in the editor.
+- The inline lane still journals per pointer motion (the draft refactor); accessibility names on the
+  toolbar/rack buttons; the ruler label offset; no-op gestures still journaling a step.
+- Evaluator hot-path allocation, `FindCue` per tick, and per-tick effect JSON round-tripping.
+- Video-side descriptor publication without an instance, and the un-normalized video-effect nested vtable.

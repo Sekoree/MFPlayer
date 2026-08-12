@@ -20,9 +20,13 @@ namespace S.Media.Decode.FFmpeg.Audio;
 /// </para>
 /// </remarks>
 public sealed class AdaptiveRateAudioOutput
-    : IAudioOutput, IAudioOutputChannelCapabilities, IClockedOutput, IAdaptiveRateWrappedOutput, IDisposable
+    : IAudioOutput, IAudioOutputChannelCapabilities, IClockedOutput, IAdaptiveRateWrappedOutput,
+      IAudioOutputDecorator, IDisposable
 {
     private readonly IAudioOutput _inner;
+
+    /// <summary>Lets <see cref="AudioOutputCapabilities"/> resolve the sink's faces through this wrapper.</summary>
+    IAudioOutput IAudioOutputDecorator.InnerOutput => _inner;
     private readonly AudioFormat _format;
     private readonly Func<double> _getPpmBias;
     private readonly IDisposable? _biasSource;

@@ -454,6 +454,89 @@ public sealed class MasterTrimTests
         Assert.Equal(0.2f, levels.EnvelopeLevel, 3);
     }
 
+    /// <summary>Regression: the authored cue volume and its automation shared ONE slot. The compiler
+    /// emitted a static one-point envelope for every cue, which armed the 25 ms envelope runner on every
+    /// cue, and the runner then re-sampled that constant straight over the operator's live fader move - the
+    /// inspector fader appeared to do nothing. They are now separate slots.</summary>
+    [Fact]
+    public async Task ALiveVolumeEditIsNotRevertedByTheEnvelopeRunner()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(OneCue("fake://x"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+
+        Assert.True(await session.ApplyActiveVolumeAsync("c", 0.5f));
+
+        // Well past several 25 ms runner ticks: nothing may write the authored slot back.
+        await Task.Delay(200);
+
+        var levels = Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c"));
+        Assert.Equal(0.5f, levels.BaseLevel, 3);
+        Assert.Equal(0.5f, levels.EnvelopeLevel, 3);
+        Assert.Equal(0.5f, levels.EffectiveLevel, 3);
+    }
+
+    /// <summary>Cue volume is replace-authored, so a track SHADOWS the authored level rather than
+    /// overwriting it: the operator's edit is still there, still reportable, and is what the cue returns to
+    /// when automation stops driving it. This is the contract that lets a host show
+    /// "base −6.0 dB · automated now −20.0 dB" instead of a static control that silently lies.</summary>
+    [Fact]
+    public async Task AutomationShadowsTheAuthoredLevelWithoutDestroyingIt()
+    {
+        var (session, _) = BuildToneSession();
+        await using var scope = session;
+        await session.LoadDocumentAsync(
+            OneToneCueWithEnvelope(0.2f, new ShowClipAudioRoute(TrimDevice, [0, 1])));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+
+        Assert.True(await session.ApplyActiveVolumeAsync("c", 0.5f));
+        await Task.Delay(200);
+
+        var levels = Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c"));
+        Assert.Equal(0.5f, levels.BaseLevel, 3);      // the edit survived
+        Assert.Equal(0.2f, levels.EnvelopeLevel, 3);  // automation is what sounds
+        Assert.Equal(0.2f, levels.EffectiveLevel, 3);
+    }
+
+    /// <summary>A seek must seed every automated value at the sought position BEFORE playback resumes.
+    /// The lane runners tick only every 25 ms, so a scrub into the middle of a fade used to resume at the
+    /// PRE-seek value and correct itself a tick later - audible as a burst when seeking backwards out of a
+    /// quiet passage, and visible as a frame or two at the wrong opacity.</summary>
+    [Fact]
+    public async Task SeekingSeedsTheAutomatedVolumeBeforePlaybackResumes()
+    {
+        var (session, _) = BuildToneSession();
+        await using var scope = session;
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "C")],
+            Clips:
+            [
+                new ShowClipBinding("c", "tone://1")
+                {
+                    AudioRoutes = [new ShowClipAudioRoute(TrimDevice, [0, 1])],
+                    // Ramps 1.0 -> 0.0 across the clip's whole 10 s.
+                    VolumeEnvelope =
+                    [
+                        new ShowEnvelopePoint(TimeSpan.Zero, 1f),
+                        new ShowEnvelopePoint(TimeSpan.FromSeconds(10), 0f),
+                    ],
+                },
+            ],
+            Compositions: [], Routes: []));
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        var atStart = Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c"));
+        Assert.Equal(1f, atStart.EnvelopeLevel, 2);
+
+        await session.SeekAsync(TimeSpan.FromSeconds(7.5));
+
+        // Read back with no delay at all: the value must ALREADY be the sought one, not the pre-seek one
+        // waiting on the next runner tick.
+        var afterSeek = Assert.IsType<ClipAudioLevels>(await session.GetClipAudioLevelsAsync("c"));
+        Assert.Equal(0.25f, afterSeek.EnvelopeLevel, 2);
+    }
+
     [Fact]
     public async Task MasterTrim_SurvivesALiveAudioMatrixEdit()
     {

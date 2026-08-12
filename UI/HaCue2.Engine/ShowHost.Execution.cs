@@ -334,11 +334,16 @@ public sealed partial class ShowHost
         await Task.WhenAll(runs.Select(run => run.Complete.Task)).ConfigureAwait(false);
     }
 
-    private async Task StartVisualizerAutomationAsync(
+    /// <returns>The run's clock, so the SAME clock can drive this cue's outbound ramps. A visualizer used
+    /// to get two independent <see cref="AutomationRunClock"/>s - one for its surface lanes, one for its
+    /// OSC/MIDI lanes - and seeking bumped only the first: the outbound driver then saw a generation it did
+    /// not recognise and repositioned itself back to its own un-sought position, silently undoing the seek
+    /// within 10 ms. Null when the cue has no enabled tracks (there is nothing to drive).</returns>
+    private async Task<AutomationRunClock?> StartVisualizerAutomationAsync(
         VisualizerCueNode cue, TimeSpan initialPosition)
     {
         if (!cue.AutomationTracks.Any(track => track.Enabled))
-            return;
+            return null;
 
         var duration = TimeSpan.FromMilliseconds(Math.Max(1, cue.HoldMs));
         var start = initialPosition < TimeSpan.Zero
@@ -363,6 +368,7 @@ public sealed partial class ShowHost
 
         _ = DriveVisualizerAutomationAsync(run, duration);
         await run.Started.Task.ConfigureAwait(false);
+        return run.Clock;
     }
 
     private async Task DriveVisualizerAutomationAsync(
@@ -870,11 +876,13 @@ public sealed partial class ShowHost
 
             // A visualizer holds a renderer rather than a transport, so it has no group to seek.
             Remember(cue.Id, list?.Id ?? Guid.Empty, groupId: "");
-            await StartVisualizerAutomationAsync(visualizer, TimeSpan.Zero).ConfigureAwait(false);
+            var visualizerClock = await StartVisualizerAutomationAsync(visualizer, TimeSpan.Zero)
+                .ConfigureAwait(false);
             await StartClockedOutboundAsync(
                 cue,
                 TimeSpan.FromMilliseconds(Math.Max(1, visualizer.HoldMs)),
-                groupId: "").ConfigureAwait(false);
+                groupId: "",
+                sharedClock: visualizerClock).ConfigureAwait(false);
             return true;
         }
 
@@ -1001,13 +1009,14 @@ public sealed partial class ShowHost
         {
             var cue = start.Cue;
             Remember(cue.Id, list?.Id ?? Guid.Empty, groupId: "");
-            await StartVisualizerAutomationAsync(cue, start.StartPosition)
+            var visualizerClock = await StartVisualizerAutomationAsync(cue, start.StartPosition)
                 .ConfigureAwait(false);
             await StartClockedOutboundAsync(
                 cue,
                 TimeSpan.FromMilliseconds(Math.Max(1, cue.HoldMs)),
                 groupId: "",
-                initialPosition: start.StartPosition).ConfigureAwait(false);
+                initialPosition: start.StartPosition,
+                sharedClock: visualizerClock).ConfigureAwait(false);
         }
 
         return started;
@@ -1027,11 +1036,15 @@ public sealed partial class ShowHost
         return null;
     }
 
+    /// <param name="sharedClock">The clock this cue's other automation already runs on, when it has one.
+    /// Passing it is what keeps a cue on ONE timebase: a second clock for the same cue means a seek bumps
+    /// only one of them, and the driver that missed it repositions back to its own stale position.</param>
     private async Task StartClockedOutboundAsync(
         CueNode cue,
         TimeSpan? duration,
         string groupId,
-        TimeSpan initialPosition = default)
+        TimeSpan initialPosition = default,
+        AutomationRunClock? sharedClock = null)
     {
         var outboundKeys = CueAutomation.Of(cue)
             .Where(track => track.Enabled
@@ -1057,8 +1070,13 @@ public sealed partial class ShowHost
             return;
         }
 
-        var clock = new AutomationRunClock((ICueExecutionHost)this, initialPosition);
-        await _outbound.StartAsync(cue, runDuration, clock.Read, duration is null).ConfigureAwait(false);
+        var clock = sharedClock ?? new AutomationRunClock((ICueExecutionHost)this, initialPosition);
+        // Same rule as the transport branch above: when something else owns the clock (a visualizer run
+        // here), that owner owns the lifetime too - keeping the driver registered after the last key lets a
+        // later backward seek reopen an already-completed ramp instead of finding nothing to reposition.
+        await _outbound
+            .StartAsync(cue, runDuration, clock.Read, duration is null || sharedClock is not null)
+            .ConfigureAwait(false);
     }
 
     private RunClockSnapshot TransportAutomationClock(string groupId)

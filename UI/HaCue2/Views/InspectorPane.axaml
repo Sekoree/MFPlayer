@@ -164,6 +164,9 @@
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Level">
               <TextBox Classes="short" Text="{Binding LevelValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
+            <TextBlock Classes="small dim2" TextWrapping="Wrap" Margin="0,0,0,6"
+                       IsVisible="{Binding LevelIsAutomated}"
+                       Text="{Binding LevelAutomationNote}" />
             <ContentControl Theme="{StaticResource Subhead}" Content="Cue inserts" />
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Gain">
               <CheckBox IsChecked="{Binding AudioGainOn}" Content="gain insert" />

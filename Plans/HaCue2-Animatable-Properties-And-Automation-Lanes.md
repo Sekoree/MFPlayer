@@ -737,8 +737,19 @@ The feature is not complete until these behaviours are covered:
 
 ### Migration
 
-- Schema-1 volume and opacity fixtures have the same effective sampled values before and after conversion
-  at start, every key, every segment midpoint, and end.
+- Schema-1 **opacity** fixtures have the same effective sampled values before and after conversion at
+  start, every key, every segment midpoint, and end.
+- Schema-1 **volume** fixtures match exactly at start, every key, and end. Segment interiors deliberately
+  do **not** match: schema 1 interpolated the linear gain factor, whereas cue volume is now authored,
+  stored and interpolated in dB, converting to gain only after interpolation. A legacy `(0,0)→(1,1)` lane
+  on a 0 dB cue sampled `0.5` at its midpoint and now samples `10^(−30/20) ≈ 0.0316`.
+
+  This divergence was **adopted deliberately on 2026-08-12** rather than shimmed. One value domain for cue
+  volume everywhere — editor, compiler, session, automation cue — is worth more than bit-identical replay
+  of legacy interiors, and a dB-domain fade from silence is the perceptually better curve. The cost is
+  real and must not be rediscovered as a bug: a schema-1 show with a volume lane sounds different through
+  the middle of that lane, most audibly on fades from silence. `AShortLegacyVolumeLaneIsInterpolatedInDb`
+  pins the new values so the change stays intentional.
 - Unknown-duration legacy lanes remain intact until duration resolution; no guessed conversion is saved.
 - Legacy group precedence and outbound endpoint/address data survive migration.
 - Schema-2 projects are refused by schema-1 builds instead of opening without automation.

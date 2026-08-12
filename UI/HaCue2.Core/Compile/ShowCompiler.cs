@@ -364,8 +364,11 @@ public static class ShowCompiler
                     effect.ConfigJson)),
             ],
             AudioEffectEnvelopes = AudioEffectEnvelopes(project, media),
-            // Cue volume is authored in absolute dB. It lives in the envelope component (including the
-            // static one-point case), leaving send gains as independent route trims.
+            // Cue volume is authored in absolute dB, and leaves send gains as independent route trims. The
+            // authored level and its automation are lowered to SEPARATE slots: emitting a static one-point
+            // envelope for an un-automated cue armed the session's 25 ms envelope runner on every cue, and
+            // that runner then reverted every live fader edit within a tick.
+            VolumeDb = (float)media.LevelDb,
             VolumeEnvelope = VolumeEnvelope(project, media),
             PlacementOpacityEnvelopes = PlacementOpacityEnvelopes(project, media, placements),
             PlacementTransformEnvelopes = PlacementTransformEnvelopes(project, media, placements),
@@ -686,12 +689,18 @@ public static class ShowCompiler
     }
 
     /// <summary>The cue's absolute dB property lowered without changing value space. The session converts
-    /// the sampled dB value to gain only after interpolation, matching the editor and automation cues.</summary>
-    private static IReadOnlyList<ShowEnvelopePoint> VolumeEnvelope(HaCueProject project, MediaCueNode media)
+    /// the sampled dB value to gain only after interpolation, matching the editor and automation cues.
+    /// <para>Null when the cue has no volume track: the authored level rides
+    /// <see cref="ShowClipBinding.VolumeDb"/> instead, which keeps the session's envelope runner off an
+    /// un-automated cue entirely so a live fader edit has an uncontested slot to write.</para></summary>
+    private static IReadOnlyList<ShowEnvelopePoint>? VolumeEnvelope(HaCueProject project, MediaCueNode media)
     {
         var track = media.AutomationTracks.FirstOrDefault(candidate =>
             candidate.Target.PropertyId == AutomationPropertyIds.CueVolume
             && candidate.Target.ObjectId is null);
+        if (track is not { Enabled: true, Keyframes.Count: > 0 })
+            return null;
+
         return Envelope(
             project,
             track,

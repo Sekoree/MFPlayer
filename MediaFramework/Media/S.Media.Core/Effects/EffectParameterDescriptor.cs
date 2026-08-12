@@ -27,7 +27,15 @@ public sealed record EffectParameterDescriptor(
     EffectParameterScale Scale = EffectParameterScale.Linear,
     bool SupportsAutomation = true)
 {
-    public float Clamp(float value) => float.IsFinite(value)
-        ? Math.Clamp(value, Minimum, Maximum)
-        : Default;
+    /// <summary>Brings a control value into range. Non-finite input resolves toward the nearest BOUND, not
+    /// to <see cref="Default"/>: for a gain parameter, −inf means silence, and answering it with the
+    /// default (0 dB) turned an explicit mute into FULL level - the worst possible direction for an audio
+    /// failure. NaN has no direction and is the only case that can fall back to the default.</summary>
+    public float Clamp(float value) => value switch
+    {
+        _ when float.IsNaN(value) => Math.Clamp(Default, Minimum, Maximum),
+        float.NegativeInfinity => Minimum,
+        float.PositiveInfinity => Maximum,
+        _ => Math.Clamp(value, Minimum, Maximum),
+    };
 }

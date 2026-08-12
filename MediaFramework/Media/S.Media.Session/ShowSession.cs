@@ -1509,12 +1509,16 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             if (player.AudioRouter is not null && (_audioBackend is not null || programSends is not null))
             {
                 var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
-                // Seed the envelope component from the automation's value at the clip's FIRST frame, before
-                // anything attaches. StartEnvelopeRunner does not start until the end of the commit, so a clip
-                // whose automation begins below unity would otherwise attach at unity and burst until the
-                // runner's first tick - loud on a cue authored quiet. The runner then simply keeps writing the
-                // same component as the clip plays on.
-                voice.Level.Envelope = VolumeEnvelopes.Sample(binding.VolumeEnvelope, cueElapsed);
+                // Seed the cue-volume component at the clip's FIRST frame, before anything attaches. The
+                // authored base always applies; the automation slot is seeded only when a track owns the cue,
+                // and stays null otherwise so a live fader edit to the base is what the routes carry.
+                // StartEnvelopeRunner does not start until the end of the commit, so a clip whose automation
+                // begins below unity would otherwise attach at unity and burst until the runner's first tick -
+                // loud on a cue authored quiet. The runner then keeps writing the same component as it plays on.
+                voice.Level.Base = VolumeEnvelopes.LinearFromDb(binding.VolumeDb);
+                voice.Level.Envelope = binding.VolumeEnvelope is { Count: > 0 }
+                    ? VolumeEnvelopes.Sample(binding.VolumeEnvelope, cueElapsed)
+                    : null;
                 // The level every route attaches at, so the FIRST buffer the device sees is already at the
                 // composed level: 0 for a fade-in (the ramp lifts it), else the voice's own composition -
                 // the master trim it stamped at construction, times the envelope seeded just above.
@@ -2150,11 +2154,18 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
 /// the persistent fade level (what fade cues compose from), the cue-owned volume-envelope factor,
 /// the controller/group modifier, and the effective level the route gains are actually written with -
 /// fade × envelope × modifier × the session-wide <see cref="ShowSession.MasterTrim"/>.</summary>
+/// <param name="EnvelopeLevel">The cue-volume component in force: the sampled automation when a volume
+/// track owns the cue, otherwise <paramref name="BaseLevel"/>.</param>
+/// <param name="BaseLevel">The AUTHORED cue volume, live-editable through
+/// <see cref="ShowSession.ApplyActiveVolumeAsync"/>. Reported separately from
+/// <paramref name="EnvelopeLevel"/> so a host can show the operator what automation is currently
+/// shadowing instead of letting a static control look authoritative.</param>
 public sealed record ClipAudioLevels(
     float FadeLevel,
     float EnvelopeLevel,
     float ModifierLevel,
-    float EffectiveLevel);
+    float EffectiveLevel,
+    float BaseLevel = 1f);
 
 /// <summary>A mid-show audio-path failure surfaced by <see cref="ShowSession.PlaybackAlert"/>: the cue
 /// whose clip hit it, the router output id when one specific output errored (null = the clip's whole

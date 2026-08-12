@@ -547,6 +547,35 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
+    /// <summary>The volume track that owns this cue's level, when one does.</summary>
+    private AutomationTrack? LevelAutomationTrack => Cue is MediaCueNode media
+        ? media.AutomationTracks.FirstOrDefault(track =>
+            track.Enabled
+            && track.Target.ObjectId is null
+            && track.Target.PropertyId == AutomationPropertyIds.CueVolume
+            && track.Keyframes.Count > 0)
+        : null;
+
+    public bool LevelIsAutomated => LevelAutomationTrack is not null;
+
+    /// <summary>Says out loud that the box above is the BASE, not what the cue will actually play. Cue
+    /// volume is replace-authored, so a track shadows this value while it runs - and a static control that
+    /// looks authoritative while automation overrides it is exactly what the automation design forbids.
+    /// <para>The live "automated now" half needs a playhead value from the engine and is not wired yet.</para>
+    /// </summary>
+    public string LevelAutomationNote
+    {
+        get
+        {
+            if (LevelAutomationTrack is not { } track)
+                return "";
+
+            var values = track.Keyframes.Select(key => key.Value).ToList();
+            return $"automated by a volume track ({CuePresentation.Db(values.Min())} … "
+                   + $"{CuePresentation.Db(values.Max())}) — the value above is the base";
+        }
+    }
+
     private AudioEffectInstance? AudioGainEffect => Cue is MediaCueNode media
         ? media.AudioEffects.FirstOrDefault(effect => effect.EffectTypeId == S.Media.Routing.GainAudioEffect.EffectId)
         : null;

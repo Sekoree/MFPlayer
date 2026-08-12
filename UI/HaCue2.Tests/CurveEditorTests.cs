@@ -345,7 +345,9 @@ public sealed class CurveEditorTests
             Assert.Equal(4_800, lane.Keyframes[2].TimeMs);
 
             var text = editor.Copy();
-            Assert.StartsWith(LaneKeyframeClipboard.Header, text);
+            // Automation copies carry NATIVE ms/value, not the normalized knot format the curve-SHAPE
+            // editor uses - normalizing through the cue duration is what made a cross-cue paste collapse.
+            Assert.StartsWith(LaneKeyframeClipboard.AutomationHeader, text);
 
             // Paste lands at the primary selection and REPLACES the span it covers: the copied pair
             // spans 0.25, so pasting at 0 consumes the keyframe already at 0 and leaves the three

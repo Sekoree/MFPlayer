@@ -206,11 +206,19 @@
                                                IsHitTestVisible="False"
                                                Stroke="{DynamicResource GelAmber}"
                                                StrokeThickness="1.4" Margin="0,4" />
-                              <c:CurveCanvas Points="{Binding Points}" Shape="{Binding Shape}"
+                              <!-- This lane projects absolute-time AutomationTracks, so it takes the same
+                                   contract as the dedicated editor: arrow nudges step the snap grid rather
+                                   than 1% of the whole cue, a key released outside the lane is NOT deleted
+                                   (a lost capture must not be data loss), and Escape cancels the drag. -->
+                              <c:CurveCanvas AutomationProperties.Name="Inline automation lane"
+                                             LogicalNudges="True"
+                                             RemoveWhenDraggedOffCanvas="False"
+                                             Points="{Binding Points}" Shape="{Binding Shape}"
                                              Tangents="{Binding Tangents}"
                                              IsVisible="{Binding IsExpanded}"
                                              Gesture="OnLaneGesture"
                                              GestureCompleted="OnLaneGestureCompleted"
+                                             GestureCancelled="OnLaneGestureCancelled"
                                              SelectAllRequested="OnCanvasSelectAllKeyframes"
                                              CopyRequested="OnCanvasCopyKeyframes"
                                              PasteRequested="OnCanvasPasteKeyframes" />
