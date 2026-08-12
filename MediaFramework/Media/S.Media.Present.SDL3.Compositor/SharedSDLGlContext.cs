@@ -83,6 +83,10 @@ internal sealed class SharedSDLGlContext
         if (_threadCurrent == this)
             _threadCurrent = null;
 
+        // Same gate as Initialize: destroying the window mutates the global list a concurrent
+        // SDL_CreateWindow is walking.
+        using var videoDevice = SDL3Runtime.EnterVideoDevice();
+
         // Teardown runs against this context - make it current in case a probe displaced the binding.
         if (_window != nint.Zero && _glContext != nint.Zero)
         {
@@ -114,6 +118,11 @@ internal sealed class SharedSDLGlContext
 
     private void Initialize()
     {
+        // Serialized against every other SDL window/context builder in the process. This is the one
+        // that lost the race in practice: the composition compositor's context was still being built
+        // when the projector output's render thread called SDL_CreateWindow, and SDL segfaulted.
+        using var videoDevice = SDL3Runtime.EnterVideoDevice();
+
         SDL3Runtime.Acquire();
         try
         {

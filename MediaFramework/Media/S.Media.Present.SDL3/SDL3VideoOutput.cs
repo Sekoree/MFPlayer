@@ -326,6 +326,10 @@ public sealed unsafe class SDL3VideoOutput : INonBlockingVideoOutput, IDisposabl
 
     private void InitGraphics()
     {
+        // Serialized with every other SDL window builder in the process — this output runs on its own
+        // render thread too. See SDL3Runtime.EnterVideoDevice.
+        using var videoDevice = SDL3Runtime.EnterVideoDevice();
+
         // NotFocusable: a video-output window needs no keyboard focus, and Wayland delivers the clipboard /
         // primary-selection data offer only to the focused surface - so a focus-less window dodges SDL3 3.4.x's
         // null-deref in Wayland_data_offer_add_mime (uncatchable crash on a middle-click primary paste).
@@ -416,6 +420,8 @@ public sealed unsafe class SDL3VideoOutput : INonBlockingVideoOutput, IDisposabl
 
     private void TeardownGraphics()
     {
+        using var videoDevice = SDL3Runtime.EnterVideoDevice();
+
         if (_texture != nint.Zero)  { SDL.DestroyTexture(_texture);  _texture = nint.Zero; }
         if (_renderer != nint.Zero) { SDL.DestroyRenderer(_renderer); _renderer = nint.Zero; }
         if (_window != nint.Zero)   { SDL.DestroyWindow(_window);     _window = nint.Zero; }

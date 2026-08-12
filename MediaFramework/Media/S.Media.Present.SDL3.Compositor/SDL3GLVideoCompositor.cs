@@ -91,6 +91,12 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor, IVideoComp
         SilkGL? gl = null;
         GlVideoCompositor? probeCompositor = null;
         var acquired = false;
+
+        // The probe builds a real GL window and context, so it races every other SDL window builder
+        // in the process — including each video output's render thread. Scoped over the finally too:
+        // tearing the probe down mutates the same global window list.
+        using var videoDevice = SDL3Runtime.EnterVideoDevice();
+
         try
         {
             SDL3Runtime.Acquire();

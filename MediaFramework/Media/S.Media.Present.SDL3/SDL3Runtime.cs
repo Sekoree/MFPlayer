@@ -21,6 +21,34 @@ public static class SDL3Runtime
     private static int _refCount;
     private static int _autoThreadOutputCount;
 
+    /// <summary>
+    /// Serializes every mutation of SDL's process-global video state: the GL attribute block, window
+    /// creation and destruction, GL context creation, and subsystem init/quit. Hold it around a whole
+    /// "set attributes → create window → create context → make current" sequence, and around the
+    /// matching teardown. Do NOT hold it while rendering, swapping, or joining a thread.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is not defensive; it fixes a reproducible SIGSEGV.</b> Four call sites build SDL GL
+    /// windows on four different threads — the compositor probe, the shared compositor context, the
+    /// visualizer's offscreen context, and each video output's own render thread. Two of them
+    /// overlapping crashes inside <c>SDL_CreateWindow</c> (SEGV_MAPERR), or fails with
+    /// "EGL context already created" when the same global EGL state is read mid-mutation.
+    /// </para>
+    /// <para>
+    /// <c>SDL_GL_SetAttribute</c> makes the ordering requirement stricter than "one call at a time":
+    /// the attributes live in ONE process-global block that the following <c>SDL_CreateWindow</c> and
+    /// <c>SDL_GL_CreateContext</c> consume. Two threads interleaving there silently give each other's
+    /// windows the wrong pixel format even when nothing crashes — which is why the scope has to span
+    /// the whole sequence rather than each call.
+    /// </para>
+    /// <para>
+    /// Reentrant, so a scope may nest <see cref="Acquire"/> / <see cref="Release"/> or a teardown
+    /// helper that takes it again.
+    /// </para>
+    /// </remarks>
+    public static Lock.Scope EnterVideoDevice() => Gate.EnterScope();
+
     /// <summary>Initialise the SDL video subsystem (idempotent, ref-counted).</summary>
     public static void Acquire()
     {

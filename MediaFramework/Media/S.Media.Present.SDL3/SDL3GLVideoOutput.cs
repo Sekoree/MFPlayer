@@ -962,6 +962,12 @@ public sealed unsafe class SDL3GLVideoOutput : INonBlockingVideoOutput, IVideoOu
 
     private void InitGraphics()
     {
+        // The GL attribute block, the window list and SDL's EGL state are process-global, and every
+        // video output builds its window on its OWN render thread. Overlapping this with the
+        // composition compositor's context creation segfaults inside SDL_CreateWindow — see
+        // SDL3Runtime.EnterVideoDevice. Held for the whole sequence, released before the render loop.
+        using var videoDevice = SDL3Runtime.EnterVideoDevice();
+
         ApplyStandardGlContextAttributes();
 
         if (_textureMirrorAnchor is { } shareFrom)
@@ -1164,6 +1170,10 @@ public sealed unsafe class SDL3GLVideoOutput : INonBlockingVideoOutput, IVideoOu
 
     private void TeardownGraphicsCore()
     {
+        // Destroying a window mutates the same global list creation walks. An output going away while
+        // another builds its window is the same race as two creations overlapping.
+        using var videoDevice = SDL3Runtime.EnterVideoDevice();
+
         MediaDiagnostics.SwallowDisposeErrors(() => _renderer?.Dispose(), "SDL3GLVideoOutput.TeardownGraphicsCore: renderer");
         _renderer = null;
         MediaDiagnostics.SwallowDisposeErrors(_win32Nv12Device.DisposeOwnedInteropHost, "SDL3GLVideoOutput.TeardownGraphicsCore: Win32 NV12 resolver");
