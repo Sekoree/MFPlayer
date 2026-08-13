@@ -1276,7 +1276,18 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                 if (_fmt != null)
                 {
                     var f = _fmt;
-                    f->pb = null;
+                    // Detach the AVIO context ONLY when StreamAvioBridge owns it. That is the custom-IO case
+                    // (OpenInternalLargeBufferFile / OpenInternalFromStream), where the bridge allocated _avio,
+                    // set AVFMT_FLAG_CUSTOM_IO, and frees it itself in _streamIo.Dispose() below.
+                    //
+                    // On the NATIVE file path FFmpeg allocates pb inside avformat_open_input, and
+                    // avformat_close_input freeing it is exactly what releases the OS file handle. Nulling pb
+                    // unconditionally hid it from the close, so EVERY container opened from a path stayed open
+                    // for the life of the process — one descriptor per open, on the success path too. On Linux
+                    // that is an fd leak; on Windows the file also stays LOCKED, so media added to a show could
+                    // not be moved, renamed or replaced until the app quit.
+                    if (_streamIo is not null)
+                        f->pb = null;
                     avformat_close_input(&f);
                     _fmt = null;
                 }
