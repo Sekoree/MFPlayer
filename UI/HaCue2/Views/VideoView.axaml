@@ -602,8 +602,14 @@
             <Border Grid.Column="0" Classes="badge"><TextBlock Text="MAPPING" /></Border>
             <TextBlock Grid.Column="1" Classes="mono small" VerticalAlignment="Center"
                        Text="{Binding MappingScopeNote}" />
-            <ToggleButton Grid.Column="2" Classes="tight" Content="CALIBRATION GRID"
-                          IsChecked="{Binding IsCalibrationOn}" Click="OnCalibration"
+            <!-- A real latch, so unlike the inspector key this stays a ToggleButton — but an explicit
+                 theme, because a bare one misses the booth skin entirely (an implicit ControlTheme
+                 matches the exact type, and ToggleButton is not Button), and OneWay, because
+                 IsCalibrationOn is COMPUTED from the calibrating set. Bound two-way it tried to write a
+                 get-only property on every single click and failed as a silent binding error. The click
+                 handler is the only writer, and the engine is allowed to refuse it. -->
+            <ToggleButton Grid.Column="2" Theme="{StaticResource ChipToggle}" Content="CALIBRATION GRID"
+                          IsChecked="{Binding IsCalibrationOn, Mode=OneWay}" Click="OnCalibration"
                           AutomationProperties.Name="Toggle persistent output calibration grid"
                           ToolTip.Tip="Shows orientation corners, a ten-by-ten warp grid and section boundaries on this output until the mapping editor closes." />
             <Button Grid.Column="3" Classes="tight" Content="✕ CLOSE" Click="OnCloseMapping"

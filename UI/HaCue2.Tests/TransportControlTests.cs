@@ -1,5 +1,7 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
@@ -29,6 +31,22 @@ public class TransportControlTests
         window.Show();
         Dispatcher.UIThread.RunJobs();
         return window;
+    }
+
+    /// <summary>Finds a transport key the way a screen reader would, by the name it announces.</summary>
+    private static Button TransportButton(Control view, string automationName) =>
+        view.GetVisualDescendants()
+            .OfType<Button>()
+            .Single(button => AutomationProperties.GetName(button) == automationName);
+
+    /// <summary>A whole click — press AND release, which is what raises Click.</summary>
+    private static void Click(Window window, Control target)
+    {
+        var centre = target.TranslatePoint(
+            new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window)!.Value;
+        window.MouseDown(centre, MouseButton.Left);
+        window.MouseUp(centre, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
     }
 
     [Fact]
@@ -110,6 +128,85 @@ public class TransportControlTests
 
         // A brush against the button must not take the show down.
         Assert.False(shell.Cues.IsPanicArming, "releasing PANIC early left it armed");
+    });
+
+    [Fact]
+    public Task ClickingTheInspectorToggleActuallyShowsAndHidesTheRightColumn() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var view = new CuesView();
+            var window = Host(view, shell.Cues);
+            var toggle = TransportButton(view, "Show or hide cue inspector");
+
+            Assert.True(shell.Cues.IsRightPanelOpen, "the inspector should start open at 1600 px");
+
+            Click(window, toggle);
+
+            // This button did NOTHING, on any click. It was a ToggleButton whose IsChecked was bound to
+            // IsRightPanelOpen, and IsChecked binds two-way by DEFAULT: the click wrote the property
+            // through the binding, and then the Click handler inverted it straight back. Two writers,
+            // one per click, cancelling exactly.
+            //
+            // Only a real pointer can see this. The responsive test next door sets IsRightPanelOpen
+            // itself, so it exercised the half that was never broken.
+            Assert.False(shell.Cues.IsRightPanelOpen, "clicking HIDE INSPECTOR left the inspector open");
+            Assert.Equal(0, shell.Cues.RightPanelWidth.Value);
+
+            Click(window, toggle);
+
+            Assert.True(shell.Cues.IsRightPanelOpen, "clicking SHOW INSPECTOR left the inspector hidden");
+            Assert.Equal(316, shell.Cues.RightPanelWidth.Value);
+        });
+
+    [Fact]
+    public Task TheInspectorToggleIsSkinnedLikeTheKeysBesideIt() => ShellFixture.WithShell(shell =>
+    {
+        var view = new CuesView();
+        Host(view, shell.Cues);
+
+        var inspector = TransportButton(view, "Show or hide cue inspector");
+        var standby = TransportButton(view, "Move standby up");
+
+        // Avalonia resolves an implicit ControlTheme by STYLE KEY — the control's own concrete type.
+        // ToggleButton is not Button, so the booth theme keyed off {x:Type Button} never reached it: it
+        // drew in SimpleTheme's stock chrome beside eight mono booth keys, and `.tight`, which is
+        // declared INSIDE that theme, styled nothing at all.
+        //
+        // Asserted against the neighbouring key rather than against literals, so the two move together
+        // when the skin does.
+        Assert.Equal(standby.FontFamily, inspector.FontFamily);
+        Assert.Equal(standby.Padding, inspector.Padding);
+    });
+
+    [Fact]
+    public Task TheActiveGroupExpanderDrawsTheTreesChevron() => ShellFixture.WithShell(shell =>
+    {
+        shell.Cues.ActivePanelRows.Add(new ActiveGroupRow
+        {
+            GroupId = Guid.NewGuid(),
+            Number = "12",
+            Label = "Walk-in playlist",
+            Mode = "playlist",
+        });
+
+        var view = new CuesView();
+        var window = Host(view, shell.Cues);
+
+        var expander = window.GetVisualDescendants()
+            .OfType<ToggleButton>()
+            .Single(button => AutomationProperties.GetName(button) == "Expand active group");
+        var row = (ActiveGroupRow)expander.DataContext!;
+
+        // The chevron theme templates a Path and flips its geometry on :checked. SimpleTheme's stock
+        // ToggleButton — which is what this got, because an implicit ControlTheme matches the exact type
+        // and the booth theme is keyed off {x:Type Button} — templates a ContentPresenter and would have
+        // drawn the literal "▾" that used to be its Content, in Inter, in a stock box.
+        Assert.Single(expander.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>());
+
+        Assert.True(row.IsExpanded, "a group opens showing its children");
+        Click(window, expander);
+
+        Assert.False(row.IsExpanded, "clicking the chevron did not collapse the group");
     });
 
     [Fact]

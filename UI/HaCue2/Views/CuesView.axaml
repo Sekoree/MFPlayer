@@ -63,10 +63,19 @@
         </ToggleButton>
 
         <Border Grid.Column="9" Classes="chip"><TextBlock Text="{Binding ChaseReadout}" /></Border>
-        <ToggleButton Grid.Column="7" HorizontalAlignment="Right" Classes="tight"
-                      IsChecked="{Binding IsRightPanelOpen}" Click="OnToggleRightPanel"
-                      Content="{Binding RightPanelToggleLabel}"
-                      AutomationProperties.Name="Show or hide cue inspector" />
+        <!-- A Button, not a ToggleButton, and the click handler is the ONLY writer.
+             As a ToggleButton it did nothing at all: IsChecked binds two-way by default, so the click
+             wrote IsRightPanelOpen through the binding and the handler then inverted it straight back.
+             It was also off-skin, because Avalonia matches an implicit ControlTheme on the exact type —
+             ToggleButton never saw the `{x:Type Button}` theme, so it fell through to Simple's stock
+             chrome and `.tight`, which lives inside that theme, applied to nothing.
+             The label already carries the state, exactly like PAUSE beside it, so there is no latch to
+             show; `.icon` keeps it the same height as the STBY keys rather than `.tight`, which is for
+             the shorter buttons in a `.chain` row. -->
+        <Button Grid.Column="7" HorizontalAlignment="Right" Classes="icon"
+                Click="OnToggleRightPanel"
+                Content="{Binding RightPanelToggleLabel}"
+                AutomationProperties.Name="Show or hide cue inspector" />
       </Grid>
     </Border>
 
@@ -322,8 +331,8 @@
             <ListBox.DataTemplates>
 
               <DataTemplate DataType="vm:ActiveGroupRow">
-                <!-- Double-tap anywhere on the header toggles the expander — the ▾ works too, but a
-                     22-pixel toggle is a small target for a booth in the dark. -->
+                <!-- Double-tap anywhere on the header toggles the expander — the chevron works too, but
+                     a 10-pixel target is a small one for a booth in the dark. -->
                 <Border Classes="actrow grp" Classes.near="{Binding IsNearEnd}"
                         DoubleTapped="OnToggleGroupRow">
                   <StackPanel Margin="0,0,10,0">
@@ -331,9 +340,16 @@
                       <Border Grid.Column="0" Classes="stripe is-go grp"
                               Classes.fading="{Binding IsFading}" />
                       <!-- Expanded by default: a group that hid its children would show LESS than the
-                           flat list it replaced. -->
-                      <ToggleButton Grid.Column="1" Classes="tight" MinWidth="20" Padding="3,0"
-                                    IsChecked="{Binding IsExpanded}" Content="▾"
+                           flat list it replaced.
+                           The cue TREE's chevron, deliberately. As a bare ToggleButton this drew in
+                           SimpleTheme's stock chrome — Avalonia matches an implicit ControlTheme on the
+                           exact type, so the booth theme keyed off {x:Type Button} never reached it and
+                           `.tight` styled nothing. The tree already answers this exact gesture on this
+                           exact object, a group, so it gets the tree's answer: one glyph, flipped when
+                           open and congo while it is. -->
+                      <ToggleButton Grid.Column="1"
+                                    Theme="{StaticResource TreeDataGridExpandCollapseChevron}"
+                                    IsChecked="{Binding IsExpanded}"
                                     AutomationProperties.Name="Expand active group"
                                     ToolTip.Tip="Show the cues inside this group" />
                       <TextBlock Grid.Column="2" Classes="qnum" Text="{Binding Number}" />

@@ -247,6 +247,17 @@ public partial class VideoViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Re-announces the calibration latch when nothing here changed.
+    /// </summary>
+    /// <remarks>
+    /// A ToggleButton flips itself on the click, before the engine is asked. If the answer is no —
+    /// there is no show running, most often — nothing in this view-model moves, so nothing notifies,
+    /// and the button keeps a latch it awarded itself. Raising the UNCHANGED value is what pushes the
+    /// binding back over the top of the control's own flip.
+    /// </remarks>
+    public void ReassertCalibration() => OnPropertyChanged(nameof(IsCalibrationOn));
+
+    /// <summary>
     /// The record pane for the selected output (register item 30).
     /// </summary>
     /// <remarks>

@@ -1,4 +1,9 @@
+using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using HaCue2.Core.Model;
@@ -112,6 +117,62 @@ public class VideoViewRenderTests
         // …destination in pixels of the output raster, which with no raster stated is the composition's.
         Assert.Contains(1920m, values);
     });
+
+    /// <summary>Finds a mapping-bar control by the name it announces.</summary>
+    private static T MappingControl<T>(Window window, string automationName) where T : Control =>
+        window.GetVisualDescendants()
+            .OfType<T>()
+            .Single(control => AutomationProperties.GetName(control) == automationName);
+
+    [Fact]
+    public Task TheCalibrationLatchWearsTheBoothSkin() => ShellFixture.WithShell(shell =>
+    {
+        var (video, _, _) = Rig(shell);
+        video.OpenMapping();
+        video.Refresh();
+        var window = Host(new VideoView(), video);
+
+        var calibration = MappingControl<ToggleButton>(
+            window, "Toggle persistent output calibration grid");
+        var close = MappingControl<Button>(window, "Close mapping editor");
+
+        // It was a bare ToggleButton, so the booth theme — keyed off {x:Type Button}, and matched by
+        // EXACT type — never reached it: it drew in SimpleTheme's chrome, in Inter, beside the mono
+        // ✕ CLOSE key it shares a chain row with. Compared against that neighbour rather than against a
+        // literal font, so the two stay in step when the skin moves.
+        Assert.Equal(close.FontFamily, calibration.FontFamily);
+    });
+
+    [Fact]
+    public Task ACalibrationThatTurnedNothingOnDoesNotLeaveTheButtonLatched() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var (video, _, _) = Rig(shell);
+            video.OpenMapping();
+            video.Refresh();
+            var window = Host(new VideoView(), video);
+
+            var calibration = MappingControl<ToggleButton>(
+                window, "Toggle persistent output calibration grid");
+
+            Assert.False(video.IsCalibrationOn);
+            Assert.False(calibration.IsChecked);
+
+            var centre = calibration.TranslatePoint(
+                new Point(calibration.Bounds.Width / 2, calibration.Bounds.Height / 2), window)!.Value;
+            window.MouseDown(centre, MouseButton.Left);
+            window.MouseUp(centre, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+
+            // Nothing turned the grid on — there is no engine behind this view, which is exactly the
+            // shape of the refusal an operator meets ("the show is not running"). The button had
+            // already latched ITSELF on the click, and IsCalibrationOn is computed, so nothing in the
+            // view-model moved to contradict it.
+            Assert.False(video.IsCalibrationOn);
+            Assert.False(
+                calibration.IsChecked,
+                "CALIBRATION GRID stayed lit over an output showing no grid");
+        });
 
     /// <summary>The splitter is reachable on the mapping editor, which now opens over the output it belongs to.</summary>
     [Fact]

@@ -145,13 +145,24 @@ public partial class VideoView : UserControl
 
     private async Task SetCalibrationAsync(VideoViewModel video, bool enabled)
     {
-        if (video.SelectedOutput is not { } output
-            || this.FindAncestorOfType<ShellWindow>()?.DataContext is not ShellViewModel shell)
-            return;
-        if (await shell.SetCalibrationAsync(output.Id, enabled) is { } problem)
-            video.NoteProblem(problem);
-        else
-            video.NoteCalibration(output.Id, enabled);
+        try
+        {
+            if (video.SelectedOutput is not { } output
+                || this.FindAncestorOfType<ShellWindow>()?.DataContext is not ShellViewModel shell)
+                return;
+            if (await shell.SetCalibrationAsync(output.Id, enabled) is { } problem)
+                video.NoteProblem(problem);
+            else
+                video.NoteCalibration(output.Id, enabled);
+        }
+        finally
+        {
+            // The button flipped ITSELF on the click, before the engine was asked anything. Every way
+            // out of here — refused because no show is running, no output selected, or done — has to
+            // put the latch back onto the truth, or CALIBRATION GRID sits lit over an output that is
+            // showing no grid at all. Cheap, and idempotent on the path that already notified.
+            video.ReassertCalibration();
+        }
     }
 
     private void OnLayoutGesture(object? sender, PlacementGesture e) => Video?.ApplyLayoutGesture(e);
