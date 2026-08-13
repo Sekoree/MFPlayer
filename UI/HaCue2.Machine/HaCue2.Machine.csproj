@@ -4,7 +4,7 @@
          actually contains.
 
          A separate library from HaCue2.Core on purpose. Core answers questions about the DOCUMENT and
-         must stay runnable where there is no audio backend and no window system — that is what lets
+         must stay runnable where there is no audio backend and no window system - that is what lets
          `hacue2-check` run in CI over a fixture project. Everything here needs real hardware or a real
          decoder, so it lives one layer out and is composed in by the app. -->
 
@@ -20,7 +20,7 @@
         <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Decode.FFmpeg\S.Media.Decode.FFmpeg.csproj" />
         <!-- Discovery only: which senders are on the network is a question about this machine's view of
-             the world, exactly like which audio devices it has. Nothing here OPENS a receiver — that is
+             the world, exactly like which audio devices it has. Nothing here OPENS a receiver - that is
              the engine's job, and NdiSources answers "empty, because…" on a box without the runtime. -->
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.NDI\S.Media.NDI.csproj" />
     </ItemGroup>

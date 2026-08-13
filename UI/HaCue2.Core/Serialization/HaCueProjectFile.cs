@@ -17,7 +17,7 @@ namespace HaCue2.Core.Serialization;
 /// </para>
 /// <para>
 /// <b>Tolerant below, closed above.</b> An older document loads, because every addition to this schema
-/// is additive and nullable. A NEWER one is refused with a clear message rather than partially read —
+/// is additive and nullable. A NEWER one is refused with a clear message rather than partially read -
 /// this build cannot know what it would be ignoring, and a show that silently lost its patch on open
 /// is worse than one that refuses to open.
 /// </para>
@@ -238,18 +238,18 @@ public sealed class HaCueProjectFormatException : Exception
 /// <remarks>
 /// Source-generated rather than reflection-based so the app stays NativeAOT-clean, matching the rest
 /// of the repo. Every derived cue kind is listed because the generator only walks types it can see,
-/// and a missing one fails at run time on the first document that contains it — not at build time.
+/// and a missing one fails at run time on the first document that contains it - not at build time.
 /// <para>
 /// Three settings are decisions, not defaults:
 /// </para>
 /// <list type="bullet">
-///   <item><b>camelCase</b> — safe because this format is new and HaCue2 is its only reader. The
+///   <item><b>camelCase</b> - safe because this format is new and HaCue2 is its only reader. The
 ///   engine's <c>ShowDocument</c> deliberately has no naming policy, since its property names ARE its
 ///   wire names for an external C ABI consumer; that constraint does not apply here.</item>
-///   <item><b>String enums</b> — a numeric enum silently changes meaning when someone inserts a member,
+///   <item><b>String enums</b> - a numeric enum silently changes meaning when someone inserts a member,
 ///   and this document has no external reader forcing the numeric form on it. A show file that says
 ///   <c>"skipOnward"</c> also survives being read by a human during a support call.</item>
-///   <item><b>No <c>WhenWritingDefault</c></b> — omitting CLR defaults would drop <c>enabled: false</c>
+///   <item><b>No <c>WhenWritingDefault</c></b> - omitting CLR defaults would drop <c>enabled: false</c>
 ///   from the file, and reading it back would hit the property initializer and turn the cue back on:
 ///   a cue disabled for a performance silently firing in the next one. Every property is written.</item>
 /// </list>

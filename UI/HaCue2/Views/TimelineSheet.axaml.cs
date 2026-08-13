@@ -51,12 +51,12 @@ public partial class TimelineSheet : UserControl
         e.Handled = true;
     }
 
-    /// <summary>Closing the sheet is the Cues view's state, not the sheet's — the sheet is only ever
+    /// <summary>Closing the sheet is the Cues view's state, not the sheet's - the sheet is only ever
     /// a projection of "is the timeline open".</summary>
     /// <remarks>
     /// Through <c>Timeline.Owner</c>, never an ancestor walk: in the floating window there is no
     /// <see cref="CuesView"/> above this control, and the ancestor form made CLOSE a silent no-op
-    /// there. Undocked, CLOSE means "close the editor", not "dock it" — <c>RequestClose</c> takes the
+    /// there. Undocked, CLOSE means "close the editor", not "dock it" - <c>RequestClose</c> takes the
     /// window down without the re-dock its ordinary Closed handler performs.
     /// </remarks>
     private void OnClose(object? sender, RoutedEventArgs e)
@@ -70,7 +70,7 @@ public partial class TimelineSheet : UserControl
     }
 
     // Handled here rather than bound: a lane lives in a DataTemplate whose DataContext is one lane, and
-    // the edit belongs to the sheet — the lane is a projection, not the thing holding the journal.
+    // the edit belongs to the sheet - the lane is a projection, not the thing holding the journal.
     private void OnClipGesture(object? sender, ClipGesture e) => Timeline?.ApplyClipGesture(e);
 
     private void OnClipGestureCompleted(object? sender, EventArgs e) => Timeline?.EndGesture();
@@ -162,7 +162,7 @@ public partial class TimelineSheet : UserControl
     }
 
     /// <summary>
-    /// Runs the group from the playhead — the rehearsal verb.
+    /// Runs the group from the playhead - the rehearsal verb.
     /// </summary>
     /// <remarks>
     /// Distinct from GO, which always starts a group at its top. What somebody rehearsing a scene wants
@@ -184,7 +184,7 @@ public partial class TimelineSheet : UserControl
     /// </summary>
     /// <remarks>
     /// The GROUP, not the show: a timeline sheet is open on one scene, and an operator pressing stop
-    /// inside it is asking for that scene to stop — not for the music bed running under the whole act
+    /// inside it is asking for that scene to stop - not for the music bed running under the whole act
     /// from a different list.
     /// </remarks>
     private async void OnStopTimeline(object? sender, RoutedEventArgs e)
@@ -206,7 +206,7 @@ public partial class TimelineSheet : UserControl
     /// Places the playhead where the ruler was clicked.
     /// </summary>
     /// <remarks>
-    /// Measured against the ruler's own width, which starts after the label column — so the fraction
+    /// Measured against the ruler's own width, which starts after the label column - so the fraction
     /// the view-model gets is a fraction of the TRACKS, not of the whole sheet. Getting that wrong
     /// would put the playhead a fixed distance off, worst at the left where it matters most.
     /// </remarks>
@@ -264,12 +264,12 @@ public partial class TimelineSheet : UserControl
         e.Handled = true;
     }
 
-    /// <summary>The drag ended without a release — window deactivated, or something else took the
+    /// <summary>The drag ended without a release - window deactivated, or something else took the
     /// pointer. Same reset, so a later hover cannot resume scrubbing.</summary>
     private void OnRulerCaptureLost(object? sender, PointerCaptureLostEventArgs e) =>
         _rulerDragging = false;
 
-    /// <summary>A lane label click selects the lane's cue — the same selection the tree, the
+    /// <summary>A lane label click selects the lane's cue - the same selection the tree, the
     /// inspector, "+ AUTOMATION" and DUCK all act on.</summary>
     private void OnLaneLabelPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -293,7 +293,7 @@ public partial class TimelineSheet : UserControl
     /// Moves the sheet between the bottom of the Cues view and a window of its own.
     /// </summary>
     /// <remarks>
-    /// The same view-model in both, so an edit made in one is already in the other — there is one
+    /// The same view-model in both, so an edit made in one is already in the other - there is one
     /// timeline, and two ways to look at it. The window closing docks it again rather than leaving a
     /// sheet nobody can see: a "close" that hides a panel with no way back is how a feature goes
     /// missing.
@@ -364,8 +364,8 @@ public partial class TimelineSheet : UserControl
     /// Adds an automation track to the selected cue, from the footer's property picker.
     /// </summary>
     /// <remarks>
-    /// Delegates to the inspector's <c>AddLane</c> — the one place that knows which kinds a cue can
-    /// carry — so the footer affordance and the inspector's stay one behaviour. The refusal goes to
+    /// Delegates to the inspector's <c>AddLane</c> - the one place that knows which kinds a cue can
+    /// carry - so the footer affordance and the inspector's stay one behaviour. The refusal goes to
     /// the transport row, same as Duck's.
     /// </remarks>
     private void OnAddLane(object? sender, RoutedEventArgs e)
@@ -375,7 +375,7 @@ public partial class TimelineSheet : UserControl
             return;
 
         // The menu already disables what the selection cannot carry, so reaching here with a refusal
-        // means no cue is selected at all — which the menu has no way to grey out.
+        // means no cue is selected at all - which the menu has no way to grey out.
         if (!inspector.CanAddLane(propertyId))
         {
             timeline.TransportProblem =

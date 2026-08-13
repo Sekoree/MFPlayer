@@ -78,7 +78,7 @@ public class RecordingStatusTests
     [Fact]
     public void AStreamIsNotJudgedOnItsPattern()
     {
-        // A stream's container follows its protocol — RTMP takes FLV whatever the pattern says — so the
+        // A stream's container follows its protocol - RTMP takes FLV whatever the pattern says - so the
         // extension is not a thing to fail it on.
         var project = WithOutput(
             VideoOutputKind.Stream, new RecordTarget { Url = "rtmp://example/app/key", Pattern = "ignored.flac" });

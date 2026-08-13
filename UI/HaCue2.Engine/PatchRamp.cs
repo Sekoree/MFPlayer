@@ -8,7 +8,7 @@ namespace HaCue2.Engine;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The bay's own <c>UpdatePatch</c> reconciles a matrix over the next chunk — a few milliseconds, which
+/// The bay's own <c>UpdatePatch</c> reconciles a matrix over the next chunk - a few milliseconds, which
 /// is right for an operator dragging a cell and wrong for a cue that says "over four seconds". So the
 /// cue's ramp is stepped HERE, pushing a series of intermediate matrices, and the document is written
 /// once with the destination values.
@@ -19,7 +19,7 @@ namespace HaCue2.Engine;
 /// operator authored the number on.
 /// </para>
 /// <para>
-/// <b>Mute is not interpolated</b> — it is a state, not a level. A cell that ends muted rides its gain
+/// <b>Mute is not interpolated</b> - it is a state, not a level. A cell that ends muted rides its gain
 /// down and mutes at the end; one that ends unmuted unmutes at the start and rides up. Either way the
 /// audible result is a ramp rather than a step, and the end state is exactly what the document says.
 /// </para>
@@ -39,7 +39,7 @@ public static class PatchRamp
     /// <paramref name="progress"/> of the way from where it was.
     /// </summary>
     /// <remarks>
-    /// Keyed off the DESTINATION, so a cell the patch cue does not mention keeps whatever it has —
+    /// Keyed off the DESTINATION, so a cell the patch cue does not mention keeps whatever it has -
     /// which is the partial-recall promise, held one frame at a time. A destination cell with no prior
     /// value fades up from silence rather than appearing at full level.
     /// </remarks>

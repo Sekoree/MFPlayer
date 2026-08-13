@@ -1,6 +1,6 @@
 # S.Media.Control
 
-Show control for MFPlayer. Composes the control runtime (`S.Control` — surfaces, Mond scripting,
+Show control for MFPlayer. Composes the control runtime (`S.Control` - surfaces, Mond scripting,
 command dispatch, bindings), its contracts (`S.Control.Abstractions`), PortMidi MIDI (`PMLib`)
 and OSC (`OSCLib`).
 

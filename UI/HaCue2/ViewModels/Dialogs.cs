@@ -14,12 +14,12 @@ namespace HaCue2.ViewModels;
 /// <para>
 /// Gathered in one file on purpose. These are the app's whole vocabulary of "make a new thing", and
 /// keeping them together is what makes it obvious that a new audio line and a new video output ask for
-/// the same shape of information — and that every one of them ends in a command rather than a direct
+/// the same shape of information - and that every one of them ends in a command rather than a direct
 /// mutation.
 /// </para>
 /// <para>
 /// Each returns a <see cref="PromptViewModel"/> or null. Null means the button had nothing to act on
-/// (no selection, nothing to add to), and the caller simply does not open a dialog — which is quieter
+/// (no selection, nothing to add to), and the caller simply does not open a dialog - which is quieter
 /// than a modal that says "select something first".
 /// </para>
 /// </remarks>
@@ -37,14 +37,14 @@ public static class Dialogs
     /// <remarks>
     /// <para>
     /// <b>The device is CHOSEN, not typed.</b> This box enumerates fifteen outputs across three driver
-    /// families with names like <c>HD-Audio Generic: HDMI 0 (hw:0,3)</c> — nobody types that from
+    /// families with names like <c>HD-Audio Generic: HDMI 0 (hw:0,3)</c> - nobody types that from
     /// memory, and a hint that does not match is a silent absence at the venue rather than an error
     /// here. With no backend to ask (a preview, a headless capture) it falls back to a free-text hint,
     /// which is also the honest thing for a show authored on a laptop for a rig it has never seen.
     /// </para>
     /// <para>
     /// <b>The host API narrows the list rather than being stored.</b> The same interface appears as
-    /// "Scarlett 2i2 USB: Audio (hw:3,0)" under ALSA and "Scarlett 2i2 3rd Gen Pro" under JACK — two
+    /// "Scarlett 2i2 USB: Audio (hw:3,0)" under ALSA and "Scarlett 2i2 3rd Gen Pro" under JACK - two
     /// different names for one box, and picking the wrong one is how a show ends up on the wrong
     /// driver. What travels in the document is the NAME, because that is what the hint matches on.
     /// </para>
@@ -97,7 +97,7 @@ public static class Dialogs
 
         var hosts = catalog.HostApis;
 
-        // "Any" first, so a rig with one driver family needs no decision — and so a show authored
+        // "Any" first, so a rig with one driver family needs no decision - and so a show authored
         // against a name that exists under several of them can still be pointed at any of them.
         var hostOptions = new List<string> { "any" };
         hostOptions.AddRange(hosts);
@@ -123,14 +123,14 @@ public static class Dialogs
             var found = catalog.OutputsFor(chosen);
 
             // The channel count follows the device, because it is the number an operator would
-            // otherwise have to look up and get wrong — the patch is built against it.
+            // otherwise have to look up and get wrong - the patch is built against it.
             device.Options = [.. found.Select(Label)];
             device.SelectedIndex = Math.Max(0, found.ToList().FindIndex(item => item.IsDefault));
         }
 
         // Everything that FOLLOWS the chosen device. Called explicitly as well as on Picked, because
         // Picked fires on a CHANGE of index and the list opens already pointing at the default device:
-        // an operator who accepts that default — the common case — changed nothing, so nothing fired,
+        // an operator who accepts that default - the common case - changed nothing, so nothing fired,
         // and the line was created with the two channels the field was born with rather than the
         // eight the device has.
         void FollowDevice()
@@ -151,7 +151,7 @@ public static class Dialogs
 
             // Filled in ONLY when the device's own rate differs from the show's. Prefilling every line
             // with its device rate would write an explicit rate into projects that never needed one and
-            // turn a clock master into a validation error the moment its driver reported 44.1 — and
+            // turn a clock master into a validation error the moment its driver reported 44.1 - and
             // leaving it blank when the device genuinely cannot do the mix rate is the case the field
             // exists for. So the dialog takes a position exactly when there is a disagreement to see.
             var native = (int)Math.Round(picked.DefaultSampleRate);
@@ -195,7 +195,7 @@ public static class Dialogs
     }
 
     /// <summary>
-    /// The rates a device picker offers. Typed values are still accepted — it is a suggestion list.
+    /// The rates a device picker offers. Typed values are still accepted - it is a suggestion list.
     /// </summary>
     /// <remarks>
     /// The two families and their multiples, because a device that will not do 48 k is almost always a
@@ -242,7 +242,7 @@ public static class Dialogs
     /// opens, and null is the one that keeps FOLLOWING the mix rate if it is ever changed. Writing the
     /// number would silently pin the line to whatever the rate happened to be on the day it was added.
     /// Anything unparseable or outside the range the validator accepts is treated as empty rather than
-    /// stored — a typo must not become a line that fails the status pass with no way to see why.
+    /// stored - a typo must not become a line that fails the status pass with no way to see why.
     /// </remarks>
     private static int? NativeRate(PromptField? rate) =>
         rate is not null
@@ -266,7 +266,7 @@ public static class Dialogs
     /// recall, or when the rig came up on the wrong speakers.
     /// </para>
     /// <para>
-    /// The consequences are COUNTED from the document, not described in general terms — "removes 4
+    /// The consequences are COUNTED from the document, not described in general terms - "removes 4
     /// patch cells" is something an operator can weigh, and "may affect the patch" is not.
     /// </para>
     /// </remarks>
@@ -297,8 +297,8 @@ public static class Dialogs
     /// <remarks>
     /// <para>
     /// Register item 11's cascade, finally reachable. <c>ProjectEdits.DeleteLogicalChannel</c> has
-    /// existed — cleaning up patch cells, cue sends, snapshot cells, group membership, patch-cue levels
-    /// and fade targets as ONE undoable edit — with nothing in the app calling it, while the pane's own
+    /// existed - cleaning up patch cells, cue sends, snapshot cells, group membership, patch-cue levels
+    /// and fade targets as ONE undoable edit - with nothing in the app calling it, while the pane's own
     /// footer advertised the behaviour. An operator could add a logical output and never remove one.
     /// </para>
     /// <para>
@@ -350,7 +350,7 @@ public static class Dialogs
 
         return new PromptViewModel(
             $"Remove group “{group.Name}”?",
-            $"{group.MemberIds.Count} output(s) stay exactly as they are — only the link between them goes",
+            $"{group.MemberIds.Count} output(s) stay exactly as they are - only the link between them goes",
             [],
             _ =>
             {
@@ -429,7 +429,7 @@ public static class Dialogs
     /// A new output group.
     /// </summary>
     /// <remarks>
-    /// Grouping is an editing convenience only (register item 9) — the mix math stays per channel — so
+    /// Grouping is an editing convenience only (register item 9) - the mix math stays per channel - so
     /// this creates a name and nothing else. Membership is set by selecting outputs, which is where
     /// the operator can see what they are grouping.
     /// </remarks>
@@ -444,7 +444,7 @@ public static class Dialogs
     /// </para>
     /// <para>
     /// The group is NOT optional here. A pair that is not grouped is two channels that happen to be
-    /// called L and R — which is exactly the state an operator discovers when a trim moves one of them.
+    /// called L and R - which is exactly the state an operator discovers when a trim moves one of them.
     /// </para>
     /// </remarks>
     public static PromptViewModel AddStereoPair(ProjectJournal journal)
@@ -486,7 +486,7 @@ public static class Dialogs
                 };
 
                 // ONE undo step for all three. Undoing a stereo pair has to leave no half of one
-                // behind — a lone "Main R" is worse than never having pressed the button.
+                // behind - a lone "Main R" is worse than never having pressed the button.
                 using var scope = journal.Composite($"add stereo pair “{name}”", "audio");
 
                 journal.Do(new AddItemCommand<LogicalAudioChannel>(
@@ -511,7 +511,7 @@ public static class Dialogs
     /// <para>
     /// Bus order is POSITIONAL: a logical output's index is its channel on the program bus, which is
     /// what the V×R patch multiplies and what the meters are labelled from. So this renumbers every
-    /// output rather than swapping two — leaving a gap or a duplicate in SortOrder would put two
+    /// output rather than swapping two - leaving a gap or a duplicate in SortOrder would put two
     /// outputs on one bus channel.
     /// </para>
     /// <para>
@@ -652,9 +652,9 @@ public static class Dialogs
         var width = new PromptField { Label = "Width", Kind = PromptFieldKind.Number, Value = "1920" };
         var height = new PromptField { Label = "Height", Kind = PromptFieldKind.Number, Value = "1080" };
         // TYPED, not picked. The composition pane edits size and rate as free text, so a
-        // dropdown here taught the operator that the common rates were the only ones — and a
+        // dropdown here taught the operator that the common rates were the only ones - and a
         // projector at 23.976 or a LED wall at 47.95 is an ordinary thing to have to match.
-        // 60 — the same default CompositionDefinition itself carries. This field said 30, so
+        // 60 - the same default CompositionDefinition itself carries. This field said 30, so
         // every composition made through the dialog contradicted the model's own default and
         // ran a 60p source at half rate unless the operator noticed and retyped it.
         var rate = new PromptField
@@ -674,7 +674,7 @@ public static class Dialogs
         };
 
         // The rig's own screens as PREFILLS, still typed underneath: a canvas that does not match
-        // the panel it feeds beats against its refresh — a 60.000 canvas on a 59.94 (or 165) panel
+        // the panel it feeds beats against its refresh - a 60.000 canvas on a 59.94 (or 165) panel
         // drops one frame per beat crossing, on a schedule nobody can attribute. The rates come from
         // the ACTUAL desktop modes (exact numerator/denominator when the platform reports them), so
         // "match the projector" is one pick instead of reading the EDID off a service menu. Absent
@@ -698,7 +698,7 @@ public static class Dialogs
                     .. displays.Select(display =>
                         $"{display.Name} · {display.Width}×{display.Height} @ {RateText(display)} Hz"),
                 ],
-                Hint = "prefills size and rate from a connected screen — everything stays editable",
+                Hint = "prefills size and rate from a connected screen - everything stays editable",
             };
             preset.Picked += picked =>
             {
@@ -748,8 +748,8 @@ public static class Dialogs
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>It asks nothing about compositions.</b> An output is a piece of the RIG — a screen, a sender,
-    /// a recorder — and it exists before any canvas is authored against it. This dialog used to open
+    /// <b>It asks nothing about compositions.</b> An output is a piece of the RIG - a screen, a sender,
+    /// a recorder - and it exists before any canvas is authored against it. This dialog used to open
     /// with a "Shows" picker, so the first thing an operator did on a new project was answer a question
     /// about a composition that did not exist yet; the picker was empty, the output was created showing
     /// nothing, and there was no hint that the two were meant to be joined later. Assignment now lives
@@ -757,7 +757,7 @@ public static class Dialogs
     /// </para>
     /// <para>
     /// <b>The screen is stored as a number.</b> The picker's labels read "2 · 1920×1080" and the whole
-    /// label used to be written into the hint, which every reader of it then failed to parse — so the
+    /// label used to be written into the hint, which every reader of it then failed to parse - so the
     /// chosen screen was silently discarded and the window opened wherever SDL felt like.
     /// </para>
     /// </remarks>
@@ -808,7 +808,7 @@ public static class Dialogs
 
         if (kind == VideoOutputKind.LocalScreen)
         {
-            // Fullscreen ALREADY existed on the model and defaulted to true, with no way to reach it —
+            // Fullscreen ALREADY existed on the model and defaulted to true, with no way to reach it -
             // so every local output was created fullscreen and there was no windowed option at all.
             var windowed = new PromptField
             {
@@ -849,7 +849,7 @@ public static class Dialogs
             // The two are mutually exclusive and each dialog used to offer both at once: a fullscreen
             // output takes the SCREEN's size, so a window size typed beside it did nothing, and a
             // windowed one opens where the desktop puts it, so the screen picker did nothing either.
-            // Whichever the presentation makes meaningless is greyed rather than hidden — the value
+            // Whichever the presentation makes meaningless is greyed rather than hidden - the value
             // survives a change of mind, and the dialog keeps its shape while it is being filled in.
             void Follow(PromptField _)
             {
@@ -916,7 +916,7 @@ public static class Dialogs
     /// </summary>
     /// <remarks>
     /// Derived from the SELECTED INDEX rather than parsed back out of the label, because index 0 is
-    /// "anywhere" and every entry after it is display N — so the number is known without reading prose
+    /// "anywhere" and every entry after it is display N - so the number is known without reading prose
     /// that a future relabelling could change.
     /// </remarks>
     private static string ScreenHint(PromptField screens) =>
@@ -973,7 +973,7 @@ public static class Dialogs
     /// </summary>
     /// <remarks>
     /// One undoable edit, like deleting a logical output is. A composition is referenced from two
-    /// directions — cues placed ON it and outputs fed BY it — and leaving either behind gives the
+    /// directions - cues placed ON it and outputs fed BY it - and leaving either behind gives the
     /// validator a dangling reference to a canvas that no longer exists.
     /// </remarks>
     public static PromptViewModel? RemoveComposition(ProjectJournal journal, Guid? compositionId)
@@ -1018,7 +1018,7 @@ public static class Dialogs
                                 $"remove placement from Q{cue.Number}"));
                     }
 
-                    // The outputs SURVIVE — they are pieces of the rig, not of the canvas. They simply
+                    // The outputs SURVIVE - they are pieces of the rig, not of the canvas. They simply
                     // stop showing anything, which is the state a freshly added output is already in.
                     foreach (var output in fed)
                     {
@@ -1075,7 +1075,7 @@ public static class Dialogs
     /// </summary>
     /// <remarks>
     /// Any of ×, x or a space between them, because all three are what somebody types. Zeros mean "the
-    /// composition's own size", which is also what an empty box means — so a half-typed value opens the
+    /// composition's own size", which is also what an empty box means - so a half-typed value opens the
     /// window at the canvas size rather than at something arbitrary.
     /// </remarks>
     public static (int Width, int Height) WindowSize(string text)
@@ -1106,7 +1106,7 @@ public static class Dialogs
 
     // ── targets ───────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>A new action endpoint — somewhere action cues send to.</summary>
+    /// <summary>A new action endpoint - somewhere action cues send to.</summary>
     public static PromptViewModel AddEndpoint(ProjectJournal journal, EndpointKind kind)
     {
         var project = journal.Project;
@@ -1123,7 +1123,7 @@ public static class Dialogs
                 {
                     Label = "Host",
                     Value = osc ? "127.0.0.1" : "",
-                    Hint = osc ? "" : "MIDI device name — matched as a hint, like an audio line",
+                    Hint = osc ? "" : "MIDI device name - matched as a hint, like an audio line",
                 },
                 new PromptField
                 {
@@ -1184,7 +1184,7 @@ public static class Dialogs
                 {
                     Label = "Host",
                     Value = endpoint.Host,
-                    Hint = osc ? "" : "MIDI device name — matched as a hint, like an audio line",
+                    Hint = osc ? "" : "MIDI device name - matched as a hint, like an audio line",
                 },
                 new PromptField
                 {
@@ -1202,7 +1202,7 @@ public static class Dialogs
             ],
             prompt =>
             {
-                // ONE undo step for the whole address: a half-applied endpoint — new host, old port —
+                // ONE undo step for the whole address: a half-applied endpoint - new host, old port -
                 // is a destination that exists on no network.
                 using var scope = journal.Composite($"edit endpoint “{endpoint.Name}”", "targets");
 
@@ -1258,7 +1258,7 @@ public static class Dialogs
             $"Remove “{endpoint.Name}”?",
             aimed == 0
                 ? "no cue sends to it"
-                : $"{aimed} action cue(s) will have nowhere to send — they are kept, and reported",
+                : $"{aimed} action cue(s) will have nowhere to send - they are kept, and reported",
             [],
             _ =>
             {
@@ -1347,7 +1347,7 @@ public static class Dialogs
             $"Remove “{input.Name}”?",
             input.Bindings.Count == 0
                 ? "nothing is bound to it"
-                : $"{input.Bindings.Count} binding(s) go with it — the cues themselves stay",
+                : $"{input.Bindings.Count} binding(s) go with it - the cues themselves stay",
             [],
             _ =>
             {
@@ -1358,7 +1358,7 @@ public static class Dialogs
             confirm: "REMOVE");
     }
 
-    /// <summary>A new trigger input — something that can fire this show.</summary>
+    /// <summary>A new trigger input - something that can fire this show.</summary>
     public static PromptViewModel AddTriggerInput(ProjectJournal journal, TriggerInputKind kind)
     {
         var project = journal.Project;
@@ -1507,7 +1507,7 @@ public static class Dialogs
     /// <remarks>
     /// <para>
     /// The name can be PICKED or TYPED, and both are first-class. Picked, because NDI names are
-    /// "STUDIO-PC (CAM 1)" — parentheses, spaces and a machine name nobody types correctly from
+    /// "STUDIO-PC (CAM 1)" - parentheses, spaces and a machine name nobody types correctly from
     /// memory. Typed, because the camera is very often not on the network yet: a show authored in an
     /// office for a rig that arrives on the day must be able to name a sender that does not exist, and
     /// a dialog that only offered a list would make that impossible.
@@ -1547,7 +1547,7 @@ public static class Dialogs
                 Hint = "fills the sender above · the typed name is what the show stores",
             };
 
-            // The list FILLS the field rather than replacing it, so a picked name can then be edited —
+            // The list FILLS the field rather than replacing it, so a picked name can then be edited -
             // which is how an operator names next week's camera after this week's.
             found.Picked += _ =>
             {
@@ -1578,7 +1578,7 @@ public static class Dialogs
         var proxy = new PromptField
         {
             Label = "Low bandwidth", Kind = PromptFieldKind.Toggle, IsOn = existing.LowBandwidth,
-            Hint = "the sender's preview stream — a fraction of the bandwidth, at preview resolution",
+            Hint = "the sender's preview stream - a fraction of the bandwidth, at preview resolution",
         };
 
         var buffer = new PromptField
@@ -1600,7 +1600,7 @@ public static class Dialogs
                 var options = new NdiSourceOptions(sender.Value.Trim())
                 {
                     // Both off is not a source. Refusing would lose everything else typed, so the
-                    // half an operator most likely meant — the pictures — comes back on.
+                    // half an operator most likely meant - the pictures - comes back on.
                     Audio = audio.IsOn || !video.IsOn,
                     Video = video.IsOn || !audio.IsOn,
                     LowBandwidth = proxy.IsOn,
@@ -1615,7 +1615,7 @@ public static class Dialogs
     }
 
     /// <summary>
-    /// A cue that plays a capture device on this machine — a microphone, a line in, a loopback.
+    /// A cue that plays a capture device on this machine - a microphone, a line in, a loopback.
     /// </summary>
     /// <remarks>
     /// The host API narrows the list and IS stored, unlike the output-line picker: the same interface
@@ -1636,11 +1636,11 @@ public static class Dialogs
 
         // Capture is a PortAudio provider, and the device NAMES it resolves against are PortAudio's.
         // On a machine running the other backend the list below is somebody else's names, so the cue
-        // would be authored against a device the provider cannot find — said here rather than
+        // would be authored against a device the provider cannot find - said here rather than
         // discovered on GO.
         var backend = App.Backend is null || App.Backend is S.Media.Audio.PortAudio.PortAudioBackend
             ? ""
-            : " · this machine runs the miniaudio backend, where capture cues cannot open — switch to"
+            : " · this machine runs the miniaudio backend, where capture cues cannot open - switch to"
               + " PortAudio in Settings";
 
         var channels = new PromptField

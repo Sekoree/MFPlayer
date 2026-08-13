@@ -3,7 +3,7 @@ using HaCue2.Core.Model;
 namespace HaCue2.Core.Media;
 
 /// <summary>One media reference in a project, and the thing that holds it.</summary>
-/// <param name="Path">As stored in the document — relative to the media root, or absolute.</param>
+/// <param name="Path">As stored in the document - relative to the media root, or absolute.</param>
 /// <param name="SubjectKind">What holds it, for the status view's navigation target.</param>
 /// <param name="SubjectId">That thing's id.</param>
 /// <param name="Describe">How to name it to an operator: "Q15 Interval music".</param>
@@ -19,7 +19,7 @@ public sealed record MediaReference(
 /// </summary>
 /// <remarks>
 /// Paths are stored RELATIVE to the media root where they can be, so a show consolidated into one
-/// directory transports without rewriting. Absolute paths are legal too — register item 26 allows
+/// directory transports without rewriting. Absolute paths are legal too - register item 26 allows
 /// media outside the root, warns when one is added, and offers move/copy rather than refusing it.
 /// A project that could only reference files it owned would make "add the band's stem from the USB
 /// stick" impossible five minutes before doors.
@@ -79,7 +79,7 @@ public static class MediaPaths
     /// </summary>
     /// <remarks>
     /// Source URIs are deliberately absent. This list is what gets probed, relinked, consolidated and
-    /// reported missing — and an NDI camera has no length to probe, no copy to make and no filesystem
+    /// reported missing - and an NDI camera has no length to probe, no copy to make and no filesystem
     /// that could say it is gone. Including them would paint every live cue red on a machine that is
     /// simply not on the venue's network yet, which is most machines most of the time.
     /// </remarks>

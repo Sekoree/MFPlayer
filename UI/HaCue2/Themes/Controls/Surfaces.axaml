@@ -5,13 +5,13 @@
 
   <!-- Tokens are merged into THIS dictionary (not just into the bundle) so every {StaticResource}
        below resolves against the file's own root. Avalonia resolves StaticResource by walking the
-       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it —
+       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it -
        which is why Avalonia's own themes never reach across control files for a key. -->
   <ResourceDictionary.MergedDictionaries>
     <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
   </ResourceDictionary.MergedDictionaries>
 
-  <!-- ══ PanelBox — the mockup's `.pnl` ══════════════════════════════════════════════════════ -->
+  <!-- ══ PanelBox - the mockup's `.pnl` ══════════════════════════════════════════════════════ -->
   <ControlTheme x:Key="{x:Type c:PanelBox}" TargetType="c:PanelBox">
     <Setter Property="Background" Value="{DynamicResource BoothPanel}" />
     <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
@@ -86,7 +86,7 @@
     </Setter>
   </ControlTheme>
 
-  <!-- ══ ProgressBar — the active panel's `.prog` sliver ═════════════════════════════════════
+  <!-- ══ ProgressBar - the active panel's `.prog` sliver ═════════════════════════════════════
        4 px, no text, no minimum width. `.fading` recolours it amber, which is the same signal the
        row's stripe carries: a cue on its way out is amber everywhere it appears. -->
   <ControlTheme x:Key="{x:Type ProgressBar}" TargetType="ProgressBar">

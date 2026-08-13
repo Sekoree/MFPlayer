@@ -12,7 +12,7 @@ namespace HaCue2.Tests;
 /// <para>
 /// This is the chain that turned one crash into a broken show. The shell's own refresh is the FIRST
 /// subscriber to the journal and the engine reload is a later one, and a multicast delegate stops at
-/// the first handler that throws — so a fault while rebuilding a panel stopped the engine ever being
+/// the first handler that throws - so a fault while rebuilding a panel stopped the engine ever being
 /// told about that edit, or any edit after it. The document and the rig then diverged in silence.
 /// </para>
 /// <para>

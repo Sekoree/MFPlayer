@@ -150,7 +150,7 @@
                             Height="{Binding Height}">
                       <Grid ColumnDefinitions="168,*">
                         <!-- Clicking a lane's label selects its cue, the same selection the tree and
-                             the inspector act on — how "+ EFFECT LANE" and DUCK know which cue. -->
+                             the inspector act on - how "+ EFFECT LANE" and DUCK know which cue. -->
                         <Border Grid.Column="0" BorderBrush="{DynamicResource BoothRule}"
                                 BorderThickness="0,0,1,0" Padding="8,8,8,0"
                                 Background="Transparent"

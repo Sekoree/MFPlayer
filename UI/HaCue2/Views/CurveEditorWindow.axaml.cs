@@ -17,7 +17,7 @@ public partial class CurveEditorWindow : Window
         DataContext = new CurveEditorViewModel();
     }
 
-    /// <summary>Opens on a real curve — the route every "✎" beside a curve picker takes.</summary>
+    /// <summary>Opens on a real curve - the route every "✎" beside a curve picker takes.</summary>
     public CurveEditorWindow(CurveEditorViewModel editor)
     {
         InitializeComponent();
@@ -36,7 +36,7 @@ public partial class CurveEditorWindow : Window
     /// The canvas's own Ctrl+A / Ctrl+C / Ctrl+V, and the buttons beside it.
     /// </summary>
     /// <remarks>
-    /// Wired here as well as on the timeline sheet so ONE control behaves the same in both hosts —
+    /// Wired here as well as on the timeline sheet so ONE control behaves the same in both hosts -
     /// the canvas raised these events in this window too, and nothing was listening.
     /// </remarks>
     private void OnSelectAllPoints(object? sender, EventArgs e) => Editor?.SelectAll();

@@ -10,7 +10,7 @@ namespace HaCue2.Machine;
 /// <remarks>
 /// <para>
 /// The cache root already had a <c>waveforms</c> folder and the settings pane already reported and
-/// cleared it — this is what puts something in it.
+/// cleared it - this is what puts something in it.
 /// </para>
 /// <para>
 /// <b>Keyed by what the file IS, not by where it is.</b> Path, length and last-write time together:

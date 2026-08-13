@@ -11,25 +11,25 @@ using S.Media.Session;
 namespace HaCue2.ViewModels;
 
 /// <summary>
-/// Screens 09–10 — Compositions · Mapping · Outputs · Audition, projected from the document.
+/// Screens 09–10 - Compositions · Mapping · Outputs · Audition, projected from the document.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>Tab order is the order of the work.</b> Outputs first, because an output is a piece of THIS
-/// machine — a screen, a sender, a recorder — and exists before any show is authored against it.
+/// machine - a screen, a sender, a recorder - and exists before any show is authored against it.
 /// Compositions second, because a canvas is a decision about the show, and choosing which outputs a
 /// canvas feeds is the moment the two meet. Mapping last, because it is the fine adjustment between
 /// them and there is nothing to adjust until both ends exist.
 /// </para>
 /// <para>
 /// It used to run Compositions · Mapping · Outputs, and the add-output dialog asked which composition
-/// the new output showed — so the first thing an operator did on a new project was answer a question
+/// the new output showed - so the first thing an operator did on a new project was answer a question
 /// about a canvas that did not exist yet.
 /// </para>
 /// <para>
 /// Mapping still belongs to an output BINDING rather than to a composition: the same canvas renders
 /// warped to a projector and clean to a TV. A composition owns exactly size, frame rate and idle image
-/// — there is deliberately no visualizer flag anywhere in this view.
+/// - there is deliberately no visualizer flag anywhere in this view.
 /// </para>
 /// </remarks>
 public partial class VideoViewModel : ObservableObject
@@ -70,7 +70,7 @@ public partial class VideoViewModel : ObservableObject
 
         // Mapping is NOT a tab any more. It is always the mapping OF ONE OUTPUT, so a top-level tab
         // asked the operator to hold "which output am I looking at" in their head while they were
-        // looking at something else — and a canvas layout is the same question asked of a
+        // looking at something else - and a canvas layout is the same question asked of a
         // composition. Both are opened on the thing they belong to and closed again.
         Tabs = [OutputsTab, CompositionsTab, AuditionTab];
         _selectedTab = OutputsTab;
@@ -110,8 +110,8 @@ public partial class VideoViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Opened from the output it belongs to and closed again, rather than being a tab of its own: a
-    /// mapping is always the mapping of one output — the same canvas is warped for the projector and
-    /// clean for the lobby screen — so a top-level tab made the operator carry "which output is this"
+    /// mapping is always the mapping of one output - the same canvas is warped for the projector and
+    /// clean for the lobby screen - so a top-level tab made the operator carry "which output is this"
     /// while looking at a pane that did not say.
     /// </remarks>
     [ObservableProperty]
@@ -152,7 +152,7 @@ public partial class VideoViewModel : ObservableObject
     /// <remarks>
     /// Rebuilt only when the SET of compositions changes, and mutated in place otherwise. Re-creating
     /// the list on every refresh would replace the items control's containers mid-drag, and a control
-    /// that is replaced loses the pointer capture the drag depends on — a placement box would follow
+    /// that is replaced loses the pointer capture the drag depends on - a placement box would follow
     /// the pointer for exactly one frame. Never rebuilding it at all was worse: an added composition
     /// simply never appeared.
     /// </remarks>
@@ -202,7 +202,7 @@ public partial class VideoViewModel : ObservableObject
     /// </remarks>
     public string OutputsEmptyDetail =>
         HasNoCompositions
-            ? "Add a COMPOSITION first — an output shows one, and until there is one there is nothing "
+            ? "Add a COMPOSITION first - an output shows one, and until there is one there is nothing "
               + "for an output to point at."
             : "Nothing receives a composition yet. Add a local screen, an NDI sender, a recorder or a "
               + "stream below.";
@@ -228,7 +228,7 @@ public partial class VideoViewModel : ObservableObject
 
         // The composition pane follows the output's own composition: an operator who selects the
         // projector and then goes to look at a canvas expects to be looking at what the projector
-        // shows. NOT while they are standing ON the Compositions tab, though — there their own click
+        // shows. NOT while they are standing ON the Compositions tab, though - there their own click
         // is the selection, and refreshing the output rows underneath them (a screen going absent, a
         // recorder arming) would otherwise pull the pane back to somewhere they did not choose.
         if (!IsCompositionsPane)
@@ -250,8 +250,8 @@ public partial class VideoViewModel : ObservableObject
     /// Re-announces the calibration latch when nothing here changed.
     /// </summary>
     /// <remarks>
-    /// A ToggleButton flips itself on the click, before the engine is asked. If the answer is no —
-    /// there is no show running, most often — nothing in this view-model moves, so nothing notifies,
+    /// A ToggleButton flips itself on the click, before the engine is asked. If the answer is no -
+    /// there is no show running, most often - nothing in this view-model moves, so nothing notifies,
     /// and the button keeps a latch it awarded itself. Raising the UNCHANGED value is what pushes the
     /// binding back over the top of the control's own flip.
     /// </remarks>
@@ -292,7 +292,7 @@ public partial class VideoViewModel : ObservableObject
     // ── 09 · the selected output ──────────────────────────────────────────────────────────────
     //
     // No CompositionNames / OutputCompositionIndex here any more. They were the old "Shows" picker on
-    // this pane, and assignment moved to the composition's FEEDS rail — an operator decides where a
+    // this pane, and assignment moved to the composition's FEEDS rail - an operator decides where a
     // canvas goes once the canvas exists. What was left was a second, unreachable way to write the
     // same field, which is the shape a divergence starts as. The rail's Retarget is the one path.
 
@@ -307,7 +307,7 @@ public partial class VideoViewModel : ObservableObject
     public int OutputScreenIndex
     {
         // Through the engine's own reader, so the pane and the window agree about which screen a hint
-        // names — including the "2 · 1920×1080" labels the add-output dialog used to store.
+        // names - including the "2 · 1920×1080" labels the add-output dialog used to store.
         get => MappedOutput is { } output && ProjectVideoOutputs.ScreenNumber(output.TargetHint) is { } display
             ? Math.Min(display, Screens.Count - 1)
             : 0;
@@ -328,7 +328,7 @@ public partial class VideoViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Editable after creation, because how big a monitor window is on THIS machine is exactly the
-    /// kind of thing somebody adjusts once they can see it — and only visible while windowed, since a
+    /// kind of thing somebody adjusts once they can see it - and only visible while windowed, since a
     /// fullscreen output takes the screen's size and the field would be a control that does nothing.
     /// </remarks>
     public string OutputWindowSize
@@ -385,7 +385,7 @@ public partial class VideoViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// The number a video wall is built out of. Mapping destinations are measured in this raster, so a
-    /// 1920×2160 stacked canvas split across two 1920×1080 projectors needs each output to say 1080 —
+    /// 1920×2160 stacked canvas split across two 1920×1080 projectors needs each output to say 1080 -
     /// against the canvas both halves would be described as 2160 tall and land at half height.
     /// </remarks>
     public string OutputRaster
@@ -426,7 +426,7 @@ public partial class VideoViewModel : ObservableObject
         MappedOutput?.CompositionId is { } id
         && _project.Compositions.FirstOrDefault(item => item.Id == id) is { } composition
             ? $"{composition.Name} · {composition.Width}×{composition.Height}"
-            : "nothing — assign it under COMPOSITIONS";
+            : "nothing - assign it under COMPOSITIONS";
 
     /// <summary>Fullscreen (0) or windowed (1).</summary>
     public int OutputFullscreenIndex
@@ -460,7 +460,7 @@ public partial class VideoViewModel : ObservableObject
     /// How an idle image fills its surface. The same six fits a layer placement offers.
     /// </summary>
     /// <remarks>
-    /// A holding slate is rarely the canvas's own shape — it is a logo, or a photograph somebody had —
+    /// A holding slate is rarely the canvas's own shape - it is a logo, or a photograph somebody had -
     /// and it used to be stretched to fill, which is the one option that always looks wrong.
     /// </remarks>
     public static IReadOnlyList<string> IdleFits { get; } =
@@ -517,8 +517,8 @@ public partial class VideoViewModel : ObservableObject
     /// The last refusal from a press on this pane, or nothing.
     /// </summary>
     /// <remarks>
-    /// Held rather than shown in a dialog: IDENTIFY fails for ordinary, recoverable reasons — no show
-    /// running, no composition on the output — and a modal for each of them is a modal the operator
+    /// Held rather than shown in a dialog: IDENTIFY fails for ordinary, recoverable reasons - no show
+    /// running, no composition on the output - and a modal for each of them is a modal the operator
     /// dismisses without reading. Cleared by selecting another output, because it was about that one.
     /// </remarks>
     [ObservableProperty]
@@ -531,9 +531,9 @@ public partial class VideoViewModel : ObservableObject
     public string MappingNote => MappedOutput switch
     {
         null => "",
-        { Mapping.Count: 0 } => "no sections authored — this output shows a clean feed",
+        { Mapping.Count: 0 } => "no sections authored - this output shows a clean feed",
         { MappingEnabled: false } output =>
-            $"{output.Mapping.Count} section(s) authored, bypassed — the feed is clean tonight",
+            $"{output.Mapping.Count} section(s) authored, bypassed - the feed is clean tonight",
         var output => $"{output.Mapping.Count} section(s) in force",
     };
 
@@ -621,7 +621,7 @@ public partial class VideoViewModel : ObservableObject
         }
     }
 
-    /// <summary>Resizes one composition, named by id — see <see cref="CompositionOf"/>.</summary>
+    /// <summary>Resizes one composition, named by id - see <see cref="CompositionOf"/>.</summary>
     internal void SetCompositionSize(Guid id, string value)
     {
         if (CompositionOf(id) is not { } composition)
@@ -646,7 +646,7 @@ public partial class VideoViewModel : ObservableObject
             return;
 
         // ONE composite: a size is one edit, and an undo that took the width back without the
-        // height would leave a canvas nobody authored — and every placement in the show is
+        // height would leave a canvas nobody authored - and every placement in the show is
         // expressed as a fraction of it.
         using (_journal.Composite($"“{composition.Name}” {width}×{height}", "video"))
         {
@@ -804,13 +804,13 @@ public partial class VideoViewModel : ObservableObject
 
         if (screens.Count == 0)
         {
-            // A sender and a recorder take the WHOLE canvas by definition, so they are not drawn here —
+            // A sender and a recorder take the WHOLE canvas by definition, so they are not drawn here -
             // but they ARE showing it, and saying "no output shows this canvas yet" to somebody who has
             // just assigned one reads as an assignment that did not take.
             var others = _project.VideoOutputs.Count(output => output.CompositionId == id);
 
             return others == 0
-                ? "no output shows this canvas yet — assign one under FEEDS"
+                ? "no output shows this canvas yet - assign one under FEEDS"
                 : $"{others} output(s) take the whole canvas · add a screen to divide it";
         }
 
@@ -841,7 +841,7 @@ public partial class VideoViewModel : ObservableObject
     // AUTHORED: an operator builds the canvas and then decides what it goes to, and answering "which
     // composition?" inside the add-output dialog asked about a canvas that did not exist yet.
 
-    /// <summary>Which canvas this rail is assigning, named — every pane on the left is open at once.</summary>
+    /// <summary>Which canvas this rail is assigning, named - every pane on the left is open at once.</summary>
     public string FeedsHint =>
         SelectedComposition is { } composition
             ? $"outputs showing {composition.Name}"
@@ -879,12 +879,12 @@ public partial class VideoViewModel : ObservableObject
 
     public bool CanAssignOutput => SelectedComposition is not null && AssignableOutputs.Count > 0;
 
-    /// <summary>Why there is nothing to assign — a project with no outputs looks the same as a bug.</summary>
+    /// <summary>Why there is nothing to assign - a project with no outputs looks the same as a bug.</summary>
     public string AssignHint =>
         SelectedComposition is null
             ? "select a composition"
             : _project.VideoOutputs.Count == 0
-                ? "no outputs yet — add one under OUTPUTS, then send this composition to it"
+                ? "no outputs yet - add one under OUTPUTS, then send this composition to it"
                 : AssignableOutputs.Count == 0
                     ? "every output in this show already shows this composition"
                     : "";
@@ -1076,7 +1076,7 @@ public partial class VideoViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Handed in rather than constructed here: the audition rig is one thing (register item 15), and
-    /// two view-models over it would drift the moment either was edited — the operator would set a
+    /// two view-models over it would drift the moment either was edited - the operator would set a
     /// surface in Video and find it unset in Audio.
     /// </remarks>
     public AuditionViewModel Audition { get; init; } = new();
@@ -1127,7 +1127,7 @@ public partial class VideoViewModel : ObservableObject
                 TargetX = Math.Min(section.TargetX + 0.02, 1 - section.TargetWidth),
                 TargetY = Math.Min(section.TargetY + 0.02, 1 - section.TargetHeight),
                 // A copied mesh must not share the original's list, or nudging one handle would move
-                // the same handle on both sections — a record's `with` copies the reference.
+                // the same handle on both sections - a record's `with` copies the reference.
                 WarpOffsets = [.. section.WarpOffsets],
             },
             SelectedSection + 1,
@@ -1358,7 +1358,7 @@ public partial class VideoViewModel : ObservableObject
             ? ""
             : output is { MappingWidth: > 0, MappingHeight: > 0 }
                 ? $"destination boxes are in pixels of {output.MappingWidth}×{output.MappingHeight}"
-                : $"destination boxes are in pixels of the composition, {Raster.Width}×{Raster.Height} — "
+                : $"destination boxes are in pixels of the composition, {Raster.Width}×{Raster.Height} - "
                   + "set an output raster if this screen is a different size";
 
     public double SourceX
@@ -1450,7 +1450,7 @@ public partial class VideoViewModel : ObservableObject
 
             // Seeded at whatever the two counts ALREADY SHOW, which for a section that has never been
             // warped is the default 3×3. Seeding at the minimum instead would tick the box and leave
-            // the two fields beside it reading 3 over a mesh that was 2 — the first mesh anyone made
+            // the two fields beside it reading 3 over a mesh that was 2 - the first mesh anyone made
             // would be a size they did not choose.
             SetMesh(section, value ? MeshColumns : 0, value ? MeshRows : 0,
                 value ? "warp on" : "warp off");
@@ -1643,7 +1643,7 @@ public partial class VideoViewModel : ObservableObject
         changed[at + 1] = y;
 
         // QUIET, like the canvas-slice drag beside it. Without a scope this emitted a journal command
-        // per native pointer sample, and every one of them ran the shell's whole edit reaction —
+        // per native pointer sample, and every one of them ran the shell's whole edit reaction -
         // re-probing media references, refreshing four view-models, and (until it was deferred) a full
         // compile-and-validate of the show. Dragging one mesh point did that fifty times a second.
         // The finished warp is one undo step and one shell refresh, on release.
@@ -1812,7 +1812,7 @@ public partial class VideoViewModel : ObservableObject
         ];
     }
 
-    /// <summary>The local screens showing this canvas, in document order — the boxes it is divided into.</summary>
+    /// <summary>The local screens showing this canvas, in document order - the boxes it is divided into.</summary>
     private IReadOnlyList<VideoOutputDefinition> ScreensOn(Guid compositionId) =>
         VideoPresentation.Screens(_project, compositionId);
 
@@ -2015,7 +2015,7 @@ public partial class VideoViewModel : ObservableObject
         RaiseSliceFields();
 
         // The PANES, which is where the layout is now drawn. A gesture that only re-announced the
-        // view-model's own copy moved nothing on screen — the canvas an operator is dragging in binds
+        // view-model's own copy moved nothing on screen - the canvas an operator is dragging in binds
         // to its pane.
         foreach (var pane in Compositions)
         {
@@ -2031,7 +2031,7 @@ public partial class VideoViewModel : ObservableObject
 
     // ── the selected screen's slice, as numbers ───────────────────────────────────────────────
     // The numeric half of dividing a canvas. A drag cannot reliably hit exactly half, which is the
-    // number a two-projector wall is made of — so every slice is typable as well as draggable, and
+    // number a two-projector wall is made of - so every slice is typable as well as draggable, and
     // both routes end in the same command.
 
     /// <summary>The selected screen's slice of the canvas, or the whole canvas when it has no mapping.</summary>
@@ -2154,7 +2154,7 @@ public partial class VideoViewModel : ObservableObject
     /// <summary>Selects the box a click landed on, so the numeric fields address the same section.</summary>
     public void SelectSection(int index) => SelectedSection = index;
 
-    /// <summary>Re-reads every canvas from the document — after an edit here, or an undo anywhere.</summary>
+    /// <summary>Re-reads every canvas from the document - after an edit here, or an undo anywhere.</summary>
     public void Refresh()
     {
         if (_refreshing)
@@ -2196,7 +2196,7 @@ public partial class VideoViewModel : ObservableObject
 
             pane.Feeds = Feeds(composition.Id);
             // The BOXES, which is the whole picture. Left out of this loop, they were only ever built
-            // in Panes() — so a canvas kept whatever screens it had when its pane was created, and
+            // in Panes() - so a canvas kept whatever screens it had when its pane was created, and
             // assigning an output to a composition put its name under FEEDS and drew nothing at all.
             // The one thing on the screen that answers "where does this go" was the one that did not
             // update.
@@ -2256,7 +2256,7 @@ public partial class VideoViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// The same rule the composition panes follow, for a sharper reason: two of these rows' fields are
-    /// edited in place, and a rename goes through the journal — which refreshes the whole view. Rebuilt
+    /// edited in place, and a rename goes through the journal - which refreshes the whole view. Rebuilt
     /// unconditionally, the text box the operator was typing into would be replaced after every
     /// keystroke, taking the caret with it, so a section could only ever be renamed one letter at a
     /// time. A section that merely CHANGED is mutated where it stands.
@@ -2349,7 +2349,7 @@ public partial class VideoViewModel : ObservableObject
 /// </summary>
 /// <remarks>
 /// Observable and callback-carrying rather than a plain record, because two of its fields are EDITED
-/// in place — the enable checkbox and the inline name — and a row that could only be read would send
+/// in place - the enable checkbox and the inline name - and a row that could only be read would send
 /// the operator to a second pane to rename the thing they are looking at. The callbacks go back to the
 /// view-model so the journal stays in one place; the row itself knows nothing about undo.
 /// </remarks>
@@ -2402,7 +2402,7 @@ public sealed partial class MappingSectionRow : ObservableObject
     /// </summary>
     /// <remarks>
     /// How a row is updated in place. Assigning through the generated setters would journal a rename
-    /// for every refresh — an edit anywhere in the show would write "rename section" into the undo
+    /// for every refresh - an edit anywhere in the show would write "rename section" into the undo
     /// stack for every section on the selected output.
     /// </remarks>
     public void Adopt(string name, bool enabled, string warp)
@@ -2437,7 +2437,7 @@ public sealed partial class CompositionPaneViewModel(
 {
     public Guid Id { get; } = id;
 
-    /// <summary>The header's name — a snapshot, so the expander title does not rewrite itself per keystroke.</summary>
+    /// <summary>The header's name - a snapshot, so the expander title does not rewrite itself per keystroke.</summary>
     public string Name { get; } = name;
 
     public string Hint { get; } = hint;
@@ -2447,7 +2447,7 @@ public sealed partial class CompositionPaneViewModel(
     //
     // These used to live on the screen's single right-hand pane, driven by a selection: one canvas
     // was editable at a time and which one was decided by a click on a pane that gave no sign it was
-    // selectable. With more than one composition that is unmanageable — which is exactly the state a
+    // selectable. With more than one composition that is unmanageable - which is exactly the state a
     // show with a projector and a stream is in from the first day. Every pane now carries its own
     // fields, and they read and write through the owner so there is still one implementation of what
     // an edit means and one journal entry per edit.
@@ -2491,7 +2491,7 @@ public sealed partial class CompositionPaneViewModel(
 
     public IReadOnlyList<string> Resolutions => owner.Resolutions;
 
-    /// <summary>How the outputs showing this canvas divide it — on the pane, not behind a button.</summary>
+    /// <summary>How the outputs showing this canvas divide it - on the pane, not behind a button.</summary>
     public string LayoutSummary => owner.LayoutSummaryOf(Id);
 
     public string OutputRasterSummary => owner.OutputRasterSummaryOf(Id);
@@ -2526,7 +2526,7 @@ public sealed partial class CompositionPaneViewModel(
     /// <remarks>
     /// The canvas on a composition pane used to draw the cue LAYERS. That is a picture of the show's
     /// content, which the operator is already looking at on the Cues screen and in the preview, and it
-    /// changes with every cue — so the compositions screen spent its largest element re-answering a
+    /// changes with every cue - so the compositions screen spent its largest element re-answering a
     /// question nobody was asking there. What the screen is FOR is the wiring: overlap between two
     /// projectors is a blend zone and canvas nobody covers is a gap, and neither can be seen one
     /// output at a time. That answer was behind an EDIT › button in a submenu.
@@ -2543,7 +2543,7 @@ public sealed partial class CompositionPaneViewModel(
     /// </summary>
     /// <remarks>
     /// On the pane rather than only in the inspector because "where does this go" is the question an
-    /// operator asks while LOOKING at the canvas — a composition feeding nothing looks identical to one
+    /// operator asks while LOOKING at the canvas - a composition feeding nothing looks identical to one
     /// feeding three projectors, and that is the single most expensive thing to discover at a get-in.
     /// </remarks>
     [ObservableProperty]
@@ -2560,12 +2560,12 @@ public sealed partial class CompositionPaneViewModel(
     private bool _snapEnabled = true;
 
     // No GuidesX/GuidesY on the pane. They were the slice edges of THIS canvas, and the only canvas
-    // that ever received them was the layout editor drawing those same edges — so an editable drag
+    // that ever received them was the layout editor drawing those same edges - so an editable drag
     // found a guide exactly where the dragged edge already was, snapped to itself, and could never
     // reach another. PlacementCanvas derives that correctly from its own boxes, skipping the dragged
     // one. The reader they were built FOR is the inspector's cue-placement canvas, which now takes
     // them straight from VideoPresentation.SliceGuides, scoped to the composition that placement is
-    // on — a cue can sit on several at once, so it has to be resolved per placement, not per pane.
+    // on - a cue can sit on several at once, so it has to be resolved per placement, not per pane.
 
     public bool HasNoFeeds => Feeds.Count == 0;
 
@@ -2574,5 +2574,5 @@ public sealed partial class CompositionPaneViewModel(
 }
 
 /// <summary>One output a composition is sent to, as the composition pane lists it.</summary>
-/// <param name="State">"live" or "not open" — a machine fact, so it can differ per booth.</param>
+/// <param name="State">"live" or "not open" - a machine fact, so it can differ per booth.</param>
 public sealed record CompositionFeedRow(Guid OutputId, string Name, string State, bool IsLive);

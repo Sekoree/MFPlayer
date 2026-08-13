@@ -193,7 +193,7 @@ public interface IArmedClip : IAsyncDisposable
         Func<bool>? verifyPrebufferAfterPrefill = null);
 
     /// <summary>
-    /// The slow half of <see cref="Start"/> — decode spin-up, buffer wait, sync present — without
+    /// The slow half of <see cref="Start"/> - decode spin-up, buffer wait, sync present - without
     /// starting the clocks; the returned action is the start edge. Group fires prepare every sibling
     /// first and then run the starters together, which is what makes an all-together group actually
     /// start together (the slow half used to run inside each serialized commit, staggering siblings
@@ -698,7 +698,7 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
             var startClocks = Player.PreparePlay(
                 prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
             // Started FROM THE PREPARE: decode threads are running and the hardware may be, so this
-            // player is no longer pristine — a release between prepare and the edge must dispose it,
+            // player is no longer pristine - a release between prepare and the edge must dispose it,
             // never return it to warm standby as if it had not been touched.
             IsStarted = true;
             return startClocks;

@@ -10,8 +10,8 @@ namespace S.Media.Compositor.Tests;
 /// </summary>
 /// <remarks>
 /// Regression (HaCue2 batch fire): the default id was <c>slot_{count + 1}</c>, so removing a slot and
-/// adding another reissued an id a surviving slot still held. On a live composition — layers come and
-/// go with every cue — the collision threw out of <c>AddSlot</c>, aborted the whole batch fire
+/// adding another reissued an id a surviving slot still held. On a live composition - layers come and
+/// go with every cue - the collision threw out of <c>AddSlot</c>, aborted the whole batch fire
 /// ("slot id 'slot_3' is already registered"), and the one-at-a-time fallback then skipped cues.
 /// </remarks>
 public sealed class CompositorSlotIdTests

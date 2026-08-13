@@ -9,7 +9,7 @@ namespace HaCue2.Core.Model;
 /// <remarks>
 /// <para>
 /// The tokens an operator can put in a filename pattern, and the one place that expands them. It is
-/// pure so the help popover's example rendering and the file actually written cannot disagree — the
+/// pure so the help popover's example rendering and the file actually written cannot disagree - the
 /// popover shows what <see cref="Expand"/> returns, not a hand-written imitation of it.
 /// </para>
 /// <para>
@@ -48,7 +48,7 @@ public static class RecordPattern
     /// and so every file in one arm agrees on the moment even if the encoders open a second apart.
     /// </remarks>
     /// <param name="Attempt">
-    /// Zero-based. <c>{n}</c> renders it one-based, and it climbs while a name is taken — the pattern
+    /// Zero-based. <c>{n}</c> renders it one-based, and it climbs while a name is taken - the pattern
     /// is expanded again per attempt rather than having a suffix bolted onto the first result, because
     /// an operator who wrote <c>{n}</c> in the middle meant the number to appear there.
     /// </param>
@@ -93,7 +93,7 @@ public static class RecordPattern
         var name = Clean(built.ToString());
 
         // A name needs something READABLE in it, not merely something in it. A pattern of nothing but
-        // separators cleans to "---", which is a legal filename and a useless one — the operator would
+        // separators cleans to "---", which is a legal filename and a useless one - the operator would
         // be looking for a recording and find punctuation.
         return name.Any(char.IsLetterOrDigit) ? name : "recording";
     }
@@ -134,7 +134,7 @@ public static class RecordPattern
         }
 
         // A leading dot hides the recording on Unix, and trailing dots and spaces are silently dropped
-        // by Windows — both turn "the file is not where I put it" into a mystery.
+        // by Windows - both turn "the file is not where I put it" into a mystery.
         return built.ToString().Trim().Trim('.').Trim();
     }
 

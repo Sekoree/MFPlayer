@@ -33,7 +33,7 @@ public interface IRemoteApiTransport
 /// <see cref="RemoteApiOverride.LanAllowed"/> is what widens it, and a token is required either way.
 /// </para>
 /// <para>
-/// <b>Every route goes through the same verbs the UI calls.</b> A remote GO is a GO — not a second
+/// <b>Every route goes through the same verbs the UI calls.</b> A remote GO is a GO - not a second
 /// implementation that can drift from the one an operator tested with. That is the same rule external
 /// input follows, for the same reason.
 /// </para>
@@ -78,7 +78,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
     /// <remarks>
     /// <c>localhost</c> unless the project allows the LAN. Binding a wildcard prefix needs elevation on
     /// Windows and would be a surprising thing for a cue player to ask for, so a failure to bind is
-    /// reported and survived rather than thrown — the show does not depend on this.
+    /// reported and survived rather than thrown - the show does not depend on this.
     /// </remarks>
     public Task StartAsync(int port, bool lanAllowed)
     {
@@ -104,7 +104,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
         {
             listener.Close();
             Problem?.Invoke(
-                $"the remote API could not listen on port {port} — {failure.Message}"
+                $"the remote API could not listen on port {port} - {failure.Message}"
                 + (lanAllowed ? " (a LAN binding may need elevation)" : ""));
             return Task.CompletedTask;
         }
@@ -171,13 +171,13 @@ public sealed class RemoteApiServer : IAsyncDisposable
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            Problem?.Invoke($"remote request failed — {failure.Message}");
+            Problem?.Invoke($"remote request failed - {failure.Message}");
             try
             {
                 // The reason rides along: the API is token-gated, and a controller integrator staring
                 // at a bare "could not be completed" has no way to tell a show fault from their own
                 // request. (The slot-collision incident fired 12 of 13 cues and answered exactly that.)
-                var result = Error(500, $"the request could not be completed — {failure.Message}");
+                var result = Error(500, $"the request could not be completed - {failure.Message}");
                 var bytes = Encoding.UTF8.GetBytes(result.Body);
                 context.Response.StatusCode = result.Status;
                 context.Response.ContentType = result.ContentType;
@@ -213,7 +213,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
     {
         // A missing configured token REFUSES every call rather than waving them through. The app
         // always supplies one (AppSettings.EnsureRemoteToken mints it), so this can only be reached by
-        // a hand-edited settings file or a future call site — and either of those combined with
+        // a hand-edited settings file or a future call site - and either of those combined with
         // LanAllowed, which binds a wildcard prefix, would leave anyone on the network able to fire
         // cues. A credential check that disappears when the credential is absent is the wrong way to
         // fail.
@@ -341,7 +341,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
     /// </summary>
     /// <remarks>
     /// By NAME as a fallback because a show-control system is configured by a human typing a cue list's
-    /// name, not a GUID — and a remote API that only accepted GUIDs would be one nobody could set up
+    /// name, not a GUID - and a remote API that only accepted GUIDs would be one nobody could set up
     /// from a lighting desk's macro editor.
     /// </remarks>
     private static T? Find<T>(

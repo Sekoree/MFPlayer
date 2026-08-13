@@ -8,7 +8,7 @@ namespace HaCue2.Tests;
 /// The per-kind inspector panes for the cues the transport resolves app-side.
 /// </summary>
 /// <remarks>
-/// These cues EXECUTE — fade, jump, patch and action all have real behaviour behind them — but until
+/// These cues EXECUTE - fade, jump, patch and action all have real behaviour behind them - but until
 /// this pass their panes were literals, so the only working ones in existence were those the fixture
 /// generator wrote. An operator could fire a fade cue and not set its duration. Each test below is
 /// therefore about one question: does this field reach the document, and can it be undone.
@@ -20,7 +20,7 @@ public class ControlFlowPaneTests
     /// </summary>
     /// <remarks>
     /// Not <c>Inspector.Show</c> directly. Every journaled edit raises <c>Journal.Changed</c>, which
-    /// rebuilds the cue tree, which clears the grid's selection and re-announces it — and the shell
+    /// rebuilds the cue tree, which clears the grid's selection and re-announces it - and the shell
     /// restores the selection BY ID from the tree. A test that set the inspector's selection without
     /// the tree knowing lost it on its own first edit, so only the first assignment in each test stuck.
     /// Driving it the way the UI does is what makes these tests mean anything.

@@ -11,7 +11,7 @@ namespace HaCue2.Machine;
 /// </para>
 /// <para>
 /// The sizes are MEASURED. The settings pane used to state invented waveform/probe/thumbnail sizes, so
-/// it read the same on a machine with an empty cache and on one with a full disk — exactly the situation
+/// it read the same on a machine with an empty cache and on one with a full disk - exactly the situation
 /// somebody opens that pane to find out about. Probe facts remain in memory and curve thumbnails are
 /// drawn controls, so neither is advertised here as a disk cache.
 /// </para>

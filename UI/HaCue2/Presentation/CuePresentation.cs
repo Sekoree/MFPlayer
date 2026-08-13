@@ -37,11 +37,11 @@ public static class CuePresentation
     public static IReadOnlyList<CueRow> Rows(CueList list, HaCueProject project, ShowRuntime runtime) =>
         [.. list.Cues.Select(cue => Row(cue, project, runtime, depth: 0))];
 
-    /// <summary>The rows for one subtree — the scoped view (screen 03) narrows to exactly this.</summary>
+    /// <summary>The rows for one subtree - the scoped view (screen 03) narrows to exactly this.</summary>
     public static IReadOnlyList<CueRow> Subtree(CueNode root, HaCueProject project, ShowRuntime runtime) =>
         [Row(root, project, runtime, depth: 0)];
 
-    /// <summary>Every row of a tree, in fire order — what a flat operation walks.</summary>
+    /// <summary>Every row of a tree, in fire order - what a flat operation walks.</summary>
     public static IEnumerable<CueRow> Flatten(IEnumerable<CueRow> rows)
     {
         foreach (var row in rows)
@@ -81,7 +81,7 @@ public static class CuePresentation
     }
 
     /// <summary>
-    /// "12", "12.5", "13.1" — trailing zeros trimmed.
+    /// "12", "12.5", "13.1" - trailing zeros trimmed.
     /// </summary>
     /// <remarks>
     /// Invariant-formatted: a cue number is an identifier an operator calls over comms, and "13,1" on a
@@ -95,14 +95,14 @@ public static class CuePresentation
     /// <remarks>
     /// <para>
     /// Every value here is a RUNTIME fact joined to a document one: the engine supplies the cue id and
-    /// its clock, the project supplies the number, label and destination. Nothing is invented — a cue
+    /// its clock, the project supplies the number, label and destination. Nothing is invented - a cue
     /// whose length nobody has probed shows its elapsed time and an empty progress bar rather than a
     /// bar filled to a guess.
     /// </para>
     /// <para>
     /// Ordered by WHEN each was fired, newest LAST, so a row never moves while its cue runs. The
     /// previous key was the playhead, which rewinds on loop wraps, jumps on seeks and freezes on
-    /// pause — every one of those reshuffled the list under the pointer. Cue id breaks ties so a
+    /// pause - every one of those reshuffled the list under the pointer. Cue id breaks ties so a
     /// batch fire (a group's stems, all stamped together) keeps one stable order. Scope never
     /// filters this list: a sounding cue the operator cannot see is the one thing the Active panel
     /// exists to prevent.
@@ -120,7 +120,7 @@ public static class CuePresentation
         var rows = new List<ActiveCueRow>();
 
         // Every cue that is inside a group, gathered ONCE. This was a full walk of the show per active
-        // cue — on a 600-cue show with five sounding, three thousand node visits four times a second
+        // cue - on a 600-cue show with five sounding, three thousand node visits four times a second
         // to answer a question whose answer does not change between rows.
         var children = project.AllCues()
             .OfType<GroupCueNode>()
@@ -153,7 +153,7 @@ public static class CuePresentation
                 Number = Number(cue.Number),
                 Label = cue.Label,
                 AutomatedVolumeDb = state.AutomatedVolumeDb,
-                // Which list, but only when there is more than one — on a single-list show the name
+                // Which list, but only when there is more than one - on a single-list show the name
                 // would be on every row and tell the operator nothing.
                 Qualifier = project.CueLists.Count > 1
                     ? project.CueLists.FirstOrDefault(list => list.Id == state.ListId)?.Name ?? ""
@@ -190,7 +190,7 @@ public static class CuePresentation
     /// <remarks>
     /// <para>
     /// A playlist group of twelve used to fill the panel with twelve equal rows and nothing saying they
-    /// were one thing. Now the group is one row that owns them — with the whole group's remaining time,
+    /// were one thing. Now the group is one row that owns them - with the whole group's remaining time,
     /// which is the number an operator actually wants ("how long until this is done"), and the rest of
     /// the chain underneath with a countdown to each.
     /// </para>
@@ -274,7 +274,7 @@ public static class CuePresentation
     /// <para>
     /// <b>Only a playlist adds up.</b> Its items succeed one another, so its clock is the sum of their
     /// lengths and its count-down is the current item's remainder plus everything after it. Every other
-    /// mode's children sound at the SAME time, so the group is exactly as long as its longest child —
+    /// mode's children sound at the SAME time, so the group is exactly as long as its longest child -
     /// summing them reported a group of eleven three-minute stems, fired all together, as running for
     /// half an hour, and drove the progress bar from a total the group never had.
     /// </para>
@@ -287,11 +287,11 @@ public static class CuePresentation
         var sounding = header.Children.Select(child => child.CueId).ToHashSet();
 
         // Everything the group still owes: what is playing now, plus the chain after it. An
-        // ALL-TOGETHER group owes nothing beyond what is already up — they all started at once.
+        // ALL-TOGETHER group owes nothing beyond what is already up - they all started at once.
         var chained = group.FireMode is GroupFireMode.Playlist or GroupFireMode.Timeline;
 
         // A playlist accumulates; the simultaneous modes take the longest. A TIMELINE is simultaneous
-        // too — its children overlap — but each starts at its authored offset, so its span is measured
+        // too - its children overlap - but each starts at its authored offset, so its span is measured
         // from the group's own zero rather than from each child's start.
         var overlaps = group.FireMode is not GroupFireMode.Playlist;
         var offsets = group.FireMode is GroupFireMode.Timeline;
@@ -360,9 +360,9 @@ public static class CuePresentation
             {
                 Number = Number(child.Number),
                 Label = child.Label,
-                Length = Played(child, durations) is { } run ? PreciseClock(run) : "—",
+                Length = Played(child, durations) is { } run ? PreciseClock(run) : "-",
                 // Staged precision: whole seconds while the start is far away, milliseconds (via the
-                // smooth-clock timer) inside the last ten — see UpcomingCueRow.
+                // smooth-clock timer) inside the last ten - see UpcomingCueRow.
                 Countdown = UpcomingCountdown(starts),
                 StartsInAtPoll = starts,
                 PolledAtTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
@@ -391,7 +391,7 @@ public static class CuePresentation
 
         header.IsNearEnd = known && remaining > TimeSpan.Zero && remaining <= TimeSpan.FromSeconds(10);
 
-        // The header's own feedback and its bar. Fading only when EVERYTHING it holds is ramping —
+        // The header's own feedback and its bar. Fading only when EVERYTHING it holds is ramping -
         // one stem stopped early must not paint the whole group as going down. The bar seeks only
         // for a together-group: one absolute time means the same place in every child there, which
         // is not true of a sequence (playlist) and not yet wired for offset children (timeline).
@@ -434,7 +434,7 @@ public static class CuePresentation
         }
 
         if (cue is not MediaCueNode media)
-            return "—";
+            return "-";
 
         var names = PatchOperations.DestinationsOf(project, media)
             .Select(channel => channel.Name)
@@ -471,7 +471,7 @@ public static class CuePresentation
     /// A media cue carrying a placement IS the mockup's video cue.
     /// </summary>
     /// <remarks>
-    /// The model has no separate video kind on purpose — a cue with a picture and a cue with sound are
+    /// The model has no separate video kind on purpose - a cue with a picture and a cue with sound are
     /// the same thing with different members, and splitting them would mean two code paths for a cue
     /// that has both.
     /// </remarks>
@@ -574,19 +574,19 @@ public static class CuePresentation
         FadeCueNode fade => Seconds(fade.DurationMs),
         PatchCueNode { FadeMs: > 0 } patch => Seconds(patch.FadeMs),
         VisualizerCueNode visualizer => Seconds(visualizer.BlendMs),
-        _ => "—",
+        _ => "-",
     };
 
     /// <summary>
-    /// A media file's duration is a MACHINE fact — it comes from probing the file, not from the
-    /// document — so it arrives through the runtime and reads "—" until something has looked.
+    /// A media file's duration is a MACHINE fact - it comes from probing the file, not from the
+    /// document - so it arrives through the runtime and reads "-" until something has looked.
     /// </summary>
     /// <summary>
     /// How long the cue PLAYS for, which is the trimmed length rather than the file's.
     /// </summary>
     /// <remarks>
     /// It showed the raw file duration, so a cue trimmed to a ten-second sting out of a four-minute
-    /// track read as four minutes — the one number in the row an operator uses to plan, wrong by the
+    /// track read as four minutes - the one number in the row an operator uses to plan, wrong by the
     /// whole of the trim.
     /// </remarks>
     private static string Length(CueNode cue, ShowRuntime runtime)
@@ -597,7 +597,7 @@ public static class CuePresentation
                 : "hold";
 
         if (!runtime.MediaDurations.TryGetValue(cue.Id, out var duration))
-            return "—";
+            return "-";
 
         var played = cue is MediaCueNode media ? media.TrimmedLength(duration) ?? duration : duration;
 
@@ -613,7 +613,7 @@ public static class CuePresentation
     private static string Level(CueNode cue) => cue switch
     {
         MediaCueNode media => Db(media.LevelDb),
-        _ => "—",
+        _ => "-",
     };
 
     private static IReadOnlyList<Badge> Badges(CueNode cue, HaCueProject project, ShowRuntime runtime)

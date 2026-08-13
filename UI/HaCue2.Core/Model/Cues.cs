@@ -34,7 +34,7 @@ public sealed record CueList
 /// Base of every cue kind. The discriminator is written as <c>kind</c>.
 /// </summary>
 /// <remarks>
-/// <see cref="Number"/> is a <see cref="CueNumber"/> — dot-separated segments, stored as written and
+/// <see cref="Number"/> is a <see cref="CueNumber"/> - dot-separated segments, stored as written and
 /// compared numerically. It was a <c>decimal</c> until real HaPlay projects showed three-level numbers
 /// (1.1.1, 1.2.1) throughout, which a decimal cannot represent and which would have made the app
 /// unable to open a project from the app it replaces. See that type for the rest of the reasoning.
@@ -56,7 +56,7 @@ public abstract record CueNode
     public CueNumber Number { get; set; }
     public string Label { get; set; } = "";
 
-    /// <summary>One Note per cue — and the whole of a comment cue. Stays writable under Lock.</summary>
+    /// <summary>One Note per cue - and the whole of a comment cue. Stays writable under Lock.</summary>
     public string Note { get; set; } = "";
 
     /// <summary>
@@ -75,7 +75,7 @@ public abstract record CueNode
     /// <remarks>
     /// An INDEX rather than a colour, so the palette can be restyled with the theme and so a show does
     /// not carry hex codes that clash with whatever skin it is opened under. It is the fastest thing to
-    /// read in a list of six hundred rows — an operator finds "the blue block" before they find Q412.
+    /// read in a list of six hundred rows - an operator finds "the blue block" before they find Q412.
     /// </remarks>
     public int ColorTag { get; set; }
 
@@ -83,8 +83,8 @@ public abstract record CueNode
     /// Where this cue starts inside a TIMELINE group, in milliseconds from the group's own start.
     /// </summary>
     /// <remarks>
-    /// Meaningless outside one — a playlist child follows its predecessor and an all-together child
-    /// starts with the group — but it lives on the base because a cue can be dragged into and out of a
+    /// Meaningless outside one - a playlist child follows its predecessor and an all-together child
+    /// starts with the group - but it lives on the base because a cue can be dragged into and out of a
     /// timeline group without changing kind, and losing its position on the way in would be a data
     /// loss the operator did not ask for.
     /// <para>
@@ -110,7 +110,7 @@ public sealed record MediaCueNode : CueNode
     /// A file, or a source URI.
     /// </summary>
     /// <remarks>
-    /// A path — relative to the media root or absolute — for a file, and one of the registry's source
+    /// A path - relative to the media root or absolute - for a file, and one of the registry's source
     /// schemes for everything else: <c>ndi://</c> a camera, <c>padev://</c> a capture device,
     /// <c>youtube://</c> a prepared video. <see cref="Media.SourceUri"/> tells them apart, and the
     /// difference matters everywhere something would otherwise treat this as a filename.
@@ -124,7 +124,7 @@ public sealed record MediaCueNode : CueNode
     /// Durations are otherwise a machine fact, probed from the file and deliberately never written
     /// into the document. A URI source has no file here to probe: a YouTube video knows its length
     /// from the manifest at the moment it is added, and without somewhere to keep that the cue reads
-    /// "—" in every list for the rest of the show's life. Live sources leave it zero, which is the
+    /// "-" in every list for the rest of the show's life. Live sources leave it zero, which is the
     /// honest answer for a camera.
     /// </remarks>
     public int SourceDurationMs { get; set; }
@@ -158,7 +158,7 @@ public sealed record MediaCueNode : CueNode
     /// <remarks>
     /// Pre-roll opens the next few cues' media so the next GO is instant, at the cost of a decoder
     /// held open per warmed cue. A few are worth exempting: a 4 K master that costs more to hold than
-    /// it saves, or a source whose open starts something — a connection, a device claim — that nobody
+    /// it saves, or a source whose open starts something - a connection, a device claim - that nobody
     /// wants running early. The cue still fires normally; it simply opens at that moment.
     /// </remarks>
     public bool DisablePreRoll { get; set; }
@@ -183,7 +183,7 @@ public sealed record MediaCueNode : CueNode
     /// Where playback stops inside the file, in milliseconds; 0 means play to the end.
     /// </summary>
     /// <remarks>
-    /// Zero rather than null for "to the end", matching HaPlay's <c>endOffsetMs</c> — a file cannot
+    /// Zero rather than null for "to the end", matching HaPlay's <c>endOffsetMs</c> - a file cannot
     /// usefully end at 0 ms, so the sentinel costs nothing and keeps the two documents the same shape.
     /// </remarks>
     public int TrimOutMs { get; set; }
@@ -247,7 +247,7 @@ public sealed record MediaCueNode : CueNode
     /// Which audio track to play, or null to let the decoder elect one.
     /// </summary>
     /// <remarks>
-    /// A concert capture routinely carries several — a stereo mix, an isolated vocal, a room pair —
+    /// A concert capture routinely carries several - a stereo mix, an isolated vocal, a room pair -
     /// and which one a cue plays is an authoring decision, not something to guess. Null is the honest
     /// default: "whatever the file says is the main one".
     /// </remarks>
@@ -258,7 +258,7 @@ public sealed record MediaCueNode : CueNode
     /// </summary>
     /// <remarks>
     /// Stream indices are positional. Re-muxing a file keeps its tracks and can renumber them, and a
-    /// stored index would then point at a different one — the commentary instead of the music, with
+    /// stored index would then point at a different one - the commentary instead of the music, with
     /// nothing on screen to say so. The signature is compared on load and a mismatch falls back to
     /// automatic election, which is obviously automatic rather than quietly wrong.
     /// </remarks>
@@ -269,7 +269,7 @@ public sealed record MediaCueNode : CueNode
 
     public string VideoTrackSignature { get; set; } = "";
 
-    /// <summary>Subtitle tracks to show. Empty means none — subtitles are never on by default.</summary>
+    /// <summary>Subtitle tracks to show. Empty means none - subtitles are never on by default.</summary>
     public List<SubtitleSelection> Subtitles { get; set; } = [];
 
     /// <summary>The N×V half: which source channel feeds which logical output, at what gain.</summary>
@@ -282,8 +282,8 @@ public sealed record MediaCueNode : CueNode
     /// Where this cue's video appears. Empty for an audio-only cue.
     /// </summary>
     /// <remarks>
-    /// A LIST, because one cue can appear in several places at once — the same feed mirrored to a
-    /// second canvas, or two regions of one canvas — and the engine fans ONE decoded source to all of
+    /// A LIST, because one cue can appear in several places at once - the same feed mirrored to a
+    /// second canvas, or two regions of one canvas - and the engine fans ONE decoded source to all of
     /// them (<c>ShowClipBinding.ExtraPlacements</c>: "decoded once"). Playing the file twice to get a
     /// mirror would double the decode cost and drift the two copies apart.
     /// </remarks>
@@ -397,7 +397,7 @@ public sealed record FadeCueNode : CueNode
 {
     public List<Guid> TargetCueIds { get; set; } = [];
     public List<Guid> TargetChannelIds { get; set; } = [];
-    /// <summary>Defaults to the silence floor — see <see cref="GainRange.SilenceFloorDb"/>.</summary>
+    /// <summary>Defaults to the silence floor - see <see cref="GainRange.SilenceFloorDb"/>.</summary>
     public double ToLevelDb { get; set; } = GainRange.SilenceFloorDb;
     public int DurationMs { get; set; } = 2_000;
     public CurveSpec Curve { get; set; } = new();
@@ -424,7 +424,7 @@ public enum JumpCondition
 }
 
 /// <summary>
-/// A visualizer. Its settings live HERE and nowhere else — a composition carries no visualizer flag
+/// A visualizer. Its settings live HERE and nowhere else - a composition carries no visualizer flag
 /// (register item 21); the visualizer's presence on a canvas is an ordinary placement.
 /// </summary>
 public sealed record VisualizerCueNode : CueNode
@@ -461,7 +461,7 @@ public sealed record VisualizerCueNode : CueNode
 /// Recalls part of the project patch, and leaves it recalled.
 /// </summary>
 /// <remarks>
-/// It writes patch CELL gains only — the same values the operator edits in the patch pane. It never
+/// It writes patch CELL gains only - the same values the operator edits in the patch pane. It never
 /// touches a cue's sends, a voice's fade level or the master trim, so the gain-composition chain
 /// still composes exactly once. Stopping the cue undoes nothing: returning to a prior state is
 /// another patch cue, which is what a board operator expects.
@@ -474,7 +474,7 @@ public sealed record PatchCueNode : CueNode
     public CurveSpec FadeCurve { get; set; } = new();
 }
 
-/// <summary>A cue that is only its note — a marker in the list.</summary>
+/// <summary>A cue that is only its note - a marker in the list.</summary>
 public sealed record CommentCueNode : CueNode;
 
 /// <summary>
@@ -483,7 +483,7 @@ public sealed record CommentCueNode : CueNode;
 /// <remarks>
 /// <para>
 /// The document stores the WORDS and how they should look, and compiles to a <c>text:</c> URI that
-/// carries the whole render spec. The framework's own text source draws it — so a card needs no file
+/// carries the whole render spec. The framework's own text source draws it - so a card needs no file
 /// anywhere, no cache to invalidate, and nothing from the app at all. The words travel with the show
 /// and each machine draws them with the faces it has.
 /// </para>
@@ -503,7 +503,7 @@ public sealed record TextCueNode : CueNode
     /// <remarks>
     /// A HINT, matched the way an audio line's device name is: a booth machine may not have the face a
     /// show was authored with, and falling back to something readable beats refusing to draw. Empty is
-    /// the honest default — the app embeds one face precisely so a show that names none looks the same
+    /// the honest default - the app embeds one face precisely so a show that names none looks the same
     /// everywhere.
     /// </remarks>
     public string FontFamily { get; set; } = "";
@@ -526,7 +526,7 @@ public sealed record TextCueNode : CueNode
     /// <summary>An outline behind the ink, in fractions of the canvas height. Zero draws none.</summary>
     /// <remarks>
     /// What makes a caption readable over picture. Without one, white words over a bright shot are
-    /// words nobody in the room can read, and the usual fix — a background band — covers the shot.
+    /// words nobody in the room can read, and the usual fix - a background band - covers the shot.
     /// </remarks>
     public double OutlineWidth { get; set; }
 
@@ -569,7 +569,7 @@ public sealed record TextCueNode : CueNode
     // There is no render key here any more. It was the cache key for the app-side card renderer,
     // and that renderer is gone: a card compiles to a `text:` URI carrying its whole spec, so the
     // framework's own text source draws it and there is nothing left to cache or invalidate. The
-    // key had also drifted out of step with the record — it never covered the outline or the
+    // key had also drifted out of step with the record - it never covered the outline or the
     // duration, so two cards differing only in those would have shared one entry.
 }
 
@@ -627,7 +627,7 @@ public sealed record LayerPlacement
     /// Clockwise rotation about the destination rectangle's centre, in degrees.
     /// </summary>
     /// <remarks>
-    /// A rotated layer OVERFLOWS its rectangle rather than being trimmed to it — which is what a
+    /// A rotated layer OVERFLOWS its rectangle rather than being trimmed to it - which is what a
     /// portrait screen hung sideways needs, and the opposite of what the unrotated fit does.
     /// </remarks>
     public double RotationDegrees { get; set; }
@@ -696,7 +696,7 @@ public sealed record ChromaKeySpec
     /// <summary>How soft the edge between kept and keyed is.</summary>
     public double Smoothness { get; set; } = 0.1;
 
-    /// <summary>How much of the key colour is pulled out of what remains — the green fringe.</summary>
+    /// <summary>How much of the key colour is pulled out of what remains - the green fringe.</summary>
     public double SpillReduction { get; set; } = 0.1;
 }
 
@@ -716,7 +716,7 @@ public sealed record ColorAdjustSpec
 /// </summary>
 /// <remarks>
 /// Either a track inside the media (<see cref="StreamIndex"/>) or a sidecar file
-/// (<see cref="Path"/>) — a show routinely uses both, an embedded track for one language and a
+/// (<see cref="Path"/>) - a show routinely uses both, an embedded track for one language and a
 /// hand-corrected .srt for another, so this is a list rather than a single choice.
 /// </remarks>
 public sealed record SubtitleSelection
@@ -778,7 +778,7 @@ public enum CueEndBehavior
 /// How a layer's picture fills its destination rectangle.
 /// </summary>
 /// <remarks>
-/// Six, matching what the compositor can actually do — it was three, so half the fits the renderer
+/// Six, matching what the compositor can actually do - it was three, so half the fits the renderer
 /// supports could not be authored. <see cref="Contain"/> and <see cref="Center"/> both letterbox; they
 /// differ in whether the picture is scaled to the rectangle at all.
 /// </remarks>
@@ -810,7 +810,7 @@ public enum LayerFit
 /// <b>A custom curve is never a new <see cref="FadeCurve"/> member.</b> Enums round-trip numerically
 /// and the sidecar format's other reader is the C ABI host, which would decode an unknown member as a
 /// different valid law and quietly play the wrong shape. A nullable companion field is the only
-/// additive-safe route — the same rule the framework's <c>FadeShape</c> follows.
+/// additive-safe route - the same rule the framework's <c>FadeShape</c> follows.
 /// </remarks>
 public sealed record CurveSpec
 {

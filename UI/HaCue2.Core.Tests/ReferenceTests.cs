@@ -78,7 +78,7 @@ public sealed class ReferenceTests
     public void FeedingCuesAreCountedOncePerCue()
     {
         var fixture = new TestProject();
-        // A second send from the same cue into the same output — a mono-from-both-channels patch.
+        // A second send from the same cue into the same output - a mono-from-both-channels patch.
         fixture.Track.Sends.Add(new CueAudioSend { SourceChannel = 1, LogicalChannelId = fixture.MainL.Id });
 
         Assert.Equal(1, ProjectReferences.CuesFeeding(fixture.Project, fixture.MainL.Id));

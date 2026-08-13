@@ -10,14 +10,14 @@ namespace HaCue2.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The project comes from <see cref="LibrarySeeder"/> — the same generator that builds the app's real
-/// fixture — rather than from a hand-written one. Two reasons: it exercises every cue kind, and it
+/// The project comes from <see cref="LibrarySeeder"/> - the same generator that builds the app's real
+/// fixture - rather than from a hand-written one. Two reasons: it exercises every cue kind, and it
 /// means the seeder and the view-models are tested against the same document, so a change that breaks
 /// one is caught by the other rather than by neither.
 /// </para>
 /// <para>
 /// No engine is started. A shell with no session is a fully working EDITOR, which is what these tests
-/// are about — the transport's live half belongs to <c>HaCue2.Core.Tests</c>, where it can be tested
+/// are about - the transport's live half belongs to <c>HaCue2.Core.Tests</c>, where it can be tested
 /// without devices.
 /// </para>
 /// </remarks>
@@ -44,7 +44,7 @@ internal static class ShellFixture
     public static Task WithShellAsync(Func<ShellViewModel, Task> body) =>
         Session.DispatchAsync(() => body(new ShellViewModel(Project())));
 
-    /// <summary>The first media cue in the Music list — the one the fixture calls "Walk-in bed".</summary>
+    /// <summary>The first media cue in the Music list - the one the fixture calls "Walk-in bed".</summary>
     public static MediaCueNode Bed(HaCueProject project) =>
         project.CueLists.Single(list => list.Name == "Music").Flatten().OfType<MediaCueNode>().First();
 

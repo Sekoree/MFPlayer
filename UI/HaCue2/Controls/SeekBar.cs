@@ -12,7 +12,7 @@ namespace HaCue2.Controls;
 /// <para>
 /// A <see cref="ProgressBar"/> with a pointer contract, rather than a <see cref="Slider"/>: a slider
 /// carries a thumb, a track, keyboard focus and a two-way <c>Value</c> that fights a four-times-a-second
-/// poll — every tick would either snap the thumb out from under the operator's finger or, worse, be
+/// poll - every tick would either snap the thumb out from under the operator's finger or, worse, be
 /// interpreted as a seek back to where the show already was.
 /// </para>
 /// <para>
@@ -31,7 +31,7 @@ public class SeekBar : ProgressBar
     /// A templated control looks up its default <c>ControlTheme</c> by STYLE KEY, which is its own
     /// concrete type unless it says otherwise. The booth theme keys its bar off
     /// <c>{x:Type ProgressBar}</c>, so without this a <c>SeekBar</c> found no theme, got no template,
-    /// and rendered NOTHING — every playing cue in the Active panel showed an empty space where its
+    /// and rendered NOTHING - every playing cue in the Active panel showed an empty space where its
     /// progress should be, which reads as a bar that never moves.
     /// </remarks>
     protected override Type StyleKeyOverride => typeof(ProgressBar);
@@ -67,7 +67,7 @@ public class SeekBar : ProgressBar
     /// <summary>
     /// The other half of the "ignores incoming ticks" promise: the poll's binding writes at the same
     /// priority as our local preview writes, so a tick landing mid-drag DID snap the bar back to the
-    /// show's position — on a long clip the whole control width away from the finger, and the release
+    /// show's position - on a long clip the whole control width away from the finger, and the release
     /// then seeked to wherever the snap left it. While a drag is in progress, any Value write that is
     /// not our own is immediately reverted to the preview.
     /// </summary>
@@ -148,7 +148,7 @@ public class SeekBar : ProgressBar
     /// <summary>Whether a poll may write to <see cref="ProgressBar.Value"/> right now.</summary>
     /// <remarks>
     /// Read by the binding so a tick landing mid-drag does not snap the bar back to the show's
-    /// position — which on a long clip is the whole width of the control away from the finger.
+    /// position - which on a long clip is the whole width of the control away from the finger.
     /// </remarks>
     public bool IsScrubbing => _dragging;
 }

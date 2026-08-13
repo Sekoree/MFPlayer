@@ -10,7 +10,7 @@ using HaCue2.Session;
 
 namespace HaCue2.ViewModels;
 
-/// <summary>Screens 06–08b — Logical outputs · Patch · Devices · Audition, all from the document.</summary>
+/// <summary>Screens 06–08b - Logical outputs · Patch · Devices · Audition, all from the document.</summary>
 public partial class AudioViewModel : ObservableObject
 {
     private readonly ProjectJournal _journal;
@@ -30,7 +30,7 @@ public partial class AudioViewModel : ObservableObject
 
         // Keyed, so the labels can carry LIVE counts. They used to be plain strings that doubled as the
         // tabs' identity, which meant a count could never be rewritten without the selection losing the
-        // tab it pointed at — so the numbers were frozen at construction and quietly went stale.
+        // tab it pointed at - so the numbers were frozen at construction and quietly went stale.
         OutputsTab = new SectionTab(OutputsKey, "LOGICAL OUTPUTS");
         PatchTab = new SectionTab(PatchKey, "PATCH");
         DevicesTab = new SectionTab(DevicesKey, "DEVICES");
@@ -96,7 +96,7 @@ public partial class AudioViewModel : ObservableObject
     /// <summary>The journal, for the dialogs the view opens.</summary>
     public ProjectJournal Journal => _journal;
 
-    /// <summary>What a new group would take as members — the selected output, when there is one.</summary>
+    /// <summary>What a new group would take as members - the selected output, when there is one.</summary>
     public IReadOnlyList<Guid> SelectedOutputIds =>
         SelectedOutput is { } row ? [row.Id] : [];
 
@@ -104,7 +104,7 @@ public partial class AudioViewModel : ObservableObject
     /// Patches the selected logical output onto a device line's channels.
     /// </summary>
     /// <remarks>
-    /// Register item 8's "pick device channels" — the operator names the LINE and the first channel,
+    /// Register item 8's "pick device channels" - the operator names the LINE and the first channel,
     /// and the cells land from there. Null when there is nothing selected or nowhere to patch to, so
     /// the button opens nothing rather than a modal that says "select something first".
     /// </remarks>
@@ -119,7 +119,7 @@ public partial class AudioViewModel : ObservableObject
 
         // WHERE IT ALREADY IS. The dialog used to open on line 1 / channel 1 whatever the patch said,
         // so re-patching a cell to the channel it was already on looked like a control that did
-        // nothing — and there was no way to see where the output actually went without leaving.
+        // nothing - and there was no way to see where the output actually went without leaving.
         var current = _project.AudioPatch.Cells
             .FirstOrDefault(cell => cell.LogicalChannelId == channel.Id);
 
@@ -241,7 +241,7 @@ public partial class AudioViewModel : ObservableObject
     /// The selected logical output's name, editable in place.
     /// </summary>
     /// <remarks>
-    /// The inspector's Name box was bound to <see cref="SelectedOutputName"/>, which has no setter — so
+    /// The inspector's Name box was bound to <see cref="SelectedOutputName"/>, which has no setter - so
     /// it accepted typing and threw it away, and the only working rename was the footer button. A field
     /// that looks editable and is not is worse than no field.
     /// </remarks>
@@ -282,7 +282,7 @@ public partial class AudioViewModel : ObservableObject
     /// </remarks>
     public string SoloLabel =>
         SelectedOutput is { } row && _soloed == row.Id
-            ? "CLEAR SOLO — MONITOR BACK TO ITS OWN PATCH"
+            ? "CLEAR SOLO - MONITOR BACK TO ITS OWN PATCH"
             : "SOLO THIS OUTPUT TO AUDITION";
 
     /// <summary>The last refusal from the solo button, or nothing.</summary>
@@ -307,7 +307,7 @@ public partial class AudioViewModel : ObservableObject
     /// Where the selected logical output is patched, line by line.
     /// </summary>
     /// <remarks>
-    /// Was a literal "18i20 · Out 3" — a fixture's rig, shown over every project. This is the answer to
+    /// Was a literal "18i20 · Out 3" - a fixture's rig, shown over every project. This is the answer to
     /// "why can I not hear Lobby", so it has to be the truth about THIS document.
     /// </remarks>
     public string SelectedOutputLines
@@ -315,7 +315,7 @@ public partial class AudioViewModel : ObservableObject
         get
         {
             if (SelectedChannel is not { } channel)
-                return "—";
+                return "-";
 
             var cells = _project.AudioPatch.Cells
                 .Where(cell => cell.LogicalChannelId == channel.Id)
@@ -332,14 +332,14 @@ public partial class AudioViewModel : ObservableObject
         get
         {
             if (SelectedChannel is not { } channel)
-                return "—";
+                return "-";
 
             var cells = _project.AudioPatch.Cells
                 .Where(cell => cell.LogicalChannelId == channel.Id)
                 .ToList();
 
             if (cells.Count == 0)
-                return "nothing — no device channel receives it";
+                return "nothing - no device channel receives it";
 
             var muted = cells.Count(cell => cell.Muted);
             var loudest = cells.Max(cell => cell.GainDb);
@@ -381,8 +381,8 @@ public partial class AudioViewModel : ObservableObject
 
     /// <summary>The group the selected output belongs to, which is what "remove group" acts on.</summary>
     /// <remarks>
-    /// Reached through the SELECTION rather than through a list of its own. Groups have no pane —
-    /// membership is shown on the outputs that are in one — so the group an operator means is the one
+    /// Reached through the SELECTION rather than through a list of its own. Groups have no pane -
+    /// membership is shown on the outputs that are in one - so the group an operator means is the one
     /// belonging to the row they right-clicked, and a second list to select from would be a second
     /// place to get the selection wrong.
     /// </remarks>
@@ -420,7 +420,7 @@ public partial class AudioViewModel : ObservableObject
     /// Recalls the selected snapshot onto the live patch.
     /// </summary>
     /// <remarks>
-    /// <b>Not journaled, and not a document edit in the undo sense</b> — the same rule a patch cue
+    /// <b>Not journaled, and not a document edit in the undo sense</b> - the same rule a patch cue
     /// firing follows. Recall is an operator action on the patch; "undo" means un-edit my document,
     /// never un-recall my snapshot. What it DOES change is the document's cell values, so the project
     /// goes dirty and the change is saved with the show.
@@ -452,7 +452,7 @@ public partial class AudioViewModel : ObservableObject
     /// <remarks>
     /// Journaled, unlike recall: editing what a snapshot STORES is an ordinary document edit, and
     /// overwriting somebody's stored state without an undo would be the most expensive mistake this
-    /// pane can make. Only the channels the snapshot already covers are re-captured — "update" means
+    /// pane can make. Only the channels the snapshot already covers are re-captured - "update" means
     /// this snapshot as it is now, not "make it cover the whole console".
     /// </remarks>
     public void UpdateSelected()
@@ -489,7 +489,7 @@ public partial class AudioViewModel : ObservableObject
     /// Whether there is anything to patch a logical output ONTO.
     /// </summary>
     /// <remarks>
-    /// A new project has logical outputs and no lines, deliberately — a line is one machine's sound
+    /// A new project has logical outputs and no lines, deliberately - a line is one machine's sound
     /// card and does not belong in a travelling document. That made the patch button a dead end: it
     /// opened nothing, said nothing, and looked broken. It is disabled with a reason now.
     /// </remarks>
@@ -498,7 +498,7 @@ public partial class AudioViewModel : ObservableObject
     public string PatchHint =>
         CanPatchToDevice
             ? ""
-            : "no audio lines yet — add one under DEVICES, then patch this output onto its channels";
+            : "no audio lines yet - add one under DEVICES, then patch this output onto its channels";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SelectedLineName))]
@@ -589,7 +589,7 @@ public partial class AudioViewModel : ObservableObject
     /// <remarks>
     /// A line that does not run natively at the mix rate is excluded rather than shown and refused:
     /// the bay wraps it in a resampler, and a resampled master would drift the show clock against
-    /// itself. "None" is a real answer — it means the wall-clock fallback, which is what a rig with no
+    /// itself. "None" is a real answer - it means the wall-clock fallback, which is what a rig with no
     /// audio interface actually has.
     /// </remarks>
     public IReadOnlyList<string> ClockMasters =>
@@ -641,7 +641,7 @@ public partial class AudioViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Set by editing either, cleared by a restart. It drives the "Apply &amp; restart audio" button's
-    /// enabled state so the operator can see that the show is not yet running what the document says —
+    /// enabled state so the operator can see that the show is not yet running what the document says -
     /// which is the one thing a silent deferral would hide.
     /// </remarks>
     public bool NeedsAudioRestart =>
@@ -685,7 +685,7 @@ public partial class AudioViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Click toggles at unity, drag adjusts the gain, right-click mutes — the interaction the register
+    /// Click toggles at unity, drag adjusts the gain, right-click mutes - the interaction the register
     /// specifies, and the same one the cue-sends matrix uses.
     /// </para>
     /// <para>
@@ -721,8 +721,8 @@ public partial class AudioViewModel : ObservableObject
 
             case MatrixGestureKind.Adjust:
                 // QUIET, and pushed straight at the bay instead. A gain drag emits a command per
-                // pointer sample; announcing each one ran the shell's entire edit reaction — a media
-                // re-probe, four view-model refreshes, and a compile — per pixel, and still gave the
+                // pointer sample; announcing each one ran the shell's entire edit reaction - a media
+                // re-probe, four view-model refreshes, and a compile - per pixel, and still gave the
                 // operator NOTHING to hear, because every sample restarted the reload debounce behind
                 // it. The patch is not part of the compiled document, so it can be reconciled under
                 // running voices directly: the drag is now audible as it happens and costs one shell
@@ -815,7 +815,7 @@ public partial class AudioViewModel : ObservableObject
 public sealed record SnapshotRow(Guid Id, string Text);
 
 /// <summary>
-/// The audition rig — one audio line plus one video surface, shared by the Audio and Video views.
+/// The audition rig - one audio line plus one video surface, shared by the Audio and Video views.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -824,7 +824,7 @@ public sealed record SnapshotRow(Guid Id, string Text);
 /// machine that lacks it. Its settings are journaled like any other project edit.
 /// </para>
 /// <para>
-/// Every field here was a hardcoded string until the rig existed in the model — the pane described a
+/// Every field here was a hardcoded string until the rig existed in the model - the pane described a
 /// booth that only appeared in the mockup.
 /// </para>
 /// </remarks>
@@ -890,7 +890,7 @@ public partial class AuditionViewModel : ObservableObject
     }
 
     /// <summary>
-    /// How wide the audition path will be — read from the chosen line, never assumed.
+    /// How wide the audition path will be - read from the chosen line, never assumed.
     /// </summary>
     /// <remarks>
     /// D8's whole point, said on screen: a rig on an 8-channel interface auditions in 8 channels. The
@@ -983,7 +983,7 @@ public partial class AuditionViewModel : ObservableObject
         get
         {
             if (Rig is not { Surface: AuditionSurface.Window })
-                return "audio only — no window is opened";
+                return "audio only - no window is opened";
 
             if (Rig is { SurfaceWidth: > 0, SurfaceHeight: > 0 } sized)
                 return $"{sized.SurfaceWidth}×{sized.SurfaceHeight}";

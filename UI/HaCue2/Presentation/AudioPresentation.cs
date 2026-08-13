@@ -32,14 +32,14 @@ public static class AudioPresentation
             {
                 Id = channel.Id,
                 Name = channel.Name,
-                Group = group?.Name ?? "—",
+                Group = group?.Name ?? "-",
                 FedBy = new Status(
                     $"{feeding} cue{(feeding == 1 ? "" : "s")}",
                     unfed ? Gel.Amber : Gel.Neutral),
                 PatchedTo = cells.Count == 0
-                    ? new Status("nothing — silent", unpatched ? Gel.Red : Gel.Neutral)
+                    ? new Status("nothing - silent", unpatched ? Gel.Red : Gel.Neutral)
                     : new Status(string.Join(" + ", cells.Select(cell => CellLabel(project, cell)))),
-                // The meter is a RUNTIME fact. No telemetry means no bars — never an invented level.
+                // The meter is a RUNTIME fact. No telemetry means no bars - never an invented level.
                 MeterBars = runtime.Levels.TryGetValue(channel.Id, out var level) ? level.Bars : 0,
                 MeterGel = runtime.Levels.TryGetValue(channel.Id, out var hot) && hot.IsHot
                     ? Gel.Red
@@ -174,7 +174,7 @@ public static class AudioPresentation
     /// <remarks>
     /// Structured rather than pre-formatted strings, and VARIABLE length: a source channel can reach
     /// no outputs, one, or six, and the view was previously indexing four fixed slots with the gains
-    /// typed in beside them — so it bound past the end of the list on every cue that did not happen to
+    /// typed in beside them - so it bound past the end of the list on every cue that did not happen to
     /// have exactly four routes, and showed invented decibels on the ones that did.
     /// </remarks>
     public static IReadOnlyList<RouteHop> RouteChain(
@@ -221,12 +221,12 @@ public static class AudioPresentation
                     ? new Status(
                         $"{declared:N0} {(resampled ? "· resampled" : "native")}",
                         resampled ? Gel.Amber : Gel.Neutral)
-                    : new Status("—"),
+                    : new Status("-"),
                 State = absent
                     ? new Status("absent on this machine", Gel.Red)
                     : new Status(isMaster ? "open · clock master" : "open", Gel.Green),
                 Carries = carries == 0
-                    ? "—"
+                    ? "-"
                     : $"{carries} logical out{(carries == 1 ? "" : "s")}",
                 NameGel = absent ? Gel.Red : Gel.Neutral,
             });
@@ -246,7 +246,7 @@ public static class AudioPresentation
     private static string CellLabel(HaCueProject project, PatchCell cell) =>
         $"{project.FindLine(cell.LineId)?.Name ?? "absent"}·{cell.LineChannel + 1}";
 
-    /// <summary>"Src L" / "Src R" / "Src 3" — the first two channels have names people use.</summary>
+    /// <summary>"Src L" / "Src R" / "Src 3" - the first two channels have names people use.</summary>
     private static string Source(int channel) => channel switch
     {
         0 => "Src L",

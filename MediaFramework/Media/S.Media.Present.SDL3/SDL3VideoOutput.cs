@@ -326,7 +326,7 @@ public sealed unsafe class SDL3VideoOutput : INonBlockingVideoOutput, IDisposabl
 
     private void InitGraphics()
     {
-        // Serialized with every other SDL window builder in the process — this output runs on its own
+        // Serialized with every other SDL window builder in the process - this output runs on its own
         // render thread too. See SDL3Runtime.EnterVideoDevice.
         using var videoDevice = SDL3Runtime.EnterVideoDevice();
 

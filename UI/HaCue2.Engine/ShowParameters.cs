@@ -8,7 +8,7 @@ namespace HaCue2.Engine;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Continuous-controller bindings to PARAMETERS are v1, not just note→cue — a fader on the master trim
+/// Continuous-controller bindings to PARAMETERS are v1, not just note→cue - a fader on the master trim
 /// is a first-class binding rather than something bolted on later. The framework supplies the registry
 /// and the soft-takeover arithmetic; what belongs here is the ANSWER to "which values does a cue
 /// player offer", which only the app can give.
@@ -31,7 +31,7 @@ public static class ShowParameters
     /// Registers what this show offers, over the accessors that can actually move them.
     /// </summary>
     /// <remarks>
-    /// The registry holds delegates rather than values, so a parameter always reads what is true now —
+    /// The registry holds delegates rather than values, so a parameter always reads what is true now -
     /// which is what soft takeover compares a fader's position against. A cached number would make the
     /// control latch against a value the show had already moved past.
     /// </remarks>

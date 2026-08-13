@@ -10,7 +10,7 @@ namespace HaCue2.Core.Tests;
 /// </summary>
 /// <remarks>
 /// A slate is rarely the canvas's own shape, and it used to be submitted at its own raster and
-/// stretched — the one option that always looks wrong on a logo.
+/// stretched - the one option that always looks wrong on a logo.
 /// </remarks>
 public sealed class IdleImageFitTests
 {

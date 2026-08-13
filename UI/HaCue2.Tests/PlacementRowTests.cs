@@ -12,7 +12,7 @@ namespace HaCue2.Tests;
 /// Carrying a cue on several canvases without scrolling past all of them.
 /// </summary>
 /// <remarks>
-/// A placement holds geometry, a fit, an opacity, a crop, a chroma key and a colour adjust — the better
+/// A placement holds geometry, a fit, an opacity, a crop, a chroma key and a colour adjust - the better
 /// part of a screen each. Behind a picker over one editor, a cue on three canvases was three screens of
 /// settings reachable only by remembering which entry in the picker was which.
 /// </remarks>

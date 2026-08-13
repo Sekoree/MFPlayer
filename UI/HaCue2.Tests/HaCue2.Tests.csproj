@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <!-- The APP's tests: view-models, bindings and the surfaces that need a real Avalonia application
-         behind them. Pure model/compiler/engine work is HaCue2.Core.Tests and stays there — this
+         behind them. Pure model/compiler/engine work is HaCue2.Core.Tests and stays there - this
          project exists for the half that could not be tested without a dispatcher.
 
          The headless harness is copied WHOLESALE from HaPlay.Tests, including HeadlessSessionBootstrap:

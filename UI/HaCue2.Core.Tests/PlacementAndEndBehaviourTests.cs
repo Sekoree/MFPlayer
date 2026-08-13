@@ -81,7 +81,7 @@ public class PlacementAndEndBehaviourTests
     public void EveryFitModeHasAName(LayerFit fit, string expected)
     {
         // The framework maps these BY NAME, so a fit that compiled to the wrong string would silently
-        // fall through to Cover — a picture in the wrong shape and no error anywhere.
+        // fall through to Cover - a picture in the wrong shape and no error anywhere.
         var project = WithPlacement(new LayerPlacement { Fit = fit }, out _);
 
         Assert.Equal(expected, Compile(project).Placement!.Fit);

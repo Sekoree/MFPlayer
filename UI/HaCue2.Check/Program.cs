@@ -14,7 +14,7 @@ namespace HaCue2.Check;
 /// </para>
 /// <para>
 /// Consequently the DEVICE half reports as "not checked" here, not as passing. The checks that mean
-/// the same thing on any machine — dangling references, unpatched outputs, missing media — are the
+/// the same thing on any machine - dangling references, unpatched outputs, missing media - are the
 /// ones this is for.
 /// </para>
 /// </remarks>

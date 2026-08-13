@@ -10,7 +10,7 @@ namespace HaCue2.Core.Tests;
 /// Cues whose media is a SOURCE rather than a file.
 /// </summary>
 /// <remarks>
-/// The whole of this feature is one idea — a media path that is a URI — and the risk is everything
+/// The whole of this feature is one idea - a media path that is a URI - and the risk is everything
 /// downstream that assumed a media path is a filename. These tests are mostly about the second half:
 /// what must NOT happen to a URI on its way to the engine.
 /// </remarks>
@@ -194,7 +194,7 @@ public class SourceUriTests
         Assert.Equal(CheckOutcome.Passed, media.Outcome);
     }
 
-    /// <summary>The URI reaches the engine exactly as authored — that is the whole contract.</summary>
+    /// <summary>The URI reaches the engine exactly as authored - that is the whole contract.</summary>
     [Fact]
     public void TheUriReachesTheEngineVerbatim()
     {

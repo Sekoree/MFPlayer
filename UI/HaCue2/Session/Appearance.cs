@@ -25,13 +25,13 @@ public enum Density
 /// <b>Everything here is live.</b> Metrics and colours are both pushed in as resource overrides, and
 /// every control reads them with <c>DynamicResource</c>, so a change lands on the next layout without
 /// a restart. Getting the palette there needed the colour references converted from
-/// <c>StaticResource</c> — a static lookup resolves once when the theme is built, which is why this
+/// <c>StaticResource</c> - a static lookup resolves once when the theme is built, which is why this
 /// was startup-only until the conversion.
 /// </para>
 /// <para>
 /// A palette re-states only what actually depends on the surface: the 13 base colours, the 13 brushes
 /// built from them, and the 14 pre-computed OPAQUE mixes. The 35 gel-over-transparent washes are
-/// palette-independent by construction — they tint whatever they sit on, which is why the mockup
+/// palette-independent by construction - they tint whatever they sit on, which is why the mockup
 /// authored them with an alpha channel.
 /// </para>
 /// </remarks>
@@ -66,7 +66,7 @@ public sealed class Appearance
     private readonly ResourceDictionary _palette = [];
     private string _paletteName = "booth dark";
 
-    /// <summary>Which palette is drawn. Live — the app re-tints on the next layout.</summary>
+    /// <summary>Which palette is drawn. Live - the app re-tints on the next layout.</summary>
     public string Palette
     {
         get => _paletteName;
@@ -93,7 +93,7 @@ public sealed class Appearance
     /// </summary>
     /// <remarks>
     /// Merged LAST so it wins over the theme's own values, and kept as one dictionary that is mutated
-    /// rather than swapped — a dictionary that is replaced breaks every DynamicResource pointing at it.
+    /// rather than swapped - a dictionary that is replaced breaks every DynamicResource pointing at it.
     /// </remarks>
     public void Attach(Application application)
     {
@@ -116,7 +116,7 @@ public sealed class Appearance
     /// </summary>
     /// <remarks>
     /// One call rather than four setters, because each of those re-applies the whole override
-    /// dictionary — doing it four times at start-up is four layout passes before the first window is
+    /// dictionary - doing it four times at start-up is four layout passes before the first window is
     /// even shown. The palette is set last: it is the only one that rebuilds the theme.
     /// </remarks>
     public void Adopt(Machine.AppSettings settings)
@@ -187,7 +187,7 @@ public sealed class Appearance
     {
         _palette.Clear();
 
-        // "booth dark" is Tokens.axaml itself — nothing to override, which is why it is the default
+        // "booth dark" is Tokens.axaml itself - nothing to override, which is why it is the default
         // and why an empty dictionary is the correct representation of it.
         ResourceDictionary? loaded = _paletteName switch
         {

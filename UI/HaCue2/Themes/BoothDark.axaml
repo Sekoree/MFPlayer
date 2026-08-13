@@ -5,7 +5,7 @@
        and the class-based chrome vocabulary.
 
        Named "booth dark" because that is what the Appearance pane calls it (screen 12), and because it
-       is not a dark VARIANT of a light theme — it is the only skin the mockup specifies. The plain
+       is not a dark VARIANT of a light theme - it is the only skin the mockup specifies. The plain
        dark/light options in that pane are a later exercise: everything colour lives in Tokens.axaml, so
        they become two more token sets rather than a re-theme.
 

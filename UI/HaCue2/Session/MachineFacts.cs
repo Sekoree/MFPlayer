@@ -14,7 +14,7 @@ namespace HaCue2.Session;
 /// </para>
 /// <para>
 /// <see cref="Nothing"/> is the version for a preview, a test, or a headless capture: it probes files
-/// (which needs no hardware) and reports every device as Unknown. It is a real object, not a null —
+/// (which needs no hardware) and reports every device as Unknown. It is a real object, not a null -
 /// the difference between "no devices" and "nobody looked" is the whole point of the seam, and a null
 /// would collapse them.
 /// </para>
@@ -31,7 +31,7 @@ public sealed class MachineFacts
     /// <summary>No hardware asked. Files are still probed; devices report Unknown.</summary>
     public static MachineFacts Nothing { get; } = new();
 
-    /// <summary>Null when no backend was supplied — every device answer is then Unknown.</summary>
+    /// <summary>Null when no backend was supplied - every device answer is then Unknown.</summary>
     public AudioDevices? Devices { get; }
 
     public MediaFactsCache Media { get; }
@@ -43,6 +43,6 @@ public sealed class MachineFacts
     public IReadOnlyList<string> OutputDeviceNames =>
         Devices is null ? [] : [.. Devices.Outputs.Select(device => device.Name)];
 
-    /// <summary>Whether anything could be enumerated at all — "not checked" versus an answer.</summary>
+    /// <summary>Whether anything could be enumerated at all - "not checked" versus an answer.</summary>
     public bool DevicesEnumerated => Devices is { Enumerated: true };
 }

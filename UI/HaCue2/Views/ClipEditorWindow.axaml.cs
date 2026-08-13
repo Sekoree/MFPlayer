@@ -7,7 +7,7 @@ using HaCue2.ViewModels;
 namespace HaCue2.Views;
 
 /// <summary>
-/// Screen 04b — the clip editor.
+/// Screen 04b - the clip editor.
 /// </summary>
 /// <remarks>
 /// A window rather than a sheet inside the Cues view, because trimming half an hour off a recording is
@@ -43,7 +43,7 @@ public partial class ClipEditorWindow : Window
     /// Commits a typed time on blur, not on every keystroke.
     /// </summary>
     /// <remarks>
-    /// "30:0" is a prefix of "30:00" and would otherwise be committed on the way through — moving the
+    /// "30:0" is a prefix of "30:00" and would otherwise be committed on the way through - moving the
     /// trim point twice, the second time to somewhere nobody asked for.
     /// </remarks>
     private void OnTrimInCommitted(object? sender, RoutedEventArgs e)

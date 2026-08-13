@@ -9,12 +9,12 @@ namespace HaCue2.Session;
 /// <remarks>
 /// <para>
 /// Which cues are sounding, how far through they are, what the meters read and what the audio bay's
-/// counters say cannot be derived from a <c>HaCueProject</c> — they come from the running session,
+/// counters say cannot be derived from a <c>HaCueProject</c> - they come from the running session,
 /// which the views deliberately cannot see. They read this instead, and <c>EngineRuntime</c> fills it.
 /// </para>
 /// <para>
 /// It is a separate seam because the alternative is worse: with document and runtime facts mixed into
-/// one bag, nobody reading the shell can tell which values are measured and which are assumed — and
+/// one bag, nobody reading the shell can tell which values are measured and which are assumed - and
 /// with no session at all (a laptop, a preview, a test) the app is still a working editor, which only
 /// holds while the runtime half is one object that can simply be empty.
 /// </para>
@@ -28,7 +28,7 @@ namespace HaCue2.Session;
 /// <see cref="Broken"/> from a probe; device enumeration fills <see cref="AbsentLines"/>, and opening
 /// the show's windows fills <see cref="AbsentVideoOutputs"/>.
 /// <para>
-/// <b>Nothing here is invented any more.</b> Keep this paragraph current if that changes — it is the
+/// <b>Nothing here is invented any more.</b> Keep this paragraph current if that changes - it is the
 /// one place a reader can tell which values on screen are facts. A member that has to be guessed at
 /// belongs in a named list here, not quietly among the measured ones.
 /// </para>
@@ -49,15 +49,15 @@ public sealed class ShowRuntime
     /// How long each cue's media runs, by document id.
     /// </summary>
     /// <remarks>
-    /// A duration is a MACHINE fact — it comes from probing the file — so it belongs here rather than
-    /// in the document. A cue whose media nobody has looked at shows "—" in the Len column, which is
+    /// A duration is a MACHINE fact - it comes from probing the file - so it belongs here rather than
+    /// in the document. A cue whose media nobody has looked at shows "-" in the Len column, which is
     /// the truthful answer and not a rendering gap.
     /// </remarks>
     public Dictionary<Guid, TimeSpan> MediaDurations { get; set; } = [];
 
     /// <summary>
     /// Per-logical-output levels, by document id. Absent means NO TELEMETRY, which is why the meter
-    /// column reads "—" rather than showing an empty bar: silence and "nobody is measuring" look the
+    /// column reads "-" rather than showing an empty bar: silence and "nobody is measuring" look the
     /// same on a meter and must not read the same in a table.
     /// </summary>
     public Dictionary<Guid, OutputLevel> Levels { get; set; } = [];
@@ -69,12 +69,12 @@ public sealed class ShowRuntime
     public HashSet<Guid> AbsentVideoOutputs { get; set; } = [];
 
     /// <summary>
-    /// The Active panel — a runtime list in its entirety.
+    /// The Active panel - a runtime list in its entirety.
     /// </summary>
     /// <remarks>
     /// Settable, like the other members the engine fills. It was init-only, which meant
     /// <c>EngineRuntime</c> could not write it and the panel showed the sample's five invented rows
-    /// forever — empty on any real project, however much was sounding.
+    /// forever - empty on any real project, however much was sounding.
     /// </remarks>
     public IReadOnlyList<ActiveCueRow> ActiveCues { get; set; } = [];
 
@@ -95,7 +95,7 @@ public sealed class ShowRuntime
     /// </summary>
     /// <remarks>
     /// Where the incoming timecode says the SENDER is. Nothing chases it yet, so this is a report on a
-    /// cable rather than on the show — which is why the chip distinguishes "input off" from "no signal"
+    /// cable rather than on the show - which is why the chip distinguishes "input off" from "no signal"
     /// from "undecodable" rather than showing a blank when any of the three is true.
     /// </remarks>
     public string ChaseReadout { get; set; } = "";
@@ -137,7 +137,7 @@ public sealed class ShowRuntime
     /// </summary>
     /// <remarks>
     /// What Learn captures. Stored as the PATTERN rather than the raw message because that is what a
-    /// binding holds — and because the wire monitor prints the same text, so what the operator sees is
+    /// binding holds - and because the wire monitor prints the same text, so what the operator sees is
     /// literally what gets bound.
     /// </remarks>
     public string LastSignal { get; set; } = "";
@@ -154,6 +154,6 @@ public sealed class ShowRuntime
 }
 
 /// <summary>One logical output's level, as the summary column shows it.</summary>
-/// <param name="Bars">0–7 bar glyphs; zero renders as "—", not as an empty meter.</param>
-/// <param name="IsHot">Clipping, latched — the sticky red the operator has to acknowledge.</param>
+/// <param name="Bars">0–7 bar glyphs; zero renders as "-", not as an empty meter.</param>
+/// <param name="IsHot">Clipping, latched - the sticky red the operator has to acknowledge.</param>
 public readonly record struct OutputLevel(int Bars, bool IsHot);

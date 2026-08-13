@@ -25,7 +25,7 @@ public sealed class PlacementRectTests
 
         RectEdits.Placement(cue, placement, new NormalizedRect(-0.25, 0.1, 1, 1)).Apply(new HaCueProject());
 
-        // Clamped() pins X to 1 − width, which for a full-canvas layer is 0 — so the placement every
+        // Clamped() pins X to 1 − width, which for a full-canvas layer is 0 - so the placement every
         // show starts with could not be dragged at all, in any direction.
         Assert.Equal(-0.25, placement.X, 6);
         Assert.Equal(0.1, placement.Y, 6);
@@ -56,7 +56,7 @@ public sealed class PlacementRectTests
         var rect = new NormalizedRect(-500, 900, 0.5, 0.5).Free();
 
         // A slip that threw a layer a thousand canvases away would leave nothing on screen to drag
-        // back — the same trap the minimum size exists to avoid.
+        // back - the same trap the minimum size exists to avoid.
         Assert.True(rect.X >= -NormalizedRect.FreeReach, $"X was {rect.X}");
         Assert.True(rect.Y <= 1 + NormalizedRect.FreeReach, $"Y was {rect.Y}");
     }

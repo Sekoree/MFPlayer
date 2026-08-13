@@ -97,7 +97,7 @@ public sealed class MediaPlayerOpenLiveBuilder : MediaPlayerOpenBuilder
     /// </summary>
     /// <remarks>
     /// Optional, because this builder exists for callers that own their decoders and may have no
-    /// registry at all. Without it a branch that needs a pixel conversion is refused — the same
+    /// registry at all. Without it a branch that needs a pixel conversion is refused - the same
     /// behaviour this path has always had, now stated rather than silent.
     /// </remarks>
     public MediaPlayerOpenLiveBuilder WithRegistry(IMediaRegistry registry)

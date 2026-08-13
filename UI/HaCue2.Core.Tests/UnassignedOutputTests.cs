@@ -8,7 +8,7 @@ namespace HaCue2.Core.Tests;
 /// An output that shows no composition yet.
 /// </summary>
 /// <remarks>
-/// Outputs are created UNBOUND — they are pieces of this machine, and exist before any canvas is
+/// Outputs are created UNBOUND - they are pieces of this machine, and exist before any canvas is
 /// authored against them. That made the first thing an operator does produce nothing they could see:
 /// the output was skipped entirely by the open pass, so adding a local screen put a row in a table and
 /// no window anywhere, with no error to explain it.
@@ -33,7 +33,7 @@ public class UnassignedOutputTests
     /// A local screen with no composition is not reported as a failure to open.
     /// </summary>
     /// <remarks>
-    /// Headless here, so no SDL window is created — what this pins is the DECISION: "shows no
+    /// Headless here, so no SDL window is created - what this pins is the DECISION: "shows no
     /// composition" must stop being a reason a local screen is skipped. On a machine with a display the
     /// same branch opens the window and the host paints it black.
     /// </remarks>
@@ -44,7 +44,7 @@ public class UnassignedOutputTests
 
         using var outputs = ProjectVideoOutputs.OpenAll(project, headless: true);
 
-        // Headless reports it unopened for the honest reason — no display — rather than for the wrong
+        // Headless reports it unopened for the honest reason - no display - rather than for the wrong
         // one. What matters is that a machine WITH a display would take the window branch.
         Assert.Contains(outputs.Failures, failure => failure.Contains("no display", StringComparison.Ordinal));
         Assert.DoesNotContain(
@@ -108,7 +108,7 @@ public class UnassignedOutputTests
     /// </summary>
     /// <remarks>
     /// The open record kept the canvas it was created with, and the sync pass skipped anything already
-    /// open — so re-pointing a live projector at a different composition did nothing, and the host went
+    /// open - so re-pointing a live projector at a different composition did nothing, and the host went
     /// on believing it was attached where it used to be.
     /// </remarks>
     [Fact]

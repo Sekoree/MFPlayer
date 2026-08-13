@@ -393,7 +393,7 @@ public sealed class CuePlayerLayoutBoundsTests(ITestOutputHelper output)
 internal sealed class CueScene(Window window, CuePlayerView view, CuePlayerViewModel vm) : IDisposable
 {
     private const string LongLabel =
-        "Act II — walk-in bed with a deliberately very long operator-authored cue name that wraps";
+        "Act II - walk-in bed with a deliberately very long operator-authored cue name that wraps";
 
     private const string LongPath =
         "/mnt/media/shows/2026/summer-festival/main-stage/act-ii/walk-in-bed-master-2496-final-v3.wav";
@@ -519,7 +519,7 @@ internal sealed class CueScene(Window window, CuePlayerView view, CuePlayerViewM
 
     private static CueList MainList() => new()
     {
-        Name = "Main show — full running order (long list name)",
+        Name = "Main show - full running order (long list name)",
         Nodes =
         {
             new MediaCueNode
@@ -560,7 +560,7 @@ internal sealed class CueScene(Window window, CuePlayerView view, CuePlayerViewM
             new CueGroupNode
             {
                 Number = "2",
-                Label = "Interval playlist — " + LongLabel,
+                Label = "Interval playlist - " + LongLabel,
                 FireMode = CueGroupFireMode.Playlist,
                 Playlist = new CuePlaylistOptions { Shuffle = true, CrossfadeMs = 2500, LoopCount = 0 },
                 Children =

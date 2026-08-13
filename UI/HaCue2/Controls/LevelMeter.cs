@@ -8,15 +8,15 @@ namespace HaCue2.Controls;
 /// The mockup's <c>.mtr .bar</c>: a narrow vertical level bar with a peak-hold tick and a clip latch.
 /// </summary>
 /// <remarks>
-/// Drawn rather than templated because the two things it shows — a fill whose height is a fraction of
-/// the control and a 1 px rule at another fraction — are exactly what a template cannot express without
+/// Drawn rather than templated because the two things it shows - a fill whose height is a fraction of
+/// the control and a 1 px rule at another fraction - are exactly what a template cannot express without
 /// a converter per binding.
 /// <para>
 /// It renders whatever it is given and invents nothing. A meter with no telemetry behind it must read
 /// as silence, not as a plausible-looking signal: in the first extraction attempt the output strip
 /// deliberately never faked levels for the same reason. In this shell the values come from sample data,
 /// which is why <see cref="Level"/> and <see cref="Peak"/> are plain properties with no animation,
-/// decay or ballistics — those belong to the real meter, driven by <c>ProgramBusMeter</c>.
+/// decay or ballistics - those belong to the real meter, driven by <c>ProgramBusMeter</c>.
 /// </para>
 /// </remarks>
 public class LevelMeter : Control
@@ -29,7 +29,7 @@ public class LevelMeter : Control
     public static readonly StyledProperty<double> PeakProperty =
         AvaloniaProperty.Register<LevelMeter, double>(nameof(Peak));
 
-    /// <summary>Sticky clip latch — reddens the border, matching <c>.mtr.clip</c>.</summary>
+    /// <summary>Sticky clip latch - reddens the border, matching <c>.mtr.clip</c>.</summary>
     public static readonly StyledProperty<bool> IsClippingProperty =
         AvaloniaProperty.Register<LevelMeter, bool>(nameof(IsClipping));
 
@@ -108,7 +108,7 @@ public class LevelMeter : Control
         {
             // The gradient is defined over the WHOLE bar (green → amber → red at the ceiling), so the
             // fill has to be clipped out of a full-height rectangle rather than painted into a short
-            // one — otherwise a quiet signal would be drawn with the red end of the gradient inside it.
+            // one - otherwise a quiet signal would be drawn with the red end of the gradient inside it.
             using (context.PushClip(new Rect(0, h - (h * level), w, h * level)))
                 context.FillRectangle(fill, new Rect(0, 0, w, h));
         }

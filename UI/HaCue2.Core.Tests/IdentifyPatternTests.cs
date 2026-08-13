@@ -26,7 +26,7 @@ public class IdentifyPatternTests
     /// The rendered frame's one plane, read back.
     /// </summary>
     /// <remarks>
-    /// A plain managed BGRA buffer, which is the whole reason this needs no GPU — and the whole reason
+    /// A plain managed BGRA buffer, which is the whole reason this needs no GPU - and the whole reason
     /// a test can look at what was drawn.
     /// </remarks>
     private static (byte[] Pixels, int Stride, int Width, int Height) Render(
@@ -131,7 +131,7 @@ public class IdentifyPatternTests
     public void ALongNameIsScaledDownRatherThanDrawnAtFullSizeAndClipped()
     {
         // The same name on a canvas four times as wide gets bigger letters. Scaling down is what keeps
-        // the whole name on screen — half a name identifies the wrong output, which is worse than
+        // the whole name on screen - half a name identifies the wrong output, which is worse than
         // small letters.
         var narrow = Ink(Render("PROJECTOR A", 320, 240));
         var wide = Ink(Render("PROJECTOR A", 1280, 960));
@@ -150,7 +150,7 @@ public class IdentifyPatternTests
         Assert.Equal(120, frame.Format.Height);
     }
 
-    /// <summary>How many pixels were drawn on — a proxy for how big the letters came out.</summary>
+    /// <summary>How many pixels were drawn on - a proxy for how big the letters came out.</summary>
     private static int Ink((byte[] Pixels, int Stride, int Width, int Height) frame)
     {
         var (pixels, stride, width, height) = frame;

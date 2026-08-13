@@ -75,7 +75,7 @@ public sealed class ShowCompilerTests
 
         var numbers = ShowCompiler.Compile(fixture.Project).Cues.Select(cue => cue.Number).ToList();
 
-        // Dense from 1, in the order the tree shows — the engine's Number is a POSITION, not the
+        // Dense from 1, in the order the tree shows - the engine's Number is a POSITION, not the
         // dotted number the operator calls. Every cue counts, including the comment: the cursor can
         // stand on one, so it occupies a position like anything else.
         Assert.Equal(Enumerable.Range(1, numbers.Count), numbers);
@@ -178,7 +178,7 @@ public sealed class ShowCompilerTests
 
         // The cue survives, so numbering and order stay stable while a show is being built...
         Assert.Contains(document.Cues, cue => cue.Id == fixture.Track.Id.ToString());
-        // ...but no clip, because an empty path makes the engine refuse the WHOLE document — one
+        // ...but no clip, because an empty path makes the engine refuse the WHOLE document - one
         // unfinished cue would stop the show loading in the middle of a rehearsal.
         Assert.DoesNotContain(document.Clips, clip => clip.ClipId == fixture.Track.Id.ToString());
         ShowDocumentValidator.ThrowIfInvalid(document);
@@ -209,8 +209,8 @@ public sealed class ShowCompilerTests
 
         var document = ShowCompiler.Compile(fixture.Project);
 
-        // Both the group and its child. The group carries no clip — what firing it MEANS is the fire
-        // mode's business and only the app can resolve that — but it has to be addressable, or standby
+        // Both the group and its child. The group carries no clip - what firing it MEANS is the fire
+        // mode's business and only the app can resolve that - but it has to be addressable, or standby
         // could never sit on it and GO would silently skip the whole group.
         Assert.Contains(document.Cues, cue => cue.Id == group.Id.ToString());
         Assert.DoesNotContain(document.Clips, clip => clip.ClipId == group.Id.ToString());
@@ -325,7 +325,7 @@ public sealed class ShowCompilerTests
         var stabGroup = document.Cues.First(cue => cue.Id == stab.Id.ToString()).GroupId;
 
         // A session group holds ONE active voice: firing a second cue into it RELEASES the first. That
-        // is right for a playlist and fatal for a timeline — a stab at five seconds would hard-cut the
+        // is right for a playlist and fatal for a timeline - a stab at five seconds would hard-cut the
         // bed underneath it. One transport each is what lets them overlap.
         Assert.NotEqual(bedGroup, stabGroup);
         Assert.Contains(group.Id.ToString("N"), bedGroup, StringComparison.Ordinal);
@@ -380,7 +380,7 @@ public sealed class ShowCompilerTests
         string Group(CueNode cue) =>
             document.Cues.First(item => item.Id == cue.Id.ToString()).GroupId ?? "";
 
-        // The nested playlist is one LAYER of the timeline, so it gets a transport of its own — and
+        // The nested playlist is one LAYER of the timeline, so it gets a transport of its own - and
         // its own children share it, because within the playlist they still replace each other.
         Assert.NotEqual(Group(nested), Group(bed));
         Assert.Equal(Group(inner), Group(alsoInner));
@@ -391,7 +391,7 @@ public sealed class ShowCompilerTests
     public void EveryChildOfAnAllTogetherGroupGetsItsOwnTransportSoTheyAllSound()
     {
         // The shape of the report that found this: a stack of stems plus two video layers, fired as
-        // one all-together group. Sharing a transport played the LAST child only — the group went
+        // one all-together group. Sharing a transport played the LAST child only - the group went
         // silent (its final child was a video with no sends) and only that video's layer appeared.
         var children = Enumerable.Range(1, 11)
             .Select(index => new MediaCueNode
@@ -426,7 +426,7 @@ public sealed class ShowCompilerTests
     {
         // The document can only hold a double, and the old fps*1000/1000 conversion carried the rounding
         // straight through: 59.94 became 59940/1000, which is not 60000/1001 and so never exactly matches
-        // an NTSC-rate panel — it beats against it instead.
+        // an NTSC-rate panel - it beats against it instead.
         var project = new HaCueProject
         {
             Compositions = [new CompositionDefinition { Name = "Screen", FramesPerSecond = fps }],

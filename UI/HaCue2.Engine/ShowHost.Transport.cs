@@ -10,8 +10,8 @@ namespace HaCue2.Engine;
 /// </summary>
 /// <remarks>
 /// One half of this file is the transport an operator presses; the other is the bookkeeping that makes
-/// the Active panel possible. They belong together because they are the same fact seen twice — a fire
-/// adds to the sounding set, a natural end removes from it, a stop clears it — and splitting them
+/// the Active panel possible. They belong together because they are the same fact seen twice - a fire
+/// adds to the sounding set, a natural end removes from it, a stop clears it - and splitting them
 /// would put the writer and the reader of that state in different files.
 /// </remarks>
 public sealed partial class ShowHost
@@ -22,7 +22,7 @@ public sealed partial class ShowHost
     /// <param name="GroupId">
     /// The session group whose playhead IS this cue's playhead. Without it the Active panel could only
     /// count wall time from the fire, which is a different number the moment anything pauses, seeks or
-    /// trims — and there was no way at all to seek, because a seek addresses a group.
+    /// trims - and there was no way at all to seek, because a seek addresses a group.
     /// </param>
     private readonly record struct Sounding(long StartedTicks, Guid ListId, string GroupId, bool IsFading);
 
@@ -88,7 +88,7 @@ public sealed partial class ShowHost
     /// <para>
     /// The difference between a GO that plays and a GO that opens a file first. Opening a 4 K clip off a
     /// slow disk takes long enough to be seen, and until now HaCue2 did it at the moment the operator
-    /// pressed the button — the one moment it must not.
+    /// pressed the button - the one moment it must not.
     /// </para>
     /// <para>
     /// Fired and NOT awaited, deliberately: pre-roll is best-effort and must never delay the transport
@@ -116,11 +116,11 @@ public sealed partial class ShowHost
         {
             // Best-effort by contract. Reported once rather than swallowed silently, because a rig
             // where pre-roll always fails is a rig where every GO pays for an open.
-            Report($"pre-roll could not warm the next cue — {failure.Message}");
+            Report($"pre-roll could not warm the next cue - {failure.Message}");
         }
     }
 
-    /// <summary>Warms every list's cursor — what a freshly opened show wants before the first GO.</summary>
+    /// <summary>Warms every list's cursor - what a freshly opened show wants before the first GO.</summary>
     internal void WarmAllStandby()
     {
         foreach (var list in _project.CueLists)
@@ -128,7 +128,7 @@ public sealed partial class ShowHost
     }
 
     /// <summary>
-    /// Runs a timeline group from a position inside it — the rehearsal verb.
+    /// Runs a timeline group from a position inside it - the rehearsal verb.
     /// </summary>
     /// <remarks>
     /// Distinct from firing the group, which always starts at its top. What an operator rehearsing a
@@ -154,8 +154,8 @@ public sealed partial class ShowHost
     /// <remarks>
     /// <para>
     /// Set by the shell. A cue fired against a document the operator has since edited would play the
-    /// old version of itself — the one failure the deferral in <see cref="TryReloadAsync"/> must not
-    /// introduce — so every fire passes through here first.
+    /// old version of itself - the one failure the deferral in <see cref="TryReloadAsync"/> must not
+    /// introduce - so every fire passes through here first.
     /// </para>
     /// <para>
     /// Only the OPERATOR's verbs go through this: the executor's own internal fires (a playlist
@@ -180,12 +180,12 @@ public sealed partial class ShowHost
             // A flush that failed must never stop the GO. The operator pressed a transport button; the
             // worst case is that it fires the document the engine already had, which is what would have
             // happened anyway.
-            Report($"a held edit could not be applied before firing — {failure.Message}");
+            Report($"a held edit could not be applied before firing - {failure.Message}");
         }
     }
 
     /// <summary>
-    /// Stops one cue — the bare STOP.
+    /// Stops one cue - the bare STOP.
     /// </summary>
     /// <remarks>
     /// A per-cue stop rather than a stop-all, because on a show with a music bed under a video the
@@ -195,7 +195,7 @@ public sealed partial class ShowHost
     public Task StopCueAsync(Guid cueId) => StopCueAsync(cueId, fadeDuration: null);
 
     /// <summary>The bare STOP with a fade override: null keeps the cue's configured fade-out, a
-    /// non-positive duration hard-cuts past it — the operator's second press on a stop that is
+    /// non-positive duration hard-cuts past it - the operator's second press on a stop that is
     /// already ramping means "now", not "start the same 2-second fade again".</summary>
     public async Task StopCueAsync(Guid cueId, TimeSpan? fadeDuration)
     {
@@ -211,7 +211,7 @@ public sealed partial class ShowHost
         await StopVisualizerAutomationRunAsync(cueId).ConfigureAwait(false);
 
         // A visualizer holds a renderer rather than a voice, so the session has nothing to stop for it
-        // — asking anyway would silently do nothing and leave the canvas lit.
+        // - asking anyway would silently do nothing and leave the canvas lit.
         await _visualizers.StopAsync(cueId).ConfigureAwait(false);
         await _session.StopCueAsync(cueId.ToString(), fadeDuration).ConfigureAwait(false);
         Forget(cueId.ToString());
@@ -228,7 +228,7 @@ public sealed partial class ShowHost
     /// PANIC: stops everything over the project's panic fade.
     /// </summary>
     /// <remarks>
-    /// A fade rather than a cut, and a SHORT one — the setting defaults to 250 ms. A true hard cut
+    /// A fade rather than a cut, and a SHORT one - the setting defaults to 250 ms. A true hard cut
     /// through a big PA is a thump that can damage drivers, so "as fast as is safe" is the honest
     /// reading of panic, and the number stays the operator's to set.
     /// </remarks>
@@ -361,7 +361,7 @@ public sealed partial class ShowHost
     }
 
     /// <summary>
-    /// Raised whenever the sounding set changes — a cue fired, ended, or was forgotten. The UI uses
+    /// Raised whenever the sounding set changes - a cue fired, ended, or was forgotten. The UI uses
     /// it to poll a fresh snapshot IMMEDIATELY instead of waiting out its own tick, so the Active
     /// panel reflects a GO on the next dispatcher pass rather than up to a poll period later.
     /// Raised from engine threads; subscribers must marshal themselves.
@@ -374,7 +374,7 @@ public sealed partial class ShowHost
     /// <remarks>
     /// Called at FIRE START, before the media open completes. The open of a cold file takes long
     /// enough to see, and an Active panel that only shows the cue once it is audible reads as a GO
-    /// that did not take — the cue is committed from the operator's point of view the moment they
+    /// that did not take - the cue is committed from the operator's point of view the moment they
     /// pressed the button. A fire that then fails takes the entry back down via <see cref="Forget"/>.
     /// </remarks>
     private void Remember(Guid cueId, Guid listId, string groupId)
@@ -389,9 +389,9 @@ public sealed partial class ShowHost
     /// </summary>
     /// <remarks>
     /// A re-fire of an already-sounding cue displaces its old voice DURING the fire, and that old
-    /// voice's teardown calls <see cref="Forget"/> — which, now that Remember runs before the open,
+    /// voice's teardown calls <see cref="Forget"/> - which, now that Remember runs before the open,
     /// can race the fresh entry away. This puts it back (with a fresh stamp, since the original
-    /// moment was lost with the entry) and leaves a surviving entry — and its fire-start stamp —
+    /// moment was lost with the entry) and leaves a surviving entry - and its fire-start stamp -
     /// untouched, so the Active panel's order still reflects when the operator fired it.
     /// </remarks>
     private void ConfirmSounding(Guid cueId, Guid listId, string groupId)
@@ -416,7 +416,7 @@ public sealed partial class ShowHost
     /// <remarks>
     /// Addressed by CUE because that is what the operator clicked, and resolved to the transport GROUP
     /// the cue is on, because that is what a seek moves. A cue that is not sounding refuses rather than
-    /// seeking something else — there is no useful meaning for "seek a cue that is not playing", and
+    /// seeking something else - there is no useful meaning for "seek a cue that is not playing", and
     /// the group it would land on is whatever played there last.
     /// </remarks>
     public async Task<string?> SeekCueAsync(Guid cueId, TimeSpan position)
@@ -461,12 +461,12 @@ public sealed partial class ShowHost
             : cueTime > TimeSpan.Zero ? cueTime : TimeSpan.Zero;
 
     /// <summary>
-    /// Seeks several sounding cues as ONE transport operation — the group-header scrub.
+    /// Seeks several sounding cues as ONE transport operation - the group-header scrub.
     /// </summary>
     /// <remarks>
     /// Through the session's seek barrier (<c>SeekManyAsync</c>: every group pauses, all seek with
     /// clocks frozen, the running ones resume together), because seeking the cues one at a time
-    /// landed each at a different wall moment — eleven stems arrived milliseconds apart and stayed
+    /// landed each at a different wall moment - eleven stems arrived milliseconds apart and stayed
     /// that far out of sync for the rest of the song. Cues that are not sounding are skipped; the
     /// refusal names them only when NOTHING in the batch could seek.
     /// </remarks>
@@ -559,12 +559,12 @@ public sealed partial class ShowHost
                     var wall = Stopwatch.GetElapsedTime(entry.Value.StartedTicks);
                     var playhead = playheads.GetValueOrDefault(entry.Value.GroupId);
 
-                    // The group's position when it has one, and wall time otherwise — a visualizer
+                    // The group's position when it has one, and wall time otherwise - a visualizer
                     // cue holds no transport at all, and counting up is better than standing still.
                     //
                     // ONE domain for the whole panel: on-air. A routed cue's transport position tracks
-                    // content entering the mix bus — one downstream depth (~pump + device latency)
-                    // ahead of the speaker — while a genlocked video-only cue's position tracks the
+                    // content entering the mix bus - one downstream depth (~pump + device latency)
+                    // ahead of the speaker - while a genlocked video-only cue's position tracks the
                     // glass (its start was deferred by exactly that depth). Shown raw, cues that ARE
                     // playing together read ~100–200 ms apart; subtracting AudibleLatency puts every
                     // readout at the speaker/glass truth.
@@ -583,7 +583,7 @@ public sealed partial class ShowHost
 
                     // The transport reports MEDIA time; the operator reads CUE time. A trimmed cue's
                     // playhead therefore starts at its trim-in and its transport duration is the whole
-                    // file — a cue trimmed to start at 36:00 read "38:17 of 2:36:09" two minutes in,
+                    // file - a cue trimmed to start at 36:00 read "38:17 of 2:36:09" two minutes in,
                     // beside siblings reading "02:17", and the panel looked half an hour out of sync.
                     if (playhead is { IsActive: true }
                         && _project.FindCue(entry.Key) is MediaCueNode media)

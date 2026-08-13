@@ -5,7 +5,7 @@
          Owns the ShowSession, the project audio patch bay and the program-audio target that joins
          them, and turns a HaCueProject into playback. Separate from HaCue2 (the UI) because a session
          is a long-lived, thread-affine, device-holding thing and the views must not be able to reach
-         into it by accident — they see it through `Session/ShowRuntime`, exactly as they saw the
+         into it by accident - they see it through `Session/ShowRuntime`, exactly as they saw the
          sample before this existed.
 
          Separate from HaCue2.Machine too: that answers questions about the box without starting
@@ -45,7 +45,7 @@
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Source.YouTube\S.Media.Source.YouTube.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Source.Text\S.Media.Source.Text.csproj" />
         <!-- Action cues send OSC. MIDI out would need S.Control's device layer, which HaCue2 has not
-             adopted yet — ActionSender refuses a MIDI endpoint out loud rather than pretending. -->
+             adopted yet - ActionSender refuses a MIDI endpoint out loud rather than pretending. -->
         <ProjectReference Include="..\..\MediaFramework\OSC\OSCLib\OSCLib.csproj" />
         <!-- Local-screen video outputs. HaPlay gets its IVideoOutputs from HaOutput/OutputManagement,
              which HaCue2 cannot reference; until that engine's HaPlay couplings are inverted, this
@@ -57,11 +57,11 @@
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Subtitles\S.Media.Subtitles.csproj" />
         <!-- Visualizer cues. A visualizer is not a clip: it has nothing to decode, so it attaches
              through the session's SetCompositionVisualizerAsync seam rather than the clip path. The
-             native library is OPTIONAL at runtime — ProjectVisualizers reports a machine without it
+             native library is OPTIONAL at runtime - ProjectVisualizers reports a machine without it
              rather than firing onto a canvas that then stays black. -->
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Visualizer.ProjectM\S.Media.Visualizer.ProjectM.csproj" />
         <!-- External input (register item 3). S.Control already owns MIDI/OSC device discovery,
-             matching and hot-plug — the fiddly half — and is framework-clean, so HaCue2 consumes it
+             matching and hot-plug - the fiddly half - and is framework-clean, so HaCue2 consumes it
              rather than re-deriving a second device layer. HaControl.Input, which the plan names for
              this, lives on next-fix-enhance-round and is not on this branch. -->
         <ProjectReference Include="..\..\MediaFramework\Control\S.Control\S.Control.csproj" />

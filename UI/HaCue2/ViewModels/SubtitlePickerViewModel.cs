@@ -30,7 +30,7 @@ public sealed partial class SubtitleChoice : ObservableObject
 /// </summary>
 /// <remarks>
 /// A LIST, not a single choice: a show routinely runs an embedded track for one language and a
-/// hand-corrected sidecar for another, and both have to be on at once. Nothing is checked by default —
+/// hand-corrected sidecar for another, and both have to be on at once. Nothing is checked by default -
 /// subtitles appearing because a file happened to carry them is the surprise this avoids.
 /// </remarks>
 public sealed partial class SubtitlePickerViewModel : ObservableObject
@@ -61,7 +61,7 @@ public sealed partial class SubtitlePickerViewModel : ObservableObject
                                                    && selection.StreamIndex == track.Index),
             }),
 
-            // Sidecars the cue already carries are listed even though nothing probed them — the choice
+            // Sidecars the cue already carries are listed even though nothing probed them - the choice
             // was made and must not vanish because the file is on another machine.
             .. chosen.Where(selection => selection.Path.Length > 0).Select(selection => new SubtitleChoice
             {
@@ -83,7 +83,7 @@ public sealed partial class SubtitlePickerViewModel : ObservableObject
 
     public string Hint => HasChoices
         ? "none are on by default · several can run at once"
-        : "this file carries no subtitle tracks — add a sidecar file";
+        : "this file carries no subtitle tracks - add a sidecar file";
 
     /// <summary>Adds a sidecar file to the list, already checked.</summary>
     public void AddSidecar(string path)
@@ -108,7 +108,7 @@ public sealed partial class SubtitlePickerViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// The list is replaced rather than diffed: it is a handful of entries, and "the subtitles are now
-    /// these" is the edit the operator made — an undo that walked back individual check marks would
+    /// these" is the edit the operator made - an undo that walked back individual check marks would
     /// step through states nobody chose.
     /// </remarks>
     public void Commit()

@@ -7,7 +7,7 @@ namespace HaCue2.Controls;
 /// Gives its child the aspect ratio of the composition it represents, filling the width it is given.
 /// </summary>
 /// <remarks>
-/// Every canvas in the Video view stands for a real frame — 1920 × 1080, 1280 × 720 — and a canvas
+/// Every canvas in the Video view stands for a real frame - 1920 × 1080, 1280 × 720 - and a canvas
 /// stretched to whatever height the panel happens to have is actively misleading: a placement drawn on
 /// a 3:1 canvas does not look like what will hit the wall. Avalonia has no declarative
 /// height-follows-width, and <see cref="Viewbox"/> solves a different problem (it scales content,

@@ -204,7 +204,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             };
             _engine = new VizNdiEngine(settings, SDL3OffscreenGlContext.TryCreate, _loggerFactory);
             _engine.Faulted += ex => Dispatcher.UIThread.Post(() =>
-                StatusText = $"engine faulted: {ex.Message} — stop and start again");
+                StatusText = $"engine faulted: {ex.Message} - stop and start again");
             _engine.Start();
             IsEngineRunning = true;
             StatusText = $"sending '{settings.NdiName}' {settings.Width}x{settings.Height}@{settings.Fps}";

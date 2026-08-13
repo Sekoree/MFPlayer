@@ -28,7 +28,7 @@
         <CheckBox Margin="10,4" IsChecked="{Binding DuckWhenProgramSounds}"
                   Content="Duck audition when program is sounding" />
         <TextBlock Margin="10,4,10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
-                   Text="Audition enters the bay as a monitor input — it never touches the patch or the program bus." />
+                   Text="Audition enters the bay as a monitor input - it never touches the patch or the program bus." />
       </StackPanel>
     </c:PanelBox>
 

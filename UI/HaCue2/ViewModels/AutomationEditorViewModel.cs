@@ -178,10 +178,10 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
     private string _problem = "";
 
     [ObservableProperty]
-    private string _pointTime = "—";
+    private string _pointTime = "-";
 
     [ObservableProperty]
-    private string _pointValue = "—";
+    private string _pointValue = "-";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSelection))]
@@ -938,8 +938,8 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
     {
         if (SelectedKey() is not { } key)
         {
-            PointTime = "—";
-            PointValue = "—";
+            PointTime = "-";
+            PointValue = "-";
             return;
         }
         PointTime = ClipTimes.Format((int)Math.Min(int.MaxValue, key.TimeMs));

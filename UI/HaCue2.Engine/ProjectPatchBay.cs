@@ -15,7 +15,7 @@ namespace HaCue2.Engine;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is the SECOND of the two matrices. The first — a cue's sends onto logical outputs — travels in
+/// This is the SECOND of the two matrices. The first - a cue's sends onto logical outputs - travels in
 /// the document as <c>ShowClipLogicalSend</c> and is applied by the session. This one, logical outputs
 /// onto real device channels, is a property of the RIG rather than of the show, which is why it is
 /// built here from the project's lines and never compiled into the document.
@@ -58,7 +58,7 @@ public sealed class ProjectPatchBay : IDisposable
     /// <summary>Where audition monitors, or null when no line offered itself.</summary>
     public string? MonitorTerminalId { get; }
 
-    /// <summary>Lines that could not be opened, and why — what the status bar reports.</summary>
+    /// <summary>Lines that could not be opened, and why - what the status bar reports.</summary>
     public IReadOnlyList<string> Failures { get; private init; } = [];
 
     /// <summary>
@@ -98,7 +98,7 @@ public sealed class ProjectPatchBay : IDisposable
         var failures = new List<string>();
 
         // Enumerated ONCE, and only to turn a name into whatever this backend calls a device. A hint
-        // is a name by design; a backend wants its own id, and PortAudio's is a global index — passing
+        // is a name by design; a backend wants its own id, and PortAudio's is a global index - passing
         // the name straight through made every configured line refuse to open.
         var catalog = Catalog(backend);
         var opened = new List<IAudioOutput>();
@@ -114,7 +114,7 @@ public sealed class ProjectPatchBay : IDisposable
                 continue;
 
             // Record and stream lines are not devices. They are encode sessions, and they open when the
-            // operator ARMS them rather than when the show opens — so they join the bay through
+            // operator ARMS them rather than when the show opens - so they join the bay through
             // AttachRecorder, not here. Opening one here would hand a recording's filename pattern to
             // the audio backend as a device name and then report the show's own recorder as a missing
             // interface, which is exactly what happened before recording was implemented.
@@ -125,7 +125,7 @@ public sealed class ProjectPatchBay : IDisposable
             {
                 var format = new AudioFormat(line.SampleRate ?? patch.MixSampleRate, line.Channels);
 
-                // An NDI line is a SENDER, not a device on this machine — asking the audio backend for
+                // An NDI line is a SENDER, not a device on this machine - asking the audio backend for
                 // one by name would look for a sound card called "HACUE-PROG" and report the show's own
                 // NDI feed as a missing interface.
                 var output = line.Kind == AudioLineKind.Ndi
@@ -133,15 +133,15 @@ public sealed class ProjectPatchBay : IDisposable
                     : backend.CreateOutput(AudioDevices.DeviceIdFor(catalog, line.DeviceHint), format);
 
                 // The clock master paces the whole bay, so it must be a line that natively runs at the
-                // project rate — the document says which, and choosing it is a real decision. An NDI
+                // project rate - the document says which, and choosing it is a real decision. An NDI
                 // sender is never it: it paces on the network's terms, not the rig's.
                 //
                 // But a document that names NONE is not a decision to run without one: a masterless
-                // bay free-runs on the wall clock, and no two crystals agree — the device terminal's
+                // bay free-runs on the wall clock, and no two crystals agree - the device terminal's
                 // ring then drops a burst every couple of seconds, which is an audible pop, for the
                 // whole show ("ring full" every ~2 s in the incident log). When the document is
                 // silent, the FIRST local line whose device actually opened at the mix rate takes the
-                // role — the same line the operator would be told to pick — and the log says so.
+                // role - the same line the operator would be told to pick - and the log says so.
                 var isMaster = patch.ClockMasterLineId is { } chosen
                     ? chosen == line.Id && line.Kind != AudioLineKind.Ndi
                     : automaticMaster is null
@@ -186,7 +186,7 @@ public sealed class ProjectPatchBay : IDisposable
                 patch.ClockMasterLineId is { } masterId
                     ? $"'{project.FindLine(masterId)?.Name ?? masterId.ToString()}'"
                     : automaticMaster is not null
-                        ? $"'{automaticMaster}' (automatic — the project names none; set one on the Audio patch to choose)"
+                        ? $"'{automaticMaster}' (automatic - the project names none; set one on the Audio patch to choose)"
                         : "NOT SET and no line is eligible (bay free-runs on the wall clock; A/V genlock is off)");
 
         if (opened.Count > 0)
@@ -211,7 +211,7 @@ public sealed class ProjectPatchBay : IDisposable
     /// </summary>
     /// <remarks>
     /// A backend that will not enumerate is not a reason to refuse to open anything: every hint then
-    /// resolves to null, which is "the default device" — the same answer a show with no hint gets.
+    /// resolves to null, which is "the default device" - the same answer a show with no hint gets.
     /// </remarks>
     private static IReadOnlyList<AudioDeviceInfo> Catalog(IAudioBackend? backend)
     {
@@ -251,7 +251,7 @@ public sealed class ProjectPatchBay : IDisposable
     /// <para>
     /// This is the half that makes "changing the real-output patch does not rebuild active cue
     /// transport" true. <see cref="AudioPatchBay.UpdatePatch"/> reconciles one terminal's matrix
-    /// atomically — changed cells ramp, newly non-zero cells fade in, zeroed cells stop — and the
+    /// atomically - changed cells ramp, newly non-zero cells fade in, zeroed cells stop - and the
     /// producers behind it are never touched, so a cell can be re-patched under a sounding cue.
     /// </para>
     /// <para>
@@ -284,14 +284,14 @@ public sealed class ProjectPatchBay : IDisposable
             return
             [
                 $"the project now has {channels.Count} logical output(s) and the running bay has "
-                + $"{LogicalChannelIds.Count} — reopen the show to apply that change",
+                + $"{LogicalChannelIds.Count} - reopen the show to apply that change",
             ];
         }
 
         // Order matters as much as count: the bus is addressed by POSITION, so a reordered channel
         // list would silently send Main L down the Sub bus. Ids in bus order are the check.
         if (!channels.Select(channel => channel.Id.ToString()).SequenceEqual(LogicalChannelIds, StringComparer.Ordinal))
-            return ["the logical outputs were reordered — reopen the show to apply that change"];
+            return ["the logical outputs were reordered - reopen the show to apply that change"];
 
         var failures = new List<string>();
 
@@ -336,7 +336,7 @@ public sealed class ProjectPatchBay : IDisposable
     /// <para>
     /// <b>The monitor's V×R row is rewritten, not tapped.</b> Everything audible arrives from the
     /// program bus through a line's own matrix, so a matrix that is unity on one bus row and zero
-    /// everywhere else makes the monitor carry that output alone. That needs no new capability — it is
+    /// everywhere else makes the monitor carry that output alone. That needs no new capability - it is
     /// the same live reconciliation an ordinary patch edit uses, so it fades rather than clicks.
     /// </para>
     /// <para>
@@ -361,7 +361,7 @@ public sealed class ProjectPatchBay : IDisposable
         var channels = project.AudioPatch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
 
         if (channels.Count != LogicalChannelIds.Count)
-            return "the logical outputs changed — reopen the show before soloing";
+            return "the logical outputs changed - reopen the show before soloing";
 
         if (_open.FirstOrDefault(open => open.LineId == monitorLineId) is not { Channels: > 0 } monitorLine)
             return "the monitor line is not open on this machine";
@@ -396,7 +396,7 @@ public sealed class ProjectPatchBay : IDisposable
         }
         catch (Exception failure) when (failure is ArgumentException or InvalidOperationException)
         {
-            return $"the monitor line refused the solo — {failure.Message}";
+            return $"the monitor line refused the solo - {failure.Message}";
         }
 
         lock (_solo)
@@ -410,7 +410,7 @@ public sealed class ProjectPatchBay : IDisposable
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A recorder is patched exactly like an interface — same cells, same matrix, same code — so what
+    /// A recorder is patched exactly like an interface - same cells, same matrix, same code - so what
     /// gets recorded is what the operator patched to it, and "record the foldback mix" needs no feature
     /// of its own. The bay takes a terminal while running and fades it in, so arming mid-show neither
     /// interrupts the program nor starts the file with a click.
@@ -433,7 +433,7 @@ public sealed class ProjectPatchBay : IDisposable
         var channels = project.AudioPatch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
 
         if (channels.Count != LogicalChannelIds.Count)
-            return "the logical outputs changed — reopen the show before arming";
+            return "the logical outputs changed - reopen the show before arming";
 
         var cells = project.AudioPatch.Cells.Where(cell => cell.LineId == lineId).ToList();
 
@@ -455,7 +455,7 @@ public sealed class ProjectPatchBay : IDisposable
     /// </summary>
     /// <remarks>
     /// The sink is BORROWED, as every terminal is: the recorder owns the encode session and flushes it
-    /// after this returns. Detaching first is what makes the trailer complete — a session still
+    /// after this returns. Detaching first is what makes the trailer complete - a session still
     /// attached to a running bay would be written to while it was being finalized.
     /// </remarks>
     public void DetachRecorder(Guid lineId)
@@ -468,7 +468,7 @@ public sealed class ProjectPatchBay : IDisposable
     /// The logical→device gain matrix for one line.
     /// </summary>
     /// <remarks>
-    /// Rows are LOGICAL channels in bus order, columns the line's own channels — the shape the bay
+    /// Rows are LOGICAL channels in bus order, columns the line's own channels - the shape the bay
     /// wants. Gains are linear here because a matrix is multiplied, not added; the document's decibels
     /// are converted once, at the boundary. A muted cell is a zero rather than an absent one, so
     /// unmuting is a value change instead of a re-patch.
@@ -480,7 +480,7 @@ public sealed class ProjectPatchBay : IDisposable
     {
         var matrix = new float[Math.Max(1, channels.Count), Math.Max(1, lineChannels)];
 
-        // Built ONCE. This was a ToList().FindIndex per cell — a fresh list allocated and scanned for
+        // Built ONCE. This was a ToList().FindIndex per cell - a fresh list allocated and scanned for
         // every cell of every line, on every reload, and a reload happens every 300 ms while somebody
         // drags a patch cell.
         var rows = new Dictionary<Guid, int>(channels.Count);

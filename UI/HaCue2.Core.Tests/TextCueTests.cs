@@ -14,7 +14,7 @@ namespace HaCue2.Core.Tests;
 /// Words on a canvas.
 /// </summary>
 /// <remarks>
-/// The document stores WORDS — portable, diffable, translatable — and compiles to a <c>text:</c> URI
+/// The document stores WORDS - portable, diffable, translatable - and compiles to a <c>text:</c> URI
 /// carrying the whole render spec. The framework's own source draws it, so a card needs no file
 /// anywhere, no cache to invalidate and nothing from the app: the words travel with the show and each
 /// machine draws them with the faces it has.

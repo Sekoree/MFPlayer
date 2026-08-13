@@ -9,8 +9,8 @@ namespace HaCue2.Core.Validation;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is one half of "Project status" (screen 14). The other half is environment-aware — missing
-/// media files, absent devices, an unresolvable clock master — and needs to probe the machine, so it
+/// This is one half of "Project status" (screen 14). The other half is environment-aware - missing
+/// media files, absent devices, an unresolvable clock master - and needs to probe the machine, so it
 /// lives beside this rather than inside it. Keeping them apart is what lets this one run in a script
 /// over a committed fixture project and mean the same thing on any box.
 /// </para>
@@ -231,7 +231,7 @@ public static class ProjectValidator
             // an output but nothing is lost (register item 25).
             if (fed.Contains(channel.Id) && !patched.Contains(channel.Id))
                 issues.Add(Error("logicalOutput", id,
-                    $"“{channel.Name}” is fed by cues but patched to nothing — those cues run silent."));
+                    $"“{channel.Name}” is fed by cues but patched to nothing - those cues run silent."));
             else if (!fed.Contains(channel.Id) && patched.Contains(channel.Id))
                 issues.Add(Warn("logicalOutput", id,
                     $"“{channel.Name}” is patched to hardware but no cue sends to it."));
@@ -387,7 +387,7 @@ public static class ProjectValidator
                     issues.Add(Error("cue", id,
                         $"“{list.Name}” has more than one cue numbered {cue.Number}."));
 
-                // A media cue with no file is an unfinished cue, not a broken one — it is how every
+                // A media cue with no file is an unfinished cue, not a broken one - it is how every
                 // cue starts. A warning, so it is visible without failing the checks, and named here
                 // rather than left to the engine, which can only say "a clip had no path".
                 if (cue is MediaCueNode { MediaPath.Length: 0 })
@@ -534,7 +534,7 @@ public static class ProjectValidator
                 break;
 
             // A MIDI message that will not parse is found HERE, on a laptop with no interface in it,
-            // rather than at the moment the cue fires — which is the one moment nobody can act on it.
+            // rather than at the moment the cue fires - which is the one moment nobody can act on it.
             case ActionCueNode action when action.EndpointId is { } endpointId
                                            && project.ActionEndpoints.FirstOrDefault(e => e.Id == endpointId)
                                                is { Kind: EndpointKind.MidiOut }
@@ -977,7 +977,7 @@ public static class ProjectValidator
                     issues.Add(Error("triggerInput", input.Id.ToString(),
                         $"“{input.Name}” has an invalid repeat filter."));
                 // A clock binding whose time will not parse is a cue that can never fire, and unlike a
-                // wire binding there is no device to blame for it — so it is found here, while the show
+                // wire binding there is no device to blame for it - so it is found here, while the show
                 // is being written, rather than by its absence on the night.
                 if (TriggerTimes.Refuse(input.Kind, binding.Input) is { } wrong)
                     issues.Add(Error("triggerInput", input.Id.ToString(),

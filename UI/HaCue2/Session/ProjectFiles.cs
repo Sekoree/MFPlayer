@@ -24,7 +24,7 @@ public readonly record struct ProjectFileResult(bool Succeeded, string Path, str
 /// unhandled exception that loses the edits it was trying to protect.
 /// </para>
 /// <para>
-/// Recovery and autosave live in Settings and are deliberately not here — this is the part the
+/// Recovery and autosave live in Settings and are deliberately not here - this is the part the
 /// operator drives by hand.
 /// </para>
 /// </remarks>
@@ -105,12 +105,12 @@ public static class ProjectFiles
             failure is IOException
                 or UnauthorizedAccessException
                 or System.Text.Json.JsonException
-                // "written by a newer HaCue2" — the version gate, which is a refusal, not a crash.
+                // "written by a newer HaCue2" - the version gate, which is a refusal, not a crash.
                 or InvalidOperationException)
         {
             // Named exceptions only: an OutOfMemory or a cancellation is not "this file is bad", and
             // swallowing one here would hide a real fault behind a friendly message.
-            return (null, ProjectFileResult.Failed($"could not open {Path.GetFileName(path)} — {failure.Message}"));
+            return (null, ProjectFileResult.Failed($"could not open {Path.GetFileName(path)} - {failure.Message}"));
         }
     }
 
@@ -127,7 +127,7 @@ public static class ProjectFiles
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
         {
-            return ProjectFileResult.Failed($"could not save — {failure.Message}");
+            return ProjectFileResult.Failed($"could not save - {failure.Message}");
         }
     }
 

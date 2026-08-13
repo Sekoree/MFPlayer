@@ -23,7 +23,7 @@ public sealed record RecoveryMeta
 public sealed record RecoveryCandidate(
     string CopyPath, string OriginalPath, string Title, DateTimeOffset SavedAt, int Edits)
 {
-    /// <summary>The banner's sentence — what was found, and how much is at stake.</summary>
+    /// <summary>The banner's sentence - what was found, and how much is at stake.</summary>
     public string Notice =>
         $"{Title} has an autosave newer than its file ({SavedAt.ToLocalTime():HH:mm}, "
         + $"+{Edits} edit{(Edits == 1 ? "" : "s")})";
@@ -41,7 +41,7 @@ public sealed record RecoveryCandidate(
 /// <para>
 /// <b>An autosave is never written over the project itself.</b> The whole point is to survive a crash
 /// between two deliberate saves, so the operator's own file must be exactly what they last chose to
-/// write — recovery is an OFFER made at the next launch, never something that happened to their show
+/// write - recovery is an OFFER made at the next launch, never something that happened to their show
 /// while they were not looking.
 /// </para>
 /// <para>
@@ -112,7 +112,7 @@ public static class RecoveryStore
     /// <remarks>
     /// <para>
     /// "Newer than the file" is the whole question. An autosave older than the project means the
-    /// operator saved after it was written and there is nothing to recover — offering it anyway would
+    /// operator saved after it was written and there is nothing to recover - offering it anyway would
     /// invite them to overwrite good work with stale work.
     /// </para>
     /// <para>
@@ -154,7 +154,7 @@ public static class RecoveryStore
         return [.. found.OrderByDescending(candidate => candidate.SavedAt)];
     }
 
-    /// <summary>Forgets a project's autosaves — the DISCARD answer.</summary>
+    /// <summary>Forgets a project's autosaves - the DISCARD answer.</summary>
     /// <remarks>
     /// Deletes the whole per-project directory rather than one copy: "discard" means the operator has
     /// decided the file on disk is the truth, and leaving older copies behind would make the banner

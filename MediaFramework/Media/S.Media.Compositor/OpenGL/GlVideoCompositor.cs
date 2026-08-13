@@ -716,7 +716,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor, IVideoComposit
     /// <summary>
     /// Composites one surface layer indirectly (an effect chain and/or mapping sections): the
     /// surface renders full-canvas (identity transform, full opacity) into the intermediate FBO,
-    /// whose texture is then drawn into the canvas by the layer shader — one quad with the layer's
+    /// whose texture is then drawn into the canvas by the layer shader - one quad with the layer's
     /// own transform, or one draw per mapping section (crop/transform/mesh, media-layer parity).
     /// The intermediate is stored exactly like a direct BGRA32 layer upload relative to the canvas
     /// paint convention, so the draws use the frame-layer pair (mirrored dest NDC + V-flip

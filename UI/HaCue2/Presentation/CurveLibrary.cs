@@ -11,14 +11,14 @@ namespace HaCue2.Presentation;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is product vocabulary, not sample data — it lived in <c>SampleShow</c>, which meant that file
+/// This is product vocabulary, not sample data - it lived in <c>SampleShow</c>, which meant that file
 /// could never be deleted however much of the real app landed, and its size stopped meaning anything.
 /// A project's OWN custom curves are saved as presets on its document and are not here.
 /// </para>
 /// <para>
 /// The order is load-bearing: the index into this list is the <c>FadeCurve</c> enum value, and
 /// "custom" is one past the last law rather than a fifth member of it. A custom curve is never a new
-/// enum member — enums round-trip numerically and the sidecar's other reader is the C ABI host, which
+/// enum member - enums round-trip numerically and the sidecar's other reader is the C ABI host, which
 /// would decode an unknown member as a different valid law and quietly play the wrong shape.
 /// </para>
 /// </remarks>

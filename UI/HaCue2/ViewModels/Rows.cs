@@ -12,7 +12,7 @@ namespace HaCue2.ViewModels;
 /// </summary>
 /// <remarks>
 /// They are immutable records rather than observable objects on purpose. A row in this shell never
-/// changes after it is created — a row is built from the document or the runtime and replaced, never mutated — and making them
+/// changes after it is created - a row is built from the document or the runtime and replaced, never mutated - and making them
 /// observable now would invent a change-notification design before there is a document to notify about.
 /// When the engine lands, the rows that genuinely tick (active cues, meters, diagnostics counters)
 /// become observables and the rest stay exactly as they are.
@@ -49,8 +49,8 @@ public enum Gel
 /// <remarks>
 /// <para>
 /// The key exists so the label can change. The strips used to be lists of STRINGS which doubled as the
-/// tabs' identity — "DEVICES · 3" was both what the tab said and how the view-model recognised which
-/// pane was open — so the counts had to be frozen at construction or selecting a tab whose label had
+/// tabs' identity - "DEVICES · 3" was both what the tab said and how the view-model recognised which
+/// pane was open - so the counts had to be frozen at construction or selecting a tab whose label had
 /// been rewritten would blank the pane. They were frozen, and a project with eight devices spent the
 /// evening insisting it had three.
 /// </para>
@@ -100,19 +100,19 @@ public sealed record CueRow
 
     public bool HasColorTag => ColorTag > 0;
     public string Source { get; init; } = "";
-    public string Fade { get; init; } = "—";
-    public string Length { get; init; } = "—";
-    public string Level { get; init; } = "—";
+    public string Fade { get; init; } = "-";
+    public string Length { get; init; } = "-";
+    public string Level { get; init; } = "-";
     public IReadOnlyList<Badge> Badges { get; init; } = [];
 
-    /// <summary>The Note tab's content — one tab on every kind, and the whole of a comment cue.</summary>
+    /// <summary>The Note tab's content - one tab on every kind, and the whole of a comment cue.</summary>
     public string Note { get; init; } = "";
 
     /// <summary>Indent level. The TreeDataGrid indents from the hierarchy itself; this is kept for
     /// anything that still reads a row out of tree context.</summary>
     public int Depth { get; init; }
 
-    /// <summary>A group's cues. Empty for everything else — this is what makes the tree a tree.</summary>
+    /// <summary>A group's cues. Empty for everything else - this is what makes the tree a tree.</summary>
     public IReadOnlyList<CueRow> Children { get; init; } = [];
 
     /// <summary>
@@ -120,7 +120,7 @@ public sealed record CueRow
     /// </summary>
     /// <remarks>
     /// A GROUP with no cues in it still gets one, deliberately: an empty group is a thing an operator
-    /// made and needs to see is empty, and a row with no chevron reads as an ordinary cue — which is
+    /// made and needs to see is empty, and a row with no chevron reads as an ordinary cue - which is
     /// exactly the confusion the tree was adopted to end.
     /// </remarks>
     public bool HasChildren => IsGroup;
@@ -175,7 +175,7 @@ public sealed record CueRow
     public Thickness NumberIndent => new(6 + (Depth * 9), 0, 0, 0);
 }
 
-/// <summary>One row of the Active panel — everything sounding, in or out of the current scope.</summary>
+/// <summary>One row of the Active panel - everything sounding, in or out of the current scope.</summary>
 /// <remarks>
 /// Fully observable, because the row object PERSISTS across engine polls: the panel reconciles rows
 /// in place rather than replacing them, so the seek bar an operator is dragging and the button under
@@ -186,7 +186,7 @@ public sealed record CueRow
 public sealed partial class ActiveCueRow : ObservableObject
 {
     /// <summary>
-    /// Which cue this row is. Needed because the row is a TARGET, not just a readout — bare STOP acts
+    /// Which cue this row is. Needed because the row is a TARGET, not just a readout - bare STOP acts
     /// on it, and a row that only carried its number could not be turned back into a cue to stop.
     /// </summary>
     public Guid CueId { get; init; }
@@ -202,7 +202,7 @@ public sealed partial class ActiveCueRow : ObservableObject
     [ObservableProperty]
     private double? _automatedVolumeDb;
 
-    /// <summary>Where the playhead is, as the transport reports it — not wall time since the fire.</summary>
+    /// <summary>Where the playhead is, as the transport reports it - not wall time since the fire.</summary>
     [ObservableProperty]
     private string _clock = "";
 
@@ -232,7 +232,7 @@ public sealed partial class ActiveCueRow : ObservableObject
     private double _progress;
 
     [ObservableProperty]
-    private string _destination = "—";
+    private string _destination = "-";
 
     public bool IsGroup { get; init; }
     public bool IsChild { get; init; }
@@ -240,7 +240,7 @@ public sealed partial class ActiveCueRow : ObservableObject
     [ObservableProperty]
     private bool _isFading;
 
-    /// <summary>Within seconds of the end — the clock turns red before it becomes a problem.</summary>
+    /// <summary>Within seconds of the end - the clock turns red before it becomes a problem.</summary>
     [ObservableProperty]
     private bool _isNearEnd;
 
@@ -273,8 +273,8 @@ public sealed partial class ActiveCueRow : ObservableObject
 /// A group with something sounding inside it, as the Active panel's header row.
 /// </summary>
 /// <remarks>
-/// Mutable and observable, unlike the flat rows: it is built in two passes — children collected, then
-/// the aggregate computed over them — and its expander is operator state that must survive the 4 Hz
+/// Mutable and observable, unlike the flat rows: it is built in two passes - children collected, then
+/// the aggregate computed over them - and its expander is operator state that must survive the 4 Hz
 /// rebuild. <see cref="IsExpanded"/> starts TRUE, because a group that hid its children by default
 /// would be a panel that shows less than the flat list it replaced.
 /// </remarks>
@@ -285,7 +285,7 @@ public sealed partial class ActiveGroupRow : ObservableObject
     public required string Number { get; init; }
     public required string Label { get; init; }
 
-    /// <summary>"playlist", "timeline" or "together" — what firing it did.</summary>
+    /// <summary>"playlist", "timeline" or "together" - what firing it did.</summary>
     public required string Mode { get; init; }
 
     /// <summary>The sounding children, in the order the flat panel would have listed them.
@@ -295,7 +295,7 @@ public sealed partial class ActiveGroupRow : ObservableObject
     /// <summary>The rest of the chain, each with how long until it starts.</summary>
     public ObservableCollection<UpcomingCueRow> Upcoming { get; } = [];
 
-    /// <summary>The WHOLE group's remaining and total — what somebody waiting for the list wants.</summary>
+    /// <summary>The WHOLE group's remaining and total - what somebody waiting for the list wants.</summary>
     [ObservableProperty]
     private string _clock = "";
 
@@ -309,7 +309,7 @@ public sealed partial class ActiveGroupRow : ObservableObject
     [ObservableProperty]
     private bool _isNearEnd;
 
-    /// <summary>Everything the group holds is ramping down — the header's feedback that its × took.</summary>
+    /// <summary>Everything the group holds is ramping down - the header's feedback that its × took.</summary>
     [ObservableProperty]
     private bool _isFading;
 
@@ -351,7 +351,7 @@ public sealed partial class ActiveGroupRow : ObservableObject
 /// <remarks>
 /// The countdown text is observable and STAGED: far from its start it reads (and updates) in whole
 /// seconds on the 4 Hz poll, and inside the last ten seconds the smooth-clock timer takes over and
-/// ticks its milliseconds — the closer the start, the more precision the readout carries.
+/// ticks its milliseconds - the closer the start, the more precision the readout carries.
 /// </remarks>
 public sealed partial class UpcomingCueRow : ObservableObject
 {
@@ -379,7 +379,7 @@ public sealed partial class UpcomingCueRow : ObservableObject
     }
 }
 
-/// <summary>A generic status word plus its gel — used across every table's result column.</summary>
+/// <summary>A generic status word plus its gel - used across every table's result column.</summary>
 public sealed record Status(string Text, Gel Gel = Gel.Neutral)
 {
     public bool IsGood => Gel == Gel.Green;
@@ -388,7 +388,7 @@ public sealed record Status(string Text, Gel Gel = Gel.Neutral)
     public bool IsInfo => Gel == Gel.Steel;
 }
 
-/// <summary>Screen 06 — a project-owned audio channel; the only destination a cue can name.</summary>
+/// <summary>Screen 06 - a project-owned audio channel; the only destination a cue can name.</summary>
 public sealed record LogicalOutputRow
 {
     public Guid Id { get; init; }
@@ -396,7 +396,7 @@ public sealed record LogicalOutputRow
     public required string Name { get; init; }
 
     /// <summary>Named Output Group (register item 9); a stereo pair is a two-member group.</summary>
-    public string Group { get; init; } = "—";
+    public string Group { get; init; } = "-";
 
     public required Status FedBy { get; init; }
     public required Status PatchedTo { get; init; }
@@ -406,16 +406,16 @@ public sealed record LogicalOutputRow
 
     public Gel MeterGel { get; init; } = Gel.Green;
     public Gel NameGel { get; init; } = Gel.Neutral;
-    public bool HasGroup => Group != "—";
+    public bool HasGroup => Group != "-";
     public bool IsMeterHot => MeterGel == Gel.Red;
-    public string MeterGlyphs => MeterBars == 0 ? "—" : new string('▮', MeterBars);
+    public string MeterGlyphs => MeterBars == 0 ? "-" : new string('▮', MeterBars);
 }
 
 /// <summary>One cell of the patch or per-cue send matrix.</summary>
 /// <remarks>
 /// Every cell carries its own <see cref="Row"/> and <see cref="Column"/>. Without them a pointer
 /// gesture would have to find the cell in the bound lists, and since this is a record with structural
-/// equality, two empty cells in a row are indistinguishable — a click on the last column would edit
+/// equality, two empty cells in a row are indistinguishable - a click on the last column would edit
 /// the first. The coordinates make the lookup unnecessary as well as unambiguous.
 /// </remarks>
 public sealed record MatrixCell
@@ -431,7 +431,7 @@ public sealed record MatrixCell
     /// <summary>The cell the effective-route strip underneath is currently explaining.</summary>
     public bool IsPicked { get; init; }
 
-    /// <summary>Not routed — which is not the same as muted, and is why this is a distinct state.</summary>
+    /// <summary>Not routed - which is not the same as muted, and is why this is a distinct state.</summary>
     public bool IsEmpty => !IsOn && !IsMuted;
 
     public static MatrixCell Empty(int row, int column) => new() { Row = row, Column = column };
@@ -460,28 +460,28 @@ public sealed record MatrixRow(
 /// <param name="ChannelId">The logical output this column is, so a gesture can name it.</param>
 public sealed record MatrixColumn(string Header, bool IsGrouped = false, Guid ChannelId = default);
 
-/// <summary>Screen 08 — a machine-side audio line, project-owned and possibly absent here.</summary>
+/// <summary>Screen 08 - a machine-side audio line, project-owned and possibly absent here.</summary>
 public sealed record AudioLineRow
 {
     public Guid Id { get; init; }
 
     public required string Name { get; init; }
     public required string Kind { get; init; }
-    public string Channels { get; init; } = "—";
+    public string Channels { get; init; } = "-";
     public required Status Rate { get; init; }
     public required Status State { get; init; }
-    public string Carries { get; init; } = "—";
+    public string Carries { get; init; } = "-";
     public Gel NameGel { get; init; } = Gel.Neutral;
 }
 
-/// <summary>Screen 09 — a video output and what it currently shows.</summary>
+/// <summary>Screen 09 - a video output and what it currently shows.</summary>
 public sealed record VideoOutputRow
 {
     public Guid Id { get; init; }
 
     public required string Name { get; init; }
     public required string Kind { get; init; }
-    public string Shows { get; init; } = "—";
+    public string Shows { get; init; } = "-";
     public string Map { get; init; } = "clean";
     public required Status State { get; init; }
 }
@@ -489,7 +489,7 @@ public sealed record VideoOutputRow
 /// <summary>A layer or mapping section drawn on a canvas, positioned in fractions of the frame.</summary>
 public sealed record PlacementBox
 {
-    /// <summary>The cue or mapping section this box is — how a drag names what it moved.</summary>
+    /// <summary>The cue or mapping section this box is - how a drag names what it moved.</summary>
     public Guid SubjectId { get; init; }
 
     /// <summary>Stacking order on the canvas. Mapping sections all sit at 0; only layers stack.</summary>
@@ -512,7 +512,7 @@ public sealed record PlacementBox
     /// </remarks>
     public NormalizedRect? AuthoredRect { get; init; }
 
-    /// <summary>Steel (a) or congo (b) — the mockup alternates so overlapping boxes stay separable.</summary>
+    /// <summary>Steel (a) or congo (b) - the mockup alternates so overlapping boxes stay separable.</summary>
     public bool IsSecondary { get; init; }
 
     public bool IsSelected { get; init; }
@@ -528,25 +528,25 @@ public sealed record PlacementBox
     public bool IsDisabled { get; init; }
 }
 
-/// <summary>Screen 11 — an inbound trigger source.</summary>
+/// <summary>Screen 11 - an inbound trigger source.</summary>
 public sealed record TriggerSourceRow
 {
     public Guid Id { get; init; }
 
     public required string Name { get; init; }
     public required string Kind { get; init; }
-    public string Bindings { get; init; } = "—";
-    public string LastSeen { get; init; } = "—";
+    public string Bindings { get; init; } = "-";
+    public string LastSeen { get; init; } = "-";
     public required Status State { get; init; }
 }
 
-/// <summary>Screen 11 — one input-to-cue binding on the selected device.</summary>
+/// <summary>Screen 11 - one input-to-cue binding on the selected device.</summary>
 public sealed record BindingRow(string Input, string Fires, string Filter);
 
-/// <summary>Screen 11b — a remote API route with its live call count.</summary>
+/// <summary>Screen 11b - a remote API route with its live call count.</summary>
 public sealed record EndpointRow(string Method, string Path, string Does, string Calls);
 
-/// <summary>Screen 14 — one project-status check.</summary>
+/// <summary>Screen 14 - one project-status check.</summary>
 public sealed record CheckRow
 {
     public required string Check { get; init; }
@@ -566,7 +566,7 @@ public sealed record CheckRow
     /// </para>
     /// <para>
     /// Empty for a check with nowhere to send anybody. The button reads its own destination, so a
-    /// fix that cannot navigate is simply not offered rather than offered and inert — which is what
+    /// fix that cannot navigate is simply not offered rather than offered and inert - which is what
     /// every one of them was: the template bound the label and never wired a click, so "Patch ›"
     /// looked like the way to patch an unpatched output and did nothing at all.
     /// </para>
@@ -586,31 +586,31 @@ public sealed record CheckRow
     public bool CanFix => HasFix && Destination.Length > 0;
 }
 
-/// <summary>Screen 15 — one audio-bay terminal or lease.</summary>
+/// <summary>Screen 15 - one audio-bay terminal or lease.</summary>
 public sealed record BayRow
 {
     public required string Name { get; init; }
     public required Status State { get; init; }
-    public string InFlight { get; init; } = "—";
-    public string Capacity { get; init; } = "—";
-    public string Enqueued { get; init; } = "—";
-    public string Processed { get; init; } = "—";
+    public string InFlight { get; init; } = "-";
+    public string Capacity { get; init; } = "-";
+    public string Enqueued { get; init; } = "-";
+    public string Processed { get; init; } = "-";
     public required Status Dropped { get; init; }
     public required Status Latency { get; init; }
-    public string Epoch { get; init; } = "—";
-    public string Rate { get; init; } = "—";
+    public string Epoch { get; init; } = "-";
+    public string Rate { get; init; } = "-";
 
     /// <summary>
     /// A lease row, indented under the terminals. Leases are listed BESIDE terminals rather than
     /// nested under one because in this topology every lease feeds the single program bus, which then
-    /// fans out to all terminals — nesting would draw a parent relationship that does not exist.
+    /// fans out to all terminals - nesting would draw a parent relationship that does not exist.
     /// </summary>
     public bool IsLease { get; init; }
 
     public Thickness NameIndent => new(IsLease ? 14 : 0, 0, 0, 0);
 }
 
-/// <summary>Screen 15 — one composition's render telemetry.</summary>
+/// <summary>Screen 15 - one composition's render telemetry.</summary>
 public sealed record CompositionStatsRow
 {
     public required string Name { get; init; }
@@ -631,18 +631,18 @@ public sealed record LogLine(string Time, string Level, string Category, string 
     public bool IsAccent => Gel == Gel.Congo;
 }
 
-/// <summary>Screen 01 — a recent project, with the reasons it may not open.</summary>
+/// <summary>Screen 01 - a recent project, with the reasons it may not open.</summary>
 public sealed record RecentProjectRow
 {
     public required string Name { get; init; }
     public required string Path { get; init; }
-    public string Contents { get; init; } = "—";
+    public string Contents { get; init; } = "-";
     public string Opened { get; init; } = "";
     public bool IsMissing { get; init; }
     public bool IsCurrent { get; init; }
 }
 
-/// <summary>Screen 13 — one app setting this project defeats.</summary>
+/// <summary>Screen 13 - one app setting this project defeats.</summary>
 public sealed record OverrideRow(string Setting, string AppValue, string ProjectValue);
 
 /// <summary>One editable machine hotkey. Safety Esc/Esc×2 is intentionally a fixed convention.</summary>
@@ -676,7 +676,7 @@ public sealed class HotkeyRow : ObservableObject
     }
 }
 
-/// <summary>Screen 02b — a line chip in the Output info drawer.</summary>
+/// <summary>Screen 02b - a line chip in the Output info drawer.</summary>
 public sealed record OutputLineChip
 {
     public required string Name { get; init; }
@@ -690,25 +690,25 @@ public sealed record OutputLineChip
     public bool HasSuffix => Suffix.Length > 0;
 }
 
-/// <summary>Screen 02b — one program meter in the drawer.</summary>
+/// <summary>Screen 02b - one program meter in the drawer.</summary>
 public sealed record ProgramMeter(string Caption, double Level, double Peak, bool IsClipping = false);
 
 /// <summary>A timeline lane and the clips on it (screen 05).</summary>
 /// <remarks>
 /// An observable CLASS rather than a record on purpose: mid-drag the sheet updates a lane's clips IN
 /// PLACE. Replacing the Lanes list makes the ItemsControl unrealize every ClipLane, and Avalonia
-/// releases pointer capture on detach — which is how a clip drag used to die after its first motion
+/// releases pointer capture on detach - which is how a clip drag used to die after its first motion
 /// event.
 /// </remarks>
 public sealed partial class TimelineLane : ObservableObject
 {
     public required string Name { get; init; }
 
-    /// <summary>The cue this lane belongs to — an effect lane carries its OWNER cue's id, so clicking
+    /// <summary>The cue this lane belongs to - an effect lane carries its OWNER cue's id, so clicking
     /// either row's label selects the same cue.</summary>
     public Guid SubjectId { get; init; }
 
-    /// <summary>Whether this lane's cue is the tree's selected cue — the sheet's label highlight.</summary>
+    /// <summary>Whether this lane's cue is the tree's selected cue - the sheet's label highlight.</summary>
     [ObservableProperty]
     private bool _isSelected;
 
@@ -778,7 +778,7 @@ public sealed partial class TimelineLane : ObservableObject
     /// <remarks>
     /// Register item 18 makes this ONE concept with two editors: the same points are edited here and
     /// in the inspector, replacing the media cue's separate VolumeEnvelope. Fractions rather than a
-    /// <see cref="Geometry"/> because a stretched geometry is scaled by its own bounding box — see
+    /// <see cref="Geometry"/> because a stretched geometry is scaled by its own bounding box - see
     /// <see cref="Controls.EnvelopeGraph"/> for why that renders a plausible lie.
     /// </remarks>
     [ObservableProperty]
@@ -791,14 +791,14 @@ public sealed partial class TimelineLane : ObservableObject
 /// <summary>A clip drawn on a timeline lane, positioned in fractions of the visible range.</summary>
 public sealed record TimelineClip
 {
-    /// <summary>The cue this clip draws — how a drag names what it moved.</summary>
+    /// <summary>The cue this clip draws - how a drag names what it moved.</summary>
     public Guid SubjectId { get; init; }
 
     public required string Label { get; init; }
     public double Left { get; init; }
     public double Width { get; init; }
 
-    /// <summary>au / vi / ac / gr — the mockup's clip colour classes.</summary>
+    /// <summary>au / vi / ac / gr - the mockup's clip colour classes.</summary>
     public string Kind { get; init; } = "au";
 
     public bool IsDisabled { get; init; }
@@ -817,13 +817,13 @@ public sealed record TimelineClip
 /// </para>
 /// <para>
 /// <b>Parsed on access, not in the constructor.</b> <see cref="Media.Geometry.Parse"/> resolves
-/// <c>IPlatformRenderInterface</c>, so a constructor-parsed geometry made this record — and therefore
-/// <see cref="Presentation.CurveLibrary"/>, and therefore every view-model that offers a curve picker —
+/// <c>IPlatformRenderInterface</c>, so a constructor-parsed geometry made this record - and therefore
+/// <see cref="Presentation.CurveLibrary"/>, and therefore every view-model that offers a curve picker -
 /// unconstructible without a running renderer. That is the wrong dependency for a row of data, and it
 /// broke as badly as it sounds: <c>CurveLibrary</c>'s static initializer threw the first time a
 /// view-model was built outside Avalonia's headless session scope, .NET cached the
 /// <see cref="TypeInitializationException"/> for the life of the process, and every later test in that
-/// assembly failed with it — 227 of them, on whichever runs happened to order a plain fact first.
+/// assembly failed with it - 227 of them, on whichever runs happened to order a plain fact first.
 /// Re-parsing per access costs nothing at five curves read once per bind.
 /// </para>
 /// </remarks>
@@ -860,7 +860,7 @@ public sealed record CurvePresetRow(Guid Id, string Name, int References)
 /// <summary>
 /// One source-to-hardware route, as the inspector's chain draws it.
 /// </summary>
-/// <param name="Gain">The COMPOSED gain — the cue's send plus the patch cell, which is what is heard.</param>
+/// <param name="Gain">The COMPOSED gain - the cue's send plus the patch cell, which is what is heard.</param>
 public sealed record RouteHop(string Source, string Logical, string Line, string Gain, bool IsMuted);
 
 /// <summary>A named settings pane in the nav (screens 12/13).</summary>
@@ -883,7 +883,7 @@ public sealed record SettingsPane : INavRow
 /// <remarks>
 /// The scope picker (screen 03) and both settings navs (screens 12/13) share one DataTemplate because
 /// they are the same control. Sharing it needs a shared TYPE: a compiled binding whose x:DataType does
-/// not match the item silently resolves to nothing, and the row falls back to ToString() — which is
+/// not match the item silently resolves to nothing, and the row falls back to ToString() - which is
 /// exactly what the scope picker was doing, printing "ScopeEntry { Id = … }" down the side of the app.
 /// </remarks>
 public interface INavRow
@@ -915,9 +915,9 @@ public enum RowWash
 /// three screens deep behind a picker. This is what a closed row says about the one it stands for:
 /// where the picture goes, and which of the optional stages are in force.
 /// </remarks>
-/// <param name="Index">Its position in the cue's placement list — what selecting it sets.</param>
+/// <param name="Index">Its position in the cue's placement list - what selecting it sets.</param>
 /// <param name="Composition">The canvas name, or a plain statement that it has none.</param>
-/// <param name="Layer">"L0", "L1" — short enough to sit beside the name.</param>
+/// <param name="Layer">"L0", "L1" - short enough to sit beside the name.</param>
 /// <param name="Summary">Geometry, and whichever of crop, key, grade and mapping are on.</param>
 /// <param name="IsOpen">Whether this is the placement the editor below is currently showing.</param>
 public readonly record struct PlacementHeader(

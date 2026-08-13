@@ -136,8 +136,8 @@ public sealed class JournalTests
     }
 
     /// <summary>
-    /// A composite opened inside another joins it. Callers compose — a group-linked patch nudge inside
-    /// a drag, a delete-with-cleanup inside a multi-selection edit — and the OUTER scope is what the
+    /// A composite opened inside another joins it. Callers compose - a group-linked patch nudge inside
+    /// a drag, a delete-with-cleanup inside a multi-selection edit - and the OUTER scope is what the
     /// operator did, so it is what one undo takes back.
     /// </summary>
     [Fact]
@@ -164,7 +164,7 @@ public sealed class JournalTests
     }
 
     /// <summary>
-    /// Coalescing applies inside a composite too — otherwise a drag wrapped in one keeps every
+    /// Coalescing applies inside a composite too - otherwise a drag wrapped in one keeps every
     /// intermediate value alive for as long as the undo entry exists.
     /// </summary>
     [Fact]
@@ -259,7 +259,7 @@ public sealed class JournalTests
     }
 
     /// <summary>
-    /// Undoing back to the state on disk is clean again — the dirty flag answers "does this differ
+    /// Undoing back to the state on disk is clean again - the dirty flag answers "does this differ
     /// from the file", not "has anything ever happened".
     /// </summary>
     [Fact]
@@ -332,7 +332,7 @@ public sealed class JournalTests
     /// <remarks>
     /// Reflection because the property is about what commands may HOLD, and no public surface can
     /// express that. Bounded depth so a model reference reached through a closure does not walk the
-    /// whole document — the thing being caught is a document field, which is at depth 1 or 2.
+    /// whole document - the thing being caught is a document field, which is at depth 1 or 2.
     /// </remarks>
     private static void AssertHoldsNoDocument(object command, int depth)
     {

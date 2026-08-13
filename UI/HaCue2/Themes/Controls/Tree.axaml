@@ -7,12 +7,12 @@
        The package ships Themes/Generic.axaml (templates + neutral resources) and Themes/Fluent.axaml
        (the same templates with Fluent system colours). NEITHER is included here: Fluent's brushes
        resolve Fluent-only palette colours through StaticResource, and a StaticResource on a
-       SolidColorBrush THROWS rather than deferring — which is exactly the crash HaPlay hit under the
+       SolidColorBrush THROWS rather than deferring - which is exactly the crash HaPlay hit under the
        Simple theme (HaPlay.Tests/SimpleThemeTreeDataGridResourceTests). HaCue2 sits on SimpleTheme for
        plumbing, so it would hit it too.
 
-       The template structure below mirrors Generic.axaml part for part — every PART_ name, presenter
-       and state the control code looks for — because those names ARE the control's contract. Only the
+       The template structure below mirrors Generic.axaml part for part - every PART_ name, presenter
+       and state the control code looks for - because those names ARE the control's contract. Only the
        visuals differ. -->
 
   <ResourceDictionary.MergedDictionaries>
@@ -205,7 +205,7 @@
     <Setter Property="Template">
       <ControlTemplate>
         <!-- Content is STRETCHED, not centred. A cell whose content is a full-height rule (the state
-             stripe) has no text to give it a height, and a centred presenter collapsed it to nothing —
+             stripe) has no text to give it a height, and a centred presenter collapsed it to nothing -
              the stripe simply did not draw. Each cell template centres its own text instead. -->
         <ContentPresenter Name="PART_ContentPresenter"
                           Content="{TemplateBinding Content}"

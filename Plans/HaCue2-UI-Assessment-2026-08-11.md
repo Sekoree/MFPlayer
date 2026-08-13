@@ -1,9 +1,9 @@
-# HaCue2 UI assessment — 2026-08-11
+# HaCue2 UI assessment - 2026-08-11
 
 Asked: are parts of the UI not properly wired up, and what could be improved?
 
 **Summary: the UI is in far better shape than the planning docs claim, and the one real problem was not
-a broken control — it was that nothing could have told you if there had been one.**
+a broken control - it was that nothing could have told you if there had been one.**
 
 Scope: 39 `.axaml` files (7 804 lines) and 17 470 lines of view models under `UI/HaCue2`.
 
@@ -12,7 +12,7 @@ Scope: 39 `.axaml` files (7 804 lines) and 17 470 lines of view models under `UI
 ## 1. The finding worth acting on: view bindings were never compile-checked
 
 Every file under `Controls/` carried `x:CompileBindings="True"`. **None of the 22 files under `Views/`
-did** — and `Views/` is where the actual screens live.
+did** - and `Views/` is where the actual screens live.
 
 That is the whole "is it wired up?" question, and it was unanswerable by construction. Without compiled
 bindings, a binding path is resolved by reflection at runtime; a typo, or a view-model property that
@@ -25,7 +25,7 @@ All 22 views already declared `x:DataType`, so the fix was one attribute per fil
 ### What turning it on found: nothing broken
 
 The build succeeds with compiled bindings on all 22 views, **zero errors**. So every binding path in
-every screen already resolves correctly — the exposure was to *future* breakage, not to existing
+every screen already resolves correctly - the exposure was to *future* breakage, not to existing
 breakage.
 
 ### Verified the guard actually bites
@@ -61,11 +61,11 @@ before it was wired (`AudioViewModel.cs:827`, `VideoViewModel.cs:964`, `VideoVie
 
 Also checked and clean:
 
-- **Buttons with no `Command` and no `Click`** — 24 of them, and every one is a flyout host
+- **Buttons with no `Command` and no `Click`** - 24 of them, and every one is a flyout host
   (`<Button.Flyout>` / `<Button.ContextFlyout>`), which is correct markup, not a dead control.
-- **Empty event handlers** in view code-behind — none.
-- **Commands with a constant-false `CanExecute`** — none.
-- **Views with no code-behind partner** — none.
+- **Empty event handlers** in view code-behind - none.
+- **Commands with a constant-false `CanExecute`** - none.
+- **Views with no code-behind partner** - none.
 
 ---
 
@@ -79,8 +79,8 @@ deliberate bar and it is met.
 
 Against a *blanket* bar it would read differently: of 390 interactive controls in `Views/`, 153 have no
 `AutomationProperties.Name`, no literal `Content` and no `ToolTip.Tip`. That number is **not** a list of
-failures — many are text boxes inside a labelled `HeaderedContentControl`, where the visible header is
-the label — but it is the gap between "the transport is accessible" and "the app is". Worth a decision
+failures - many are text boxes inside a labelled `HeaderedContentControl`, where the visible header is
+the label - but it is the gap between "the transport is accessible" and "the app is". Worth a decision
 about which one is intended, rather than an automatic fix.
 
 ### 3b. Four view models are getting large
@@ -93,7 +93,7 @@ about which one is intended, rather than an automatic fix.
 | `AuxiliaryViewModels.cs` | 1 963 |
 
 `InspectorViewModel` is the biggest file in the entire repository. The inspector is genuinely a
-many-shaped surface (one pane per cue kind), so the size is *earned* rather than accidental — but it is
+many-shaped surface (one pane per cue kind), so the size is *earned* rather than accidental - but it is
 the same shape `ShowSession` had before it was source-split into `ShowSession.*.cs` partials, and that
 split worked well. `InspectorViewModel.<CueKind>.cs` would be the same move, and it is mechanical.
 
@@ -104,7 +104,7 @@ worth splitting on names, not size.
 ### 3c. Screen complexity concentrates in two places
 
 Bindings per view: `InspectorPane` 203, `VideoView` 182, `CuesView` 127, `SettingsWindow` 113,
-`AudioView` 101. The first two are where any future UI work will be most expensive, and — until today —
+`AudioView` 101. The first two are where any future UI work will be most expensive, and - until today -
 were also the two least protected against a silent binding break.
 
 ---
@@ -113,7 +113,7 @@ were also the two least protected against a silent binding break.
 
 1. **Keep compiled bindings on** (done). It is the only change here, and it converts an entire bug
    class from invisible to impossible.
-2. **Decide the accessibility bar** — transport-only (current, and defensible for a booth tool) or
+2. **Decide the accessibility bar** - transport-only (current, and defensible for a booth tool) or
    whole-app. Do not close the 153 automatically; most need a human deciding what the control is
    *called*.
 3. **Split `InspectorViewModel` into per-cue-kind partials** when it is next touched, the way

@@ -7,8 +7,8 @@ namespace HaCue2.Engine;
 /// </summary>
 /// <remarks>
 /// <para>
-/// A thin adapter, deliberately. All of the difficulty in reading MTC — nibble assembly, the inherent
-/// two-frame read lag, wall-clock interpolation between quarter-frames, stall and relocate detection —
+/// A thin adapter, deliberately. All of the difficulty in reading MTC - nibble assembly, the inherent
+/// two-frame read lag, wall-clock interpolation between quarter-frames, stall and relocate detection -
 /// is solved in <see cref="MidiTimecodeChaseClock"/>, and re-deriving any of it here would produce a
 /// second, worse answer. What belongs in HaCue2 is the part S.Control cannot know: that timecode
 /// arrives as monitor records on the same path bindings do, and that the transport chip needs one
@@ -16,7 +16,7 @@ namespace HaCue2.Engine;
 /// </para>
 /// <para>
 /// <b>Nothing fires from here.</b> The clock is read, not subscribed to. A cue that fires on a
-/// timecode crossing is a scheduler over this position, and it is not built — so the readout says what
+/// timecode crossing is a scheduler over this position, and it is not built - so the readout says what
 /// is arriving and claims nothing more.
 /// </para>
 /// </remarks>
@@ -46,7 +46,7 @@ public sealed class TimecodeChase
             return true;
         }
 
-        // A full-frame locate is SysEx, and it is how a deck says "I am parked here" — the decoder
+        // A full-frame locate is SysEx, and it is how a deck says "I am parked here" - the decoder
         // refuses anything that is not one, so this can be handed every SysEx that arrives.
         if (bytes[0] == 0xF0)
             return _clock.FeedFullFrame(bytes) is not null;

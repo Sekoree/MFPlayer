@@ -40,7 +40,7 @@ public partial class MatrixView : UserControl
     /// </summary>
     private const double DbPerPixel = 0.25;
 
-    /// <summary>Movement under this is a click, not a drag — hands are not steady on a trackpad.</summary>
+    /// <summary>Movement under this is a click, not a drag - hands are not steady on a trackpad.</summary>
     private const double DragThreshold = 3;
 
     /// <summary>
@@ -49,7 +49,7 @@ public partial class MatrixView : UserControl
     /// <remarks>
     /// Every adjustment refreshes the pane, which rebuilds the matrix and lets the items control
     /// recycle its containers. The Border captured at press then holds a different item's DataContext,
-    /// or none — so a drag emitted its first step and went dead, which reads as one big jump per grab.
+    /// or none - so a drag emitted its first step and went dead, which reads as one big jump per grab.
     /// A row and a column cannot go stale.
     /// </remarks>
     private (int Row, int Column)? _pressed;
@@ -66,14 +66,14 @@ public partial class MatrixView : UserControl
 
     /// <summary>
     /// Width of the row-label column. It differs between the two uses on purpose: a cue's sends are
-    /// labelled "Src L", the project patch is labelled "18i20 · Out 3" — the plan requires the patch
+    /// labelled "Src L", the project patch is labelled "18i20 · Out 3" - the plan requires the patch
     /// label to carry BOTH the stable line alias and the real channel number, which needs the room.
     /// </summary>
     /// <summary>The resource the row templates read the header width from.</summary>
     /// <remarks>
     /// A resource rather than a <c>RelativeSource AncestorType</c> binding from inside the item
-    /// template. An ancestor lookup runs while a container is still detached — during realisation and
-    /// again while recycling — and Avalonia reports "Ancestor not found" every time, which fills the
+    /// template. An ancestor lookup runs while a container is still detached - during realisation and
+    /// again while recycling - and Avalonia reports "Ancestor not found" every time, which fills the
     /// debug output with errors for something that is merely not-yet-attached. A DynamicResource
     /// resolves through the same tree but DEFERS instead of failing.
     /// </remarks>
@@ -123,7 +123,7 @@ public partial class MatrixView : UserControl
     /// <remarks>
     /// The styled property is a MINIMUM, not the answer. The patch matrix labels rows
     /// "&lt;line name&gt; · Out &lt;n&gt;", and a real interface's name does not fit any fixed
-    /// width — at 118 px "Ryzen HD Audio Controller Analog Stereo · Out 1" clipped to its first few
+    /// width - at 118 px "Ryzen HD Audio Controller Analog Stereo · Out 1" clipped to its first few
     /// glyphs, which is exactly the row the operator reads to tell one output from another. The
     /// corner spacer and every row share this resource, so the whole column widens together and the
     /// pane's horizontal ScrollViewer absorbs the extra.

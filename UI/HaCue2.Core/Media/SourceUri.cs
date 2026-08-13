@@ -5,13 +5,13 @@ namespace HaCue2.Core.Media;
 /// <summary>What a cue's <c>MediaPath</c> turned out to be.</summary>
 public enum SourceKind
 {
-    /// <summary>A file on this machine — relative to the media root, or absolute.</summary>
+    /// <summary>A file on this machine - relative to the media root, or absolute.</summary>
     File,
 
     /// <summary>A live NDI sender on the network.</summary>
     Ndi,
 
-    /// <summary>A capture device on this machine — a microphone, a line in, a loopback.</summary>
+    /// <summary>A capture device on this machine - a microphone, a line in, a loopback.</summary>
     Capture,
 
     /// <summary>A YouTube video, played from the locally prepared asset.</summary>
@@ -27,7 +27,7 @@ public enum SourceKind
 /// <remarks>
 /// <para>
 /// The framework already opens <c>ndi:</c>, <c>padev:</c>, <c>youtube:</c> and <c>text:</c> through the
-/// registry — each has a decoder provider that owns its query grammar, so what a show has to store is
+/// registry - each has a decoder provider that owns its query grammar, so what a show has to store is
 /// exactly the URI. That is why these are ORDINARY media cues here: level, sends, placements, fades and
 /// effects all mean the same thing whether the pictures come off a disk or off the network, and giving a
 /// camera its own cue type would fork every one of those.
@@ -35,7 +35,7 @@ public enum SourceKind
 /// <para>
 /// What DOES have to change is everything that assumed a media path is a file. A URI must not be joined
 /// onto the media root, must not be probed for a duration, must not be reported missing by the status
-/// pass, and must not turn up in relink or consolidate — an NDI camera cannot be copied into the show
+/// pass, and must not turn up in relink or consolidate - an NDI camera cannot be copied into the show
 /// folder. <see cref="MediaPaths"/> asks this type first, so the rule lives in one place.
 /// </para>
 /// </remarks>
@@ -56,7 +56,7 @@ public static class SourceUri
     /// <remarks>
     /// The scheme is matched EXACTLY and must be at least two characters, so a Windows drive letter
     /// ("C:\Shows\…") can never be read as one. A path that names no known scheme is a file, including
-    /// one carrying a scheme this build does not have — the registry reports the absent provider, which
+    /// one carrying a scheme this build does not have - the registry reports the absent provider, which
     /// is a better error than this quietly deciding the show references nothing.
     /// </remarks>
     public static SourceKind KindOf(string? path)
@@ -81,16 +81,16 @@ public static class SourceUri
     public static bool IsSource(string? path) => KindOf(path) != SourceKind.File;
 
     /// <summary>
-    /// Whether the source is LIVE — endless, unseekable, and started by opening it.
+    /// Whether the source is LIVE - endless, unseekable, and started by opening it.
     /// </summary>
     /// <remarks>
     /// The property that matters to the rest of the app: a live source has no duration to show, no
     /// trim window that means anything, and opening it claims a device or a network connection. A
-    /// prepared YouTube asset is none of those — it is a local file with a URI for a name.
+    /// prepared YouTube asset is none of those - it is a local file with a URI for a name.
     /// </remarks>
     public static bool IsLive(string? path) => KindOf(path) is SourceKind.Ndi or SourceKind.Capture;
 
-    /// <summary>How to name a source in a list — never the raw URI, which is unreadable at row width.</summary>
+    /// <summary>How to name a source in a list - never the raw URI, which is unreadable at row width.</summary>
     public static string Describe(string? uri) => KindOf(uri) switch
     {
         SourceKind.Ndi => DescribeNdi(ParseNdi(uri!)),
@@ -258,7 +258,7 @@ public static class SourceUri
 }
 
 /// <summary>An NDI sender, and how much of it this cue takes.</summary>
-/// <param name="Name">The sender's name as NDI advertises it — "STUDIO (CAM 1)".</param>
+/// <param name="Name">The sender's name as NDI advertises it - "STUDIO (CAM 1)".</param>
 public sealed record NdiSourceOptions(string Name)
 {
     public bool Audio { get; init; } = true;
@@ -279,7 +279,7 @@ public sealed record NdiSourceOptions(string Name)
 /// <param name="Device">The device name; empty means the system default input.</param>
 public sealed record CaptureSourceOptions(string Device)
 {
-    /// <summary>Which driver family the name belongs to — the discriminator when both expose it.</summary>
+    /// <summary>Which driver family the name belongs to - the discriminator when both expose it.</summary>
     public string HostApi { get; init; } = "";
 
     /// <summary>The device's index when it was chosen. A last-resort fallback: indices move across boots.</summary>

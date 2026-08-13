@@ -14,13 +14,13 @@ public sealed record ClipFrame(int Width, int Height, int Stride, byte[] Bgra);
 /// <remarks>
 /// <para>
 /// MACHINE facts, like <see cref="MediaProbe"/>'s: they come from opening the file, they differ per
-/// box, and none of them belongs in a document. The trim editor is the caller — trimming half an hour
+/// box, and none of them belongs in a document. The trim editor is the caller - trimming half an hour
 /// off the front of a two-hour recording by typing seconds into a box is not something anybody should
 /// have to do, and both of these exist so they do not have to.
 /// </para>
 /// <para>
 /// <b>Everything here is cancellable and off the UI thread.</b> A scan of a long file takes seconds,
-/// and a scrub produces a new frame request on every pointer move — a caller that could not abandon
+/// and a scrub produces a new frame request on every pointer move - a caller that could not abandon
 /// either would be a frozen window.
 /// </para>
 /// </remarks>
@@ -45,7 +45,7 @@ public static class MediaScan
     /// <remarks>
     /// Measured, not guessed: reading every sample of a 2 h 32 m recording took 88 seconds on this box.
     /// A trim editor that takes a minute and a half to draw is one nobody waits for, and the recordings
-    /// this feature exists for — "trim the first half hour" — are exactly the long ones.
+    /// this feature exists for - "trim the first half hour" - are exactly the long ones.
     /// </remarks>
     private static readonly TimeSpan SampleBeyond = TimeSpan.FromMinutes(12);
 
@@ -54,7 +54,7 @@ public static class MediaScan
     /// </summary>
     /// <remarks>
     /// Measured, and the reason is worth writing down: a 49-minute ProRes master took 544 seconds at
-    /// 4096 buckets while its seeks measured 0 ms — the cost is the demuxer walking enormous
+    /// 4096 buckets while its seeks measured 0 ms - the cost is the demuxer walking enormous
     /// interleaved video packets to reach each audio position, so it scales with the NUMBER of samples
     /// taken and not with how far apart they are. A thousand bounds that, and on a two-hour file it is
     /// still a bar every seven seconds; the cache is what makes even that a one-time cost.
@@ -75,7 +75,7 @@ public static class MediaScan
     /// </summary>
     /// <param name="onPartial">
     /// Called with what has been analysed so far, throttled. It is what makes the waveform fill in
-    /// left to right instead of appearing when a long file finishes — on a two-hour recording the
+    /// left to right instead of appearing when a long file finishes - on a two-hour recording the
     /// difference is a window that looks broken for ten seconds and one that does not.
     /// </param>
     public static Task<float[]?> WaveformAsync(
@@ -179,7 +179,7 @@ public static class MediaScan
     /// </summary>
     /// <remarks>
     /// A picture of the file rather than a measurement of it, and the only way a two-hour recording
-    /// draws in a usable time. Every bucket is still a real peak of real audio — what is lost is
+    /// draws in a usable time. Every bucket is still a real peak of real audio - what is lost is
     /// whatever happened in the gaps, which is why <see cref="SampleBeyond"/> is generous enough that
     /// ordinary cue media is read through exactly.
     /// </remarks>
@@ -284,7 +284,7 @@ public static class MediaScan
     }
 
     /// <summary>
-    /// One frame from inside a file, as BGRA — or null when there is no picture to get.
+    /// One frame from inside a file, as BGRA - or null when there is no picture to get.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -326,7 +326,7 @@ public static class MediaScan
         {
             // A SEEK CAN THROW, and does: an attached picture in a FLAC answers av_seek_frame with
             // "Operation not permitted", because a single still has nothing to seek within. That is not
-            // a failure to report — the frame it has IS the answer for an audio cue — so the seek is
+            // a failure to report - the frame it has IS the answer for an audio cue - so the seek is
             // attempted and stepped past, and the read happens from wherever that left the decoder.
             if (at > TimeSpan.Zero)
             {

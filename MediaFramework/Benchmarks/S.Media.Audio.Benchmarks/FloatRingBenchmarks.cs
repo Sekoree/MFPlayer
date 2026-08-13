@@ -4,7 +4,7 @@ using S.Media.Core.Audio;
 namespace S.Media.Audio.Benchmarks;
 
 /// <summary>
-/// Measures <see cref="FrameAlignedFloatRing"/> — the producer↔audio-callback boundary for every
+/// Measures <see cref="FrameAlignedFloatRing"/> - the producer↔audio-callback boundary for every
 /// device output/input. Single-threaded write/read round trip isolates the copy + index math
 /// (the counters currently share a cache line; a padded layout would mostly show up under
 /// cross-thread contention, but the single-thread floor matters too).

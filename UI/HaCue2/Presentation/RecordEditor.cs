@@ -12,7 +12,7 @@ namespace HaCue2.Presentation;
 /// <remarks>
 /// An audio line and a video output are different model types with the same recording block, so this
 /// adapter is what lets one editor serve both rather than the Audio and Video views each growing their
-/// own copy of it — the copies would drift, and the difference between them would be a recording that
+/// own copy of it - the copies would drift, and the difference between them would be a recording that
 /// behaved differently depending on which pane configured it.
 /// </remarks>
 /// <param name="Channels">Audio channel count; zero for a video output, which records a picture.</param>
@@ -31,8 +31,8 @@ public readonly record struct RecordSubject(
 /// <remarks>
 /// <para>
 /// Every value here reaches the document through the journal, so a recording setting is as undoable as
-/// any other edit. The pane was drawn complete long before any of it did — a directory, a pattern, an
-/// insert-token dropdown and a format line, all literals in the markup — and looked finished in a
+/// any other edit. The pane was drawn complete long before any of it did - a directory, a pattern, an
+/// insert-token dropdown and a format line, all literals in the markup - and looked finished in a
 /// screenshot while editing nothing.
 /// </para>
 /// <para>
@@ -91,7 +91,7 @@ public sealed partial class RecordEditor(ProjectJournal journal, HaCueProject pr
             "streamUrl", "stream URL");
     }
 
-    /// <summary>Continuous (0) or content-only (1) — the archive/reel choice.</summary>
+    /// <summary>Continuous (0) or content-only (1) - the archive/reel choice.</summary>
     public int ModeIndex
     {
         get => Target?.Continuous == true ? 0 : 1;
@@ -144,7 +144,7 @@ public sealed partial class RecordEditor(ProjectJournal journal, HaCueProject pr
                 return "follows the stream's protocol";
 
             if (Target is not { } target || target.Pattern.Length == 0)
-                return "—";
+                return "-";
 
             if (RecordFormatNames.Describe(target.Pattern) is not { } summary)
                 return "unavailable";
@@ -160,7 +160,7 @@ public sealed partial class RecordEditor(ProjectJournal journal, HaCueProject pr
 
     /// <summary>The help popover's body: every token with what it stands for.</summary>
     public string TokenHelp { get; } = string.Join(
-        "\n", RecordPattern.Tokens.Select(token => $"{token.Token} — {token.Meaning}"));
+        "\n", RecordPattern.Tokens.Select(token => $"{token.Token} - {token.Meaning}"));
 
     /// <summary>Adds a token to the pattern, before its extension so the name stays writable.</summary>
     public void InsertToken(string? token)

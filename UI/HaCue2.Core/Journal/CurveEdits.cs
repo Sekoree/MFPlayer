@@ -24,7 +24,7 @@ public readonly record struct CurveKnot(
 /// </remarks>
 public interface ICurveTarget
 {
-    /// <summary>What an undo entry is ABOUT — the cue, or the preset.</summary>
+    /// <summary>What an undo entry is ABOUT - the cue, or the preset.</summary>
     Guid Subject { get; }
 
     /// <summary>Distinguishes two curves on one subject, e.g. a cue's fade-in from its fade-out.</summary>
@@ -243,7 +243,7 @@ public sealed class SetCurveCommand : ICoalescingCommand
     private readonly ICurveTarget _target;
     private readonly IReadOnlyList<CurveKnot> _before;
 
-    /// <summary>Whether there WAS a curve before this command — see <see cref="ICurveTarget.Clear"/>.</summary>
+    /// <summary>Whether there WAS a curve before this command - see <see cref="ICurveTarget.Clear"/>.</summary>
     private readonly bool _existed;
 
     private readonly Guid? _presetBefore;
@@ -336,7 +336,7 @@ public sealed class SetCurveLawCommand : IProjectCommand
         _target.WriteLaw(_before);
 
         // Only if there WAS a drawn curve. Writing the straight line the editor opens on would leave
-        // an inline list that beats the law we just restored — the same trap Clear() exists for.
+        // an inline list that beats the law we just restored - the same trap Clear() exists for.
         if (_existed)
             _target.Write(_points);
         else
@@ -391,7 +391,7 @@ public static class CurveEdits
     /// <summary>Two is the fewest a curve can have and still be a shape.</summary>
     public const int MinimumPoints = 2;
 
-    /// <summary>How close counts as the same point when adding — in fractions of the canvas.</summary>
+    /// <summary>How close counts as the same point when adding - in fractions of the canvas.</summary>
     private const double SamePointDistance = 0.01;
 
     /// <summary>Replaces a whole curve after applying the same ordering, bounds, and tangent repair as
@@ -535,7 +535,7 @@ public static class CurveEdits
     /// Picks a named law for a target that has one, or refuses.
     /// </summary>
     /// <remarks>
-    /// Null for a preset or a lane, which have no law to set — see <see cref="ICurveTarget.Law"/>. Also
+    /// Null for a preset or a lane, which have no law to set - see <see cref="ICurveTarget.Law"/>. Also
     /// null when the law is ALREADY the one asked for and nothing is drawn over it: re-selecting the
     /// current entry is what happens when the picker is rebuilt, and it must not push an undo step
     /// nobody performed.
@@ -751,7 +751,7 @@ public static class CurveEdits
     /// A number into 0..1, treating anything non-finite as 0.
     /// </summary>
     /// <remarks>
-    /// <c>Math.Clamp(NaN, 0, 1)</c> returns NaN, so clamping alone is not enough — and a lane measured
+    /// <c>Math.Clamp(NaN, 0, 1)</c> returns NaN, so clamping alone is not enough - and a lane measured
     /// before it has been laid out divides by a zero width, which is exactly where a NaN comes from.
     /// <c>CustomFadeCurve</c> rejects non-finite points, so one reaching the document would be a fade
     /// that threw when the show ran rather than when it was drawn.

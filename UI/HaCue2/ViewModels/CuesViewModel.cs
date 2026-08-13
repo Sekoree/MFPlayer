@@ -18,7 +18,7 @@ using HaCue2.Session;
 
 namespace HaCue2.ViewModels;
 
-/// <summary>Screens 02, 03 and 05 — the cue tree, the Active panel, the right column, the timeline.</summary>
+/// <summary>Screens 02, 03 and 05 - the cue tree, the Active panel, the right column, the timeline.</summary>
 public partial class CuesViewModel : ObservableObject
 {
     public const string PropertiesTab = "CUE PROPERTIES";
@@ -65,7 +65,7 @@ public partial class CuesViewModel : ObservableObject
 
         Timeline = new TimelineViewModel(Project, runtime, journal) { Owner = this };
 
-        // The sheet's lane highlight follows the ONE selection, wherever it was made — tree click,
+        // The sheet's lane highlight follows the ONE selection, wherever it was made - tree click,
         // keyboard, or a lane label routed through SelectCue below.
         PropertyChanged += (_, e) =>
         {
@@ -91,7 +91,7 @@ public partial class CuesViewModel : ObservableObject
 
         CueSource.RowSelection!.SelectionChanged += (_, _) =>
         {
-            // The tree is the authority on what is selected — SelectedCue follows it rather than the
+            // The tree is the authority on what is selected - SelectedCue follows it rather than the
             // other way round, so a click, a keyboard move and a programmatic set all take one path.
             SetProperty(ref _selectedCue, CueSource.RowSelection.SelectedItem, nameof(SelectedCue));
             OnPropertyChanged(nameof(CanEditSource));
@@ -119,7 +119,7 @@ public partial class CuesViewModel : ObservableObject
 
     /// <summary>Media import failures. Import continues with the other selected files.</summary>
     /// <remarks>
-    /// It was written and never shown anywhere — a file that could not be copied into the media root
+    /// It was written and never shown anywhere - a file that could not be copied into the media root
     /// produced no cue and no word about why. The add row carries it now.
     /// </remarks>
     [ObservableProperty]
@@ -133,7 +133,7 @@ public partial class CuesViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// NDI discovery is a two-second network scan. It moved off the UI thread so the transport stays
-    /// live through it, which left the click looking like it had done nothing — and let a second click
+    /// live through it, which left the click looking like it had done nothing - and let a second click
     /// start a second scan and stack a second dialog. This says it is happening and gates the verb.
     /// </remarks>
     [ObservableProperty]
@@ -161,7 +161,7 @@ public partial class CuesViewModel : ObservableObject
     /// <summary>The TOP-LEVEL rows. A group's cues hang off <see cref="CueRow.Children"/>.</summary>
     public ObservableCollection<CueRow> Cues { get; }
 
-    /// <summary>Every row in fire order, groups included — what a flat question asks.</summary>
+    /// <summary>Every row in fire order, groups included - what a flat question asks.</summary>
     public IEnumerable<CueRow> AllRows => CuePresentation.Flatten(Cues);
 
     /// <summary>
@@ -181,7 +181,7 @@ public partial class CuesViewModel : ObservableObject
             Columns =
             {
                 // The state stripe is its OWN column, before the expander, so it stays flush with the
-                // left edge — indentation must not push a cue's most urgent state out of line.
+                // left edge - indentation must not push a cue's most urgent state out of line.
                 new TemplateColumn<CueRow>(null, "StripeCell", width: new GridLength(3)),
                 new HierarchicalExpanderColumn<CueRow>(
                     new TemplateColumn<CueRow>("CUE", "NumberCell", width: new GridLength(112)),
@@ -210,7 +210,7 @@ public partial class CuesViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// One direction only. Assigning the field here and telling the inspector separately would let the
-    /// two disagree the moment the tree changed selection on its own — which it does whenever a row is
+    /// two disagree the moment the tree changed selection on its own - which it does whenever a row is
     /// clicked, or the keyboard moves, or a rebuild drops the row that was selected. Selecting a cue
     /// must NOT flip the right panel to Cue properties (register item 7), and it does not.
     /// </remarks>
@@ -230,7 +230,7 @@ public partial class CuesViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Selects a cue by id — the timeline sheet's lane labels route here, so the tree, the inspector
+    /// Selects a cue by id - the timeline sheet's lane labels route here, so the tree, the inspector
     /// and the sheet share ONE selection. A cue with no row under the current scope is left alone
     /// rather than clearing what the operator had.
     /// </summary>
@@ -270,7 +270,7 @@ public partial class CuesViewModel : ObservableObject
     /// multi-edit simply not working.
     /// </para>
     /// <para>
-    /// The lead is selected first so it stays <c>SelectedItem</c> — the inspector's single-value fields
+    /// The lead is selected first so it stays <c>SelectedItem</c> - the inspector's single-value fields
     /// read from it, and having those jump to a different cue after every keystroke would be its own
     /// bug. Batched so the tree raises one selection change rather than one per row.
     /// </para>
@@ -353,7 +353,7 @@ public partial class CuesViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// <para>
-    /// "Next" is the next ENABLED cue in list order — a disabled cue stays visible and is stepped over
+    /// "Next" is the next ENABLED cue in list order - a disabled cue stays visible and is stepped over
     /// rather than deleted, which is the whole reason disabling exists (dropping one for a single
     /// performance by deleting it is how shows lose cues).
     /// </para>
@@ -418,7 +418,7 @@ public partial class CuesViewModel : ObservableObject
 
     /// <summary>What the transport row says about itself.</summary>
     public string TransportHint => Engine is null
-        ? "GO always works — editing never blocks playback"
+        ? "GO always works - editing never blocks playback"
         : HasHeldEdit
             ? "live · an edit waits for the cue it would restart"
             : "live · editing never blocks playback";
@@ -429,7 +429,7 @@ public partial class CuesViewModel : ObservableObject
     /// <remarks>
     /// Said out loud rather than left silent. The engine refuses a reload that would tear down a
     /// sounding voice, so an operator who trims a playing cue and hears nothing change is owed the
-    /// reason — the alternative is to restart their cue mid-show, which is what the app used to do.
+    /// reason - the alternative is to restart their cue mid-show, which is what the app used to do.
     /// The edit lands by itself the moment that cue ends, and immediately on the next GO.
     /// </remarks>
     public bool HasHeldEdit
@@ -447,16 +447,16 @@ public partial class CuesViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Stops the selected active cue — the bare STOP.
+    /// Stops the selected active cue - the bare STOP.
     /// </summary>
     /// <remarks>
     /// One cue, not the show. On a night where a music bed is under a video, the operator reaching for
-    /// STOP because the video has to go almost never wants the bed to go with it — and the one who
+    /// STOP because the video has to go almost never wants the bed to go with it - and the one who
     /// does wants <see cref="StopAll"/>, which is a deliberate second gesture rather than the same
     /// button meaning two things.
     /// <para>
     /// "Selected" is the selected cue when that cue is sounding, and otherwise the cue that has been
-    /// running longest — which is what somebody means by "stop that" when they have not clicked
+    /// running longest - which is what somebody means by "stop that" when they have not clicked
     /// anything.
     /// </para>
     /// </remarks>
@@ -475,7 +475,7 @@ public partial class CuesViewModel : ObservableObject
             _ = host.StopCueAsync(cueId);
     }
 
-    /// <summary>Stops one named cue — the × on its Active row.</summary>
+    /// <summary>Stops one named cue - the × on its Active row.</summary>
     /// <remarks>
     /// By id rather than "the selected one", because the row IS the selection here: an operator
     /// pressing × on the third row means the third row, whatever the cue tree has highlighted.
@@ -509,7 +509,7 @@ public partial class CuesViewModel : ObservableObject
         CollectSoundingDescendants(group, sounding);
 
         // Escalation, same contract as the single-row ×: when everything this group holds is already
-        // ramping down, the second press means "now" — a hard cut instead of the same fade again.
+        // ramping down, the second press means "now" - a hard cut instead of the same fade again.
         var escalate = sounding.Count > 0 && sounding.All(id =>
             _runtime.ActiveCues.FirstOrDefault(row => row.CueId == id)?.IsFading == true);
 
@@ -532,7 +532,7 @@ public partial class CuesViewModel : ObservableObject
     /// Moves a sounding cue's playhead to a fraction of its length.
     /// </summary>
     /// <remarks>
-    /// A fraction rather than a time, because that is what the bar knows — it is as wide as the clip is
+    /// A fraction rather than a time, because that is what the bar knows - it is as wide as the clip is
     /// long and nothing more. Refusals are shown rather than swallowed: seeking a cue that has just
     /// ended is an ordinary near-miss, and a bar that appeared to work and did not would send somebody
     /// looking for a broken file.
@@ -543,10 +543,10 @@ public partial class CuesViewModel : ObservableObject
             return;
 
         // The lock is enforced HERE as well as on the bar. The control refuses the gesture, and this
-        // refuses the command — a seek that arrived from anywhere else must meet the same latch.
+        // refuses the command - a seek that arrived from anywhere else must meet the same latch.
         if (!CanSeekActive)
         {
-            TransportProblem = "seeking is locked — unlock it above the Active panel first";
+            TransportProblem = "seeking is locked - unlock it above the Active panel first";
             return;
         }
 
@@ -559,13 +559,13 @@ public partial class CuesViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Moves a whole sounding group to a fraction of its length — the bar on its Active header row.
+    /// Moves a whole sounding group to a fraction of its length - the bar on its Active header row.
     /// </summary>
     /// <remarks>
     /// The group's length is its longest sounding child (the same measure its clock shows), and the
     /// target is one ABSOLUTE time every child seeks to: eleven stems and two videos land on the same
     /// bar of the song, which is what seeking a together-group means. A child shorter than the target
-    /// seeks to its own end and takes its configured end behavior from there — the same outcome as
+    /// seeks to its own end and takes its configured end behavior from there - the same outcome as
     /// letting it play to that point. Playlist headers do not get this bar: their children play in
     /// SEQUENCE, so one absolute time does not name a place in a playlist; the current item's own row
     /// remains seekable.
@@ -577,7 +577,7 @@ public partial class CuesViewModel : ObservableObject
 
         if (!CanSeekActive)
         {
-            TransportProblem = "seeking is locked — unlock it above the Active panel first";
+            TransportProblem = "seeking is locked - unlock it above the Active panel first";
             return;
         }
 
@@ -603,7 +603,7 @@ public partial class CuesViewModel : ObservableObject
         var target = lengths.Max() * Math.Clamp(fraction, 0, 1);
         // One barrier seek, not a loop: seeking the children in turn landed each at a different wall
         // moment, and eleven stems that arrived milliseconds apart STAYED that far apart. The host
-        // batch goes through the session's seek barrier — pause all, seek with clocks frozen,
+        // batch goes through the session's seek barrier - pause all, seek with clocks frozen,
         // resume together.
         var batch = rows
             .Select(row => (row.CueId,
@@ -623,7 +623,7 @@ public partial class CuesViewModel : ObservableObject
     /// <para>
     /// Off by default. Editing mode permits the bars independently; in Locked/performance mode the bars
     /// sit under the pointer for the whole show, a drag is instantly audible in the room, and there is
-    /// no undo for it — an operator reaching past the panel must not move an on-air playhead by accident.
+    /// no undo for it - an operator reaching past the panel must not move an on-air playhead by accident.
     /// </para>
     /// <para>
     /// A latch rather than a modifier key: seeking is something an operator does deliberately during a
@@ -718,9 +718,9 @@ public partial class CuesViewModel : ObservableObject
     public string SeekLockHint => IsSeeking
         ? "seeking…"
         : CanEditDocument
-        ? "editing mode — drag an Active bar to seek a playing cue"
+        ? "editing mode - drag an Active bar to seek a playing cue"
         : SeekUnlocked
-            ? "the bars in Active can be dragged — a drag moves a cue that is on air"
+            ? "the bars in Active can be dragged - a drag moves a cue that is on air"
             : "click to allow dragging the bars in Active";
 
     /// <summary>Stops everything, over the project's stop fade. The split-menu half of STOP.</summary>
@@ -770,7 +770,7 @@ public partial class CuesViewModel : ObservableObject
         _panic.Start();
     }
 
-    /// <summary>Abandons a hold that was released early — a mis-click, and nothing happens.</summary>
+    /// <summary>Abandons a hold that was released early - a mis-click, and nothing happens.</summary>
     public void CancelPanic()
     {
         _panic?.Stop();
@@ -778,7 +778,7 @@ public partial class CuesViewModel : ObservableObject
         IsPanicArming = false;
     }
 
-    /// <summary>Pauses or resumes — one button, and it reports which it would do.</summary>
+    /// <summary>Pauses or resumes - one button, and it reports which it would do.</summary>
     public void TogglePause()
     {
         if (Engine is { } host)
@@ -790,7 +790,7 @@ public partial class CuesViewModel : ObservableObject
     public string PauseLabel => IsPaused ? "RESUME" : "PAUSE";
 
     /// <summary>
-    /// Auditions the selected cue — "Preview on audition outputs" (register item 15).
+    /// Auditions the selected cue - "Preview on audition outputs" (register item 15).
     /// </summary>
     /// <remarks>
     /// Monitoring, never program: it enters the bay as a monitor input, so it cannot be heard by the
@@ -829,13 +829,13 @@ public partial class CuesViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Moves standby without firing — the ↑/↓ keys.
+    /// Moves standby without firing - the ↑/↓ keys.
     /// </summary>
     /// <remarks>
     /// <para>
     /// The walk is over the WHOLE list and only lands on enabled cues. Standby can legally rest on a
-    /// disabled one — clicking it puts it there when <c>ClickMovesStandby</c> is on, and so does "move
-    /// standby here" — and searching an enabled-only list for it found nothing and clamped to index 0.
+    /// disabled one - clicking it puts it there when <c>ClickMovesStandby</c> is on, and so does "move
+    /// standby here" - and searching an enabled-only list for it found nothing and clamped to index 0.
     /// So ↓ STBY from a disabled cue jumped to the TOP of the list, which during a show moves the
     /// cursor most of an act away from where the operator is.
     /// </para>
@@ -929,7 +929,7 @@ public partial class CuesViewModel : ObservableObject
     /// Whether the row verbs have a cue to act on.
     /// </summary>
     /// <remarks>
-    /// Fire, preview and "move standby here" are not EDITS, so they stay available under Lock — but
+    /// Fire, preview and "move standby here" are not EDITS, so they stay available under Lock - but
     /// with nothing selected they silently did nothing, which reads as a broken menu rather than an
     /// empty selection.
     /// </remarks>
@@ -950,7 +950,7 @@ public partial class CuesViewModel : ObservableObject
     /// </para>
     /// <para>
     /// Numbered by <see cref="AutoNumber"/>, which honours the project's auto-renumber setting
-    /// (register item 20) — the new cue lands between its neighbours rather than at 0.
+    /// (register item 20) - the new cue lands between its neighbours rather than at 0.
     /// </para>
     /// </remarks>
     public CueNode? AddCue(CueKind kind, string mediaPath = "")
@@ -990,7 +990,7 @@ public partial class CuesViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Adds a cue that plays a SOURCE — an NDI camera, a capture device, a prepared YouTube video.
+    /// Adds a cue that plays a SOURCE - an NDI camera, a capture device, a prepared YouTube video.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -1000,7 +1000,7 @@ public partial class CuesViewModel : ObservableObject
     /// </para>
     /// <para>
     /// Pre-roll is off for a LIVE source. Pre-roll opens the next few cues' media early so the next GO
-    /// is instant — which for a camera means claiming the network connection, and for a capture device
+    /// is instant - which for a camera means claiming the network connection, and for a capture device
     /// means claiming the device, minutes before anybody asked. The cue still fires normally; it opens
     /// at the moment it is fired, which is when an operator expects a camera to go live.
     /// </para>
@@ -1036,7 +1036,7 @@ public partial class CuesViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// The edit path for the same dialogs. Re-adding the cue would lose its number, its placements and
-    /// its sends — which is the whole cue — so changing which camera it watches is one field.
+    /// its sends - which is the whole cue - so changing which camera it watches is one field.
     /// </remarks>
     public bool SetSource(
         Guid cueId,
@@ -1096,7 +1096,7 @@ public partial class CuesViewModel : ObservableObject
     /// The selected cue, when it plays a SOURCE rather than a file.
     /// </summary>
     /// <remarks>
-    /// Null for a file cue, which has no source dialog to reopen — its media is chosen with the file
+    /// Null for a file cue, which has no source dialog to reopen - its media is chosen with the file
     /// picker, and offering "edit source…" over it would open a box that could not describe it.
     /// </remarks>
     public MediaCueNode? SelectedSourceCue =>
@@ -1125,7 +1125,7 @@ public partial class CuesViewModel : ObservableObject
     /// <remarks>
     /// Split out for bulk import. <see cref="Refresh"/> rebuilds the scope list, the whole cue tree,
     /// the inspector and the timeline, and running it once per file made importing an album quadratic
-    /// — measured at 5 ms a file into a small list and 26 ms a file into a large one, all of it on the
+    /// - measured at 5 ms a file into a small list and 26 ms a file into a large one, all of it on the
     /// UI thread. A caller adding many cues rebuilds once at the end.
     /// </remarks>
     /// <param name="after">
@@ -1196,12 +1196,12 @@ public partial class CuesViewModel : ObservableObject
                 catch (Exception failure) when (
                     failure is IOException or UnauthorizedAccessException or ArgumentException)
                 {
-                    failed.Add($"{Path.GetFileName(path)} — {failure.Message}");
+                    failed.Add($"{Path.GetFileName(path)} - {failure.Message}");
                 }
             }
 
             // Once for the whole run. Auto-renumber rewrites every sibling, so per file it is O(list)
-            // work repeated per file — the same quadratic the rebuild was.
+            // work repeated per file - the same quadratic the rebuild was.
             if (last is not null && Project.Settings.AutoRenumberOnInsert)
                 Renumber(list, Owner(list.Cues, last.Id) ?? list.Cues);
         }
@@ -1212,7 +1212,7 @@ public partial class CuesViewModel : ObservableObject
         {
             0 => "",
             1 => $"could not import {failed[0]}",
-            _ => $"could not import {failed.Count} files — {string.Join("; ", failed)}",
+            _ => $"could not import {failed.Count} files - {string.Join("; ", failed)}",
         };
 
         Refresh();
@@ -1225,7 +1225,7 @@ public partial class CuesViewModel : ObservableObject
     /// Whether a path is a still picture rather than something with a duration.
     /// </summary>
     /// <remarks>
-    /// By EXTENSION, because this runs at import — before anything has probed the file, and the point
+    /// By EXTENSION, because this runs at import - before anything has probed the file, and the point
     /// is to get the new cue's default right at the moment it is created. A wrong guess costs one
     /// setting the operator can change; probing first would cost them the wait.
     /// </remarks>
@@ -1289,7 +1289,7 @@ public partial class CuesViewModel : ObservableObject
     /// <remarks>
     /// Through <see cref="CueRenumber"/>, which is also what the Renumber dialog runs. This used to
     /// assign bare integers at every depth, so adding one cue inside a group rewrote its children from
-    /// <c>1.1, 1.2, 1.3</c> to <c>1, 2, 3</c> — numbers that then collided with the top level. The
+    /// <c>1.1, 1.2, 1.3</c> to <c>1, 2, 3</c> - numbers that then collided with the top level. The
     /// prefix is what keeps a dotted show dotted.
     /// </remarks>
     private void Renumber(CueList list, List<CueNode> siblings) =>
@@ -1310,7 +1310,7 @@ public partial class CuesViewModel : ObservableObject
         return null;
     }
 
-    /// <summary>Removes every selected cue — a group takes its children with it.</summary>
+    /// <summary>Removes every selected cue - a group takes its children with it.</summary>
     public void RemoveSelected()
     {
         var selected = Inspector.Selected;
@@ -1335,7 +1335,7 @@ public partial class CuesViewModel : ObservableObject
     /// Copies the selected cues in place.
     /// </summary>
     /// <remarks>
-    /// New IDS all the way down — a duplicated group whose children kept their ids would be two cues
+    /// New IDS all the way down - a duplicated group whose children kept their ids would be two cues
     /// claiming to be the same cue, and every reference to one would reach both.
     /// </remarks>
     public void DuplicateSelected()
@@ -1368,7 +1368,7 @@ public partial class CuesViewModel : ObservableObject
     /// <summary>Where a new cue goes: inside the selected group, or after the selected cue.</summary>
     /// <param name="after">
     /// An explicit anchor, for a bulk run. A group anchor is only descended INTO when it is the
-    /// operator's selection — a run anchored on the cue it just added must stay beside it.
+    /// operator's selection - a run anchored on the cue it just added must stay beside it.
     /// </param>
     private (List<CueNode> Siblings, int At) InsertionPoint(CueList list, CueNode? after = null)
     {
@@ -1435,7 +1435,7 @@ public partial class CuesViewModel : ObservableObject
     /// <remarks>
     /// <para>
     /// The obvious answer is a child of the cue before: 12 and 13 give 12.1. When that child is already
-    /// the cue AFTER — 12 followed by 12.1 — the level is full, and the answer is one level deeper:
+    /// the cue AFTER - 12 followed by 12.1 - the level is full, and the answer is one level deeper:
     /// 12.0.1 still sorts between them.
     /// </para>
     /// <para>
@@ -1608,7 +1608,7 @@ public partial class CuesViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Re-reads only what moves continuously — the Active panel's clocks and the pause latch.
+    /// Re-reads only what moves continuously - the Active panel's clocks and the pause latch.
     /// </summary>
     /// <remarks>
     /// Separate from <see cref="Refresh"/> because it runs four times a second: rebuilding the whole
@@ -1639,10 +1639,10 @@ public partial class CuesViewModel : ObservableObject
             : null;
     }
 
-    /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>
+    /// <summary>Called when the document changes under us - an undo, or an edit from another view.</summary>
     public void Refresh()
     {
-        // The WHOLE selection, lead first — not just the lead. An edit applied to eleven selected cues
+        // The WHOLE selection, lead first - not just the lead. An edit applied to eleven selected cues
         // refreshes, and a refresh that remembered one of them left the next edit landing on one cue.
         var selected = new List<Guid>();
 
@@ -1665,8 +1665,8 @@ public partial class CuesViewModel : ObservableObject
         Inspector.Reload();
         Timeline.Refresh();
 
-        // The editor follows a GROUP MODE, not a selection: when its group stops being a timeline —
-        // the fire mode was switched, the group deleted, or an undo took either back — the sheet and
+        // The editor follows a GROUP MODE, not a selection: when its group stops being a timeline -
+        // the fire mode was switched, the group deleted, or an undo took either back - the sheet and
         // the floating window both close rather than keep editing offsets no run will read.
         if ((IsTimelineOpen || Timeline.IsUndocked)
             && (Timeline.Group is not { } timelineGroup
@@ -1699,7 +1699,7 @@ public partial class CuesViewModel : ObservableObject
         // selection-changed handler.
         //
         // That is worse than it sounds: a scope change is driven by a two-way binding, so the throw
-        // surfaced inside a binding setter — where Avalonia turns it into a validation error and the
+        // surfaced inside a binding setter - where Avalonia turns it into a validation error and the
         // rest of the refresh silently never ran. Clearing first is safe because the paths are still
         // valid at this point.
         CueSource.RowSelection!.Clear();
@@ -1866,7 +1866,7 @@ public partial class CuesViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// A separate collection from <see cref="ActiveCues"/>, which stays flat because the transport
-    /// reads it — bare STOP wants "the one running longest" and the seek wants a cue by id, and
+    /// reads it - bare STOP wants "the one running longest" and the seek wants a cue by id, and
     /// neither should have to walk a tree to find one.
     /// </remarks>
     public ObservableCollection<object> ActivePanelRows { get; } = [];
@@ -1874,11 +1874,11 @@ public partial class CuesViewModel : ObservableObject
     private readonly DispatcherTimer _smoothClock;
 
     /// <summary>
-    /// One UI-rate tick of the Active panel's clocks — see the timer's construction for the design.
+    /// One UI-rate tick of the Active panel's clocks - see the timer's construction for the design.
     /// </summary>
     /// <remarks>
     /// Extrapolation is gated on the transport actually running: a paused show's clocks must hold
-    /// still rather than creep a poll interval ahead and snap back. A fading cue still advances — its
+    /// still rather than creep a poll interval ahead and snap back. A fading cue still advances - its
     /// playhead genuinely runs through the ramp. Upcoming countdowns are STAGED: they stay on their
     /// calm whole-second poll text until the start is inside <see cref="CuePresentation.UpcomingPreciseWindow"/>,
     /// then tick their milliseconds here.
@@ -1951,7 +1951,7 @@ public partial class CuesViewModel : ObservableObject
     /// The poll lands four times a second, and replacing the rows wholesale replaced the CONTROLS
     /// four times a second: the seek bar died mid-drag, the expander and stop buttons lost their
     /// hover the instant the pointer settled on them, and the group header's open/shut state had to
-    /// be smuggled across each rebuild. Rows persist now — matched by cue/group identity, their
+    /// be smuggled across each rebuild. Rows persist now - matched by cue/group identity, their
     /// observable measurements updated, and only genuinely new/gone/reshaped rows change objects.
     /// </remarks>
     private void RebuildActivePanel()
@@ -1992,7 +1992,7 @@ public partial class CuesViewModel : ObservableObject
     }
 
     /// <summary>An existing row matching <paramref name="incoming"/>'s identity and shape, at or
-    /// after <paramref name="from"/>, or −1 when the row is genuinely new (or reshaped — a changed
+    /// after <paramref name="from"/>, or −1 when the row is genuinely new (or reshaped - a changed
     /// shape replaces the object, since indentation and labels are deliberately not observable).</summary>
     private static int FindRow(ObservableCollection<object> rows, object incoming, int from)
     {
@@ -2123,7 +2123,7 @@ public partial class CuesViewModel : ObservableObject
 
     public string ChaseReadout => _runtime.ChaseReadout;
 
-    /// <summary>Register item 18 — a bottom sheet by default, undockable to its own window.</summary>
+    /// <summary>Register item 18 - a bottom sheet by default, undockable to its own window.</summary>
     [ObservableProperty]
     private bool _isTimelineOpen;
 
@@ -2158,14 +2158,14 @@ public sealed record ScopeEntry(Guid Id, string Name, int Count, bool IsList, in
     public string Tally => Count.ToString(CultureInfo.CurrentCulture);
     public bool HasTally => true;
 
-    // A scope tally is a count of cues, never a warning — those belong to the settings navs.
+    // A scope tally is a count of cues, never a warning - those belong to the settings navs.
     public bool TallyIsBad => false;
     public bool TallyIsOverride => false;
 
     public Thickness Indent => new(12 + (Depth * 12), 0, 0, 0);
 }
 
-/// <summary>Screen 05 — the timeline sheet over whichever group is open.</summary>
+/// <summary>Screen 05 - the timeline sheet over whichever group is open.</summary>
 public sealed partial class TimelineViewModel : ObservableObject
 {
     /// <summary>The shortest a trim drag may leave a clip, so an end-edge drag cannot zero it out.</summary>
@@ -2199,7 +2199,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// The WINDOW's length as it was when the drag started, held for the whole gesture.
     /// </summary>
     /// <remarks>
-    /// Dragging a clip to the right can extend the group, which re-clamps the window — and if each
+    /// Dragging a clip to the right can extend the group, which re-clamps the window - and if each
     /// motion event divided by the new one, the lane would rescale under the pointer and the clip would
     /// never catch up with it. Fractions are read against the picture the operator grabbed.
     /// </remarks>
@@ -2220,7 +2220,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// Points the sheet at a group, or at nothing.
     /// </summary>
     /// <remarks>
-    /// It used to draw whichever timeline group came first in the show, whoever was looking at what —
+    /// It used to draw whichever timeline group came first in the show, whoever was looking at what -
     /// and nothing could change that. A sheet showing a different group from the selected one is worse
     /// than no sheet.
     /// </remarks>
@@ -2267,7 +2267,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// A back-reference rather than an ancestor walk, because once the sheet is UNDOCKED there is no
-    /// CuesView above it — and "which cue is selected" and "put me back" are both questions only the
+    /// CuesView above it - and "which cue is selected" and "put me back" are both questions only the
     /// cue view can answer.
     /// </remarks>
     public CuesViewModel? Owner { get; init; }
@@ -2289,14 +2289,14 @@ public sealed partial class TimelineViewModel : ObservableObject
     private string _keyframeStatus = KeyframeHelp;
 
     private const string KeyframeHelp =
-        "volume · opacity · placement · OSC/MIDI — Ctrl/Shift-click keyframes · Ctrl+wheel zooms, Shift+wheel pans";
+        "volume · opacity · placement · OSC/MIDI - Ctrl/Shift-click keyframes · Ctrl+wheel zooms, Shift+wheel pans";
 
     /// <summary>
     /// Which automation properties the footer's picker may offer for the CURRENT selection.
     /// </summary>
     /// <remarks>
-    /// Delegated to the inspector's <c>CanAddLane</c> — the one place that resolves concrete property
-    /// targets such as a media cue's volume or one placement's opacity — so the menu and inspector
+    /// Delegated to the inspector's <c>CanAddLane</c> - the one place that resolves concrete property
+    /// targets such as a media cue's volume or one placement's opacity - so the menu and inspector
     /// can never disagree about what the selected cue can animate.
     /// </remarks>
     public bool CanAddVolumeLane => CanAddLane(AutomationPropertyIds.CueVolume);
@@ -2330,7 +2330,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// <remarks>
     /// A VIEW setting, not a document one: it is how somebody is working right now, and carrying it to
     /// the next venue inside a show file would be carrying the wrong thing. Same reasoning as the
-    /// appearance pane, and the reason it is not journaled either — undoing back through "I changed
+    /// appearance pane, and the reason it is not journaled either - undoing back through "I changed
     /// the grid" would bury the edits the operator actually wants back. 0.1 s by default: fine enough
     /// to land a stab, coarse enough that laid-out cues still line up.
     /// </remarks>
@@ -2365,7 +2365,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Dragging the LEFT edge moves the clip and trims the same amount into the file, so the frame
-    /// under the cursor does not slide — the behaviour every timeline editor has, and the reason
+    /// under the cursor does not slide - the behaviour every timeline editor has, and the reason
     /// position and trim are separate numbers on the model.
     /// </remarks>
     public void ApplyClipGesture(ClipGesture gesture)
@@ -2377,7 +2377,7 @@ public sealed partial class TimelineViewModel : ObservableObject
         {
             _dragSpan = _view.LengthMs;
             // QUIET: each motion event journals a step, and a per-step Changed makes the shell run its
-            // whole refresh pass per pointer move — rebuilding the very lane controls this drag is
+            // whole refresh pass per pointer move - rebuilding the very lane controls this drag is
             // captured on. The sheet follows the pointer through its own in-place Refresh below; the
             // rest of the app sees ONE change when the gesture ends and the scope closes.
             _drag = _journal.Composite(
@@ -2385,7 +2385,7 @@ public sealed partial class TimelineViewModel : ObservableObject
         }
 
         // Fractions of the WINDOW, so a drag means the same distance on screen however far in the
-        // operator has zoomed — which is the whole reason to zoom before making a fine adjustment.
+        // operator has zoomed - which is the whole reason to zoom before making a fine adjustment.
         var left = Snap(Math.Max(0, _view.StartMs + (gesture.Left * _dragSpan)));
         var width = Snap(Math.Max(0, gesture.Width) * _dragSpan);
 
@@ -2437,7 +2437,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// arranged exactly over the cue's own span inside the larger group window.</summary>
     /// <returns>
     /// Whether a document edit was journaled. A pure selection change, and an edit the rules refused
-    /// (a delete that would leave fewer than two points), both report false — the buttons report what
+    /// (a delete that would leave fewer than two points), both report false - the buttons report what
     /// happened, and a refusal that announced itself as a deletion is worse than a silent one.
     /// </returns>
     public bool ApplyLaneGesture(TimelineLane row, CurveGesture gesture)
@@ -2683,7 +2683,7 @@ public sealed partial class TimelineViewModel : ObservableObject
         var translated = decoded.Select(point => point with { X = anchor + point.X }).ToList();
 
         // The pasted span REPLACES what it lands on. Appending piled the copy on top of the existing
-        // keyframes, so two points could share an instant — which has no defined shape between them —
+        // keyframes, so two points could share an instant - which has no defined shape between them -
         // and the operator saw a tangle rather than the shape they copied.
         var combined = AutomationKnots(cue, track)
             .Where(knot => knot.X < translated[0].X || knot.X > translated[^1].X)
@@ -2817,7 +2817,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Raised when the editor must close wherever it lives — the group left timeline mode, or left
+    /// Raised when the editor must close wherever it lives - the group left timeline mode, or left
     /// the document. The floating window subscribes; the docked sheet needs only
     /// <see cref="CuesViewModel.IsTimelineOpen"/>.
     /// </summary>
@@ -2931,7 +2931,7 @@ public sealed partial class TimelineViewModel : ObservableObject
             return;
 
         // A clip dragged past the old end makes the group longer, so the window is re-clamped before
-        // anything is drawn against it — a view wider than the group would draw the lanes squashed
+        // anything is drawn against it - a view wider than the group would draw the lanes squashed
         // into part of the sheet with nothing beside them.
         _view = Clamp(_view);
 
@@ -2952,7 +2952,7 @@ public sealed partial class TimelineViewModel : ObservableObject
         }
 
         // Mid-gesture the lane CONTAINERS must survive: replacing the Lanes list unrealizes every
-        // ClipLane, and Avalonia releases pointer capture on detach — the drag would die on its first
+        // ClipLane, and Avalonia releases pointer capture on detach - the drag would die on its first
         // motion event. A drag cannot change the lane STRUCTURE, so the fresh clips and envelopes are
         // copied into the existing lane objects instead; anything structural falls through to the
         // ordinary replacement.
@@ -3014,12 +3014,12 @@ public sealed partial class TimelineViewModel : ObservableObject
         OnPropertyChanged(nameof(HasAutomationAudioGain));
     }
 
-    /// <summary>The cue whose lane reads as selected — follows the tree's selection.</summary>
+    /// <summary>The cue whose lane reads as selected - follows the tree's selection.</summary>
     private Guid? _selectedCueId;
 
     /// <summary>
     /// Keeps the sheet's lane highlight on the tree's selected cue. Called by the owner whenever the
-    /// selection changes, and applied again on every refresh — the lanes are rebuilt objects.
+    /// selection changes, and applied again on every refresh - the lanes are rebuilt objects.
     /// </summary>
     public void SyncSelection(Guid? cueId)
     {
@@ -3138,7 +3138,7 @@ public sealed partial class TimelineViewModel : ObservableObject
         }
         catch (Exception)
         {
-            // A waveform is authoring context, never a prerequisite for editing the envelope — and
+            // A waveform is authoring context, never a prerequisite for editing the envelope - and
             // this is an async void, so ANY escape takes the app down over a decorative backdrop.
             // Scanning arbitrary media reaches a decoder, so the failure set is not just I/O.
         }
@@ -3192,7 +3192,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// <summary>The whole group, edge to edge.</summary>
     public void ZoomFit() => Show(TimelineView.Whole(SpanMs));
 
-    /// <summary>Shifts the window sideways by a fraction of itself — the wheel-pan gesture.</summary>
+    /// <summary>Shifts the window sideways by a fraction of itself - the wheel-pan gesture.</summary>
     public void Pan(double fractionOfWindow) =>
         Show(new TimelineView(_view.StartMs + (fractionOfWindow * _view.LengthMs), _view.LengthMs));
 
@@ -3206,7 +3206,7 @@ public sealed partial class TimelineViewModel : ObservableObject
         set
         {
             // The refresh below re-raises this property, and the scrollbar writes the coerced value
-            // straight back — without the guard that is an infinite edit loop.
+            // straight back - without the guard that is an infinite edit loop.
             if (Math.Abs(value - _view.StartMs) < 0.5)
                 return;
             Show(new TimelineView(value, _view.LengthMs));
@@ -3236,7 +3236,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     private double _playheadMs;
 
     /// <summary>
-    /// Where the playhead sits IN THE WINDOW, as a fraction — which is what the sheet draws.
+    /// Where the playhead sits IN THE WINDOW, as a fraction - which is what the sheet draws.
     /// </summary>
     /// <remarks>
     /// Was a runtime fact that nothing wrote, so it sat at zero forever. It is an AUTHORING position:
@@ -3265,7 +3265,7 @@ public sealed partial class TimelineViewModel : ObservableObject
         $"{(int)PlayheadAt.TotalMinutes}:{PlayheadAt.Seconds:00}.{PlayheadAt.Milliseconds / 100}";
 
     /// <summary>
-    /// Puts the playhead where the operator clicked — or is dragging on — the ruler.
+    /// Puts the playhead where the operator clicked - or is dragging on - the ruler.
     /// </summary>
     /// <remarks>
     /// Deliberately NOT snapped, unlike a clip drag: the playhead is a rehearsal cursor, and "start
@@ -3273,7 +3273,7 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// follows the pointer smoothly for the same reason.
     /// </remarks>
     /// <param name="toGrid">
-    /// Opt IN to the grid for this placement — the ruler passes the Shift modifier. Free is the right
+    /// Opt IN to the grid for this placement - the ruler passes the Shift modifier. Free is the right
     /// default for a rehearsal cursor, but "start exactly at that cue" is a real ask, and without a
     /// way to say it the grid picker sitting right there is no help to the playhead at all.
     /// </param>

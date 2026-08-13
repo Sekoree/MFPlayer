@@ -34,7 +34,7 @@ public partial class ShellWindow : Window
     /// </summary>
     /// <remarks>
     /// The File menu's recent list is bound to a command on the shell, and what that command DOES is
-    /// close this window and open another — a decision about windows, which belongs here.
+    /// close this window and open another - a decision about windows, which belongs here.
     /// </remarks>
     protected override void OnDataContextChanged(EventArgs e)
     {
@@ -175,7 +175,7 @@ public partial class ShellWindow : Window
     /// </summary>
     /// <remarks>
     /// Space in a cue LABEL has to be a space. This is the one place a transport key gives way, and it
-    /// gives way to typing rather than to focus being "somewhere else" — every other control in the
+    /// gives way to typing rather than to focus being "somewhere else" - every other control in the
     /// app can have focus and Space still fires the show.
     /// </remarks>
     private bool IsTyping() => FocusManager?.GetFocusedElement() is TextBox;
@@ -224,7 +224,7 @@ public partial class ShellWindow : Window
     /// document that had never touched a disk.
     /// </para>
     /// <para>
-    /// A cancelled picker is not a refusal to create the project — it is already open and its edits are
+    /// A cancelled picker is not a refusal to create the project - it is already open and its edits are
     /// real. It goes back to being a project with nowhere to go, and the status line says so rather
     /// than letting that be discovered later.
     /// </para>
@@ -235,7 +235,7 @@ public partial class ShellWindow : Window
 
         if (!Shell.HasPath)
             Shell.FileMessage =
-                "not saved anywhere yet — media paths stay absolute and there is no autosave until it is";
+                "not saved anywhere yet - media paths stay absolute and there is no autosave until it is";
     }
 
     // ── the File menu ─────────────────────────────────────────────────────────────────────────
@@ -315,7 +315,7 @@ public partial class ShellWindow : Window
         catch (Exception failure) when (
             failure is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
-            Shell.FileMessage = $"a second window could not be started — {failure.Message}";
+            Shell.FileMessage = $"a second window could not be started - {failure.Message}";
         }
     }
 
@@ -335,7 +335,7 @@ public partial class ShellWindow : Window
     /// </summary>
     /// <remarks>
     /// Three answers, because the question has three: save it, throw it away, or go back to editing.
-    /// Cancelling runs nothing at all — which is what makes this safe to attach to every verb that
+    /// Cancelling runs nothing at all - which is what makes this safe to attach to every verb that
     /// leaves the current project.
     /// </remarks>
     private async Task LeaveThenAsync(Func<Task> leave)
@@ -378,7 +378,7 @@ public partial class ShellWindow : Window
             await SaveAsync(Shell);
 
             // Only when the save actually landed. A cancelled Save As must not then throw the work
-            // away — the operator answered "save first", not "leave anyway".
+            // away - the operator answered "save first", not "leave anyway".
             if (!Shell.Journal.IsDirty)
                 await leave();
         }
@@ -421,7 +421,7 @@ public partial class ShellWindow : Window
         e.Handled = true;
     }
 
-    /// <summary>Pop the drawer out for a second monitor, and close the in-shell copy behind it —
+    /// <summary>Pop the drawer out for a second monitor, and close the in-shell copy behind it -
     /// two live copies of the same meters is a way to misread one of them.</summary>
     private void OnPopOutDrawer(object? sender, RoutedEventArgs e)
     {
@@ -438,7 +438,7 @@ public partial class ShellWindow : Window
     /// <remarks>
     /// The journal is what makes the project half of this screen real: without it every project-scope
     /// setting is read once and written nowhere, so the pane describes the document rather than editing
-    /// it (register items 26 and 28 — project settings are journaled and travel in the file).
+    /// it (register items 26 and 28 - project settings are journaled and travel in the file).
     /// </remarks>
     private void OnSettings(object? sender, RoutedEventArgs e)
         => _settings = Reopen(

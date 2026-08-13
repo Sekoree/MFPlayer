@@ -8,7 +8,7 @@ namespace HaCue2.Tests;
 /// The video output and composition panes edit the document.
 /// </summary>
 /// <remarks>
-/// Both were drawn complete against literals — a composition picker pinned to <c>SelectedIndex="0"</c>,
+/// Both were drawn complete against literals - a composition picker pinned to <c>SelectedIndex="0"</c>,
 /// a screen picker over three invented resolutions, a size of "1920×1080" no project could change.
 /// An operator could not point an output at a composition at all, which is the first thing anybody does.
 /// </remarks>
@@ -34,7 +34,7 @@ public class VideoOutputPaneTests
     /// </summary>
     /// <remarks>
     /// This used to drive a "Shows" picker on the output pane. Assignment lives on the composition now,
-    /// so the picker went and the second, unreachable way to write the same field went with it — but
+    /// so the picker went and the second, unreachable way to write the same field went with it - but
     /// the case it covered is real and belongs to the rail: an output already showing something is
     /// still OFFERED, saying where it would come from, because hiding it leaves an operator hunting for
     /// a projector that is simply pointed elsewhere with nothing on screen saying where.
@@ -163,7 +163,7 @@ public class VideoOutputPaneTests
 
         video.OutputMappingIndex = 1;
 
-        // Bypassed at the ENGINE, not merely in the list's label — otherwise "clean" would be a setting
+        // Bypassed at the ENGINE, not merely in the list's label - otherwise "clean" would be a setting
         // that changed what the pane said and nothing about what hit the wall.
         Assert.Null(HaCue2.Engine.OutputMapping.Spec(output, composition.Width, composition.Height));
     });
@@ -251,7 +251,7 @@ public class VideoOutputPaneTests
         var authored = composition.FramesPerSecond;
 
         // Against whatever the canvas was actually authored at, not a literal: a refused edit leaves
-        // the rate alone, which is the claim — the default it happens to start from is not.
+        // the rate alone, which is the claim - the default it happens to start from is not.
         video.CompositionRate = "0";
         Assert.Equal(authored, composition.FramesPerSecond);
 

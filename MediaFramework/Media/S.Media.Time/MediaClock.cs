@@ -242,10 +242,10 @@ public sealed class MediaClock : IMediaClock, IDisposable
     /// <remarks>
     /// For a voice slaved to an already-advancing master (a silent video cue on the show's audible
     /// clock): anchoring at Start makes its timeline advance immediately, while a sounding voice's
-    /// producer clock holds at zero until its first sample is actually audible — one audio-pipeline
+    /// producer clock holds at zero until its first sample is actually audible - one audio-pipeline
     /// depth later. Deferring by that depth puts frame 0 on screen at the same wall moment sample 0
     /// leaves the speaker. Consumers see a briefly negative position and simply wait for zero.
-    /// No-op on a running clock — a live cadence is not re-based (that is what <see cref="Seek"/>
+    /// No-op on a running clock - a live cadence is not re-based (that is what <see cref="Seek"/>
     /// is for, and it is a transport action, not a start correction).
     /// </remarks>
     public void DeferStart(TimeSpan lead)

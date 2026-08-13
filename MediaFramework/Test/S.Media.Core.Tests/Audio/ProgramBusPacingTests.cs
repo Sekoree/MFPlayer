@@ -197,7 +197,7 @@ public sealed class ProgramBusPacingTests
     /// <summary>
     /// Regression (HaCue2 once-a-second ticks): granted-but-unsubmitted audio counts against the
     /// pacing target, so every chunk the pump queue holds is a chunk the RING is allowed to be
-    /// short — at the pump's full depth the ring's share fell below one mix chunk and bus reads
+    /// short - at the pump's full depth the ring's share fell below one mix chunk and bus reads
     /// substituted silence whenever drainer scheduling lagged. Outstanding grants are therefore
     /// capped at two chunks: the ring's steady state keeps a floor of target minus two chunks.
     /// </summary>
@@ -223,7 +223,7 @@ public sealed class ProgramBusPacingTests
 
     /// <summary>
     /// Pre-roll (group-fire alignment): a held producer's ring accepts the clip's first samples but
-    /// the bus skips it — no contribution, no underrun counting, no clock advance — and the release
+    /// the bus skips it - no contribution, no underrun counting, no clock advance - and the release
     /// joins the mix with the buffered content intact from its first sample.
     /// </summary>
     [Fact]
@@ -259,7 +259,7 @@ public sealed class ProgramBusPacingTests
     /// <summary>
     /// A held producer's pacing wait outlives the starvation timeout: the bus is deliberately not
     /// consuming it, and the start edge that releases it can sit behind a slow-arming sibling. The
-    /// old behavior — timeout, write-off, then refusal — would have faulted the voice's router
+    /// old behavior - timeout, write-off, then refusal - would have faulted the voice's router
     /// during a long group prepare.
     /// </summary>
     [Fact]

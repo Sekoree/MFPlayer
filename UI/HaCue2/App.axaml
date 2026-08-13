@@ -8,7 +8,7 @@
        Letting that follow a light desktop would put a white flyout over a black cue list. -->
 
   <Application.Styles>
-    <!-- Slot 0 — infrastructure only; see HaCue2.csproj for why Simple is here at all. Anything it
+    <!-- Slot 0 - infrastructure only; see HaCue2.csproj for why Simple is here at all. Anything it
          supplies for a control HaCue2 actually shows is overridden by the bundle below, because
          Avalonia resolves a resource by walking Application.Styles from LAST to first. -->
     <SimpleTheme />

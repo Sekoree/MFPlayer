@@ -11,13 +11,13 @@ namespace HaCue2.Core.Model;
 /// <para>
 /// Stored as the operator typed it and compared as numbers. The two halves matter for different
 /// reasons. Stored as text, because a cue number is an identifier somebody calls over comms and
-/// "12.10" is a thing you say — a decimal would silently turn it into "12.1", which is a DIFFERENT
+/// "12.10" is a thing you say - a decimal would silently turn it into "12.1", which is a DIFFERENT
 /// cue. Compared numerically, because plain text ordering puts Q10 before Q2 and GO walks this order.
 /// </para>
 /// <para>
 /// Three levels are ordinary in real shows: the HaPlay projects in this repository's sibling documents
 /// folder use 1.1.1 and 1.2.1 throughout, one level per nesting depth. That is the evidence this type
-/// exists for — the earlier <c>decimal</c> could not hold those at all, so a project written by the
+/// exists for - the earlier <c>decimal</c> could not hold those at all, so a project written by the
 /// app it is replacing could not have been opened.
 /// </para>
 /// <para>
@@ -35,7 +35,7 @@ public readonly record struct CueNumber : IComparable<CueNumber>
 
     public static CueNumber Empty => default;
 
-    /// <summary>The number as written. Empty for a cue that has none — a comment, typically.</summary>
+    /// <summary>The number as written. Empty for a cue that has none - a comment, typically.</summary>
     public string Text => _text ?? "";
 
     public bool IsEmpty => Text.Length == 0;
@@ -76,7 +76,7 @@ public readonly record struct CueNumber : IComparable<CueNumber>
     /// Compares segment by segment, numerically, shorter-first on a shared prefix.
     /// </summary>
     /// <remarks>
-    /// So 2 &lt; 10, and 12 &lt; 12.1 &lt; 12.2 &lt; 12.10 &lt; 13 — the order an operator reads down
+    /// So 2 &lt; 10, and 12 &lt; 12.1 &lt; 12.2 &lt; 12.10 &lt; 13 - the order an operator reads down
     /// the list, which is the order GO must walk. An empty number sorts first so an unnumbered comment
     /// stays where it was put rather than jumping to the end.
     /// </remarks>
@@ -144,7 +144,7 @@ public readonly record struct CueNumber : IComparable<CueNumber>
 /// </summary>
 /// <remarks>
 /// Without this the struct would serialize as an object with a "text" member, which is both uglier to
-/// read in a diff and a different shape from every other tool's cue file — HaPlay writes
+/// read in a diff and a different shape from every other tool's cue file - HaPlay writes
 /// <c>"number": "1.1.1"</c>, and matching that is what makes an importer a mapping rather than a
 /// translation.
 /// </remarks>

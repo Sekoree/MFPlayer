@@ -8,7 +8,7 @@ namespace HaCue2.Controls;
 /// </summary>
 /// <remarks>
 /// A blank panel is indistinguishable from one that failed to load, and the difference matters most
-/// on a machine somebody is setting up for the first time — which is exactly when every list in the
+/// on a machine somebody is setting up for the first time - which is exactly when every list in the
 /// app is empty at once. The detail line always names the way OUT, because "nothing here" without a
 /// next step is just a dead end with better typography.
 /// </remarks>
@@ -30,7 +30,7 @@ public partial class EmptyState : UserControl
         set => SetValue(HeadlineProperty, value);
     }
 
-    /// <summary>The way out. Never left empty — a dead end with better typography is still a dead end.</summary>
+    /// <summary>The way out. Never left empty - a dead end with better typography is still a dead end.</summary>
     public string Detail
     {
         get => GetValue(DetailProperty);

@@ -5,10 +5,10 @@ namespace HaCue2.Machine;
 /// <summary>
 /// One selectable track inside a media file.
 /// </summary>
-/// <param name="Index">The container's stream index — what a cue stores when it picks this track.</param>
+/// <param name="Index">The container's stream index - what a cue stores when it picks this track.</param>
 /// <param name="Signature">
 /// Identity of the track's CONTENT, independent of its index. A file that is re-muxed keeps its tracks
-/// but can renumber them, and a stored index would then silently point at a different one — the German
+/// but can renumber them, and a stored index would then silently point at a different one - the German
 /// commentary instead of the music. Comparing signatures is how that is caught.
 /// </param>
 /// <param name="IsAttachedPicture">Cover art. A video "track" that is one still frame.</param>
@@ -25,7 +25,7 @@ public readonly record struct MediaTrack(
     bool IsDecodable);
 
 /// <summary>What a media file turned out to contain.</summary>
-/// <param name="Duration">Null when the container does not declare one — a live source, or a stream.</param>
+/// <param name="Duration">Null when the container does not declare one - a live source, or a stream.</param>
 public sealed record MediaFacts
 {
     /// <summary>What is known about a file nobody could open. Every list is deliberately empty.</summary>
@@ -34,8 +34,8 @@ public sealed record MediaFacts
     public TimeSpan? Duration { get; init; }
 
     /// <summary>
-    /// Every audio track, in container order. A concert capture routinely has several — a stereo mix,
-    /// an isolated vocal, a room pair — and which one a cue plays is an authoring decision.
+    /// Every audio track, in container order. A concert capture routinely has several - a stereo mix,
+    /// an isolated vocal, a room pair - and which one a cue plays is an authoring decision.
     /// </summary>
     public IReadOnlyList<MediaTrack> AudioTracks { get; init; } = [];
 
@@ -53,7 +53,7 @@ public sealed record MediaFacts
     /// Video that is actually moving.
     /// </summary>
     /// <remarks>
-    /// Cover art is a video stream in every container that carries it — a FLAC with album art probes
+    /// Cover art is a video stream in every container that carries it - a FLAC with album art probes
     /// as "1 video track", and treating that as a video file would put a still image on the wall.
     /// </remarks>
     public bool HasVideo => MovingVideoTracks.Count > 0;
@@ -63,7 +63,7 @@ public sealed record MediaFacts
         [.. VideoTracks.Where(track => !track.IsAttachedPicture)];
 
     /// <summary>
-    /// Whether this file has anything a composition can show — moving video OR cover art.
+    /// Whether this file has anything a composition can show - moving video OR cover art.
     /// </summary>
     /// <remarks>
     /// Cover art is a still image and it is perfectly placeable: an audio cue can put the album art on
@@ -72,7 +72,7 @@ public sealed record MediaFacts
     /// </remarks>
     public bool HasPlaceableVideo => VideoTracks.Count > 0;
 
-    /// <summary>The only video is cover art — placements will show a still frame.</summary>
+    /// <summary>The only video is cover art - placements will show a still frame.</summary>
     public bool IsCoverArtOnly => VideoTracks.Count > 0 && MovingVideoTracks.Count == 0;
 
     /// <summary>
@@ -80,7 +80,7 @@ public sealed record MediaFacts
     /// there is.
     /// </summary>
     /// <remarks>
-    /// Cover art has to be selected EXPLICITLY — the decoder's automatic election deliberately skips
+    /// Cover art has to be selected EXPLICITLY - the decoder's automatic election deliberately skips
     /// attached pictures, so a cue placed on a canvas with no explicit index would show nothing at
     /// all. Naming the track here is what makes "place it and it appears" true for an MP3.
     /// </remarks>
@@ -98,7 +98,7 @@ public sealed record MediaFacts
     /// <remarks>
     /// The index is only trusted when the CONTENT still matches. After a re-mux the same index can be
     /// a different language, so a mismatched signature falls back to automatic election rather than
-    /// playing the wrong track — being obviously automatic beats being quietly wrong.
+    /// playing the wrong track - being obviously automatic beats being quietly wrong.
     /// </remarks>
     public static MediaTrack? Resolve(IReadOnlyList<MediaTrack> tracks, int? index, string? signature)
     {
@@ -126,11 +126,11 @@ public sealed record MediaFacts
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is the difference between a cue list that says "—" in every Len column and one that tells the
+/// This is the difference between a cue list that says "-" in every Len column and one that tells the
 /// operator how long the show is, and between "this file has audio" and "this file has four audio
 /// tracks and you are playing the second". Both are MACHINE facts, not document ones: two machines
 /// with different copies of the same file can legitimately disagree, so nothing here is written into
-/// the project — it is asked for, cached, and shown.
+/// the project - it is asked for, cached, and shown.
 /// </para>
 /// <para>
 /// A failure is <see cref="MediaFacts.Unknown"/>, never an exception and never a guess. An unreadable
@@ -158,7 +158,7 @@ public static class MediaProbe
     }
 
     /// <summary>
-    /// A macOS AppleDouble stub — a resource fork sitting beside the real file.
+    /// A macOS AppleDouble stub - a resource fork sitting beside the real file.
     /// </summary>
     /// <remarks>
     /// Any drive that has been through a Mac is full of these: <c>._Concert.mp4</c> beside
@@ -186,7 +186,7 @@ public static class MediaProbe
     }
 
     /// <remarks>
-    /// Undecodable audio and video are dropped — offering a track nothing can play is worse than not
+    /// Undecodable audio and video are dropped - offering a track nothing can play is worse than not
     /// offering it. SUBTITLES are kept regardless: a subtitle track with no decoder here may still be
     /// a track somebody wants recorded in the show, and it costs nothing to list.
     /// </remarks>

@@ -13,14 +13,14 @@ internal readonly record struct VisualizerCueInstance(Guid CueId, Guid InstanceI
 /// </summary>
 /// <remarks>
 /// <para>
-/// A visualizer cue is not a clip. It has nothing to decode and nothing to seek — firing it means
+/// A visualizer cue is not a clip. It has nothing to decode and nothing to seek - firing it means
 /// attaching a renderer to every composition its placements name, and stopping it means taking that
 /// renderer away. So it does not go through the session's clip path at all; it goes through
 /// <c>SetCompositionVisualizerAsync</c>, which is the framework's own seam for exactly this.
 /// </para>
 /// <para>
 /// <b>One source per composition, not per placement.</b> A cue that puts the same visualizer into
-/// three sections of one canvas gets ONE renderer with three placement specs — the framework's
+/// three sections of one canvas gets ONE renderer with three placement specs - the framework's
 /// <c>ILayerSurfaceVideoSource</c> contract says its surface is created at most once per source, and
 /// building one renderer per section crashed projectM in HaPlay before that was understood. Two
 /// different compositions do get two renderers: they have separate GL threads and cannot share one.
@@ -28,7 +28,7 @@ internal readonly record struct VisualizerCueInstance(Guid CueId, Guid InstanceI
 /// <para>
 /// <b>A missing or damaged projectM bundle is reported, never silently blank.</b> Packaged desktop
 /// apps carry the native, but a developer checkout or damaged install can still lack it. A cue that
-/// appears to fire onto a canvas that then stays black is the worst version of that — the operator
+/// appears to fire onto a canvas that then stays black is the worst version of that - the operator
 /// has no way to tell it from a mis-authored placement.
 /// </para>
 /// </remarks>
@@ -74,7 +74,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
     /// <summary>Why not, when it is not. Null when it is.</summary>
     public static string? UnavailableReason => ProjectMModule.UnavailableReason;
 
-    /// <summary>Cue ids with a renderer attached — what the host counts as sounding.</summary>
+    /// <summary>Cue ids with a renderer attached - what the host counts as sounding.</summary>
     public IReadOnlyList<Guid> Running
     {
         get
@@ -99,7 +99,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(cue);
 
         if (!IsAvailable)
-            return $"“{cue.Label}” needs projectM — {UnavailableReason ?? "its native bundle is unavailable"}";
+            return $"“{cue.Label}” needs projectM - {UnavailableReason ?? "its native bundle is unavailable"}";
 
         if (cue.Placements.Count == 0)
             return $"“{cue.Label}” is not placed on any composition";
@@ -157,7 +157,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
             catch (Exception failure) when (failure is not OutOfMemoryException)
             {
                 source.Dispose();
-                firstFailure ??= $"“{cue.Label}” could not start — {failure.Message}";
+                firstFailure ??= $"“{cue.Label}” could not start - {failure.Message}";
                 continue;
             }
 
@@ -166,7 +166,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 // The usual cause is a composition with no GL surface host: a CPU-fallback compositor
                 // cannot render a layer surface at all, and saying "refused" beats a black canvas.
                 source.Dispose();
-                firstFailure ??= $"“{cue.Label}” was refused by “{composition.Name}” — it has no GL surface";
+                firstFailure ??= $"“{cue.Label}” was refused by “{composition.Name}” - it has no GL surface";
                 continue;
             }
 
@@ -188,7 +188,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
             _instances[cue.Id] = Guid.NewGuid();
         }
 
-        // Partial success is still a start — the canvases that came up are showing something — but the
+        // Partial success is still a start - the canvases that came up are showing something - but the
         // ones that did not are worth saying out loud.
         return firstFailure;
     }
@@ -294,7 +294,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
     {
         if (!IsAvailable)
             return new PreparedCue(cue, [],
-                $"“{cue.Label}” needs projectM — {UnavailableReason ?? "its native bundle is unavailable"}");
+                $"“{cue.Label}” needs projectM - {UnavailableReason ?? "its native bundle is unavailable"}");
         if (cue.Placements.Count == 0)
             return new PreparedCue(cue, [], $"“{cue.Label}” is not placed on any composition");
 
@@ -353,14 +353,14 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 catch (Exception failure) when (failure is not OutOfMemoryException)
                 {
                     source.Dispose();
-                    firstFailure ??= $"“{cue.Label}” could not prepare — {failure.Message}";
+                    firstFailure ??= $"“{cue.Label}” could not prepare - {failure.Message}";
                     continue;
                 }
 
                 if (!ok)
                 {
                     source.Dispose();
-                    firstFailure ??= $"“{cue.Label}” was refused by “{composition.Name}” — it has no GL surface";
+                    firstFailure ??= $"“{cue.Label}” was refused by “{composition.Name}” - it has no GL surface";
                     continue;
                 }
 
@@ -439,7 +439,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
         }
     }
 
-    /// <summary>Takes every visualizer down — what PANIC and stop-all mean here.</summary>
+    /// <summary>Takes every visualizer down - what PANIC and stop-all mean here.</summary>
     public async Task StopAllAsync()
     {
         List<Guid> running;
@@ -769,7 +769,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
             frameRate,
             new ProjectMOptions
             {
-                // A blank pack means the repository's deployed, pinned Milkdrop bundle — not the
+                // A blank pack means the repository's deployed, pinned Milkdrop bundle - not the
                 // projectM idle preset. An authored path still wins so a show can carry its own pack.
                 PresetDirectory = cue.PresetPack.Length > 0
                     ? cue.PresetPack
@@ -778,7 +778,7 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 RenderHeight = height,
                 Fps = Math.Max(1, (int)Math.Round(frameRate.ToDouble())),
                 // A locked preset is one that never advances. projectM has no lock of its own, so it is
-                // expressed as a hold longer than any show — which is also honest about what it is.
+                // expressed as a hold longer than any show - which is also honest about what it is.
                 PresetDurationSeconds = cue.LockPreset
                     ? TimeSpan.FromDays(1).TotalSeconds
                     : Math.Max(5, cue.HoldMs / 1000d),

@@ -1,4 +1,4 @@
-# HaCue2 audit — 4 August 2026
+# HaCue2 audit - 4 August 2026
 
 ## Scope
 

@@ -80,7 +80,7 @@ public partial class TargetsView : UserControl
     /// <summary>Right-clicking a row selects it first, so the menu acts on what was clicked.</summary>
     /// <remarks>
     /// Avalonia opens a ListBox's context menu without moving the selection, so without this the menu's
-    /// REMOVE would act on whatever was selected before — the one class of mistake a confirmation
+    /// REMOVE would act on whatever was selected before - the one class of mistake a confirmation
     /// dialog does not catch, because the dialog names the wrong thing convincingly.
     /// </remarks>
     private void OnRowRightPressed(object? sender, PointerPressedEventArgs e)

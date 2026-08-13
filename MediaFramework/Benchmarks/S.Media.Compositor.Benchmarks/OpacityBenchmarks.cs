@@ -5,7 +5,7 @@ using S.Media.Core.Video;
 namespace S.Media.Compositor.Benchmarks;
 
 /// <summary>
-/// Measures <see cref="VideoCpuOpacity.ApplyInPlace"/> — the scalar per-byte fade loop that runs on
+/// Measures <see cref="VideoCpuOpacity.ApplyInPlace"/> - the scalar per-byte fade loop that runs on
 /// every frame of a CPU fade (exactly when the pipeline is busiest). Baseline for a SIMD rewrite.
 /// Repeatedly fading the same buffer toward black is fine: the byte math cost is value-independent.
 /// </summary>

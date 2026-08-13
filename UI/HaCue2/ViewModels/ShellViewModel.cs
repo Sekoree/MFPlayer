@@ -54,7 +54,7 @@ public partial class ShellViewModel : ObservableObject
         Journal.IsReadOnly = _isLocked;
         Machine = machine;
 
-        // Real answers where this machine can give one, invented ones where it cannot — yet. Media
+        // Real answers where this machine can give one, invented ones where it cannot - yet. Media
         // durations and broken files come from the PROBE now; sounding cues, meters and the bay still
         // come from the sample, because those need a running session and there is not one.
         Runtime = SampleRuntime.For(project);
@@ -69,7 +69,7 @@ public partial class ShellViewModel : ObservableObject
         Cues = new CuesViewModel(Journal, Runtime)
         {
             // The inspector's track lists come from the probe. A cue whose file has not been looked at
-            // yet still shows the choice it already holds — opening a show on a machine without the
+            // yet still shows the choice it already holds - opening a show on a machine without the
             // media must not look like the choice was lost.
             MediaFacts = media => machine.Media.Facts(MediaPaths.Resolve(project, media.MediaPath, ProjectPath)),
             ProjectPath = () => ProjectPath,
@@ -105,7 +105,7 @@ public partial class ShellViewModel : ObservableObject
             : ProjectStatus.NotRun();
 
         // Fire and forget: the views draw now and the answers arrive later. Until a file has been
-        // looked at its length reads "—", which is the truth rather than a guess.
+        // looked at its length reads "-", which is the truth rather than a guess.
         machine.Media.Changed += OnProbesLanded;
         machine.Media.Refresh(project, ProjectPath);
     }
@@ -213,7 +213,7 @@ public partial class ShellViewModel : ObservableObject
             {
                 // Said once, then left alone: a read-only recovery directory fails on every tick, and
                 // repeating it every thirty seconds would bury everything else in the status bar.
-                FileMessage = "autosave could not be written — recovery is unavailable";
+                FileMessage = "autosave could not be written - recovery is unavailable";
                 StopAutosave();
             }
         }
@@ -236,7 +236,7 @@ public partial class ShellViewModel : ObservableObject
     /// <para>
     /// Deliberately NOT in the constructor. Opening devices and a decoder is slow and can fail, and a
     /// view-model that cannot be constructed without hardware is one no test and no preview can build.
-    /// A shell with no engine is a fully working EDITOR — which is also what the app is on a laptop.
+    /// A shell with no engine is a fully working EDITOR - which is also what the app is on a laptop.
     /// </para>
     /// <para>
     /// Every journal change reloads the compiled document. The session's preservation flags are what
@@ -288,11 +288,11 @@ public partial class ShellViewModel : ObservableObject
         // keeps a 250 ms poll from rebuilding the cue tree under the operator's selection.
         _engine.Ticked += Cues.Tick;
         // Learn watches the same stream the wire monitor does, on the UI tick rather than the I/O
-        // thread — the pane only has to know what arrived, not when.
+        // thread - the pane only has to know what arrived, not when.
         _engine.Ticked += () => Targets.Observe(Runtime.LastSignal);
         _engine.Ticked += OutputInfo.Refresh;
         // A recording that starts dropping frames does so quietly, so the readout is polled rather
-        // than updated on arm and disarm — the drop count is the only warning before the file gaps.
+        // than updated on arm and disarm - the drop count is the only warning before the file gaps.
         _engine.Ticked += Audio.RefreshRecorders;
         _engine.Ticked += Video.RefreshRecorders;
         _engine.Ticked += () => Diagnostics?.Refresh();
@@ -341,7 +341,7 @@ public partial class ShellViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// A reload recompiles the whole document and hands it to the session. Doing that per COMMAND meant
-    /// every keystroke in a cue label recompiled the show — the journal raises one change per character.
+    /// every keystroke in a cue label recompiled the show - the journal raises one change per character.
     /// The timer restarts on each edit, so a burst of typing costs one reload after it stops.
     /// </remarks>
     private DispatcherTimer? _reload;
@@ -360,7 +360,7 @@ public partial class ShellViewModel : ObservableObject
     /// </remarks>
     private static readonly TimeSpan HeldEditRetry = TimeSpan.FromSeconds(15);
 
-    /// <summary>An edit the engine has not adopted yet — see <see cref="ReloadEngineAsync"/>.</summary>
+    /// <summary>An edit the engine has not adopted yet - see <see cref="ReloadEngineAsync"/>.</summary>
     private bool _editPending;
 
     private void ScheduleReload()
@@ -382,7 +382,7 @@ public partial class ShellViewModel : ObservableObject
 
     /// <summary>True while an edit is waiting for the show to be idle before the engine adopts it.</summary>
     /// <remarks>
-    /// Surfaced rather than hidden — the transport row says so. An operator who edits a playing cue's
+    /// Surfaced rather than hidden - the transport row says so. An operator who edits a playing cue's
     /// trim and hears nothing change is owed the reason; the alternative was to restart their cue,
     /// which is worse and was what the app used to do.
     /// </remarks>
@@ -404,7 +404,7 @@ public partial class ShellViewModel : ObservableObject
     }
 
     public string TransportHint => Host is null
-        ? "GO always works — editing never blocks playback"
+        ? "GO always works - editing never blocks playback"
         : _heldEdit
             ? "live · an edit is waiting for this cue to end"
             : Host.Problems.Count == 0
@@ -417,7 +417,7 @@ public partial class ShellViewModel : ObservableObject
     /// <remarks>
     /// The engine refuses a reload that would restart a playing voice (see
     /// <c>ShowHost.TryReloadAsync</c>). When it does the edit stays pending, and it is re-offered the
-    /// moment what is sounding changes, on the way into the next fire, and on a slow backstop timer —
+    /// moment what is sounding changes, on the way into the next fire, and on a slow backstop timer -
     /// so it lands as soon as the cue it would have cut is out of the way.
     /// </remarks>
     private async Task ReloadEngineAsync()
@@ -457,7 +457,7 @@ public partial class ShellViewModel : ObservableObject
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            FileMessage = $"engine reload failed — {failure.Message}";
+            FileMessage = $"engine reload failed - {failure.Message}";
         }
         finally
         {
@@ -481,7 +481,7 @@ public partial class ShellViewModel : ObservableObject
     /// <remarks>
     /// Called on the way into a fire and after a stop. A cue fired against a document the operator has
     /// since edited plays the old version of itself, which is the one failure this whole deferral must
-    /// not introduce — so the moment a reload can be adopted, it is.
+    /// not introduce - so the moment a reload can be adopted, it is.
     /// </remarks>
     public async Task FlushPendingEditAsync()
     {
@@ -497,7 +497,7 @@ public partial class ShellViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// A real stop and start, because the bus width and rate are fixed when the bay is built. Anything
-    /// sounding goes silent — which is why this is a button rather than a consequence of editing a
+    /// sounding goes silent - which is why this is a button rather than a consequence of editing a
     /// combo box, and why the operator is told so before they press it.
     /// </remarks>
     public async Task RestartAudioAsync()
@@ -524,7 +524,7 @@ public partial class ShellViewModel : ObservableObject
     public async Task<string?> ToggleRecorderAsync(Guid id)
     {
         if (_engine is not { } engine)
-            return "the show is not running — start it before arming a recording";
+            return "the show is not running - start it before arming a recording";
 
         return await engine.ToggleRecorderAsync(id).ConfigureAwait(true);
     }
@@ -540,7 +540,7 @@ public partial class ShellViewModel : ObservableObject
     public async Task<string?> IdentifyAsync(Guid outputId)
     {
         if (_engine is not { } engine)
-            return "the show is not running — start it before identifying an output";
+            return "the show is not running - start it before identifying an output";
 
         return await engine.IdentifyAsync(outputId).ConfigureAwait(true);
     }
@@ -548,7 +548,7 @@ public partial class ShellViewModel : ObservableObject
     public async Task<string?> SetCalibrationAsync(Guid outputId, bool enabled)
     {
         if (_engine is not { } engine)
-            return "the show is not running — start it before calibrating an output";
+            return "the show is not running - start it before calibrating an output";
         return await engine.SetCalibrationAsync(outputId, enabled).ConfigureAwait(true);
     }
 
@@ -557,13 +557,13 @@ public partial class ShellViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Refuses with no show running, like the other engine verbs. The transport's GO deliberately still
-    /// works without one — it moves the cursor, which is the half that can be right with no devices —
+    /// works without one - it moves the cursor, which is the half that can be right with no devices -
     /// but "play this from here" has no half that is meaningful without something to play it on.
     /// </remarks>
     public async Task<string?> PlayTimelineFromAsync(GroupCueNode group, TimeSpan from)
     {
         if (_engine is not { } engine)
-            return "the show is not running — start it before playing from the playhead";
+            return "the show is not running - start it before playing from the playhead";
 
         await engine.PlayTimelineFromAsync(group, from).ConfigureAwait(true);
         return null;
@@ -600,7 +600,7 @@ public partial class ShellViewModel : ObservableObject
     public string? SoloToMonitor(Guid channelId) =>
         _engine is { } engine
             ? engine.SoloToMonitor(channelId)
-            : "the show is not running — start it before soloing an output";
+            : "the show is not running - start it before soloing an output";
 
     /// <summary>What the monitor is carrying, or null.</summary>
     public Guid? SoloedChannelId => _engine?.SoloedChannelId;
@@ -628,7 +628,7 @@ public partial class ShellViewModel : ObservableObject
 
         if (!int.TryParse(Settings.RemotePort, out var port) || port is < 1 or > 65_535)
         {
-            FileMessage = $"remote API port “{Settings.RemotePort}” is invalid — use 1–65535";
+            FileMessage = $"remote API port “{Settings.RemotePort}” is invalid - use 1–65535";
             return null;
         }
 
@@ -659,7 +659,7 @@ public partial class ShellViewModel : ObservableObject
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            FileMessage = $"the remote API could not apply its settings — {failure.Message}";
+            FileMessage = $"the remote API could not apply its settings - {failure.Message}";
         }
     }
 
@@ -715,7 +715,7 @@ public partial class ShellViewModel : ObservableObject
         Audio.Host = null;
 
         // Nothing is holding the edit back any more, and StartEngineAsync loads the current document
-        // outright — so a flag left set here would only buy the next session one pointless reload.
+        // outright - so a flag left set here would only buy the next session one pointless reload.
         _reload?.Stop();
         _editPending = false;
         NoteHeldEdit(false);
@@ -757,8 +757,8 @@ public partial class ShellViewModel : ObservableObject
             Status = ProjectStatus.Run(Project, ProjectPath, Environment);
             Refresh();
 
-            // A probe that has just landed changes what the COMPILED document should say — an
-            // out-point becomes convertible and an unresolved schema-1 lane can migrate — so the
+            // A probe that has just landed changes what the COMPILED document should say - an
+            // out-point becomes convertible and an unresolved schema-1 lane can migrate - so the
             // engine has to be told, even though nobody edited anything.
             if (Host is not null)
                 ScheduleReload();
@@ -778,7 +778,7 @@ public partial class ShellViewModel : ObservableObject
         Runtime.Broken = [.. Machine.Media.BrokenIn(Project, ProjectPath)];
 
         // Only a DEFINITE absence counts. A line whose devices nobody could enumerate stays present
-        // here and is reported as unchecked by the status pass — a red row nobody verified is the
+        // here and is reported as unchecked by the status pass - a red row nobody verified is the
         // failure this seam exists to avoid.
         if (Machine.Environment is { } environment)
         {
@@ -820,7 +820,7 @@ public partial class ShellViewModel : ObservableObject
     /// Where this project lives on disk, or empty when it has never been saved.
     /// </summary>
     /// <remarks>
-    /// Tracked here rather than on the document because it is not a property of the SHOW — the same
+    /// Tracked here rather than on the document because it is not a property of the SHOW - the same
     /// file copied to a booth machine is the same show at a different path, and writing the path into
     /// the document would make every copy differ from its original for no reason.
     /// </remarks>
@@ -844,24 +844,24 @@ public partial class ShellViewModel : ObservableObject
         + (Journal.IsDirty ? " *" : "");
 
     /// <summary>
-    /// The WINDOW's title — the file, its unsaved marker, then the app.
+    /// The WINDOW's title - the file, its unsaved marker, then the app.
     /// </summary>
     /// <remarks>
     /// File first because that is what a taskbar truncates TO, and what an operator running two shows
     /// side by side is trying to tell apart. It was the literal "HaCue2", which meant nothing anywhere
     /// on screen said which file was open or whether it had been saved.
     /// </remarks>
-    public string WindowTitle => $"{ProjectFile} — HaCue2";
+    public string WindowTitle => $"{ProjectFile} - HaCue2";
 
     /// <summary>
-    /// Where the project lives, in full — the answer to "where is this saved".
+    /// Where the project lives, in full - the answer to "where is this saved".
     /// </summary>
     /// <remarks>
     /// A tooltip rather than a field: it is long, it is asked for rarely, and it is the one thing the
     /// short name in the title bar cannot say.
     /// </remarks>
     public string ProjectLocation =>
-        HasPath ? Path : "not saved yet — Save will ask where to put it";
+        HasPath ? Path : "not saved yet - Save will ask where to put it";
 
     /// <summary>SAVE, or SAVE… when there is nowhere to save yet and it will have to ask.</summary>
     public string SaveLabel => HasPath ? "Save" : "Save…";
@@ -908,7 +908,7 @@ public partial class ShellViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Returns false when there is nowhere to save YET, so the caller opens Save As rather than this
-    /// silently doing nothing — a Ctrl+S that appears to work and did not is the worst outcome here.
+    /// silently doing nothing - a Ctrl+S that appears to work and did not is the worst outcome here.
     /// </remarks>
     public async Task<bool> SaveAsync()
     {
@@ -1015,7 +1015,7 @@ public partial class ShellViewModel : ObservableObject
             _ = host.Triggers.SetEnabledAsync(value);
     }
 
-    /// <summary>Register item 4 — hidden by default, F9 or the status-bar toggle summons it.</summary>
+    /// <summary>Register item 4 - hidden by default, F9 or the status-bar toggle summons it.</summary>
     [ObservableProperty]
     private bool _isOutputInfoOpen;
 
@@ -1119,7 +1119,7 @@ public partial class ShellViewModel : ObservableObject
 
     /// <summary>The undo toast: what ⌘Z would take back, and which surface it would change.</summary>
     public string? UndoSummary => Journal.NextUndo is { } command
-        ? $"undo: {command.Domain} — {command.Description}"
+        ? $"undo: {command.Domain} - {command.Description}"
         : null;
 
     public bool CanUndo => !IsLocked && Journal.CanUndo;
@@ -1143,7 +1143,7 @@ public partial class ShellViewModel : ObservableObject
     /// <remarks>
     /// <para>
     /// GUARDED, and that is the important part. This is the FIRST subscriber to
-    /// <see cref="ProjectJournal.Changed"/> and <see cref="ScheduleReload"/> is a later one — and a
+    /// <see cref="ProjectJournal.Changed"/> and <see cref="ScheduleReload"/> is a later one - and a
     /// multicast delegate stops at the first handler that throws. So anything escaping here did not
     /// merely lose a refresh: it stopped the ENGINE ever being told about that edit, or any edit after
     /// it, for the rest of the session. The document and what the rig was playing then diverged
@@ -1151,7 +1151,7 @@ public partial class ShellViewModel : ObservableObject
     /// </para>
     /// <para>
     /// Worse, the journal is usually driven from a binding setter, where Avalonia catches the throw and
-    /// files it as a validation error — so the whole failure was invisible. Reported here instead.
+    /// files it as a validation error - so the whole failure was invisible. Reported here instead.
     /// </para>
     /// </remarks>
     private void OnJournalChanged()
@@ -1159,7 +1159,7 @@ public partial class ShellViewModel : ObservableObject
         try
         {
             // An edit can ADD media, and until this the runtime only learned what a file was at load
-            // and after a save — so a cue added at 19:50 read "—" for its length until the show was
+            // and after a save - so a cue added at 19:50 read "-" for its length until the show was
             // saved. The adopt is a dictionary walk over what is already known (which is where a
             // source's own stated duration arrives), and the probe skips every path it has already
             // looked at.
@@ -1175,7 +1175,7 @@ public partial class ShellViewModel : ObservableObject
             // Swallowed only in the sense that the OTHER subscribers still run: the operator is told,
             // and the engine still gets its reload. A stale panel is recoverable; a rig that stopped
             // hearing about edits is not.
-            FileMessage = $"the project view could not be refreshed — {failure.Message}";
+            FileMessage = $"the project view could not be refreshed - {failure.Message}";
             MediaDiagnostics.LogError(failure, "HaCue2: refreshing the shell after an edit failed");
         }
     }
@@ -1189,15 +1189,15 @@ public partial class ShellViewModel : ObservableObject
     /// <para>
     /// <see cref="ProjectStatus.Run"/> is not a cheap read: it COMPILES the whole show and runs the
     /// engine's document validator over the result, on top of touching the filesystem once per media
-    /// reference. Running that synchronously per command meant a mesh-warp drag or a send-matrix drag —
-    /// gestures that emit one command per pointer sample — compiled and validated the entire project
+    /// reference. Running that synchronously per command meant a mesh-warp drag or a send-matrix drag -
+    /// gestures that emit one command per pointer sample - compiled and validated the entire project
     /// tens of times a second on the UI thread, which is what made live editing crawl. Under workstation
     /// GC the resulting garbage was also heard, not just seen.
     /// </para>
     /// <para>
     /// Deferred rather than dropped: the status bar's counts are a few hundred milliseconds behind a
     /// burst of typing and exactly right the moment it stops, which is the same trade the engine reload
-    /// beside it has always made. The pass still runs in full — nothing here decides that an edit
+    /// beside it has always made. The pass still runs in full - nothing here decides that an edit
     /// "cannot" have changed the answer, because that judgement is precisely what a validator is for.
     /// </para>
     /// </remarks>
@@ -1223,7 +1223,7 @@ public partial class ShellViewModel : ObservableObject
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            FileMessage = $"the project checks could not be run — {failure.Message}";
+            FileMessage = $"the project checks could not be run - {failure.Message}";
             MediaDiagnostics.LogError(failure, "HaCue2: the project status pass failed");
         }
     }
@@ -1250,10 +1250,10 @@ public partial class ShellViewModel : ObservableObject
             check.Name is "Audio devices" or "Video outputs" or "Logical outputs");
 }
 
-/// <summary>The Output info drawer's content (screen 02b) — entirely runtime facts.</summary>
+/// <summary>The Output info drawer's content (screen 02b) - entirely runtime facts.</summary>
 /// <remarks>
 /// Every member reads THROUGH the runtime. Copied values would freeze at the moment the drawer was
-/// built, which for a meter is the same as not having one — and this drawer exists precisely for the
+/// built, which for a meter is the same as not having one - and this drawer exists precisely for the
 /// "why is there no sound" moment, where a stale reading is worse than a blank one.
 /// </remarks>
 public sealed class OutputInfoViewModel(ShowRuntime runtime) : ObservableObject

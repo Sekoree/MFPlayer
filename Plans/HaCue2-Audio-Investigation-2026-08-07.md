@@ -1,4 +1,4 @@
-# HaCue2 Audio Investigation — 2026-08-07
+# HaCue2 Audio Investigation - 2026-08-07
 
 Investigation of the reported HaCue2 problems: audio stutter / mini-dropouts / pops, no audio
 after firing the "everything" group, A/V sync doubts, the active cue list reordering itself and
@@ -25,7 +25,7 @@ ERR AudioRouter RunLoop: WaitForNextChunk failed without cancellation ·
 ```
 
 ~12 of these in the log after the first GO (06:38:49–06:39:03), and again ~11 after the second GO
-(06:40:02–06:40:10). A faulted voice router never restarts — that voice is **silent for the rest of
+(06:40:02–06:40:10). A faulted voice router never restarts - that voice is **silent for the rest of
 the show**. This is the "hit go and no audio gets through" symptom.
 
 ### Mechanism
@@ -38,13 +38,13 @@ pacing primary). Pacing works on a *grant* system introduced in commit `2535a4f4
 2. The grant is released **only** when the audio arrives in `Submit`
    (`ProgramBusSource.cs:337`).
 3. Between the two, the chunk travels through the router's output pump. Every drop path in
-   `OutputPump.Commit` — backpressure cap expired (1 s), pool exhausted, ready-queue eviction
-   (`MediaFramework/Media/S.Media.Routing/Audio/AudioRouter.OutputPump.cs:140-186`) — discards the
+   `OutputPump.Commit` - backpressure cap expired (1 s), pool exhausted, ready-queue eviction
+   (`MediaFramework/Media/S.Media.Routing/Audio/AudioRouter.OutputPump.cs:140-186`) - discards the
    chunk **without releasing its grant**. That credit leaks *forever*; only `Flush` (pause/seek)
    resets `_grantedFloats`.
 4. The pacing target is half the ring = 8192 floats; one chunk = 960 floats. After **8 leaked
    chunks**, `TryTakeGrant` can never succeed again.
-5. Terminal detail: a ring that drains to empty never signals waiters — `MixInto` only signals
+5. Terminal detail: a ring that drains to empty never signals waiters - `MixInto` only signals
    when it actually read data (`ProgramBusSource.cs:517-519`). So the wedged router sits in a
    signal-less 5 s wait (`ProgramBusSource.cs:452`), `WaitForCapacity` returns `false`,
    `OutputSlavedRouterClock` forwards the failure
@@ -54,7 +54,7 @@ pacing primary). Pacing works on a *grant* system introduced in commit `2535a4f4
 ### Proof
 
 A probe against the real `ProgramBusSource` (healthy grant/submit/read loop, then simulated
-drops — grants taken, never submitted):
+drops - grants taken, never submitted):
 
 ```
 healthy: buffered=0 frames
@@ -72,12 +72,12 @@ The same log shows whole-process stalls right at GO: two different pump drainers
 spent 233 ms inside `ProgramBusProducer.Submit` (a plain ring write), and a decoder call took
 891 ms. 13 simultaneous cold opens + the 1080p60 12-bit YUVA 4:4:4 ProRes + UI work stall the
 drainer past the 1 s backpressure cap → `Commit` drops → grant leaks. **Each drop is also a 10 ms
-content skip — that is the audible pop/mini-dropout.** Pops accumulate until the voice wedges
+content skip - that is the audible pop/mini-dropout.** Pops accumulate until the voice wedges
 completely.
 
 Crucially, the engine stack **without the Avalonia shell is clean** on this machine: the real
-project + real PortAudio device + full group GO — headless, with real SDL video windows, and even
-after simulating the session's 14 live-edit reloads — runs with all 11 producers pinned at
+project + real PortAudio device + full group GO - headless, with real SDL video windows, and even
+after simulating the session's 14 live-edit reloads - runs with all 11 producers pinned at
 half-ring, zero drops, zero underruns, zero faults, negligible GC. The graph is correct; app-side
 stalls trigger the drops, and the grant leak turns a transient stall into permanent silence.
 
@@ -89,15 +89,15 @@ stalls trigger the drops, and the grant leak turns a transient stall into perman
 2. **A timed-out capacity wait must not permanently fault a voice router.** Degrade (drop,
    reanchor) and recover; a live cue player should never turn a 5-second hiccup into "silent until
    re-fired".
-3. Add a regression test shaped like the probe — the new `ProgramBusPacingTests` cover healthy
+3. Add a regression test shaped like the probe - the new `ProgramBusPacingTests` cover healthy
    pacing and flush but not the drop path.
 
 ---
 
 ## 2. Why the "Some sync fixes" commit felt inert: no clock master in the project
 
-`NewestTest.hacue2proj` has `"clockMasterLineId": null`. Everything in commit `2535a4f4` —
-video-only voices genlocked to `bay.MasterClock`, producer clocks rebased to the master terminal —
+`NewestTest.hacue2proj` has `"clockMasterLineId": null`. Everything in commit `2535a4f4` -
+video-only voices genlocked to `bay.MasterClock`, producer clocks rebased to the master terminal -
 only engages when a terminal **is** the clock master. With none, the bay free-runs on a wall clock
 and voice clocks ride the wall-clock fallback: the old drifting behavior, unchanged.
 
@@ -108,7 +108,7 @@ and voice clocks ride the wall-clock fallback: the old drifting behavior, unchan
   - Default `clockMasterLineId` to the first eligible local line when a project is created (or
     flag "no clock master" in project status). Right now it is an invisible foot-gun.
   - `ProjectPatchBay.Open` failures go only to the status bar and are never logged
-    (`UI/HaCue2.Engine/ProjectPatchBay.cs:129-133`) — this session's log looked device-less.
+    (`UI/HaCue2.Engine/ProjectPatchBay.cs:129-133`) - this session's log looked device-less.
     Log them too.
 
 Verified on this machine: the hint `"Ryzen HD Audio Controller Analog Stereo"` resolves to
@@ -121,7 +121,7 @@ paced audio with zero underruns.
 
 In the failing session the composition pump ran 2–30× over budget (up to 526 ms per 16.7 ms tick,
 `slotOverflow` climbing to 776) and video decode waited seconds for queue slots. But the **same
-composition on the same machine keeps up fine** when driven without the Avalonia shell — the
+composition on the same machine keeps up fine** when driven without the Avalonia shell - the
 projector/compositor path is not inherently too slow; the app process is stalling it.
 
 - Video is *not* rendered on the UI thread (SDL windows render on their own threads), so
@@ -139,13 +139,13 @@ projector/compositor path is not inherently too slow; the app process is stallin
 
 `CuePresentation.Active` sorts by `state.Elapsed`
 (`UI/HaCue2/Presentation/CuePresentation.cs:128`). Since the transport rework, `Elapsed` is the
-**playhead position** (`UI/HaCue2.Engine/ShowHost.Transport.cs:368-378`), not run time — so loop
+**playhead position** (`UI/HaCue2.Engine/ShowHost.Transport.cs:368-378`), not run time - so loop
 wraps, seeks, pauses, and playlist advances shuffle rows. The engine already stamps the fire time
 (`Sounding.StartedTicks`, `ShowHost.Transport.cs:27`, stamped at `:283`) and throws it away.
 
 **Fix (three edits, one construction site):**
 1. Add `long StartedTicks` to `ActiveCueState` (`UI/HaCue2.Engine/ShowHost.cs:30-31`).
-2. Pass `entry.Value.StartedTicks` in `SnapshotAsync` (`ShowHost.Transport.cs:371-378` — the only
+2. Pass `entry.Value.StartedTicks` in `SnapshotAsync` (`ShowHost.Transport.cs:371-378` - the only
    `new ActiveCueState(...)` in the codebase).
 3. Sort with `OrderBy(state => state.StartedTicks)` (earliest first = newest last, the documented
    intent), optionally `.ThenBy(state => state.CueId)` for batch-fire ties.
@@ -161,7 +161,7 @@ Two layers:
    serialize behind `CueRunner._fireLock`). Cold/heavy files show nothing for seconds, and there
    is no "starting…" placeholder.
 2. **UI**: `EngineRuntime` polls at 250 ms on `DispatcherPriority.Background`
-   (`UI/HaCue2/Session/EngineRuntime.cs:31, 66`) — the lowest priority, deferred whenever the UI
+   (`UI/HaCue2/Session/EngineRuntime.cs:31, 66`) - the lowest priority, deferred whenever the UI
    thread is busy; the `_polling` gate skips ticks while a snapshot is in flight, and
    `SnapshotAsync` awaits per-cue-list standby queries across the busy session dispatcher.
 
@@ -175,13 +175,13 @@ an immediate out-of-band `Poll()` when a fire lands plus raise the timer priorit
 
 Chain: adding a send raises `ProjectJournal.Changed` synchronously → `ShellViewModel.Refresh` →
 `CuesViewModel.Rebuild` clears the TreeDataGrid selection → `Inspector.Show([])`. The tab memory
-in `InspectorViewModel.Show` only records the open tab when the outgoing selection is **single** —
+in `InspectorViewModel.Show` only records the open tab when the outgoing selection is **single** -
 the `SelectionCount <= 1` guard (`UI/HaCue2/ViewModels/InspectorViewModel.cs:120`). With a
 multi-selection "AUDIO" is never remembered, so when `RestoreSelection` re-shows the cues, reload
 falls back to General (`InspectorViewModel.cs:155-168`). Single-selection edits work only because
 that guard passes.
 
-**Fix**: remember the tab for multi-selections too — minimally delete `&& SelectionCount <= 1`, or
+**Fix**: remember the tab for multi-selections too - minimally delete `&& SelectionCount <= 1`, or
 remember per-kind for every kind in the selection. Recall is already guarded by
 `Tabs.Contains(remembered)`, so remembering a tab a kind lacks is harmless.
 
@@ -193,9 +193,9 @@ The matrix row header is a fixed-width Border: `RowHeaderWidth="118"` at
 `UI/HaCue2/Views/AudioView.axaml:203`, consumed by
 `UI/HaCue2/Controls/MatrixView.axaml:40-43` via the `MatrixRowHeaderWidth` resource, with no
 trimming (styles at `Themes/Chrome.axaml:551-566`). Headers are `"{line.Name} · Out {n}"`
-(`UI/HaCue2/Presentation/AudioPresentation.cs:102`) — real device names far exceed 118 px.
+(`UI/HaCue2/Presentation/AudioPresentation.cs:102`) - real device names far exceed 118 px.
 
-**Fix**: treat `RowHeaderWidth` as a minimum — when `Rows` changes, measure the longest header
+**Fix**: treat `RowHeaderWidth` as a minimum - when `Rows` changes, measure the longest header
 (`FormattedText` with the `mxhead` mono font + its 5+5 padding and 1 px border) in
 `MatrixView.axaml.cs` and publish `max(RowHeaderWidth, measured)` into the resource. The top-left
 corner spacer shares the resource, so the whole column widens together and the pane's horizontal
@@ -207,11 +207,11 @@ ScrollViewer absorbs the width. (Cheap stopgap: `TextTrimming="CharacterEllipsis
 
 Session-scoped scratch projects (not part of the repo; recreate from this description if gone):
 
-- **BayProbe** — enumerates PortAudio devices, resolves the project's device hint, opens the
+- **BayProbe** - enumerates PortAudio devices, resolves the project's device hint, opens the
   output at 48 kHz stereo, attaches it to an `AudioPatchBay` with no clock master (like the
   project), and paces a producer through `WaitForCapacity`. Result: device opens (JACK host API,
   id 11), 6 s drains cleanly. Its `--grantleak` mode is the §1 proof.
-- **ShowRepro** — loads `NewestTest.hacue2proj`, starts a real `ShowHost` with `PortAudioBackend`
+- **ShowRepro** - loads `NewestTest.hacue2proj`, starts a real `ShowHost` with `PortAudioBackend`
   (headless or `--video` with real SDL windows, `--reloads N` to simulate live-edit reloads),
   fires GO on the list, and prints bay/producer diagnostics + GC stats per second. Result: clean
   in every configuration tried (25–30 s runs).
@@ -242,7 +242,7 @@ against the fixed framework.
 - §6: `MatrixView` measures the longest row header and widens the shared resource;
   `MatrixHeaderWidthTests`.
 
-## Round 2 — live-app profiling (same day, after the first fixes)
+## Round 2 - live-app profiling (same day, after the first fixes)
 
 Reported: audio fixed structurally but still popping every ~2 s; video took ~a minute to react
 after GO; UI intermittently frozen. Profiled by launching the real app with the remote API and
@@ -250,7 +250,7 @@ firing GO over HTTP; per-thread CPU + `dotnet-dump` stacks + KWin window scripti
 
 Findings and fixes:
 
-1. **Pops every ~2 s = masterless bay drift** — `PortAudioOutput: ring full - dropped …` every
+1. **Pops every ~2 s = masterless bay drift** - `PortAudioOutput: ring full - dropped …` every
    couple of seconds. With no clock master the bay free-runs on the wall clock; the device
    consumes on its own crystal; `ProjectPatchBay` built the bay with no resampler/adaptive-rate
    factories, so nothing absorbed the drift (and the adaptive wrapper couldn't have: its bias
@@ -259,20 +259,20 @@ Findings and fixes:
    at the mix rate is promoted automatically (logged; ProjectStatus still warns so the operator
    makes it explicit), and the registry's resampler + adaptive-rate factories are now wired into
    the bay for foreign-rate/multi-line rigs. Verified live: terminal state `AdvancingMaster`,
-   0 ring-full over multi-minute runs — and the A/V genlock chain from commit 2535a4f4 is now
+   0 ring-full over multi-minute runs - and the A/V genlock chain from commit 2535a4f4 is now
    actually engaged by default.
-2. **Batch fire aborting ("slot id 'slot_3' is already registered")** — `VideoCompositorSource`
+2. **Batch fire aborting ("slot id 'slot_3' is already registered")** - `VideoCompositorSource`
    default slot ids were `slot_{count+1}`, which reissues a live id after any removal. On a
    composition with layer churn this aborted `FireCuesIndependentAsync`, fell back to one-at-a-time
    fires, and in one observed run silently skipped a cue entirely. **Fix**: monotonic ordinals for
    slot and surface-slot default ids + regression tests (`CompositorSlotIdTests`).
-3. **Remote API returned `{"error":"the request could not be completed"}` although cues fired** —
+3. **Remote API returned `{"error":"the request could not be completed"}` although cues fired** -
    the slot-collision exception escaping `GoAsync` after partial success. The generic 500 now
    carries the underlying message.
 4. **The catastrophic 2.9 fps / frozen-UI session could not be reproduced outside the IDE.** The
    identical binary, launched normally on the same machine with the same project, runs the full
    group GO with both ProRes videos compositing at speed and a responsive UI (verified twice, with
-   screenshots, ~23 % total CPU). The failing sessions were launched from Rider — with ~200 threads
+   screenshots, ~23 % total CPU). The failing sessions were launched from Rider - with ~200 threads
    spawning at GO (FFmpeg decoder pools) and heavy JIT, a debug run pays debugger round-trips for
    every thread start and first-chance event, which matches "first GO after launch is horrific"
    and "UI responds every few minutes". Recommendation: test performance with Run (not Debug), or
@@ -281,7 +281,7 @@ Findings and fixes:
 All suites re-run green after round 2 (Core 786 + new, Session 359, Compositor 56, HaCue2.Core
 704, HaCue2 381).
 
-## Round 3 — sync + frame-dip measurement (same day)
+## Round 3 - sync + frame-dip measurement (same day)
 
 Reported after round 2: much better, but "buffer issues", frame-rate dips, and "cues not quite in
 sync". Measured with an instrumented headless/windowed probe printing per-cue playhead offsets and
@@ -291,14 +291,14 @@ Findings:
 
 1. **The sync spread is real and start-time, not drift**: ~230 ms headless, ~525–595 ms with real
    video windows, rock-constant while playing. Per-cue tables show the scatter follows **commit
-   order**, which varies run to run — whichever voices commit first lead the rest.
+   order**, which varies run to run - whichever voices commit first lead the rest.
    **Root cause**: `FireCuesIndependentAsync`'s barrier holds all voices until every clip is
    *armed*, but the **commits run serially on the session dispatcher and each commit both does the
    slow start work and starts the transport**. A video commit includes
    `TryPresentBufferedFrameForSync` (up to 250 ms) and buffered-frame waits, so every voice queued
    behind it starts late by that much. Headless (instant presents) the stagger is ~20 ms; with
    windows it is hundreds of ms, in random per-run order.
-   **Fix required (not yet implemented — needs a design decision)**: two-phase start. Phase A per
+   **Fix required (not yet implemented - needs a design decision)**: two-phase start. Phase A per
    voice on the dispatcher: commit/attach/prefill/present-sync WITHOUT starting clocks; second
    barrier; phase B: start every voice's router+clock in one tight pass. Trade-off to decide: a
    group GO would wait for its slowest sibling's full prep before *anything* sounds (~0.5–1.5 s on
@@ -306,7 +306,7 @@ Findings:
    / `ShowSession.CommitClipAsync` all participate.
 2. **Silent-video voices anchored early** (fixed): a genlocked video-only voice's `MediaClock`
    anchors to the already-advancing show clock at `Start()`, while a sounding voice's producer
-   clock holds at zero until its first sample is audible — one audio-pipeline depth (~200 ms)
+   clock holds at zero until its first sample is audible - one audio-pipeline depth (~200 ms)
    later. The picture therefore led the programme by that depth, rate-locked. Fixed:
    `AudibleClientClock.CurrentPipelineLead` + `MediaClock.DeferStart` + the coordinator defers the
    silent voice's start by the measured depth, capped at 300 ms (the go-storm transient reads high).
@@ -317,7 +317,7 @@ Findings:
    content. Not diagnosed further yet; candidates: occasional >16.7 ms 10/12-bit layer upload or
    conversion. Follow-up item.
 
-## Round 4 — two-phase synchronized group start (implemented)
+## Round 4 - two-phase synchronized group start (implemented)
 
 The serial-commit stagger from Round 3 is fixed structurally:
 
@@ -346,10 +346,10 @@ voice-router pump depth). The videos' deferral in turn reads a lead measurement 
 on how full the OTHER voices' rings happen to be when its starter runs. Per-voice timing heuristics
 cannot close this.
 
-**Design — pre-roll with a bus hold**: give `ProgramBusProducer` a Hold/Release state. During
+**Design - pre-roll with a bus hold**: give `ProgramBusProducer` a Hold/Release state. During
 PREPARE each voice starts its router with its producer HELD: the ring pre-fills with the clip's
 first samples but `MixInto` skips held producers (no reads, no underruns, clock frozen). At the
-start edge, release every sibling's producer — they all join the SAME bus mix chunk, which is
+start edge, release every sibling's producer - they all join the SAME bus mix chunk, which is
 sample-tight by construction, and the producer clocks anchor on that first read. The video
 deferral's edge measurement then also becomes stable (rings are deterministically full).
 Care points: `WaitForCapacity` must not time out/fault while its producer is held (the 5 s
@@ -357,20 +357,20 @@ starvation timeout would fire if a cold sibling delays the edge); release must w
 the composition's slot-overflow growth seen in some runs (0 → ~150 per 11 s, run-dependent) should
 be re-measured after pre-roll, since it correlates with the video-vs-programme offset.
 
-## Round 5 — grant cap + bus-hold pre-roll (implemented)
+## Round 5 - grant cap + bus-hold pre-roll (implemented)
 
 Reported after round 4: dropouts every second (diagnostics: 960–27,840 underrun floats per lease,
 zero overflow, terminal clean, 262 ms lease latency) and audio/video offset.
 
-1. **Micro-underruns — outstanding-grant cap.** Granted-but-unsubmitted audio counts against the
+1. **Micro-underruns - outstanding-grant cap.** Granted-but-unsubmitted audio counts against the
    half-ring pacing target, so every chunk in the voice pump's queue was a chunk the ring was
    allowed to be short: at full pump depth the ring's share fell below one mix chunk and bus reads
    substituted a few ms of silence whenever drainer scheduling lagged (≈1/s under app load; never
    in idle probes). Outstanding grants are now capped at two chunks (`TryTakeGrant`), grants are
-   retired AFTER the ring write and retire wakes the waiter (`Submit`/`ReleaseGrant`) — the ring
+   retired AFTER the ring write and retire wakes the waiter (`Submit`/`ReleaseGrant`) - the ring
    keeps a floor of target−2 chunks (~65 ms minimum) with unchanged throughput.
 2. **Bus-hold pre-roll** (`IPreRollableOutput` on `ProgramBusProducer`): during PREPARE each group
-   voice's router runs with its producer held — the ring pre-fills with the clip's first samples,
+   voice's router runs with its producer held - the ring pre-fills with the clip's first samples,
    `MixInto` skips it (no reads, no underrun counts), and `WaitForCapacity` never concludes
    starvation while held. The start edge releases every sibling together; they join the same (or
    adjacent) mix chunk. `EndPreRoll` re-anchors the producer clock (it is time-based and advanced
@@ -390,7 +390,7 @@ earlier); a user-facing A/V offset trim is the standard endgame for projector ri
 
 All suites green: Core 789, Session 359, Players 16, HaCue2 381, HaCue2.Core 704.
 
-## Round 6 — DSP-spike stutter: managed callback out of the realtime graph (implemented)
+## Round 6 - DSP-spike stutter: managed callback out of the realtime graph (implemented)
 
 Reported after round 5: still dropouts ~every second, user observes each stutter coincides with a
 DSP-load spike. New diagnostics: underruns still accumulating per lease (wildly unequal, 2,880 →
@@ -403,7 +403,7 @@ Diagnosis chain:
   the audio server's realtime graph thread** (PipeWire/JACK runs every client's process callback on
   ONE cycle). A callback that lands while a GC suspension is in progress blocks the whole graph
   cycle → DSP-load spike → server xrun → catch-up burst; a burst longer than the 85 ms producer
-  fill writes producer underruns. App GC rate × callback rate ≈ one collision/second — the observed
+  fill writes producer underruns. App GC rate × callback rate ≈ one collision/second - the observed
   cadence; headless probes allocate too little to collide.
 
 Fixes:
@@ -416,7 +416,7 @@ Fixes:
    `producerPacingTargetFrames` 9600, decoupled from ring capacity via the new
    `pacingTargetFrames` on `ProgramBusSource`): absorbs xrun catch-up bursts from OTHER graph
    clients (Discord, quantum renegotiation) that no fix of ours can prevent. Cost: program-path
-   latency ~200 ms + device — acceptable for a cue rig; make it a setting if live inputs need less.
+   latency ~200 ms + device - acceptable for a cue rig; make it a setting if live inputs need less.
 
 Validation: bay probe clean in blocking mode (fill 9600, zero underruns); full windowed show under
 a 63-collection GC storm: 11 stems within 4 ms, zero underruns, terminal clean. All suites green
@@ -424,24 +424,24 @@ a 63-collection GC storm: 11 stems within 4 ms, zero underruns, terminal clean. 
 
 Known follow-ups:
 - Trimmed-cue position readout race: under heavy load a trimmed cue (DAY1, trimIn 36:00) can report
-  ClipPosition INCLUDING the trim (36:09 instead of 0:09) — playback itself stays aligned; the
+  ClipPosition INCLUDING the trim (36:09 instead of 0:09) - playback itself stays aligned; the
   Active panel clock is what lies. Find the window-rebase race in the playhead snapshot path.
 - MiniAudio backend still uses a managed device callback (same hazard class if anyone selects it).
 - A/V offset fine-trim (video vs programme) once the user judges direction by eye.
 
-## Round 7 — A/V alignment + operator readouts (implemented)
+## Round 7 - A/V alignment + operator readouts (implemented)
 
 With the audio finally clean, the user measured video ~200–400 ms out of lip-sync and asked for
 milliseconds in the Active panel.
 
 1. **The lip-sync error was the deferral counting the pre-rolled ring.** The silent-video start
    deferral used deepest-ring + downstream, but a group fire's sample 0 sits at the HEAD of its
-   pre-rolled ring — its journey to the speaker is the downstream path only. With the round-6 200 ms
+   pre-rolled ring - its journey to the speaker is the downstream path only. With the round-6 200 ms
    fill this anchored every genlocked picture a full fill late. `AudioPatchBay`'s master clock lead
    is now DOWNSTREAM-ONLY (safe: its only consumer anchors relatively; the lead's sole effect is the
    deferral), and it is steadier as a bonus.
 2. **Producer clock pre-roll baseline**: the clock's lead now subtracts the fill captured at
-   release (`_preRollBaselineFloats`) — pre-rolled content is elapsed-to-be, not delay — so the
+   release (`_preRollBaselineFloats`) - pre-rolled content is elapsed-to-be, not delay - so the
    stems' millisecond readouts agree with what is audible. `SubmitToOutputLatency` keeps the
    un-baselined truth for diagnostics. Reset on Flush.
 3. **Milliseconds in the Active panel** (`CuePresentation.PreciseClock`) on the live playhead
@@ -449,18 +449,18 @@ milliseconds in the Active panel.
 4. **Trimmed-cue readout**: `ShowHost.SnapshotAsync` now converts the transport's MEDIA
    position/duration to CUE-relative (subtract trim-in, `TrimmedLength`), so a cue trimmed to 36:00
    no longer reads "38:17 of 2:36:09" beside siblings at "02:17". (This also retires the round-6
-   "readout race" note — the absolute reading was the transport's normal answer, visible whenever
+   "readout race" note - the absolute reading was the transport's normal answer, visible whenever
    the playhead was live.)
 
 Measured: total 13-cue clock spread 60–98 ms; stems 3–9 ms; videos ~30–60 ms behind stem clocks
 (≈1–2 display frames of physical offset). Known cosmetic residual: a voice released mid-ring-fill
-carries its fill shortfall as a readout offset (observed −95 ms once) — audio is release-aligned
+carries its fill shortfall as a readout offset (observed −95 ms once) - audio is release-aligned
 regardless; if it bothers, gate the start edge on ring-fill completion or normalize the baseline to
 the pacing target. Endgame knob if the eye still disagrees: a per-project A/V offset trim.
 
 All suites green (789/359/704/381 + earlier PortAudio/Backends/Players).
 
-## Round 8 — frame-drop bursts (~60 frames per episode)
+## Round 8 - frame-drop bursts (~60 frames per episode)
 
 Reported: ~60 frames dropped every 60–90 s; the diagnostics copy-report did not include the video
 numbers.
@@ -468,8 +468,8 @@ numbers.
 1. **Copy report now has a "Video & compositions" section** (`ShowHost.Report`): composited /
    submitted / pump overruns / slot overflow / behind-master / layer count / last & max pump time.
 2. **The engine is exonerated with numbers.** Instrumented long runs: pump average 5.6 ms against
-   the 16.7 ms budget (composite 5.5 ms) — 3× headroom on this exact show. A burst reproduced
-   exactly once in a 200 s probe (t=29–44 s, ~110 frames) — and that window coincided with a
+   the 16.7 ms budget (composite 5.5 ms) - 3× headroom on this exact show. A burst reproduced
+   exactly once in a 200 s probe (t=29–44 s, ~110 frames) - and that window coincided with a
    `dotnet build` I had running beside it; a clean rerun over the same content positions showed
    zero drops and flat timing. Conclusion: the drop bursts are external all-core CPU spikes
    (compiles, IDE solution analysis, etc.) momentarily starving the pump; slot overflow + pump
@@ -479,27 +479,27 @@ numbers.
    thread priority above AboveNormal (marginal), or treat as environmental (a booth machine does
    not run an IDE build mid-show).
 
-## Round 9 — frame drops on an idle machine: presents out of the composite tick
+## Round 9 - frame drops on an idle machine: presents out of the composite tick
 
 Reported: still drops every few seconds with the IDE closed, CPU and GPU idle. Report showed
-20 overruns + 18 slot overflows over ~130 s — ~one event per 6 s with 6 ms average pump work.
+20 overruns + 18 slot overflows over ~130 s - ~one event per 6 s with 6 ms average pump work.
 
 1. **Root cause of the overruns**: composition outputs submitted to their sinks SYNCHRONOUSLY
    inside the pump tick (`AcquiredOutput.TrySubmit` → `Output.Submit`; `QueueCapacity = 0` in the
    user's report was the tell). A window output's Submit ends in a vsynced GL present, so the tick's
    60.000 Hz timer beat against the display's real refresh; at each beat crossing a present blocked
-   an extra vblank and dropped a frame — load-independent, every few seconds, per window.
+   an extra vblank and dropped a frame - load-independent, every few seconds, per window.
    **Fix**: every composition output sink is now wrapped in a `VideoOutputPump` (2-frame queue, own
    thread) at attach; the pressure subscription and stats plumbing already anticipated pumps. A
    stalled line drops its own frames without touching the canvas cadence or sibling outputs; the
    runtime disposes the pump (never the borrowed sink) at retire.
    Measured: pump overruns 56 → 3–5 per run (startup only), compFps steady 60.
-2. **Remaining trickle (~1–4 slot overflows/s, onset varies)** — diagnosed but NOT yet fixed: the
+2. **Remaining trickle (~1–4 slot overflows/s, onset varies)** - diagnosed but NOT yet fixed: the
    canvas hosts TWO independent transports (hanacon owns the clock domain; DAY1's PTS live at
    trim+t in its own domain), and `SlotKeepPolicy.MasterAligned` compares ONE master PTS against
    every slot (`VideoCompositorSource.ChooseMasterAlignedFrame`). The non-owning slot rides
    fallback paths (too-future pending never promoted / huge-distance selection), producing
-   pending-overwrite churn. Proper fix: per-layer alignment timelines — each `LayerSlot` aligned
+   pending-overwrite churn. Proper fix: per-layer alignment timelines - each `LayerSlot` aligned
    against ITS transport's `SourceTime` (the runtime already tracks per-clip timeline claims); the
    compositor read path needs a per-slot alignment PTS instead of the single `masterAlignmentTime`.
    Also worth adding per-slot overflow counters to the diagnostics so the offending layer is
@@ -507,17 +507,17 @@ Reported: still drops every few seconds with the IDE closed, CPU and GPU idle. R
 
 All suites green (Session 359, Compositor 56, Players 16, HaCue2 381, HaCue2.Core 704).
 
-## Round 10 — per-layer alignment timelines (implemented)
+## Round 10 - per-layer alignment timelines (implemented)
 
 The round-9 residual grew in the user's next run (430 slot overflows over ~124 s, accelerating
-1/s → 3–6/s as the transports drifted) — the dual-timeline churn was the visible dropper.
+1/s → 3–6/s as the transports drifted) - the dual-timeline churn was the visible dropper.
 
 Implemented the designed fix: `Slot.AlignmentClock` on `VideoCompositorSource` (per-slot alignment
 time, falling back to the canvas master; both read paths), `ClipCompositionRuntime.AddLayer` takes
 `alignmentTimeline` and wires it from each layer's own transport (`ShowSession` passes
 `group.Timeline`), and `LayerSlot.RequestedKeepPolicy` so the master-attach upgrade loops re-apply
 the layer's ADDED policy instead of forcing `MasterAligned` onto explicitly-`Latest` layers (the
-static calibration grid — now passed `Latest` explicitly — and subtitle overlays would otherwise be
+static calibration grid - now passed `Latest` explicitly - and subtitle overlays would otherwise be
 judged permanently stale).
 
 Measured (windowed, full show): **0 slot overflows over 170 s** and 1 over a 75 s repeat, pump
@@ -525,27 +525,27 @@ overruns startup-only (2–3), fps steady 60. Combined with round 9: the user's 
 34 overruns + 430 overflows per run should drop to ~0. Suites green (Compositor 56, Session 359,
 Core 789 ×2 after one timing flake, HaCue2 381, HaCue2.Core 704).
 
-## Round 11 — screen-matched canvas presets (user request, implemented)
+## Round 11 - screen-matched canvas presets (user request, implemented)
 
 After round 10 the user's run showed 29 slot overflows + 25 overruns over ~133 s (from 430) and
-asked for composition presets matching each screen's actual refresh rate — the right instinct: this
+asked for composition presets matching each screen's actual refresh rate - the right instinct: this
 rig's panel runs 165 Hz while the canvas is authored at 60.000, and any rate mismatch beats.
 
 - `S.Media.Present.SDL3.SDL3Displays.Enumerate()`: attached displays with their CURRENT desktop
-  modes — name, PIXEL dimensions (SDL reports points × density; converted), rounded Hz and the
+  modes - name, PIXEL dimensions (SDL reports points × density; converted), rounded Hz and the
   exact refresh numerator/denominator. Never throws; headless yields an empty list.
 - `Dialogs.AddComposition` gained a "Match screen" Choice row (only when screens exist) that
-  prefills Width/Height/Rate from the picked display's actual mode — exact rational preferred —
+  prefills Width/Height/Rate from the picked display's actual mode - exact rational preferred -
   while every field stays typed underneath (the dialog's documented philosophy). The Rate hint now
   also lists the rig's actual rates. Test seam: `screens` parameter; covered by
   `DevicePickerTests.AScreenPresetPrefillsSizeAndExactRateButStaysTyped` / `AHeadlessMachineGetsNoPresetRow`.
 
 Suites green (HaCue2 383, HaCue2.Core 704).
 
-## Round 12 — quality-of-life batch (user request, implemented)
+## Round 12 - quality-of-life batch (user request, implemented)
 
 1. **Pre-roll baseline normalization**: `EndPreRoll` baselines the clock's lead at
-   `max(observed fill, pacing target)` — a voice released mid-fill no longer carries the shortfall
+   `max(observed fill, pacing target)` - a voice released mid-fill no longer carries the shortfall
    as a permanent readout offset (the −95 ms stem). Regression:
    `ProgramBusClockTests.PreRollReleasedMidFill_ReadsNoPermanentOffset_OnceTheRingTopsUp`.
 2. **Per-project A/V offset trim**: `ProjectSettings.AvOffsetMs` (positive = picture EARLIER,
@@ -553,8 +553,8 @@ Suites green (HaCue2 383, HaCue2.Core 704).
    behaviour ("A/V offset", signed ms, journaled/undoable). Plumbed as
    `ShowSession.VideoPlayheadOffset` (maps to `VideoPlayer.PlayheadOffset`, sign inverted):
    applied to voices at commit AND pushed live to sounding voices via the lock-free group views,
-   and re-applied on every reload — so editing the field takes effect against running content.
-3. **MiniAudio realtime hardening**: assessment first — miniaudio's usual backends (ALSA,
+   and re-applied on every reload - so editing the field takes effect against running content.
+3. **MiniAudio realtime hardening**: assessment first - miniaudio's usual backends (ALSA,
    Pulse/PipeWire shim, WASAPI) run the data callback on miniaudio's OWN worker thread, so a GC
    pause delays only this device's feed and can never stall the server graph (unlike
    PortAudio-on-JACK pre-round-6); only miniaudio's JACK backend reproduces that hazard, and a

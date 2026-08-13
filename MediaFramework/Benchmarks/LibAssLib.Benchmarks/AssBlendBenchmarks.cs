@@ -5,7 +5,7 @@ using LibAssLib;
 namespace LibAssLib.Benchmarks;
 
 /// <summary>
-/// Measures <see cref="AssImageBlender.Blend"/> — the scalar per-pixel loop that runs once per
+/// Measures <see cref="AssImageBlender.Blend"/> - the scalar per-pixel loop that runs once per
 /// output frame whenever animated ASS content (karaoke, transforms, scrolls) marks the frame
 /// changed. Two shapes: many small glyph runs (typical dialogue) and one full-width banner
 /// (worst case). Synthetic <see cref="AssImage"/> lists live in native memory; no libass needed.

@@ -8,13 +8,13 @@ namespace HaCue2.Core.Model;
 /// <b>Silence is <see cref="SilenceFloorDb"/>, not negative infinity.</b> Infinity is the
 /// mathematically obvious value for "fade to nothing" and it is the wrong one to put in a document:
 /// it cannot be written as JSON at all (System.Text.Json refuses it without opting into named
-/// literals), it has no meaningful UI representation, and it makes "gains must be finite" — a rule
-/// the validator enforces everywhere else — untrue in one place. A floor is also what an operator
+/// literals), it has no meaningful UI representation, and it makes "gains must be finite" - a rule
+/// the validator enforces everywhere else - untrue in one place. A floor is also what an operator
 /// actually means: below −60 dB nothing is audible, so the extra range buys nothing and costs a
 /// special case in every arithmetic path.
 /// </para>
 /// <para>
-/// The ceiling matches the existing cue controls. It is a WARNING to exceed it, not a refusal — the
+/// The ceiling matches the existing cue controls. It is a WARNING to exceed it, not a refusal - the
 /// runtime is safe for any validated value, and refusing to open a show because somebody typed +14 dB
 /// would be worse than telling them about it.
 /// </para>

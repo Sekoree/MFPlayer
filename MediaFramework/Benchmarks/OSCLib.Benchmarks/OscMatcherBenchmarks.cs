@@ -4,7 +4,7 @@ using OSCLib;
 namespace OSCLib.Benchmarks;
 
 /// <summary>
-/// Measures <see cref="OSCAddressMatcher.IsMatch"/> — the per-route address test. The current
+/// Measures <see cref="OSCAddressMatcher.IsMatch"/> - the per-route address test. The current
 /// implementation splits the address into a string[] and runs regexes even for purely literal
 /// segments; a router with N routes pays this N times per incoming message. The mismatch case
 /// matters as much as the match case (most routes reject most messages).
@@ -26,7 +26,7 @@ public class OscMatcherBenchmarks
     [Benchmark]
     public bool WildcardMismatch() => OSCAddressMatcher.IsMatch("/bus/*/mix/fader", Address);
 
-    /// <summary>32 literal routes + 4 wildcard routes, one incoming message — a realistic router pass.</summary>
+    /// <summary>32 literal routes + 4 wildcard routes, one incoming message - a realistic router pass.</summary>
     [Benchmark]
     public int RouterSweep36()
     {

@@ -8,7 +8,7 @@ namespace HaCue2.Core.Model;
 /// <remarks>
 /// <para>
 /// <b>In <c>HaCue2.Core</c> for the same reason the MIDI parser is.</b> An unparseable time is a cue
-/// that will never fire, and the operator has to learn that from the status pass while authoring —
+/// that will never fire, and the operator has to learn that from the status pass while authoring -
 /// not from a show where the thing simply did not happen and nobody can say why.
 /// </para>
 /// <para>
@@ -20,10 +20,10 @@ namespace HaCue2.Core.Model;
 public static class TriggerTimes
 {
     /// <summary>What a schedule binding's input looks like, for hints and refusals.</summary>
-    public const string ScheduleSyntax = "a time of day — 22:30 or 22:30:00";
+    public const string ScheduleSyntax = "a time of day - 22:30 or 22:30:00";
 
     /// <summary>What a timecode binding's input looks like.</summary>
-    public const string TimecodeSyntax = "a timecode — 01:12:44:07 (hh:mm:ss:ff)";
+    public const string TimecodeSyntax = "a timecode - 01:12:44:07 (hh:mm:ss:ff)";
 
     /// <summary>
     /// A time of day, as seconds since midnight.
@@ -46,7 +46,7 @@ public static class TriggerTimes
     }
 
     /// <summary>
-    /// A timecode label, as seconds — given the rate the frame field is counted in.
+    /// A timecode label, as seconds - given the rate the frame field is counted in.
     /// </summary>
     /// <remarks>
     /// The rate comes from the incoming stream rather than from the document: a label authored against
@@ -70,7 +70,7 @@ public static class TriggerTimes
     /// Whether a binding's input reads as a time for its source kind, and what is wrong when it does not.
     /// </summary>
     /// <remarks>
-    /// The frame field is checked against 30 — the HIGHEST of the common rates — so only the truly
+    /// The frame field is checked against 30 - the HIGHEST of the common rates - so only the truly
     /// impossible labels (<c>:44</c>, <c>26:00:00:00</c>) are refused. Checking against the lowest
     /// would reject perfectly good 30 fps authoring on a machine where nobody has yet plugged in the
     /// stream that would have said so.

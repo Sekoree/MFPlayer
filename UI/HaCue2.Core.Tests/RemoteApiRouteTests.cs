@@ -7,7 +7,7 @@ namespace HaCue2.Core.Tests;
 /// The remote API's route table.
 /// </summary>
 /// <remarks>
-/// Pure shape-matching, no socket. This is the half where a mistake is silent — a route that matches
+/// Pure shape-matching, no socket. This is the half where a mistake is silent - a route that matches
 /// too loosely answers requests it should refuse, and one that matches too tightly makes a documented
 /// path 404 for somebody's show-control system in the middle of a get-in.
 /// </remarks>
@@ -19,7 +19,7 @@ public class RemoteApiRouteTests
     [Fact]
     public void EveryRouteIsVersioned() =>
         // A remote API with no version in its path cannot change without breaking whatever is already
-        // driving it — and the things that drive one are other people's systems.
+        // driving it - and the things that drive one are other people's systems.
         Assert.All(RemoteApiRoutes.All, route =>
             Assert.StartsWith(RemoteApiRoutes.Prefix, route.Pattern, StringComparison.Ordinal));
 
@@ -47,7 +47,7 @@ public class RemoteApiRouteTests
 
     [Fact]
     public void TheBareListGoRouteExists() =>
-        // The one the plan singles out. It needs per-list standby, which the session now owns — a bare
+        // The one the plan singles out. It needs per-list standby, which the session now owns - a bare
         // go against a list is meaningless without a per-list cursor to advance.
         Assert.NotNull(RemoteApiRoutes.Resolve("POST", Path("/api/v1/lists/main/go")));
 
@@ -127,7 +127,7 @@ public class RemoteApiRouteTests
     /// The check used to be skipped when the configured token was empty, which meant a server built
     /// without one served every route unauthenticated. `LanAllowed` binds a wildcard prefix, so that
     /// combination put the transport on the network for anybody. A credential check that disappears
-    /// when the credential is absent is the wrong way to fail — 503 says "not configured", which is
+    /// when the credential is absent is the wrong way to fail - 503 says "not configured", which is
     /// what is actually wrong, rather than 401's "you got it wrong".
     /// </remarks>
     [Fact]
@@ -150,10 +150,10 @@ public class RemoteApiRouteTests
         Assert.Equal(401, (await server.HandleAsync("GET", RemoteApiRoutes.Prefix + "/status", "wrong")).Status);
         Assert.Equal(401, (await server.HandleAsync("GET", RemoteApiRoutes.Prefix + "/status", null)).Status);
 
-        // A shorter guess must not pass either — FixedTimeEquals rejects unequal lengths outright.
+        // A shorter guess must not pass either - FixedTimeEquals rejects unequal lengths outright.
         Assert.Equal(401, (await server.HandleAsync("GET", RemoteApiRoutes.Prefix + "/status", "correct")).Status);
 
-        // The right token gets PAST the gate — proven by reaching dispatch, which this server cannot
+        // The right token gets PAST the gate - proven by reaching dispatch, which this server cannot
         // survive because it was built with no host. What the route would answer is another test's
         // business; that the gate opened is this one's.
         await Assert.ThrowsAsync<NullReferenceException>(

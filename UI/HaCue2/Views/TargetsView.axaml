@@ -232,7 +232,7 @@
                 <TextBox Classes="ro" Classes.warn="{Binding IsLearning}" Text="{Binding LearnState}" />
               </HeaderedContentControl>
               <!-- Read-only for a wire, typable for a clock: the same field, because it holds the
-                   same thing — the pattern the binding will carry. -->
+                   same thing - the pattern the binding will carry. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Caught">
                 <TextBox Classes.ro="{Binding !IsTyped}" IsReadOnly="{Binding !IsTyped}"
                          Text="{Binding LearnCaught}" />
@@ -273,7 +273,7 @@
               <StackPanel Orientation="Horizontal" Spacing="7">
                 <Border Classes="badge"><TextBlock Text="OVERRIDE" /></Border>
                 <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                           Text="project override — app default is off" />
+                           Text="project override - app default is off" />
               </StackPanel>
             </Border>
           </c:PanelBox.Footer>

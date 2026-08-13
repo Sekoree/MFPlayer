@@ -8,7 +8,7 @@ namespace HaCue2.Core.Model;
 /// <b>Mutable on purpose.</b> The undo journal holds COMMANDS, not document snapshots
 /// (Plans/HaCue-Extraction-And-Project-Audio-Patch-Plan.md, "Editing model"), so undo cost stays
 /// proportional to what changed rather than to project size. That only works if a command can mutate
-/// the document in place and put it back — an immutable document would force every step to keep a
+/// the document in place and put it back - an immutable document would force every step to keep a
 /// whole clone, which is precisely the design the plan rejects.
 /// </para>
 /// <para>
@@ -28,7 +28,7 @@ public sealed record HaCueProject
 {
     /// <summary>What this build writes. Bumped only for a change a older build could MISREAD.</summary>
     /// <remarks>
-    /// Additive, nullable members do NOT bump it — an older build ignoring a field it never knew about
+    /// Additive, nullable members do NOT bump it - an older build ignoring a field it never knew about
     /// is the correct outcome, and bumping for every addition would refuse documents that are perfectly
     /// readable. Only a change in the meaning of an existing field earns a bump.
     /// </remarks>
@@ -53,7 +53,7 @@ public sealed record HaCueProject
 
     /// <summary>
     /// Machine-side audio lines. Project-owned (register item 14): they travel with the show, go
-    /// absent on another machine, and relink on arrival — they are never silently swapped for a
+    /// absent on another machine, and relink on arrival - they are never silently swapped for a
     /// default device.
     /// </summary>
     public List<AudioLineDefinition> AudioLines { get; set; } = [];
@@ -62,7 +62,7 @@ public sealed record HaCueProject
     public List<PatchSnapshot> PatchSnapshots { get; set; } = [];
 
     /// <summary>
-    /// The audition rig — where preview is heard and seen (register item 15).
+    /// The audition rig - where preview is heard and seen (register item 15).
     /// </summary>
     /// <remarks>
     /// Always present rather than nullable: a rig with no line named is a valid, working configuration
@@ -77,7 +77,7 @@ public sealed record HaCueProject
     public List<TriggerInputDefinition> TriggerInputs { get; set; } = [];
     public List<CueList> CueLists { get; set; } = [];
 
-    /// <summary>Custom fade curves saved as project presets — the library is the preset row itself.</summary>
+    /// <summary>Custom fade curves saved as project presets - the library is the preset row itself.</summary>
     public List<CurvePreset> CurvePresets { get; set; } = [];
 
     /// <summary>Every cue in the project, in list order, flattened through group children.</summary>
@@ -105,7 +105,7 @@ public sealed record AutomationMigrationSummary(
 }
 
 /// <summary>
-/// Show behaviour and authoring defaults — the project half of the settings split (screen 13).
+/// Show behaviour and authoring defaults - the project half of the settings split (screen 13).
 /// </summary>
 /// <remarks>
 /// These are journaled and travel in the file. Machine preferences (theme, density, cache paths) are
@@ -168,7 +168,7 @@ public sealed record ProjectSettings
     /// <remarks>
     /// <para>
     /// The difference between a GO that plays and a GO that opens a file first. Two is enough for the
-    /// ordinary case — the next cue and the one after it — and the cost is decoders held open, which is
+    /// ordinary case - the next cue and the one after it - and the cost is decoders held open, which is
     /// why it is a number rather than a switch: a booth machine with little memory and 4 K media can
     /// turn it down, and zero turns it off.
     /// </para>
@@ -182,7 +182,7 @@ public sealed record ProjectSettings
     public CueTrigger NewCueTrigger { get; set; } = CueTrigger.Manual;
 
     /// <summary>
-    /// What a new cue's fades start at. ZERO — a cue fades because somebody asked it to.
+    /// What a new cue's fades start at. ZERO - a cue fades because somebody asked it to.
     /// </summary>
     /// <remarks>
     /// It used to be 100 ms in and 2 s out, which is a reasonable house style and the wrong default: a
@@ -214,7 +214,7 @@ public sealed record ProjectSettings
     /// display adds no meaningful latency.
     /// </summary>
     /// <remarks>
-    /// A property of the VENUE's display chain, not of any cue — the pipeline keeps picture and
+    /// A property of the VENUE's display chain, not of any cue - the pipeline keeps picture and
     /// sound aligned at the moment frames leave the machine, but a projector adds one to three
     /// frames of scaling/processing after that, and no software can measure glass from here. One
     /// number, set once at the venue by eye (a clap test), carried in the project because the
@@ -230,7 +230,7 @@ public sealed record ProjectSettings
     /// <remarks>
     /// <para>
     /// A follow chain used to accumulate error per hop, because each hop paid for its own media open
-    /// after the edge rather than before it — a cold 4K file is hundreds of milliseconds, and nothing
+    /// after the edge rather than before it - a cold 4K file is hundreds of milliseconds, and nothing
     /// compensated. With a lead, the successor opens, commits, pre-rolls and presents its
     /// synchronization frame DURING the outgoing clip's last <c>FollowLeadMs</c>, and is then released
     /// on the out-point itself. The instant it starts is unchanged; what changes is that the open no
@@ -244,7 +244,7 @@ public sealed record ProjectSettings
     /// </para>
     /// <para>
     /// Ignored where there is no fixed edge to schedule against or the successor is not a playable
-    /// cue — see <c>CueExecutor.TryBeginPreparedFollow</c> for the exact opt-outs.
+    /// cue - see <c>CueExecutor.TryBeginPreparedFollow</c> for the exact opt-outs.
     /// </para>
     /// </remarks>
     public int FollowLeadMs { get; set; }
@@ -272,7 +272,7 @@ public enum DisabledCueFollow
     /// <summary>Skip the disabled cue and continue the chain.</summary>
     SkipOnward,
 
-    /// <summary>Stop the chain at the disabled cue — today's framework behaviour.</summary>
+    /// <summary>Stop the chain at the disabled cue - today's framework behaviour.</summary>
     StopTheChain,
 }
 

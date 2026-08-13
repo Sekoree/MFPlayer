@@ -242,7 +242,7 @@ public sealed class ProjectFileTests
     /// System.Text.Json's source generator assigns every init-only property in an object initializer,
     /// so one absent from the JSON lands as the CLR default and the property initializer beside it is
     /// lost. For <c>Enabled = true</c> that means a cue deliberately disabled for one performance
-    /// coming back on — or, on an older document, every cue arriving disabled. This test fails if
+    /// coming back on - or, on an older document, every cue arriving disabled. This test fails if
     /// anyone converts these properties back to <c>init</c>.
     /// </remarks>
     [Fact]
@@ -278,7 +278,7 @@ public sealed class ProjectFileTests
     /// A square warp mesh written by an older build opens as its two-axis equivalent.
     /// </summary>
     /// <remarks>
-    /// The mesh was a single <c>warpGrid</c> — always N×N — because the picker only offered off, 3×3
+    /// The mesh was a single <c>warpGrid</c> - always N×N - because the picker only offered off, 3×3
     /// and 5×5. Panels are not square, so the two axes are independent now; a document that predates
     /// that must not open with its warp silently switched off, which is a projector that has quietly
     /// lost its alignment.
@@ -335,7 +335,7 @@ public sealed class ProjectFileTests
     /// A mapping section with no <c>enabled</c> key is DRAWN.
     /// </summary>
     /// <remarks>
-    /// The flag is new, so every section in every existing show lacks it — and defaulting the other way
+    /// The flag is new, so every section in every existing show lacks it - and defaulting the other way
     /// would open a warped projector with every panel switched off.
     /// </remarks>
     [Fact]
@@ -351,7 +351,7 @@ public sealed class ProjectFileTests
         var output = HaCueProjectFile.Deserialize(json).VideoOutputs[0];
 
         Assert.True(output.Mapping[0].Enabled);
-        // And with no raster stated, mapping still resolves against the composition — zero is
+        // And with no raster stated, mapping still resolves against the composition - zero is
         // "follow the canvas", not "an output of no size".
         Assert.Equal(0, output.MappingWidth);
         Assert.Equal(0, output.MappingHeight);

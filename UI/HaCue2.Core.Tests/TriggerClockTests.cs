@@ -106,7 +106,7 @@ public class TriggerClockTests
         var (clocks, fired, source) = Schedule("22:30:00");
 
         clocks.WallPass([source], HalfPastTen - 0.2);
-        // A pass a second and a half late — a big document load, a garbage collection. The cue is late,
+        // A pass a second and a half late - a big document load, a garbage collection. The cue is late,
         // which is better than absent.
         clocks.WallPass([source], HalfPastTen + 1.5);
 
@@ -191,7 +191,7 @@ public class TriggerClockTests
         clocks.TimecodePass([source], At(36, generation: 1));
 
         // Spooled back to the top. The chase clock bumps its generation, which is the whole mechanism
-        // a scheduler has for telling a relocate from a roll — without it, the next pass would sweep
+        // a scheduler has for telling a relocate from a roll - without it, the next pass would sweep
         // from 36 s down through every target and fire all three.
         clocks.TimecodePass([source], At(0, generation: 2));
         clocks.TimecodePass([source], At(0.5, generation: 2));
@@ -222,7 +222,7 @@ public class TriggerClockTests
         clocks.TimecodePass([source], At(9.5));
         clocks.TimecodePass([source], At(10, chasing: false));
 
-        // Rolling again. The first pass back is an anchor, not a window — measured against the
+        // Rolling again. The first pass back is an anchor, not a window - measured against the
         // pre-stall reading it would sweep the whole gap.
         clocks.TimecodePass([source], At(25));
         clocks.TimecodePass([source], At(25.5));

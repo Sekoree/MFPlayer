@@ -13,7 +13,7 @@ public sealed record ProjectAudioPatch
     public int MixSampleRate { get; set; } = 48_000;
 
     /// <summary>
-    /// The line that paces the show clock. It must run natively at <see cref="MixSampleRate"/> — a
+    /// The line that paces the show clock. It must run natively at <see cref="MixSampleRate"/> - a
     /// resampled master would drift the clock against itself.
     /// </summary>
     public Guid? ClockMasterLineId { get; set; }
@@ -22,7 +22,7 @@ public sealed record ProjectAudioPatch
 
     /// <summary>
     /// Named linked-editing groups (register item 9). A stereo pair is simply a two-member group.
-    /// Grouping affects EDITING and DISPLAY only — the mix math stays strictly per channel.
+    /// Grouping affects EDITING and DISPLAY only - the mix math stays strictly per channel.
     /// </summary>
     public List<OutputGroup> Groups { get; set; } = [];
 
@@ -68,7 +68,7 @@ public sealed record PatchCell
 
     /// <summary>
     /// Muted keeps the routing and silences it. Deleting the cell instead would lose the operator's
-    /// patch the moment they wanted it back — and on an absent device, losing it is permanent.
+    /// patch the moment they wanted it back - and on an absent device, losing it is permanent.
     /// </summary>
     public bool Muted { get; set; }
 
@@ -86,7 +86,7 @@ public sealed record AudioLineDefinition
     public AudioLineKind Kind { get; set; } = AudioLineKind.LocalAudio;
 
     /// <summary>
-    /// How this line is found on a machine — a device name, an NDI source name, a file pattern. It is
+    /// How this line is found on a machine - a device name, an NDI source name, a file pattern. It is
     /// deliberately a hint, not an identity: on another machine it may match nothing, and that is a
     /// reported absence rather than a silent redirect to the default device.
     /// </summary>
@@ -99,7 +99,7 @@ public sealed record AudioLineDefinition
 
     /// <summary>
     /// Register item 25: a REQUIRED line that is absent is an error, not a warning. The flag is
-    /// inverted from the obvious design on purpose — it lets a show say "this cannot run without the
+    /// inverted from the obvious design on purpose - it lets a show say "this cannot run without the
     /// main PA" instead of asking every optional output to excuse itself.
     /// </summary>
     public bool Required { get; set; }
@@ -121,7 +121,7 @@ public enum AudioLineKind
     /// A sound device on this machine.
     /// </summary>
     /// <remarks>
-    /// NOT named after a backend. Which library opens the device — PortAudio or miniaudio — is a
+    /// NOT named after a backend. Which library opens the device - PortAudio or miniaudio - is a
     /// MACHINE setting, so a line called "PortAudio" played through miniaudio would be a document
     /// contradicting itself. What the document means is "a local sound card", and that is stable.
     /// </remarks>
@@ -138,13 +138,13 @@ public enum AudioLineKind
 /// <para>
 /// Shared by audio lines and video outputs, because "record" means the same thing on both sides and a
 /// second copy would drift. The FORMAT is the pattern's own extension (register item 30's patterns are
-/// written as whole filenames — <c>show-{date}.mka</c>), so there is no separate container picker to
+/// written as whole filenames - <c>show-{date}.mka</c>), so there is no separate container picker to
 /// contradict the name the operator typed.
 /// </para>
 /// <para>
 /// <b>Arming is an operator action, not a property of existing.</b> A record line that merely appears
-/// in a show writes nothing until somebody arms it; the alternative — a show that starts recording
-/// because it was opened — fills disks during rehearsal and overwrites nothing anybody wanted.
+/// in a show writes nothing until somebody arms it; the alternative - a show that starts recording
+/// because it was opened - fills disks during rehearsal and overwrites nothing anybody wanted.
 /// <see cref="ArmWithShow"/> is the opt-in for the rig where recording every performance IS the point.
 /// </para>
 /// </remarks>
@@ -171,7 +171,7 @@ public sealed record RecordTarget
     /// matches the show. Content-only collapses those gaps, which is what somebody cutting a montage
     /// wants and what would make an archive useless for finding anything.
     /// <para>
-    /// Streams are always continuous whatever this says — an ingest drops a connection that stops
+    /// Streams are always continuous whatever this says - an ingest drops a connection that stops
     /// sending, so a stream that went quiet between cues would simply die.
     /// </para>
     /// </remarks>
@@ -215,14 +215,14 @@ public sealed record PatchLevelChange
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>One rig, not two halves.</b> Auditioning is a single thing an operator does — "let me hear and
-/// see this before I fire it" — so the pane that configures it appears in both the Audio and Video
+/// <b>One rig, not two halves.</b> Auditioning is a single thing an operator does - "let me hear and
+/// see this before I fire it" - so the pane that configures it appears in both the Audio and Video
 /// views rather than being split across them.
 /// </para>
 /// <para>
 /// <b>The audio side names a project LINE, not a device</b> (D8). The rig is an output like any other:
 /// it takes that line's own channel count rather than being hardcoded stereo, it travels with the show,
-/// it goes absent on a machine that lacks it, and it relinks on arrival — all for the same reasons
+/// it goes absent on a machine that lacks it, and it relinks on arrival - all for the same reasons
 /// register item 14 gives for every other line. Naming a raw device here would make the audition path
 /// the one output in the app that behaved differently from the rest.
 /// </para>
@@ -248,7 +248,7 @@ public sealed record AuditionRig
     /// </remarks>
     public double LevelDb { get; set; } = -12;
 
-    /// <summary>Ducks the monitor while the program is sounding — the booth's own ears, not the mix.</summary>
+    /// <summary>Ducks the monitor while the program is sounding - the booth's own ears, not the mix.</summary>
     public bool DuckWhenProgramSounds { get; set; } = true;
 
     /// <summary>The audition canvas size. Follows the largest composition when left at zero.</summary>

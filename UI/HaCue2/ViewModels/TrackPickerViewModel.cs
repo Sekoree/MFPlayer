@@ -23,7 +23,7 @@ public enum TrackKind
 /// project on a machine without the media does not look like the choice was lost.
 /// </para>
 /// <para>
-/// Index 0 is always "automatic" — the decoder elects a track. It is a real option, not a blank: most
+/// Index 0 is always "automatic" - the decoder elects a track. It is a real option, not a blank: most
 /// files have one track and picking it explicitly would freeze an index that a re-mux can move.
 /// </para>
 /// </remarks>
@@ -55,8 +55,8 @@ public sealed partial class TrackPickerViewModel : ObservableObject
             : kind == TrackKind.Audio ? facts.AudioTracks : facts.VideoTracks;
 
         // Cover art is a video stream in every container that carries it, so a FLAC with album art
-        // probes as one video track. It stays SELECTABLE — automatic election skips it, and choosing
-        // it explicitly is the only way to show one — but it is not counted as video the cue has.
+        // probes as one video track. It stays SELECTABLE - automatic election skips it, and choosing
+        // it explicitly is the only way to show one - but it is not counted as video the cue has.
         _coverArt = _tracks.Count(track => track.IsAttachedPicture);
 
         Options =
@@ -69,13 +69,13 @@ public sealed partial class TrackPickerViewModel : ObservableObject
 
     public IReadOnlyList<string> Options { get; }
 
-    /// <summary>Whether this cue can have a track at all — false for a cue with no media.</summary>
+    /// <summary>Whether this cue can have a track at all - false for a cue with no media.</summary>
     public bool HasMedia => _cue is { MediaPath.Length: > 0 };
 
     /// <summary>Whether anything has looked at the file yet.</summary>
     public bool IsProbed => _tracks.Count > 0;
 
-    /// <summary>How many tracks were found — what makes a multi-track file worth noticing.</summary>
+    /// <summary>How many tracks were found - what makes a multi-track file worth noticing.</summary>
     public int Count => _tracks.Count - _coverArt;
 
     public string Hint
@@ -88,7 +88,7 @@ public sealed partial class TrackPickerViewModel : ObservableObject
             if (!IsProbed)
                 return "not probed yet";
 
-            // Cover art is a STILL that can be placed, not a missing video track — saying "no tracks"
+            // Cover art is a STILL that can be placed, not a missing video track - saying "no tracks"
             // over an MP3 with album art would hide something the operator can legitimately put on a
             // canvas.
             if (Count == 0)
@@ -120,7 +120,7 @@ public sealed partial class TrackPickerViewModel : ObservableObject
     }
 
     public string MovedNote => HasMoved
-        ? "this track moved in the file — playing the elected one instead"
+        ? "this track moved in the file - playing the elected one instead"
         : "";
 
     private int? StoredIndex => _kind == TrackKind.Audio ? _cue?.AudioTrackIndex : _cue?.VideoTrackIndex;

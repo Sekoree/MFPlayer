@@ -10,7 +10,7 @@ namespace HaCue2.Engine;
 /// <para>
 /// S.Control owns the port catalogue, the name matching and the message encoding. What lives here is
 /// the HaCue2 half: an <see cref="ActionEndpoint"/> is a device NAME HINT, exactly like an audio line's
-/// — ports are not stable across reboots, let alone across machines — and turning the document's list
+/// - ports are not stable across reboots, let alone across machines - and turning the document's list
 /// of endpoints into the device config that layer wants.
 /// </para>
 /// <para>
@@ -91,7 +91,7 @@ public sealed class MidiOut : IDisposable
         ArgumentNullException.ThrowIfNull(endpoint);
 
         if (MidiActions.TryParse(cue.Address, cue.Arguments, out var message) is { } wrong)
-            return $"“{cue.Label}” — {wrong}";
+            return $"“{cue.Label}” - {wrong}";
 
         ControlSystemMIDIDeviceSessionManager? sender;
 
@@ -125,7 +125,7 @@ public sealed class MidiOut : IDisposable
             // A port another application holds, a device that has been unplugged, a name that matches
             // nothing on this machine. All of them are the operator's to fix and none of them may take
             // the show down.
-            return $"“{cue.Label}” → {endpoint.Name} failed — {failure.Message}";
+            return $"“{cue.Label}” → {endpoint.Name} failed - {failure.Message}";
         }
     }
 

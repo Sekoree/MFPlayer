@@ -12,7 +12,7 @@ namespace HaCue2.Tests;
 /// </summary>
 /// <remarks>
 /// The window title was the literal "HaCue2", so nothing anywhere on screen named the file that was
-/// open or said whether it had been saved — which makes a working Ctrl+S indistinguishable from a
+/// open or said whether it had been saved - which makes a working Ctrl+S indistinguishable from a
 /// broken one.
 /// </remarks>
 public class FileMenuTests
@@ -126,7 +126,7 @@ public class FileMenuTests
         prompt.Commit();
 
         // The empty path is what the shell keys "ask where this lives" on, and it is what every OTHER
-        // route into the shell does not produce — a recovered autosave is adopted under its original
+        // route into the shell does not produce - a recovered autosave is adopted under its original
         // file's path precisely so it is not mistaken for a new show.
         var created = Assert.Single(opened);
         Assert.Equal("Gala", created.Title);
@@ -150,7 +150,7 @@ public class FileMenuTests
             await shell.SaveToAsync(target);
 
             // This is what puts a project created THIS session into the recents list. Without it a new
-            // show was missing from the launcher until somebody opened it by hand — which is the one
+            // show was missing from the launcher until somebody opened it by hand - which is the one
             // time they cannot, because it is not in the list.
             Assert.Equal(target, Assert.Single(announced));
 

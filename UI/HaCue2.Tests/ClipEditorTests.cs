@@ -16,8 +16,8 @@ namespace HaCue2.Tests;
 /// The clip editor, driven the way a pointer drives it.
 /// </summary>
 /// <remarks>
-/// The window exists for one sentence — "trim thirty minutes off the front and ten off the end of a
-/// two-hour recording" — so that sentence is what is asserted here, against the DOCUMENT rather than
+/// The window exists for one sentence - "trim thirty minutes off the front and ten off the end of a
+/// two-hour recording" - so that sentence is what is asserted here, against the DOCUMENT rather than
 /// against the view-model's own fields.
 /// </remarks>
 public class ClipEditorTests

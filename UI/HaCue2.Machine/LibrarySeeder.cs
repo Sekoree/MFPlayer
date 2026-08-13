@@ -21,7 +21,7 @@ public sealed record LibrarySeed(
 /// therefore proves nothing: every duration is a round number, every file resolves, no track list
 /// surprises the inspector, and the probe has nothing to disagree with. A project built from somebody's
 /// actual library has odd lengths, unicode names, files with several audio tracks, cover art where a
-/// video track is expected, and formats the decoder has to be asked about — which is where the bugs are.
+/// video track is expected, and formats the decoder has to be asked about - which is where the bugs are.
 /// </para>
 /// <para>
 /// <b>Every cue KIND is emitted</b>, not just media, because the transport resolves them app-side and
@@ -31,7 +31,7 @@ public sealed record LibrarySeed(
 /// </remarks>
 public static class LibrarySeeder
 {
-    /// <summary>Builds the project. Pure — it reads no files, so it is testable without a library.</summary>
+    /// <summary>Builds the project. Pure - it reads no files, so it is testable without a library.</summary>
     public static HaCueProject Build(LibrarySeed seed)
     {
         ArgumentNullException.ThrowIfNull(seed);
@@ -108,7 +108,7 @@ public static class LibrarySeeder
     /// </summary>
     /// <remarks>
     /// <para>
-    /// In the fixture because a recorder nobody can find is a recorder nobody uses — the pane only
+    /// In the fixture because a recorder nobody can find is a recorder nobody uses - the pane only
     /// appears for a record or stream line, so a fixture without one hides the whole feature behind
     /// "add a line first".
     /// </para>
@@ -156,7 +156,7 @@ public static class LibrarySeeder
         //
         // Sub is deliberately left UNPATCHED while a cue feeds it (see the bed below), which is the
         // one condition register item 25 calls an error rather than a warning. A fixture that passes
-        // every check teaches nothing about the screen that reports them — this one opens with exactly
+        // every check teaches nothing about the screen that reports them - this one opens with exactly
         // one real, explainable failure and a fix action that resolves it.
         project.AudioPatch.Cells.AddRange(
         [
@@ -185,7 +185,7 @@ public static class LibrarySeeder
 
         list.Cues.Add(new CommentCueNode { Number = New(ref number), Note = "Built from a real library." });
 
-        // A plain bed. It also feeds Sub, which nothing patches — the deliberate error described in
+        // A plain bed. It also feeds Sub, which nothing patches - the deliberate error described in
         // Patch, so the status screen and the red health token have something real to report.
         if (Take(audio, 0) is { } bed)
         {
@@ -332,7 +332,7 @@ public static class LibrarySeeder
 
     private static CueNumber New(ref int number) => new((number++).ToString());
 
-    /// <summary>A cue label from a file name — readable, and short enough for the tree's column.</summary>
+    /// <summary>A cue label from a file name - readable, and short enough for the tree's column.</summary>
     private static string Name(string path)
     {
         var name = Path.GetFileNameWithoutExtension(path);

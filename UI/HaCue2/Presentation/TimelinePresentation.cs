@@ -18,7 +18,7 @@ namespace HaCue2.Presentation;
 /// </para>
 /// <para>
 /// The VIEW is a window onto the group rather than the whole of it, which is what zooming is. Fractions
-/// are of the window, so a clip outside it lands outside 0..1 and is simply not drawn — the alternative,
+/// are of the window, so a clip outside it lands outside 0..1 and is simply not drawn - the alternative,
 /// clamping everything into range, would pile every off-screen cue against the edges as a row of
 /// slivers that look like real clips.
 /// </para>
@@ -121,7 +121,7 @@ public static class TimelinePresentation
         var step = Step(TimeSpan.FromMilliseconds(window.LengthMs)).TotalMilliseconds;
         var labels = new List<string>();
 
-        // Snapped to the step, so the labels are round numbers wherever the window happens to start —
+        // Snapped to the step, so the labels are round numbers wherever the window happens to start -
         // a ruler reading 3:07, 3:17, 3:27 is one nobody can place anything against.
         var first = Math.Floor(window.StartMs / step) * step;
 
@@ -150,7 +150,7 @@ public static class TimelinePresentation
     /// The group's length: the furthest a child reaches.
     /// </summary>
     /// <remarks>
-    /// Never zero — a group whose media nobody has probed still has to draw, and dividing by its span
+    /// Never zero - a group whose media nobody has probed still has to draw, and dividing by its span
     /// must not produce infinities. One minute is an arbitrary but harmless floor for an empty group.
     /// </remarks>
     public static double SpanMs(GroupCueNode group, ShowRuntime runtime) => Span(group, runtime);
@@ -171,7 +171,7 @@ public static class TimelinePresentation
     /// <remarks>
     /// A clip drawn at the file's full length after somebody trimmed it is a picture of a show that
     /// will not happen. Probing is a machine fact, so an unprobed cue with no explicit trim-out gets a
-    /// nominal width — visible and obviously not measured, rather than a hairline that reads as a
+    /// nominal width - visible and obviously not measured, rather than a hairline that reads as a
     /// rendering fault.
     /// </remarks>
     private static double Duration(CueNode cue, ShowRuntime runtime)
@@ -236,7 +236,7 @@ public static class TimelinePresentation
 /// <para>
 /// A VIEW state, not a document one. Where somebody has scrolled and how far in they have zoomed is
 /// how they are working right now, and carrying it to the next venue inside a show file would be
-/// carrying the wrong thing — the same reasoning as the appearance pane and the snap toggle.
+/// carrying the wrong thing - the same reasoning as the appearance pane and the snap toggle.
 /// </para>
 /// <para>
 /// Immutable, so every zoom produces a NEW window rather than mutating one under a draw that is
@@ -254,7 +254,7 @@ public sealed record TimelineView(double StartMs, double LengthMs)
     /// </remarks>
     public const double MinimumLengthMs = 500;
 
-    /// <summary>The whole group — what FIT means, and what the sheet opens on.</summary>
+    /// <summary>The whole group - what FIT means, and what the sheet opens on.</summary>
     public static TimelineView Whole(double spanMs) => new(0, Math.Max(MinimumLengthMs, spanMs));
 
     /// <summary>Where a moment sits in the window, as a fraction. Outside 0..1 means off screen.</summary>
@@ -268,7 +268,7 @@ public sealed record TimelineView(double StartMs, double LengthMs)
     /// </summary>
     /// <remarks>
     /// The centre rather than the start, because the thing an operator is looking at is in the middle
-    /// of the window — zooming about the left edge walks it off the right of the screen.
+    /// of the window - zooming about the left edge walks it off the right of the screen.
     /// </remarks>
     public TimelineView Zoom(double factor, double spanMs)
     {

@@ -3,14 +3,14 @@ using Xunit;
 namespace S.Media.Session.Tests;
 
 /// <summary>
-/// Asking, in advance, whether a reload would interrupt anything — <c>WouldPreservePlaybackAsync</c>.
+/// Asking, in advance, whether a reload would interrupt anything - <c>WouldPreservePlaybackAsync</c>.
 /// </summary>
 /// <remarks>
 /// <para>
 /// A host that reloads the whole merged document after every edit has only two blunt options without
 /// this. Reload always, and any edit touching a playing cue's binding restarts it: on a group layering
 /// two 1080p60 ProRes clips over eleven stems that is a pop, eleven re-opened files, and the picture
-/// snapping back to its in-point — 300 ms after every drag. Or defer every reload while anything plays,
+/// snapping back to its in-point - 300 ms after every drag. Or defer every reload while anything plays,
 /// which is safe but leaves a cue label waiting on a fifty-minute track.
 /// </para>
 /// <para>
@@ -61,7 +61,7 @@ public sealed class PlaybackPreservationForecastTests
         await using var session = BuildSession(releases);
         await session.LoadDocumentAsync(TwoLists());
 
-        // Not "nothing changed" — a document that deletes the cue outright. There is no voice to
+        // Not "nothing changed" - a document that deletes the cue outright. There is no voice to
         // interrupt, so there is nothing to defer for.
         var gutted = new ShowDocument(
             Version: 1, Cues: [], Clips: [], Compositions: [], Routes: []);
@@ -95,7 +95,7 @@ public sealed class PlaybackPreservationForecastTests
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("b1"));
 
         // The overwhelmingly common edit: typing in a label. It is not part of the clip binding, so it
-        // cannot disturb a voice — and the app must not hold it back as though it could.
+        // cannot disturb a voice - and the app must not hold it back as though it could.
         var renamed = TwoLists(listALabel: "Walk-in bed");
 
         Assert.True(await session.WouldPreservePlaybackAsync(renamed));

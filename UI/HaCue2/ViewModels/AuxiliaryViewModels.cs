@@ -17,7 +17,7 @@ using S.Media.Source.YouTube;
 
 namespace HaCue2.ViewModels;
 
-/// <summary>Screen 01 — recents, inline recovery, and the cheap machine checks.</summary>
+/// <summary>Screen 01 - recents, inline recovery, and the cheap machine checks.</summary>
 /// <remarks>
 /// The import door is gone (register item 29): HaCue2 is a clean start and a <c>.haplayproj</c>
 /// converter is a separate companion tool with no priority, so the launcher stops promising one.
@@ -115,7 +115,7 @@ public partial class LauncherViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// It used to raise an event the app answered by opening the SAMPLE show, whichever row was
-    /// clicked — the recents list looked real and did the same thing every time. Now the row's path is
+    /// clicked - the recents list looked real and did the same thing every time. Now the row's path is
     /// what gets loaded, and a file that has since gone is reported rather than opened.
     /// </remarks>
     public async Task OpenAsync(RecentProjectRow? row)
@@ -143,7 +143,7 @@ public partial class LauncherViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Opens the autosave instead of the file — the RECOVER answer.
+    /// Opens the autosave instead of the file - the RECOVER answer.
     /// </summary>
     /// <remarks>
     /// The recovered document is adopted under its ORIGINAL path, so the next save writes where the
@@ -169,7 +169,7 @@ public partial class LauncherViewModel : ObservableObject
         Adopt(project, candidate.OriginalPath);
     }
 
-    /// <summary>Throws the autosave away — the operator has decided the file on disk is the truth.</summary>
+    /// <summary>Throws the autosave away - the operator has decided the file on disk is the truth.</summary>
     public void DiscardRecovery()
     {
         foreach (var candidate in _recoveries)
@@ -187,7 +187,7 @@ public partial class LauncherViewModel : ObservableObject
         {
             Name = recent.Title.Length > 0 ? recent.Title : Path.GetFileNameWithoutExtension(recent.Path),
             Path = recent.Path,
-            Contents = recent.Summary.Length > 0 ? recent.Summary : "—",
+            Contents = recent.Summary.Length > 0 ? recent.Summary : "-",
             Opened = Ago(recent.LastOpened),
             // File.Exists, not an open: the launcher must not stall on a disconnected volume, and
             // "gone" is the only answer that changes what the row can do.
@@ -196,7 +196,7 @@ public partial class LauncherViewModel : ObservableObject
         }),
     ];
 
-    /// <summary>"today 14:02", "yesterday", "Jul 28" — the resolution that is actually useful.</summary>
+    /// <summary>"today 14:02", "yesterday", "Jul 28" - the resolution that is actually useful.</summary>
     private static string Ago(DateTimeOffset when)
     {
         var local = when.ToLocalTime();
@@ -220,7 +220,7 @@ public partial class LauncherViewModel : ObservableObject
     [
         new("", "", "audio", machine.DevicesEnumerated
             ? $"{machine.OutputDeviceNames.Count} output device(s)"
-            : "not checked — no backend"),
+            : "not checked - no backend"),
         new("", "", "video", "not checked yet"),
         new("", "", "ndi", "not checked yet"),
         new("", "", "midi", "not checked yet"),
@@ -228,7 +228,7 @@ public partial class LauncherViewModel : ObservableObject
 }
 
 /// <summary>
-/// Screen 04's curve editor — the "custom" option behind every curve picker in the app.
+/// Screen 04's curve editor - the "custom" option behind every curve picker in the app.
 /// </summary>
 /// <remarks>
 /// Custom curves save as PROJECT presets ("slow tail"), so the preset row itself is the library and
@@ -281,7 +281,7 @@ public partial class CurveEditorViewModel : ObservableObject
         ? CurveLibrary.Choices(journal.Project)
         : CurveLibrary.Curves;
 
-    /// <summary>The index the picker's last entry sits at — "custom ✎".</summary>
+    /// <summary>The index the picker's last entry sits at - "custom ✎".</summary>
     private int CustomIndex => Curves.Count - 1;
 
     /// <summary>
@@ -289,7 +289,7 @@ public partial class CurveEditorViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Drawn points beat the named law — <c>CurveSpec.Resolve</c> follows preset → points → law — so a
+    /// Drawn points beat the named law - <c>CurveSpec.Resolve</c> follows preset → points → law - so a
     /// target with anything drawn on it reads as "custom" whatever its law says, and picking a named
     /// entry has to drop those points. Both halves travel as ONE undo step, or an undo would leave the
     /// law of one curve under the shape of another.
@@ -347,7 +347,7 @@ public partial class CurveEditorViewModel : ObservableObject
     /// The handles, in CANVAS space: y is flipped, because a level of 1 is drawn at the top.
     /// </summary>
     /// <remarks>
-    /// Flipped here rather than in the control, which knows nothing about levels — the same split the
+    /// Flipped here rather than in the control, which knows nothing about levels - the same split the
     /// timeline's effect lanes already make.
     /// </remarks>
     public IReadOnlyList<CurvePoint> Points =>
@@ -359,7 +359,7 @@ public partial class CurveEditorViewModel : ObservableObject
     public IReadOnlyList<CurveTangent> Tangents => CurveLibrary.Tangents(_knots, _selection);
 
     /// <summary>
-    /// Every selected keyframe. <see cref="SelectedIndex"/> is the PRIMARY one within it — the numeric
+    /// Every selected keyframe. <see cref="SelectedIndex"/> is the PRIMARY one within it - the numeric
     /// fields and the segment picker edit a single keyframe, so they need one to name.
     /// </summary>
     /// <remarks>
@@ -379,7 +379,7 @@ public partial class CurveEditorViewModel : ObservableObject
     /// The polyline. A held point gets a corner the point list does not contain.
     /// </summary>
     /// <remarks>
-    /// Without the extra corner a hold would be drawn as the ramp it explicitly is not — the picture
+    /// Without the extra corner a hold would be drawn as the ramp it explicitly is not - the picture
     /// would show the operator a fade that the engine will not play.
     /// </remarks>
     public IReadOnlyList<CurvePoint> Shape
@@ -459,7 +459,7 @@ public partial class CurveEditorViewModel : ObservableObject
     /// <summary>The selected point's position, as the numeric route onto the same edit.</summary>
     public string SelectedPoint => HasSelection
         ? $"{PointTime} · {PointValue}"
-        : "—";
+        : "-";
 
     /// <summary>The selected keyframe's exact time. With a known cue/fade duration this is a clock
     /// value; otherwise it is a normalized percentage.</summary>
@@ -468,7 +468,7 @@ public partial class CurveEditorViewModel : ObservableObject
         get
         {
             if (!HasSelection)
-                return "—";
+                return "-";
             return _duration is { } duration
                 ? ClipTimes.Format((int)Math.Round(_knots[SelectedIndex].X * duration.TotalMilliseconds))
                 : $"{_knots[SelectedIndex].X * 100:0.###} %";
@@ -488,7 +488,7 @@ public partial class CurveEditorViewModel : ObservableObject
         get
         {
             if (!HasSelection)
-                return "—";
+                return "-";
             var level = _knots[SelectedIndex].Y;
             if (Scale == "linear")
                 return level.ToString("0.###", CultureInfo.InvariantCulture);
@@ -528,8 +528,8 @@ public partial class CurveEditorViewModel : ObservableObject
 
             if (command is null)
             {
-                // The picker has already moved itself to what was clicked. Nothing was written — most
-                // often "bezier" on the LAST knot, which has no following segment to shape — so the
+                // The picker has already moved itself to what was clicked. Nothing was written - most
+                // often "bezier" on the LAST knot, which has no following segment to shape - so the
                 // list has to be told to go back, or it displays a law the document does not have.
                 OnPropertyChanged(nameof(Segment));
                 return;
@@ -786,7 +786,7 @@ public partial class CurveEditorViewModel : ObservableObject
         return bindings;
     }
 
-    /// <summary>A drag, a nudge, an add or a remove — every route ends in one command.</summary>
+    /// <summary>A drag, a nudge, an add or a remove - every route ends in one command.</summary>
     public void Apply(CurveGesture gesture)
     {
         if (_target is null || _journal is null)
@@ -839,7 +839,7 @@ public partial class CurveEditorViewModel : ObservableObject
         var command = gesture.Kind switch
         {
             // A drag on one of several selected keyframes moves the whole group, spacing and tangents
-            // preserved — the same edit the inline timeline lane performs.
+            // preserved - the same edit the inline timeline lane performs.
             CurveGestureKind.Move when _selection.Count > 1 && _selection.Contains(gesture.Index) =>
                 CurveEdits.MoveMany(_target, _selection, gesture.Index, x, y),
             CurveGestureKind.Move => CurveEdits.Move(_target, gesture.Index, x, y),
@@ -882,7 +882,7 @@ public partial class CurveEditorViewModel : ObservableObject
         Reload();
     }
 
-    /// <summary>Selects every keyframe — the canvas's Ctrl+A.</summary>
+    /// <summary>Selects every keyframe - the canvas's Ctrl+A.</summary>
     public void SelectAll()
     {
         _selection.Clear();
@@ -913,7 +913,7 @@ public partial class CurveEditorViewModel : ObservableObject
     /// <remarks>
     /// The pasted span REPLACES what it lands on rather than piling on top of it: two keyframes at the
     /// same instant have no defined shape between them, and the operator asked for the copied shape to
-    /// be here — not for it to be interleaved with whatever was.
+    /// be here - not for it to be interleaved with whatever was.
     /// </remarks>
     public bool Paste(string? text)
     {
@@ -964,7 +964,7 @@ public partial class CurveEditorViewModel : ObservableObject
     public void ToggleHold(int index)
     {
         // A right-click acts on the ONE keyframe under it, so it replaces any group selection rather
-        // than joining it — otherwise hold would toggle on a point nowhere near the pointer.
+        // than joining it - otherwise hold would toggle on a point nowhere near the pointer.
         _selection.Clear();
         _anchor = index;
         SelectedIndex = index;
@@ -978,7 +978,7 @@ public partial class CurveEditorViewModel : ObservableObject
         _drag = null;
     }
 
-    /// <summary>Re-reads the curve from the document — after an edit here, or an undo anywhere.</summary>
+    /// <summary>Re-reads the curve from the document - after an edit here, or an undo anywhere.</summary>
     public void Reload()
     {
         if (_target is not null)
@@ -1040,7 +1040,7 @@ public partial class CurveEditorViewModel : ObservableObject
         _journal.CloseGroup();
         _knots = _target.Read();
 
-        // Typing a time can move the keyframe PAST a neighbour, and the store is kept sorted — so the
+        // Typing a time can move the keyframe PAST a neighbour, and the store is kept sorted - so the
         // index it had is now somebody else's. Follow the keyframe to where it landed, or the next
         // edit in these fields would silently be applied to the wrong one.
         _selection.Clear();
@@ -1113,7 +1113,7 @@ public partial class CurveEditorViewModel : ObservableObject
     };
 }
 
-/// <summary>Screens 12 and 13 — application scope (not journaled) and project scope (journaled).</summary>
+/// <summary>Screens 12 and 13 - application scope (not journaled) and project scope (journaled).</summary>
 public partial class SettingsViewModel : ObservableObject
 {
     private readonly ProjectSettings _settings;
@@ -1242,7 +1242,7 @@ public partial class SettingsViewModel : ObservableObject
     /// <remarks>
     /// No undo and no commit step, which is the scope split made concrete (register item 26): the
     /// project half is journaled and travels in the file; this half is a machine preference that takes
-    /// effect when you change it. Saving on every keystroke is affordable — the file is small and the
+    /// effect when you change it. Saving on every keystroke is affordable - the file is small and the
     /// write is atomic.
     /// </remarks>
     private void WriteApp(Action<AppSettings> change)
@@ -1253,7 +1253,7 @@ public partial class SettingsViewModel : ObservableObject
         change(_app);
         SettingsProblem = AppSettingsStore.Save(_app)
             ? ""
-            : "settings could not be saved — check the profile directory and free disk space";
+            : "settings could not be saved - check the profile directory and free disk space";
         _applicationChanged?.Invoke();
     }
 
@@ -1310,7 +1310,7 @@ public partial class SettingsViewModel : ObservableObject
 
     // ── writing back (register items 26 and 28) ───────────────────────────────────────────────
     // Project-scope settings are JOURNALED: they travel in the file and ⌘Z works on them, exactly as
-    // it does on a cue label. Application-scope ones are machine preferences and are not — they have
+    // it does on a cue label. Application-scope ones are machine preferences and are not - they have
     // their own store and no undo, which is what the scope split means.
 
     /// <summary>Writes one project setting through the journal, so it is saved AND undoable.</summary>
@@ -1400,7 +1400,7 @@ public partial class SettingsViewModel : ObservableObject
         return int.TryParse(digits, out var value) ? value : fallback;
     }
 
-    /// <summary>The signed variant, for a field like "-33 ms" — an A/V trim goes both ways.</summary>
+    /// <summary>The signed variant, for a field like "-33 ms" - an A/V trim goes both ways.</summary>
     private static int SignedDigits(string text, int fallback)
     {
         var trimmed = text.TrimStart();
@@ -1410,7 +1410,7 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The application-scope navigation — the inventory this screen is a contract for.
+    /// The application-scope navigation - the inventory this screen is a contract for.
     /// </summary>
     /// <remarks>
     /// Every pane listed here has to exist, or a nav row leads to nothing and the reader cannot tell
@@ -1428,7 +1428,7 @@ public partial class SettingsViewModel : ObservableObject
     /// <para>
     /// The overridable set is frozen at panic fade, remote API and hotkeys. Each row is derived from
     /// the two scopes rather than authored, so the ledger cannot claim an override the document does
-    /// not hold — which is exactly what the sample version did, permanently listing two.
+    /// not hold - which is exactly what the sample version did, permanently listing two.
     /// </para>
     /// <para>
     /// A project override always WINS and is always VISIBLE in both scopes, which is why the row shows
@@ -1458,7 +1458,7 @@ public partial class SettingsViewModel : ObservableObject
     /// <summary>Said out loud rather than left as an empty table nobody can interpret.</summary>
     public string OverrideNote => HasOverrides
         ? "A project override always wins, and is shown in both scopes."
-        : "This project overrides nothing — every setting here is the machine's.";
+        : "This project overrides nothing - every setting here is the machine's.";
 
     /// <summary>
     /// Clears one override, so the project inherits the machine's value again.
@@ -1495,7 +1495,7 @@ public partial class SettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(ApplicationPanes));
     }
 
-    /// <summary>How many overrides this project actually holds — nothing when it holds none.</summary>
+    /// <summary>How many overrides this project actually holds - nothing when it holds none.</summary>
     private static string OverrideTally(ProjectSettings settings)
     {
         var count = (settings.PanicFadeMs is null ? 0 : 1) + (settings.RemoteApi is null ? 0 : 1);
@@ -1529,14 +1529,14 @@ public partial class SettingsViewModel : ObservableObject
     private SettingsPane? _selectedPane;
 
     /// <summary>
-    /// The application list's own selection — null while a PROJECT pane is showing.
+    /// The application list's own selection - null while a PROJECT pane is showing.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Both navs used to bind <c>SelectedItem</c> straight to <see cref="SelectedPane"/>. Two
     /// selectors sharing one selection do not co-operate: choosing "Show behaviour" set the shared
     /// property, the APPLICATION list then found its own selection missing from its items, cleared
-    /// itself, and wrote that null straight back — so every property below dereferenced null the
+    /// itself, and wrote that null straight back - so every property below dereferenced null the
     /// moment the operator touched the project half, and the right-hand side went blank.
     /// </para>
     /// <para>
@@ -1554,7 +1554,7 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>The project list's own selection — null while an APPLICATION pane is showing.</summary>
+    /// <summary>The project list's own selection - null while an APPLICATION pane is showing.</summary>
     public SettingsPane? SelectedProjectPane
     {
         get => IsApplicationScope ? null : SelectedPane;
@@ -1592,7 +1592,7 @@ public partial class SettingsViewModel : ObservableObject
     /// <remarks>
     /// The nav has listed "Project status" since screen 13 was built and nothing was behind it: the
     /// right-hand side simply went empty, which reads as a broken pane rather than as a link. The
-    /// report itself belongs in its own window — it is a page of checks, not a settings form — so this
+    /// report itself belongs in its own window - it is a page of checks, not a settings form - so this
     /// pane is the door to it. The launcher, which has no project open, leaves this null and the pane
     /// says so instead of offering a button that would do nothing.
     /// </remarks>
@@ -1606,7 +1606,7 @@ public partial class SettingsViewModel : ObservableObject
     /// </summary>
     public string ScopeNote => IsApplicationScope
         ? "Application settings save immediately · no undo"
-        : "Project settings are journaled — ⌘Z works here";
+        : "Project settings are journaled - ⌘Z works here";
 
     /// <summary>
     /// Where the selected scope's settings live, and whether this project has unsaved ones.
@@ -1641,7 +1641,7 @@ public partial class SettingsViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Said out loud rather than left for the operator to discover. Every colour in the app is looked
-    /// up once when the theme is built, so a palette swap needs the app to build it again — the
+    /// up once when the theme is built, so a palette swap needs the app to build it again - the
     /// alternative is a live lookup on 840-odd references, which is a refactor, not a preference.
     /// </remarks>
     public string ThemeNote =>
@@ -1704,7 +1704,7 @@ public partial class SettingsViewModel : ObservableObject
     // ── durations, as the operator types them ─────────────────────────────────────────────────
     // Every one of these boxes rendered a literal before: the pane looked like a settings screen and
     // was a picture of one. They are plain properties over the settings record rather than observable
-    // fields, so the getter always reports what is actually stored — which is what makes refusing a
+    // fields, so the getter always reports what is actually stored - which is what makes refusing a
     // value simply a matter of re-announcing it.
 
     /// <summary>Reads "0.75 s", "750 ms" or "0.75". Null when it is none of those.</summary>
@@ -1834,7 +1834,7 @@ public partial class SettingsViewModel : ObservableObject
 
     /// <summary>Whether the panic box is overriding, and what it would inherit if cleared.</summary>
     public string PanicFadeNote => _settings.PanicFadeMs is null
-        ? $"follows this machine — {Seconds(_app.PanicFadeMs)}"
+        ? $"follows this machine - {Seconds(_app.PanicFadeMs)}"
         : $"overrides this machine's {Seconds(_app.PanicFadeMs)} ⚑";
 
     /// <summary>A new cue's default fade in, in the project's own settings.</summary>
@@ -1946,7 +1946,7 @@ public partial class SettingsViewModel : ObservableObject
             _project,
             CurveLibrary.EmptyShape("projectStopFade"));
 
-    /// <summary>The nav's project heading — the show's own name, not a fixture's.</summary>
+    /// <summary>The nav's project heading - the show's own name, not a fixture's.</summary>
     public string ProjectScopeHeading => $"PROJECT · {_project.Title.ToUpperInvariant()}";
 
     /// <summary>
@@ -2126,7 +2126,7 @@ public partial class SettingsViewModel : ObservableObject
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
             // A headless or locked-down machine has no file manager to ask. Reporting the path is
-            // still useful — it is the thing the operator actually needs.
+            // still useful - it is the thing the operator actually needs.
             return $"{path} (could not open a file manager: {failure.Message})";
         }
     }
@@ -2143,7 +2143,7 @@ public partial class SettingsViewModel : ObservableObject
     // ── save, autosave & recovery ─────────────────────────────────────────────────────────────
     [ObservableProperty] private string _autosaveCadence = "30 s";
 
-    /// <summary>Venue A/V trim, e.g. "20 ms" or "-15 ms" — positive shows the picture earlier.</summary>
+    /// <summary>Venue A/V trim, e.g. "20 ms" or "-15 ms" - positive shows the picture earlier.</summary>
     [ObservableProperty] private string _avOffset = "0 ms";
     [ObservableProperty] private string _followLead = "0 ms";
     [ObservableProperty] private string _recoveryCopies = "5";
@@ -2162,7 +2162,7 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _externalInputOffOnOpen = true;
 
     /// <summary>
-    /// Register item 6 — default OFF: a single click view-selects and double-click or the explicit
+    /// Register item 6 - default OFF: a single click view-selects and double-click or the explicit
     /// ↑/↓ Stby commands move standby. Shows that want QLab-style click-to-target flip this.
     /// </summary>
     [ObservableProperty] private bool _clickMovesStandby;
@@ -2177,7 +2177,7 @@ public partial class SettingsViewModel : ObservableObject
 }
 
 /// <summary>
-/// Screen 14 — the renamed Preflight, running the real pass over the loaded document.
+/// Screen 14 - the renamed Preflight, running the real pass over the loaded document.
 /// </summary>
 /// <remarks>
 /// Nothing on this screen is authored any more: the rows, their severities and the summary all come
@@ -2205,7 +2205,7 @@ public partial class ProjectStatusViewModel : ObservableObject, IDisposable
         _youTubeDownloads = youTubeDownloads;
         Project = project;
         Report = ProjectStatus.Run(project, projectPath, environment);
-        Title = $"Project status — {project.Title}";
+        Title = $"Project status - {project.Title}";
         Checks = RowsOf(Report);
 
         // The relink pane offers the first missing file, because that is the one the operator is
@@ -2223,7 +2223,7 @@ public partial class ProjectStatusViewModel : ObservableObject, IDisposable
 
     public ProjectStatusReport Report { get; private set; }
 
-    /// <summary>The check table. Rebuilt by <see cref="Rerun"/> — the rows ARE the report.</summary>
+    /// <summary>The check table. Rebuilt by <see cref="Rerun"/> - the rows ARE the report.</summary>
     public IReadOnlyList<CheckRow> Checks { get; private set; }
 
     public string Title { get; }
@@ -2249,7 +2249,7 @@ public partial class ProjectStatusViewModel : ObservableObject, IDisposable
     /// Register-item behaviour worth restating: relink only touches MISSING references. Rewriting ones
     /// that already resolve would, on a machine where the old root is still mounted, silently move the
     /// show onto a different copy of the same media. The unresolved list is reported rather than
-    /// swallowed — a relink that fixed nine of ten files and said "done" fails on the tenth cue,
+    /// swallowed - a relink that fixed nine of ten files and said "done" fails on the tenth cue,
     /// mid-performance, with no record of which one.
     /// </remarks>
     public PromptViewModel? RelinkUnderRoot()
@@ -2379,7 +2379,7 @@ public partial class ProjectStatusViewModel : ObservableObject, IDisposable
 
         DownloadRepairNote = queued == 0
             ? "all YouTube cues are already ready"
-            : $"queued {queued} YouTube cue{(queued == 1 ? "" : "s")} — downloads continue in the background";
+            : $"queued {queued} YouTube cue{(queued == 1 ? "" : "s")} - downloads continue in the background";
         Rerun();
     }
 
@@ -2433,7 +2433,7 @@ public partial class ProjectStatusViewModel : ObservableObject, IDisposable
             : snapshot.Queued > 0
                 ? $"{snapshot.Queued} YouTube cue{(snapshot.Queued == 1 ? "" : "s")} queued"
                 : snapshot.Failed > 0
-                    ? $"download failed — {snapshot.LastError ?? "use Fix to retry"}"
+                    ? $"download failed - {snapshot.LastError ?? "use Fix to retry"}"
                     : DownloadRepairNote.StartsWith("queued ", StringComparison.Ordinal)
                         ? "YouTube downloads finished"
                         : DownloadRepairNote;
@@ -2454,8 +2454,8 @@ public partial class ProjectStatusViewModel : ObservableObject, IDisposable
 
     public string ErrorNote => Report.Errors == 0
         ? Report.Warnings == 0
-            ? "all checks passed — nothing to fix before the show"
-            : $"no errors · {Report.Warnings} warning{(Report.Warnings == 1 ? "" : "s")} — the status token is green"
+            ? "all checks passed - nothing to fix before the show"
+            : $"no errors · {Report.Warnings} warning{(Report.Warnings == 1 ? "" : "s")} - the status token is green"
         : $"{Report.Errors} error{(Report.Errors == 1 ? "" : "s")} keep the status token red";
 
     /// <summary>
@@ -2463,7 +2463,7 @@ public partial class ProjectStatusViewModel : ObservableObject, IDisposable
     /// </summary>
     /// <remarks>
     /// The note was painted with the error colour unconditionally, so a show with nothing wrong
-    /// announced "no errors" in red — the one glance an operator takes before doors, answered in the
+    /// announced "no errors" in red - the one glance an operator takes before doors, answered in the
     /// colour that means stop. Errors are what turn it red, because errors are what
     /// <c>hacue2-check</c> exits 1 on; warnings keep it green and say so in the text.
     /// </remarks>
@@ -2477,7 +2477,7 @@ public partial class ProjectStatusViewModel : ObservableObject, IDisposable
     /// </summary>
     /// <remarks>
     /// Journaled, because it rewrites paths in the document and an operator who consolidated into the
-    /// wrong directory needs a way back. What it could not copy is reported by name — a project that
+    /// wrong directory needs a way back. What it could not copy is reported by name - a project that
     /// looks consolidated and half-works at the venue is the worst of both outcomes.
     /// </remarks>
     public void Consolidate()
@@ -2500,7 +2500,7 @@ public partial class ProjectStatusViewModel : ObservableObject, IDisposable
     /// <summary>What the last consolidate did. Empty until one has run.</summary>
     public string ConsolidateNote { get; private set; } = "";
 
-    /// <summary>Whether there is a journal behind this window — false in a preview.</summary>
+    /// <summary>Whether there is a journal behind this window - false in a preview.</summary>
     public bool CanEdit => _journal is { IsReadOnly: false };
 
     [ObservableProperty] private string _missingFile;
@@ -2525,10 +2525,10 @@ public partial class ProjectStatusViewModel : ObservableObject, IDisposable
     };
 }
 
-/// <summary>Screen 15 — bay counters, composition telemetry, and a level-filtered log tail.</summary>
+/// <summary>Screen 15 - bay counters, composition telemetry, and a level-filtered log tail.</summary>
 /// <remarks>
 /// The event panel is a tail of the <c>Microsoft.Extensions.Logging</c> pipeline with a selectable
-/// minimum level — the same sink the file log uses (register item 27). One logging system, two readers;
+/// minimum level - the same sink the file log uses (register item 27). One logging system, two readers;
 /// a second event collector would drift from the archive the moment either changed.
 /// </remarks>
 public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = null) : ObservableObject
@@ -2544,7 +2544,7 @@ public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = 
     /// </summary>
     /// <remarks>
     /// Read straight off the ring rather than copied through the runtime, because the ring already is
-    /// the bounded window this panel wants — a second buffer would be a second thing to keep in step.
+    /// the bounded window this panel wants - a second buffer would be a second thing to keep in step.
     /// The FILTER is applied here rather than at the sink so turning it down shows what has already
     /// been captured, instead of only what arrives afterwards. A fault that reproduces once is the
     /// reason that distinction matters.
@@ -2609,7 +2609,7 @@ public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = 
         // Short category: "S.Media.Routing.AudioRouter" is a column nobody can read at that width, and
         // the last segment is the part that identifies the source.
         entry.Category.Split('.') is { Length: > 0 } parts ? parts[^1] : entry.Category,
-        entry.Exception is null ? entry.Message : $"{entry.Message} — {entry.Exception.Message}",
+        entry.Exception is null ? entry.Message : $"{entry.Message} - {entry.Exception.Message}",
         entry.Level switch
         {
             Microsoft.Extensions.Logging.LogLevel.Warning => Gel.Amber,
@@ -2625,7 +2625,7 @@ public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = 
     /// </summary>
     /// <remarks>
     /// Derived from the rows rather than authored. It used to be a fixed sentence about a recording
-    /// encoder that was not draining — permanently on screen, true only by coincidence.
+    /// encoder that was not draining - permanently on screen, true only by coincidence.
     /// </remarks>
     public string BayWarning
     {
@@ -2647,7 +2647,7 @@ public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = 
 
     public bool HasWarning => BayWarning.Length > 0;
 
-    public string CountersSince => host is null ? "no session — nothing to count" : "counters since the show started";
+    public string CountersSince => host is null ? "no session - nothing to count" : "counters since the show started";
 
     /// <summary>Re-reads everything. Driven by the same tick that fills the runtime.</summary>
     public void Refresh()
@@ -2671,5 +2671,5 @@ public partial class DiagnosticsViewModel(ShowRuntime runtime, ShowHost? host = 
     }
 
     /// <summary>The whole bay as plain text, for pasting to somebody who is not in the building.</summary>
-    public string Report() => host?.Report() ?? "No session is running — there is nothing to report.";
+    public string Report() => host?.Report() ?? "No session is running - there is nothing to report.";
 }

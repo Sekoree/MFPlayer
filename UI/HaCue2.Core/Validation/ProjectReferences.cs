@@ -3,7 +3,7 @@ using HaCue2.Core.Model;
 namespace HaCue2.Core.Validation;
 
 /// <summary>Something in the project that points at the thing you asked about.</summary>
-/// <param name="SubjectKind">What the referrer is — "cue", "snapshot", "patchCell", "outputGroup"…</param>
+/// <param name="SubjectKind">What the referrer is - "cue", "snapshot", "patchCell", "outputGroup"…</param>
 /// <param name="SubjectId">Its id, so the UI can navigate to it.</param>
 /// <param name="Description">What the reference is, in the operator's words.</param>
 public sealed record ProjectReference(string SubjectKind, string SubjectId, string Description);
@@ -13,7 +13,7 @@ public sealed record ProjectReference(string SubjectKind, string SubjectId, stri
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is the delete-safety machinery the plan requires for logical channels, generalised — because
+/// This is the delete-safety machinery the plan requires for logical channels, generalised - because
 /// the equivalent question about cues is currently unanswered anywhere: a jump or fade cue targeting
 /// a deleted cue is silently orphaned, and nothing tells the operator before they delete it.
 /// </para>
@@ -49,7 +49,7 @@ public static class ProjectReferences
 
     public static int CountTo(HaCueProject project, string kind, Guid id) => To(project, kind, id).Count;
 
-    /// <summary>How many cues feed a logical output — the "fed by" column on screen 06.</summary>
+    /// <summary>How many cues feed a logical output - the "fed by" column on screen 06.</summary>
     public static int CuesFeeding(HaCueProject project, Guid channelId) =>
         project.AllCues().OfType<MediaCueNode>()
             .Count(cue => cue.Sends.Any(send => send.LogicalChannelId == channelId));
@@ -193,7 +193,7 @@ public static class ProjectReferences
             found.Add(new ProjectReference("document", null!, "it is the clock master"));
 
         // The rig monitors THROUGH a line, so deleting that line silently sends audition back to the
-        // bay's default — which is a different pair of speakers, discovered mid-show.
+        // bay's default - which is a different pair of speakers, discovered mid-show.
         if (project.Audition.AudioLineId == id)
             found.Add(new ProjectReference("document", null!, "the audition rig monitors through it"));
 

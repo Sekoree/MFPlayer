@@ -15,7 +15,7 @@ namespace HaCue2.Core.Tests;
 /// </para>
 /// <para>
 /// <b>Collected, so nothing runs beside it.</b> These tests redirect the machine-local root with an
-/// environment variable, which is process-wide — a second class touching the same storage in parallel
+/// environment variable, which is process-wide - a second class touching the same storage in parallel
 /// would read a root this one had just repointed, and the failure would depend on timing.
 /// </para>
 /// </remarks>
@@ -98,7 +98,7 @@ public class RecoveryStoreTests : IDisposable
         await RecoveryStore.SaveAsync(
             fixture.Project, path, edits: 1, keepCopies: 5, DateTimeOffset.Now);
 
-        // The file never existed on disk. This is the case recovery matters MOST in — the copy may be
+        // The file never existed on disk. This is the case recovery matters MOST in - the copy may be
         // all that is left of the show.
         Assert.Single(RecoveryStore.Scan());
     }

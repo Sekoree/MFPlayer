@@ -44,7 +44,7 @@ public sealed class PatchTests
     }
 
     /// <summary>
-    /// Several logical outputs summing into one device channel is legal and is NOT normalized —
+    /// Several logical outputs summing into one device channel is legal and is NOT normalized -
     /// summing is the operator's decision, and meters make the result visible.
     /// </summary>
     [Fact]
@@ -188,7 +188,7 @@ public sealed class PatchTests
     }
 
     /// <summary>
-    /// A cell naming a deleted channel is reported and skipped — never slid onto a neighbouring
+    /// A cell naming a deleted channel is reported and skipped - never slid onto a neighbouring
     /// channel, which is how a recall ends up feeding the wrong speaker.
     /// </summary>
     [Fact]
@@ -381,7 +381,7 @@ public sealed class PatchTests
 
         ProjectEdits.DeleteAudioLine(journal, Guid.NewGuid());
 
-        // No command, so no undo entry — a stale row double-clicked must not push an empty step onto
+        // No command, so no undo entry - a stale row double-clicked must not push an empty step onto
         // the stack and make the next undo do nothing visible.
         Assert.False(journal.CanUndo);
         Assert.Equal(2, show.Project.AudioLines.Count);

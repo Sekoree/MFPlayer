@@ -11,7 +11,7 @@ namespace HaCue2.Controls;
 /// <remarks>
 /// A <see cref="Avalonia.Controls.Shapes.Path"/> with <c>Stretch="Fill"</c> cannot do this. Stretch maps
 /// the geometry's BOUNDING BOX to the control, not the lane's coordinate domain, so an envelope that
-/// occupies the middle third of a cue would be drawn across the whole lane — and a shallow ride would
+/// occupies the middle third of a cue would be drawn across the whole lane - and a shallow ride would
 /// be stretched to full height. Both are worse than wrong: they are plausible.
 /// <para>
 /// Drawing from fractions also means the view-model never holds pixels, and the lane rescales for free

@@ -6,7 +6,7 @@ namespace HaPlay.Tests;
 
 /// <summary>
 /// The visualizer cue's placement spec must carry the Effects-tab color stage (chroma key,
-/// brightness/contrast) like a media cue's does — 2026-07-21 report: the coordinator's
+/// brightness/contrast) like a media cue's does - 2026-07-21 report: the coordinator's
 /// visualizer mapping dropped both, so the controls silently did nothing on visualizer layers.
 /// </summary>
 public sealed class VisualizerPlacementEffectsTests

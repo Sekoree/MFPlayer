@@ -30,7 +30,7 @@ public partial class SettingsWindow : Window
     /// </summary>
     /// <remarks>
     /// The token is the whole of the remote API's authentication, so a laptop that left the building
-    /// is a reason to make the old one stop working — and there was no way to say so.
+    /// is a reason to make the old one stop working - and there was no way to say so.
     /// </remarks>
     private void OnRotateToken(object? sender, RoutedEventArgs e) =>
         (DataContext as SettingsViewModel)?.RotateRemoteToken();
@@ -58,7 +58,7 @@ public partial class SettingsWindow : Window
         {
             if (YouTubeRuntime.Downloads.Snapshot().HasWork)
             {
-                settings.CacheNote = "YouTube download in progress — wait for it to finish before clearing the cache";
+                settings.CacheNote = "YouTube download in progress - wait for it to finish before clearing the cache";
                 return;
             }
             settings.ClearYouTubeCache();
@@ -76,8 +76,8 @@ public partial class SettingsWindow : Window
 
     /// <summary>Hands the Project status pane's button back to whoever opened this window.</summary>
     /// <remarks>
-    /// The settings window cannot build the report itself — it holds the project and the journal, not
-    /// the machine environment or the project path — so the host supplies the verb and this is the
+    /// The settings window cannot build the report itself - it holds the project and the journal, not
+    /// the machine environment or the project path - so the host supplies the verb and this is the
     /// button that calls it.
     /// </remarks>
     private void OnOpenProjectStatus(object? sender, RoutedEventArgs e) =>

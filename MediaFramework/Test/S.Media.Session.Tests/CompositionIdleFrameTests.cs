@@ -186,7 +186,7 @@ public sealed class CompositionIdleFrameTests
     }
 
     /// <summary>
-    /// Without the flag the pump still waits for a layer — a media player must not light a screen.
+    /// Without the flag the pump still waits for a layer - a media player must not light a screen.
     /// </summary>
     /// <remarks>
     /// The two answers are both right for somebody, which is why this is opt-in rather than the new

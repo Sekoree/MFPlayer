@@ -16,7 +16,7 @@ public readonly record struct TimelineSpan(int StartMs, int EndMs)
 /// <para>
 /// "Duck under…" is an AUTHORING helper, not a runtime effect: it writes ordinary keyframes into the
 /// bed's own volume track, and once written they are indistinguishable from ones somebody dragged. That
-/// is the point — the operator can see exactly what will happen and fix it by hand, rather than
+/// is the point - the operator can see exactly what will happen and fix it by hand, rather than
 /// trusting a live side-chain nobody can inspect during a show.
 /// </para>
 /// <para>
@@ -27,7 +27,7 @@ public readonly record struct TimelineSpan(int StartMs, int EndMs)
 /// </remarks>
 public static class DuckMath
 {
-    /// <summary>Touching edges do NOT overlap — a voice-over starting exactly at the bed's end needs no duck.</summary>
+    /// <summary>Touching edges do NOT overlap - a voice-over starting exactly at the bed's end needs no duck.</summary>
     public static bool Overlaps(TimelineSpan a, TimelineSpan b) =>
         a.StartMs < b.EndMs && b.StartMs < a.EndMs;
 
@@ -35,7 +35,7 @@ public static class DuckMath
     /// Sorts and merges overlapping or touching spans.
     /// </summary>
     /// <remarks>
-    /// Adjacent spans merge so back-to-back voice-overs make ONE dip — the alternative is the bed
+    /// Adjacent spans merge so back-to-back voice-overs make ONE dip - the alternative is the bed
     /// bobbing up between two sentences, which is the artefact ducking is supposed to prevent.
     /// </remarks>
     public static IReadOnlyList<TimelineSpan> Merge(IEnumerable<TimelineSpan> spans)
@@ -67,7 +67,7 @@ public static class DuckMath
     /// <remarks>
     /// Per merged overlap the dip spans <c>[start − lead − ramp, end + lead + ramp]</c> in bed time,
     /// with four points: restore, depth, depth, restore. The restore LEVELS are the bed's own track
-    /// sampled at the dip edges — a bed already riding at −6 dB stays at −6 outside the dip rather
+    /// sampled at the dip edges - a bed already riding at −6 dB stays at −6 outside the dip rather
     /// than being yanked to unity. Existing points inside a dip are replaced; ones outside survive.
     /// </remarks>
     public static IReadOnlyList<AutomationKeyframe> ApplyDucks(

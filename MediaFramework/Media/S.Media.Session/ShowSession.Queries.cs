@@ -133,13 +133,13 @@ public sealed partial class ShowSession
     /// A/V trim applied to every voice's video scheduling: the amount SUBTRACTED from the clock
     /// before frames are picked (see <see cref="Players.VideoPlayer.PlayheadOffset"/>), so a
     /// positive value shows every picture LATER and a negative one earlier. Applied to voices as
-    /// they commit AND pushed to everything currently sounding — the knob is set by eye at the
+    /// they commit AND pushed to everything currently sounding - the knob is set by eye at the
     /// venue, against running content.
     /// </summary>
     /// <remarks>
     /// This is the session-level surface for a venue's display-chain latency: the pipeline aligns
     /// picture and sound at the machine's edge, but a projector adds frames of processing after
-    /// that, and only an operator's eye can measure glass. One number for the whole show — it is a
+    /// that, and only an operator's eye can measure glass. One number for the whole show - it is a
     /// property of the venue, not of any cue.
     /// </remarks>
     public TimeSpan VideoPlayheadOffset

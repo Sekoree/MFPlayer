@@ -140,7 +140,7 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Opens a project in its own shell window — the one route every "open" in the app takes.
+    /// Opens a project in its own shell window - the one route every "open" in the app takes.
     /// </summary>
     /// <remarks>
     /// Public because the File menu needs it too: switching project means a NEW window rather than
@@ -159,7 +159,7 @@ public partial class App : Application
     /// </remarks>
     public static void ShowNewProject(HaCueProject project) => Open(project, "", isNew: true).Show();
 
-    /// <summary>Returns to the launcher — what "close project" leaves the operator looking at.</summary>
+    /// <summary>Returns to the launcher - what "close project" leaves the operator looking at.</summary>
     public static void ShowLauncher() => OpenLauncher().Show();
 
     private static LauncherWindow OpenLauncher()
@@ -167,12 +167,12 @@ public partial class App : Application
         var vm = new LauncherViewModel(Settings, Machine);
         var window = new LauncherWindow { DataContext = vm };
 
-        // Every route into the shell now goes through here — a recent, a recovered autosave, a file
+        // Every route into the shell now goes through here - a recent, a recovered autosave, a file
         // the operator picked, or a new project. There is no longer a path that opens the sample
         // whatever was clicked.
         vm.ProjectOpened += (project, path) =>
         {
-            // A new project is the only route that arrives with no path — a recovered autosave is
+            // A new project is the only route that arrives with no path - a recovered autosave is
             // adopted under its ORIGINAL file's, so it has somewhere to go already.
             Open(project, path, isNew: path.Length == 0).Show();
             window.Close();
@@ -191,7 +191,7 @@ public partial class App : Application
 
         // Recorded on the FIRST save too, not only at open: a project created in this session and
         // saved from the picker below would otherwise be missing from the launcher's recents until the
-        // next time somebody opened it by hand — which is the one time they cannot, because it is not
+        // next time somebody opened it by hand - which is the one time they cannot, because it is not
         // in the list.
         shell.Saved += saved => NoteOpened(shell, saved);
 
@@ -223,13 +223,13 @@ public partial class App : Application
     /// <remarks>
     /// <para>
     /// What a file manager does when a <c>.hacue2proj</c> is double-clicked, what a desktop entry's
-    /// <c>%f</c> passes, and what a booth start-up script wants — none of which had any route in: the
+    /// <c>%f</c> passes, and what a booth start-up script wants - none of which had any route in: the
     /// app always opened the launcher and made somebody click through it.
     /// </para>
     /// <para>
     /// A path that cannot be opened falls through to the LAUNCHER rather than failing: the operator
     /// still gets a window they can pick a different show from, which is the same rule the launcher's
-    /// own file picker follows. Reading the file synchronously is deliberate — this runs before any
+    /// own file picker follows. Reading the file synchronously is deliberate - this runs before any
     /// window exists, and there is nothing yet to show a spinner on.
     /// </para>
     /// </remarks>
@@ -258,7 +258,7 @@ public partial class App : Application
     /// The machine-scope settings, loaded once at start-up.
     /// </summary>
     /// <remarks>
-    /// Read before any window so the operator's theme and density are in place for the FIRST layout —
+    /// Read before any window so the operator's theme and density are in place for the FIRST layout -
     /// applying them afterwards makes the app visibly re-flow on the first look at it.
     /// </remarks>
     private static AppSettings? _settings;
@@ -269,7 +269,7 @@ public partial class App : Application
     /// <remarks>
     /// Set by the desktop head, which must read them BEFORE this class runs: which audio backend to
     /// open is one of them, and the backend is chosen at the composition root. Loaded lazily when
-    /// nothing set them — a preview or a headless capture has no head — and never loaded twice, so a
+    /// nothing set them - a preview or a headless capture has no head - and never loaded twice, so a
     /// second read cannot discard the choice the backend was picked from.
     /// </remarks>
     public static AppSettings Settings
@@ -284,7 +284,7 @@ public partial class App : Application
     /// <remarks>
     /// Started AFTER the window exists and without awaiting it: opening devices and a decoder takes
     /// long enough to be visible, and an app that shows nothing until the audio interface answers
-    /// looks broken. The editor is fully usable in the meantime — the transport simply moves the
+    /// looks broken. The editor is fully usable in the meantime - the transport simply moves the
     /// cursor until the session is up.
     /// </remarks>
     private static ShellWindow Live(ShellViewModel shell, bool isNew = false)
@@ -301,7 +301,7 @@ public partial class App : Application
             try
             {
                 // BEFORE the autosave and the engine. Autosave writes beside the project file, so a
-                // show still waiting to be told where it lives has nowhere to put its recovery copy —
+                // show still waiting to be told where it lives has nowhere to put its recovery copy -
                 // which is exactly the window a crash during the first hour would fall into.
                 if (isNew)
                     await window.AskWhereToSaveAsync();
@@ -311,7 +311,7 @@ public partial class App : Application
             }
             catch (Exception failure)
             {
-                shell.FileMessage = $"the show engine could not start — {failure.Message}";
+                shell.FileMessage = $"the show engine could not start - {failure.Message}";
             }
         }
 
@@ -348,7 +348,7 @@ public partial class App : Application
     /// </summary>
     /// <remarks>
     /// Set by the desktop head before the app starts, because WHICH audio backend to enumerate is a
-    /// composition-root decision — PortAudio and miniaudio see different devices on the same machine.
+    /// composition-root decision - PortAudio and miniaudio see different devices on the same machine.
     /// Left at <see cref="MachineFacts.Nothing"/> for a preview or a headless capture, which probes
     /// files (no hardware needed) and reports every device as Unknown rather than inventing one.
     /// </remarks>

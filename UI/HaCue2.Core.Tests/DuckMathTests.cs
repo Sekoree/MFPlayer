@@ -33,7 +33,7 @@ public sealed class DuckMathTests
             new TimelineSpan(5000, 6000),
         ]);
 
-        // Two sentences with no gap must not let the bed bob up between them — that artefact is what
+        // Two sentences with no gap must not let the bed bob up between them - that artefact is what
         // ducking exists to prevent.
         Assert.Equal(2, merged.Count);
         Assert.Equal(new TimelineSpan(0, 2000), merged[0]);
@@ -47,7 +47,7 @@ public sealed class DuckMathTests
             [new TimelineSpan(20_000, 30_000)],
             depthDb: -12, rampMs: 500, leadMs: 250);
 
-        // restore · depth · depth · restore — nothing an operator could not have dragged themselves.
+        // restore · depth · depth · restore - nothing an operator could not have dragged themselves.
         Assert.Equal(4, ducked.Count);
         Assert.True(ducked[1].Y < ducked[0].Y);
         Assert.Equal(ducked[1].Y, ducked[2].Y, 4);
@@ -146,7 +146,7 @@ public sealed class DuckMathTests
     [Fact]
     public void SamplingAnEmptyLaneIsUnity()
     {
-        // No automation means no attenuation — the honest reading of "nobody drew anything".
+        // No automation means no attenuation - the honest reading of "nobody drew anything".
         Assert.Equal(1, DuckMath.Sample([], 0.5));
     }
 

@@ -9,13 +9,13 @@ namespace HaCue2.Engine;
 /// <remarks>
 /// <para>
 /// Black is a real answer rather than a placeholder. A cue player's projector is switched on for the
-/// evening, and between cues it has to be showing something the audience can look at — black is what
+/// evening, and between cues it has to be showing something the audience can look at - black is what
 /// every desk in the building means by "nothing", and leaving the last frame of the previous cue up is
 /// how a video ends on a freeze-frame of somebody mid-blink.
 /// </para>
 /// <para>
 /// It is also what makes an output EXIST. An <c>IVideoOutput</c> is configured by its first submitted
-/// frame, so a composition that submits nothing leaves a window that was never created — no error, no
+/// frame, so a composition that submits nothing leaves a window that was never created - no error, no
 /// window, nothing to tell an operator why the projector they just added is dark.
 /// </para>
 /// </remarks>
@@ -58,7 +58,7 @@ public static class IdleFrames
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A holding slate is rarely the canvas's own shape — it is a logo, or a photograph somebody had —
+    /// A holding slate is rarely the canvas's own shape - it is a logo, or a photograph somebody had -
     /// and it used to be submitted at its own raster and stretched to fill, which is the one option
     /// that always looks wrong. Every fit the app offers a LAYER is offered here for the same reason
     /// and computed the same way.
@@ -66,7 +66,7 @@ public static class IdleFrames
     /// <para>
     /// Done once per idle image rather than per frame: <c>ApplyIdleFramesAsync</c> gates the whole
     /// decode on a signature, so this runs when the operator changes the picture and not otherwise.
-    /// Bilinear rather than nearest — a slate is a still somebody is looking at for minutes.
+    /// Bilinear rather than nearest - a slate is a still somebody is looking at for minutes.
     /// </para>
     /// </remarks>
     public static VideoFrame Fitted(VideoFrame source, int width, int height, LayerFit fit)
@@ -168,7 +168,7 @@ public static class IdleFrames
         {
             LayerFit.Cover => (Math.Max(toWidth, toHeight), Math.Max(toWidth, toHeight)),
             LayerFit.Stretch => (toWidth, toHeight),
-            // Its own size, centred — neither scaled up nor cropped.
+            // Its own size, centred - neither scaled up nor cropped.
             LayerFit.Center => (1, 1),
             LayerFit.FillWidth => (toWidth, toWidth),
             LayerFit.FillHeight => (toHeight, toHeight),

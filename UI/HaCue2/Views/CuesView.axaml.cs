@@ -15,7 +15,7 @@ namespace HaCue2.Views;
 /// </summary>
 /// <remarks>
 /// There is no selection handler here any more. The cue tree's <c>HierarchicalTreeDataGridSource</c>
-/// owns its selection model and the view-model subscribes to it directly — one place decides what is
+/// owns its selection model and the view-model subscribes to it directly - one place decides what is
 /// selected, rather than a control event and a bound property that can disagree.
 /// </remarks>
 public partial class CuesView : UserControl
@@ -27,7 +27,7 @@ public partial class CuesView : UserControl
         InitializeComponent();
 
         // PANIC is the one control in the app that is HELD rather than clicked, so it needs the raw
-        // pointer edges — and Button marks PointerPressed and PointerReleased HANDLED in its own class
+        // pointer edges - and Button marks PointerPressed and PointerReleased HANDLED in its own class
         // handler, which runs before any instance handler on the same control. Declared in markup, the
         // hold handlers were therefore never called and the button did nothing whatsoever.
         //
@@ -103,7 +103,7 @@ public partial class CuesView : UserControl
     /// </summary>
     /// <remarks>
     /// The network scan happens on a worker so the transport and active-cue controls stay responsive
-    /// during the discovery window — and the add row says it is running, because two seconds of a
+    /// during the discovery window - and the add row says it is running, because two seconds of a
     /// click doing nothing visible is indistinguishable from a click that missed. The latch also stops
     /// a second click starting a second scan and stacking a second dialog on top of the first.
     /// </remarks>
@@ -187,7 +187,7 @@ public partial class CuesView : UserControl
     private void OnRemove(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.RemoveSelected();
 
-    // The transport. GO always works (register item 3) — with no session it moves the cursor, which
+    // The transport. GO always works (register item 3) - with no session it moves the cursor, which
     // is the half that can be right without one.
     private void OnGo(object? sender, RoutedEventArgs e) => (DataContext as CuesViewModel)?.Go();
 
@@ -225,7 +225,7 @@ public partial class CuesView : UserControl
             _ = cues.SeekGroupAsync(groupId, e.Fraction);
     }
 
-    /// <summary>Double-tap on a group header toggles its expander — a larger target than the ▾.</summary>
+    /// <summary>Double-tap on a group header toggles its expander - a larger target than the ▾.</summary>
     private void OnToggleGroupRow(object? sender, TappedEventArgs e)
     {
         if ((sender as Control)?.DataContext is ActiveGroupRow row)
@@ -279,7 +279,7 @@ public partial class CuesView : UserControl
     private void OnFireSelected(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.FireSelected();
 
-    /// <summary>Auditions the selected cue. Monitoring only — it never reaches the program mix.</summary>
+    /// <summary>Auditions the selected cue. Monitoring only - it never reaches the program mix.</summary>
     private void OnPreview(object? sender, RoutedEventArgs e) =>
         (DataContext as CuesViewModel)?.PreviewSelected();
 
@@ -288,7 +288,7 @@ public partial class CuesView : UserControl
     /// </summary>
     /// <remarks>
     /// It is the one control an operator reaches for without reading, so a mis-click must not take the
-    /// show down — but it also must not be behind a confirmation dialog, because the moment somebody
+    /// show down - but it also must not be behind a confirmation dialog, because the moment somebody
     /// needs it is the moment they have no attention left for a second decision. Holding is the
     /// compromise: one gesture, unmistakably deliberate, and the button reads HOLD… while it happens
     /// so a press that is working looks like one.
@@ -302,7 +302,7 @@ public partial class CuesView : UserControl
     private void OnPanicReleased(object? sender, PointerReleasedEventArgs e) =>
         (DataContext as CuesViewModel)?.CancelPanic();
 
-    /// <summary>A pointer that left the button abandons the hold — the mis-click escape hatch.</summary>
+    /// <summary>A pointer that left the button abandons the hold - the mis-click escape hatch.</summary>
     private void OnPanicCaptureLost(object? sender, PointerCaptureLostEventArgs e) =>
         (DataContext as CuesViewModel)?.CancelPanic();
 

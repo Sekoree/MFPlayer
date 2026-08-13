@@ -302,7 +302,7 @@ public sealed record ShowClipBinding(
     /// long before the show needs it.
     /// </para>
     /// <para>
-    /// It excludes the clip from the WARM only. The cue still fires normally — it simply opens at that
+    /// It excludes the clip from the WARM only. The cue still fires normally - it simply opens at that
     /// moment, which is where every cue was before pre-roll existed.
     /// </para>
     /// </remarks>

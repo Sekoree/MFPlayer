@@ -11,7 +11,7 @@ namespace HaCue2.Core.Tests;
 /// <remarks>
 /// <para>
 /// Records what a cue asked for instead of doing it, so <see cref="CueExecutor"/>'s decisions can be
-/// asserted without a session, a device or a socket. Waits complete instantly — a test of chain logic
+/// asserted without a session, a device or a socket. Waits complete instantly - a test of chain logic
 /// must not take as long as the show it describes.
 /// </para>
 /// <para>The timeline clock is virtual: scheduler waits advance it immediately, preserving authored
@@ -25,7 +25,7 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
     /// <summary>Cues handed to the session, in the order they were fired.</summary>
     public List<Guid> Played { get; } = [];
 
-    /// <summary>Every standby move, as (list, cue) — null cue means the cursor was cleared.</summary>
+    /// <summary>Every standby move, as (list, cue) - null cue means the cursor was cleared.</summary>
     public List<(Guid List, Guid? Cue)> Standby { get; } = [];
 
     public List<Guid> Stopped { get; } = [];
@@ -48,10 +48,10 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
     /// <summary>What is sounding. Settable, so "fade everything" has something to act on.</summary>
     public List<Guid> SoundingCues { get; } = [];
 
-    /// <summary>Makes the next <see cref="PlayAsync"/> report failure — a clip that would not open.</summary>
+    /// <summary>Makes the next <see cref="PlayAsync"/> report failure - a clip that would not open.</summary>
     public bool PlayFails { get; set; }
 
-    /// <summary>Makes waits report cancellation — the show stopping mid-chain.</summary>
+    /// <summary>Makes waits report cancellation - the show stopping mid-chain.</summary>
     public bool Cancelled { get; set; }
 
     /// <summary>What <see cref="SendActionAsync"/> answers. Null is success.</summary>

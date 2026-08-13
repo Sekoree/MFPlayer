@@ -12,7 +12,7 @@ namespace HaCue2.Core.Tests;
 /// </summary>
 /// <remarks>
 /// Both used to be invented, and both are the kind of value where a plausible wrong answer costs more
-/// than a blank one — an output that reads "live" over a window that never opened, or a "last seen"
+/// than a blank one - an output that reads "live" over a window that never opened, or a "last seen"
 /// stamp over a console the app has never successfully reached.
 /// </remarks>
 public class OutputStatusTests
@@ -23,7 +23,7 @@ public class OutputStatusTests
     public void AnOutputThatNamesNoCompositionIsUnopenedAndSaysWhy()
     {
         // A SENDER, not a local screen. Outputs are created unbound now, and a local screen with no
-        // composition deliberately opens anyway showing black — an operator who has just added a
+        // composition deliberately opens anyway showing black - an operator who has just added a
         // projector needs to see where it landed. An NDI source with no canvas is a name on the
         // network carrying black, so it stays closed and says so.
         var output = new VideoOutputDefinition
@@ -136,7 +136,7 @@ public class OutputStatusTests
     /// <remarks>
     /// The receiver is not optional. <c>OSCClient</c> CONNECTS its UDP socket, so a datagram sent to a
     /// closed port comes back as an ICMP port-unreachable and is raised as a <c>SocketException</c> on
-    /// the NEXT send — which is correct behaviour and is exactly what a test that sends twice into the
+    /// the NEXT send - which is correct behaviour and is exactly what a test that sends twice into the
     /// void would trip over, having proved nothing about this class.
     /// </remarks>
     private static (ActionEndpoint Endpoint, UdpClient Receiver) Loopback()
@@ -157,7 +157,7 @@ public class OutputStatusTests
         Assert.Null(await sender.SendAsync(
             new ActionCueNode { Label = "Go desk", Address = "/eos/cue/7.2" }, endpoint));
 
-        // Sent, not understood — the column only ever promises the first, which is why it holds the
+        // Sent, not understood - the column only ever promises the first, which is why it holds the
         // address rather than anything about the desk's reply.
         var sent = Assert.Contains(endpoint.Id, sender.LastSent);
         Assert.StartsWith("/eos/cue/7.2 · ", sent, StringComparison.Ordinal);
@@ -203,7 +203,7 @@ public class OutputStatusTests
         outputs.Sync(project);
 
         // Opening only at start-up meant a screen added mid-session stayed dark with nothing saying
-        // why — and an operator adding a projector during a get-in had no way to find that out.
+        // why - and an operator adding a projector during a get-in had no way to find that out.
         Assert.DoesNotContain(added.Id, outputs.Unopened);
         Assert.Contains(outputs.Recorders, entry => entry.Key == added.Id);
     }

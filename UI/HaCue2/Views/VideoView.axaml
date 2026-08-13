@@ -11,14 +11,14 @@
 
   <!-- Screens 09–10: Outputs · Compositions · Mapping · Audition.
 
-       The tab order is the order of the WORK. An output is a piece of this machine — a screen, a
-       sender, a recorder — and exists before any show is authored against it. A composition is a
+       The tab order is the order of the WORK. An output is a piece of this machine - a screen, a
+       sender, a recorder - and exists before any show is authored against it. A composition is a
        decision about the show, and choosing which outputs it feeds is where the two meet. Mapping is
        the fine adjustment between them, and there is nothing to adjust until both ends exist. -->
 
   <UserControl.Styles>
     <!-- Which canvas the FEEDS rail is assigning to. Every pane is open at once and each edits itself,
-         so nothing else on the screen said which one the rail on the right belonged to — an operator
+         so nothing else on the screen said which one the rail on the right belonged to - an operator
          could press + ASSIGN having read the name on a different pane. The app's own selection wash,
          the same one the cue list uses. -->
     <Style Selector="Border.canvas">
@@ -218,7 +218,7 @@
                 <TextBlock Classes="mono dim3 small" TextWrapping="Wrap" Text="{Binding MappingNote}" />
               </ContentControl>
               <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding IsOutputLocal}">
-                <Button Classes="block" Content="IDENTIFY — FLASH OUTPUT NAME ON SCREEN"
+                <Button Classes="block" Content="IDENTIFY - FLASH OUTPUT NAME ON SCREEN"
                         Click="OnIdentify" />
               </ContentControl>
               <!-- Held rather than shown in a dialog: IDENTIFY refuses for ordinary reasons, and a
@@ -317,7 +317,7 @@
 
         <!-- One EXPANDER per composition, each carrying its own editor. A single shared editor pane
              driven by a click on a pane that gave no sign it was selectable stopped scaling at the
-             second canvas — and a show with a projector and a stream has two on day one. Collapsing
+             second canvas - and a show with a projector and a stream has two on day one. Collapsing
              is what makes six of them manageable; the header keeps the name, size and feed count
              visible while closed, so the list still answers "what is on this rig" at a glance. -->
         <DockPanel Grid.Column="0">
@@ -381,7 +381,7 @@
                              nothing when dragged. There is one now. -->
                         <!-- No GuidesX/GuidesY here, deliberately. They ARE this canvas's own slice
                              edges, so once it became editable every drag found a guide exactly where
-                             the dragged edge already was and snapped to itself — which is a snap that
+                             the dragged edge already was and snapped to itself - which is a snap that
                              can never reach anything else. The canvas derives its guides from the
                              other boxes and skips the one being dragged, which is the same feature
                              done correctly. The pane's guides remain what a CUE placement snaps to. -->
@@ -448,7 +448,7 @@
                             <Border Classes="badge"><TextBlock Text="FEEDS" /></Border>
                             <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
                                        IsVisible="{Binding HasNoFeeds}"
-                                       Text="no output shows this canvas — assign one on the right" />
+                                       Text="no output shows this canvas - assign one on the right" />
                             <ItemsControl ItemsSource="{Binding Feeds}">
                               <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -483,7 +483,7 @@
 
                What is left here is the half of the layout a drag cannot deliver. A canvas alone
                cannot hit exactly half, which is the number a two-projector wall is made of, so the
-               slice a screen takes is typable as well as draggable — and a slice and the screen it
+               slice a screen takes is typable as well as draggable - and a slice and the screen it
                lands on are two different sizes, which is why the raster sits beside it: half of a
                1920×2160 stacked canvas is still a 1920×1080 projector. -->
           <c:PanelBox Grid.Row="0" Header="{Binding SelectedOutputName}" Hint="selected screen">
@@ -541,7 +541,7 @@
           </c:PanelBox>
 
           <!-- The assignment pane. It is on the COMPOSITION rather than in the add-output dialog
-               because an operator decides where a canvas goes once the canvas exists — and being
+               because an operator decides where a canvas goes once the canvas exists - and being
                asked which composition a brand-new output shows, on a project that has none, was the
                first question the old flow put in front of anybody. -->
           <!-- Named rather than "this composition": the panes are all open at once, so a rail that
@@ -588,11 +588,11 @@
 
       <!-- ══ MAPPING ════════════════════════════════════════════════════════════════════════
            Always the mapping OF ONE OUTPUT: the same Cyc is warped for Projector A and clean for the
-           lobby TV. Every geometry field is a number as well as a drag — a canvas alone cannot hit
+           lobby TV. Every geometry field is a number as well as a drag - a canvas alone cannot hit
            exactly half, which is the number a two-projector blend is made of.
 
            No longer a tab. It sits OVER the Outputs pane, opened from the output it belongs to and
-           closed again — a top-level tab asked the operator to remember which output they were
+           closed again - a top-level tab asked the operator to remember which output they were
            looking at while showing them a pane that did not say. -->
       <DockPanel IsVisible="{Binding IsMappingOpen}" Margin="7"
                  Background="{DynamicResource BoothBg}">
@@ -602,7 +602,7 @@
             <Border Grid.Column="0" Classes="badge"><TextBlock Text="MAPPING" /></Border>
             <TextBlock Grid.Column="1" Classes="mono small" VerticalAlignment="Center"
                        Text="{Binding MappingScopeNote}" />
-            <!-- A real latch, so unlike the inspector key this stays a ToggleButton — but an explicit
+            <!-- A real latch, so unlike the inspector key this stays a ToggleButton - but an explicit
                  theme, because a bare one misses the booth skin entirely (an implicit ControlTheme
                  matches the exact type, and ToggleButton is not Button), and OneWay, because
                  IsCalibrationOn is COMPUTED from the calibrating set. Bound two-way it tried to write a
@@ -630,7 +630,7 @@
                              Value="{Binding SplitRows}" />
               <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" Text="rows" />
               <Button Classes="tight" Content="SPLIT" Click="OnDialog" Tag="section:split"
-                      ToolTip.Tip="Replaces every section with an even grid, one per panel — then nudge each into place. This is how you hit exactly half." />
+                      ToolTip.Tip="Replaces every section with an even grid, one per panel - then nudge each into place. This is how you hit exactly half." />
             </StackPanel>
             <Button Classes="tight" Content="RESET" Click="OnDialog" Tag="section:reset"
                     ToolTip.Tip="Back to one section showing the whole canvas across the whole output" />
@@ -653,9 +653,9 @@
                   <Button Classes="tight" Content="–" Click="OnDialog" Tag="section:delete"
                           ToolTip.Tip="Remove the selected section" />
                   <Button Classes="tight" Content="↑" Click="OnDialog" Tag="section:up"
-                          ToolTip.Tip="Draw earlier — further back" />
+                          ToolTip.Tip="Draw earlier - further back" />
                   <Button Classes="tight" Content="↓" Click="OnDialog" Tag="section:down"
-                          ToolTip.Tip="Draw later — further front" />
+                          ToolTip.Tip="Draw later - further front" />
                 </WrapPanel>
               </Border>
             </c:PanelBox.Footer>
@@ -720,7 +720,7 @@
                              VerticalAlignment="Center" Text="Bright" />
                   <NumericUpDown Grid.Row="3" Grid.Column="1" Minimum="0" Maximum="2" Increment="0.05"
                                  FormatString="0.##" Value="{Binding Brightness}"
-                                 ToolTip.Tip="Panel brightness matching — 1.00 is the projector's own" />
+                                 ToolTip.Tip="Panel brightness matching - 1.00 is the projector's own" />
                   <TextBlock Grid.Row="3" Grid.Column="2" Grid.ColumnSpan="2" Classes="mono dim3 micro"
                              VerticalAlignment="Center" TextWrapping="Wrap"
                              Text="drag on the canvas · type for exact values" />

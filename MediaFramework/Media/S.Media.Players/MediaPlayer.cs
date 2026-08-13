@@ -342,8 +342,8 @@ public sealed class MediaPlayer : IDisposable
         PreparePlay(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill)();
 
     /// <summary>
-    /// The slow half of <see cref="Play"/> — prefill, hardware, decode spin-up, video buffer wait and
-    /// sync present — without starting the clocks; the returned action is the start edge. Exists so a
+    /// The slow half of <see cref="Play"/> - prefill, hardware, decode spin-up, video buffer wait and
+    /// sync present - without starting the clocks; the returned action is the start edge. Exists so a
     /// group fire can prepare every sibling first and then start them together (see
     /// <see cref="AvPlaybackCoordinator.PreparePlay"/> for why the split matters).
     /// </summary>
@@ -836,13 +836,13 @@ public sealed class MediaPlayer : IDisposable
     /// <para>
     /// Both halves matter and only together. The FACTORY builds the scaler a branch actually converts
     /// with; the PROBE answers whether a candidate branch format is reachable at all, which the router
-    /// asks while it is still choosing and before it commits. A router with neither — which is what
-    /// every player got, because nothing ever passed these — answers "no conversion is possible" for
+    /// asks while it is still choosing and before it commits. A router with neither - which is what
+    /// every player got, because nothing ever passed these - answers "no conversion is possible" for
     /// every pair, and rejects any fan-out branch whose format differs from the negotiated one.
     /// </para>
     /// <para>
     /// That is not an edge case. A player's PRIMARY video output is the discard sink it negotiates
-    /// against, so a composition layer is always a BRANCH — and the negotiated format is whatever the
+    /// against, so a composition layer is always a BRANCH - and the negotiated format is whatever the
     /// decoder produces natively, which for planar YUV sources is never the compositor's BGRA. It went
     /// unnoticed because most clips negotiate to a format the compositor already takes; a JPEG album
     /// cover in <c>yuvj420p</c> does not, and killed the cue it was placed on.
@@ -855,7 +855,7 @@ public sealed class MediaPlayer : IDisposable
         return new VideoRouterOptions(
             VideoCpuFrameConverterFactory: () => registry.CreateCpuConverter()
                 ?? throw new InvalidOperationException(
-                    "no CPU pixel converter is registered — add FFmpegModule to the media registry."),
+                    "no CPU pixel converter is registered - add FFmpegModule to the media registry."),
             VideoCpuFrameCanConvertProbe: registry.CanConvertCpu);
     }
 
@@ -1001,8 +1001,8 @@ public sealed class MediaPlayer : IDisposable
                     $"live video source delivered no frame within {LiveFirstFrameTimeout.TotalSeconds:0}s.");
 
             // WITH the registry's converter behind it. Without one the router's can-convert probe
-            // answers "no" for every pair, so every fan-out branch that needs a pixel conversion — which
-            // is every composition layer whose source is not already BGRA — is rejected and the route is
+            // answers "no" for every pair, so every fan-out branch that needs a pixel conversion - which
+            // is every composition layer whose source is not already BGRA - is rejected and the route is
             // rolled back, taking the whole cue with it. The options existed and their own doc comment
             // said to wire them from the registry; nothing ever did.
             router = new VideoRouter(null, routerOptions);

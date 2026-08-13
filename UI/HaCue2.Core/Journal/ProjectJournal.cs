@@ -17,7 +17,7 @@ namespace HaCue2.Core.Journal;
 /// </para>
 /// <para>
 /// "Is this project modified" is answered from the same place as "what changed", instead of being
-/// inferred separately from what actually happened — which is how a dirty flag ends up disagreeing
+/// inferred separately from what actually happened - which is how a dirty flag ends up disagreeing
 /// with the file on disk.
 /// </para>
 /// </remarks>
@@ -55,10 +55,10 @@ public sealed class ProjectJournal
     public IProjectCommand? NextUndo => _undo.Count > 0 ? _undo[^1] : null;
     public IProjectCommand? NextRedo => _redo.Count > 0 ? _redo[^1] : null;
 
-    /// <summary>Everything done since the journal was last reset, oldest first — the edit log.</summary>
+    /// <summary>Everything done since the journal was last reset, oldest first - the edit log.</summary>
     public IReadOnlyList<IProjectCommand> Log => _undo;
 
-    /// <summary>Set by <see cref="MarkDirty"/> — a change that will be SAVED but cannot be UNDONE.</summary>
+    /// <summary>Set by <see cref="MarkDirty"/> - a change that will be SAVED but cannot be UNDONE.</summary>
     private bool _dirtyOutsideTheStack;
 
     public bool IsDirty => _dirtyOutsideTheStack || !ReferenceEquals(NextUndo, _savedAt);
@@ -69,7 +69,7 @@ public sealed class ProjectJournal
     /// <remarks>
     /// <para>
     /// A snapshot recall and a patch cue firing both write real cell gains that travel in the file, and
-    /// neither belongs on the undo stack — "undo" means un-edit my document, never un-recall my
+    /// neither belongs on the undo stack - "undo" means un-edit my document, never un-recall my
     /// snapshot or un-fire my cue. But a document that differs from its file and reports itself clean
     /// is how those changes get lost at the end of the night.
     /// </para>
@@ -135,7 +135,7 @@ public sealed class ProjectJournal
     }
 
     /// <summary>
-    /// Ends the current coalescing group — the idle or blur boundary.
+    /// Ends the current coalescing group - the idle or blur boundary.
     /// </summary>
     /// <remarks>
     /// Called by the UI when a drag ends, a field loses focus, or an idle timer elapses. Without an
@@ -147,7 +147,7 @@ public sealed class ProjectJournal
     /// Groups everything done inside into ONE undo step.
     /// </summary>
     /// <remarks>
-    /// A multi-selection edit is one thing the operator did, so it is one thing to undo — matching
+    /// A multi-selection edit is one thing the operator did, so it is one thing to undo - matching
     /// what they meant rather than what the code looped over. Also how a delete-with-cleanup stays a
     /// single reversible action (register item 11).
     /// </remarks>
@@ -157,14 +157,14 @@ public sealed class ProjectJournal
     /// </param>
     /// <remarks>
     /// <para>
-    /// Opt-in, and deliberately so. An observer of this journal can be expensive — the shell re-runs
-    /// the whole project status pass on every change — and a bulk edit that raises one change per cue
+    /// Opt-in, and deliberately so. An observer of this journal can be expensive - the shell re-runs
+    /// the whole project status pass on every change - and a bulk edit that raises one change per cue
     /// pays that cost per cue. Importing a hundred files ran a hundred validation passes over a project
     /// that was growing with each one.
     /// </para>
     /// <para>
-    /// NOT the default, because a continuous gesture can be wrapped in a composite too — a patch-gain
-    /// drag, a layer move — and those want the views following the pointer. Only a caller that knows
+    /// NOT the default, because a continuous gesture can be wrapped in a composite too - a patch-gain
+    /// drag, a layer move - and those want the views following the pointer. Only a caller that knows
     /// its scope is a batch rather than a gesture asks for silence.
     /// </para>
     /// </remarks>
@@ -224,7 +224,7 @@ public sealed class ProjectJournal
     /// <summary>Marks the current state as saved. The hash and the dirty flag move together.</summary>
     /// <remarks>
     /// Closes the open coalescing group first. Without that, the next edit to the same property merges
-    /// into the command that was on top when the save happened — leaving the project reading CLEAN
+    /// into the command that was on top when the save happened - leaving the project reading CLEAN
     /// while it differs from the file on disk, which is the one lie a dirty flag must never tell.
     /// </remarks>
     public string MarkSaved()
@@ -333,7 +333,7 @@ public sealed class CompositeCommand(
 
     /// <summary>
     /// Reverts in REVERSE order. Forward order would be wrong the moment two steps touch the same
-    /// thing — undoing "delete channel" before "strip the sends that referenced it" puts the channel
+    /// thing - undoing "delete channel" before "strip the sends that referenced it" puts the channel
     /// back into a document that still has no sends.
     /// </summary>
     public void Revert(HaCueProject project)

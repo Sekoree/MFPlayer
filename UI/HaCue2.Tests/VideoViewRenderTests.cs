@@ -18,8 +18,8 @@ namespace HaCue2.Tests;
 /// </summary>
 /// <remarks>
 /// The view-model tests prove the panes EDIT; these prove the markup in front of them loads, binds and
-/// puts the controls on screen. They are different failures — a numeric field bound to a property that
-/// does not exist compiles cleanly and simply shows nothing — and this view was rebuilt around a new
+/// puts the controls on screen. They are different failures - a numeric field bound to a property that
+/// does not exist compiles cleanly and simply shows nothing - and this view was rebuilt around a new
 /// tab order, so "is the pane an operator is looking for even reachable" is the question worth asking.
 /// </remarks>
 public class VideoViewRenderTests
@@ -136,8 +136,8 @@ public class VideoViewRenderTests
             window, "Toggle persistent output calibration grid");
         var close = MappingControl<Button>(window, "Close mapping editor");
 
-        // It was a bare ToggleButton, so the booth theme — keyed off {x:Type Button}, and matched by
-        // EXACT type — never reached it: it drew in SimpleTheme's chrome, in Inter, beside the mono
+        // It was a bare ToggleButton, so the booth theme - keyed off {x:Type Button}, and matched by
+        // EXACT type - never reached it: it drew in SimpleTheme's chrome, in Inter, beside the mono
         // ✕ CLOSE key it shares a chain row with. Compared against that neighbour rather than against a
         // literal font, so the two stay in step when the skin moves.
         Assert.Equal(close.FontFamily, calibration.FontFamily);
@@ -164,7 +164,7 @@ public class VideoViewRenderTests
             window.MouseUp(centre, MouseButton.Left);
             Dispatcher.UIThread.RunJobs();
 
-            // Nothing turned the grid on — there is no engine behind this view, which is exactly the
+            // Nothing turned the grid on - there is no engine behind this view, which is exactly the
             // shape of the refusal an operator meets ("the show is not running"). The button had
             // already latched ITSELF on the click, and IsCalibrationOn is computed, so nothing in the
             // view-model moved to contradict it.

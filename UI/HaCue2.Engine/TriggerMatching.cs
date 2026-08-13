@@ -16,7 +16,7 @@ public readonly record struct TriggerSignal(
     double? Value,
     bool IsKeyboard = false)
 {
-    /// <summary>How the wire monitor shows it — the same text a binding is written in.</summary>
+    /// <summary>How the wire monitor shows it - the same text a binding is written in.</summary>
     public string Describe() => IsKeyboard
         ? Address
         : IsMidi
@@ -41,7 +41,7 @@ public readonly record struct TriggerSignal(
 /// <c>S.Control</c>'s, which already solved discovery, matching and hot-plug.
 /// </para>
 /// <para>
-/// A binding's <c>Input</c> is written the way the wire monitor prints it — "note 3 ch 1",
+/// A binding's <c>Input</c> is written the way the wire monitor prints it - "note 3 ch 1",
 /// "cc 7 ch 1", "/hacue/go". That is deliberate: an operator watching the monitor can copy what they
 /// see into a binding and have it work, which is what makes learn-by-hand possible before a Learn
 /// button exists.
@@ -73,7 +73,7 @@ public static class TriggerMatching
     /// as "note 3" that fired on release as well would fire every cue twice.
     /// </para>
     /// <para>
-    /// OSC matches on address, with a trailing <c>*</c> allowed — "/hacue/go*" catches "/hacue/go/2".
+    /// OSC matches on address, with a trailing <c>*</c> allowed - "/hacue/go*" catches "/hacue/go/2".
     /// Case-sensitive, because OSC addresses are.
     /// </para>
     /// </remarks>
@@ -107,7 +107,7 @@ public static class TriggerMatching
 
         var kind = words[0].ToLowerInvariant();
 
-        // "note off 3 ch 1" — two words for the kind. Checked before the single-word forms so "note"
+        // "note off 3 ch 1" - two words for the kind. Checked before the single-word forms so "note"
         // does not swallow it.
         var offset = 1;
 
@@ -140,7 +140,7 @@ public static class TriggerMatching
             offset++;
         }
 
-        // "ch N", or nothing — and nothing means any channel.
+        // "ch N", or nothing - and nothing means any channel.
         if (offset + 1 < words.Length
             && words[offset].Equals("ch", StringComparison.OrdinalIgnoreCase)
             && int.TryParse(words[offset + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var channel))
@@ -170,7 +170,7 @@ public static class TriggerMatching
 
     /// <summary>Turns what S.Control observed into the shape a binding is matched against.</summary>
     /// <remarks>
-    /// Returns null for anything that is not an inbound message a trigger could act on — an outbound
+    /// Returns null for anything that is not an inbound message a trigger could act on - an outbound
     /// record, or one carrying no address and no MIDI shape. Feeding those to the matcher would make
     /// every binding's behaviour depend on what the app itself had just sent.
     /// </remarks>

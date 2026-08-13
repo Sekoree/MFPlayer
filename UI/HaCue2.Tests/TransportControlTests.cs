@@ -39,7 +39,7 @@ public class TransportControlTests
             .OfType<Button>()
             .Single(button => AutomationProperties.GetName(button) == automationName);
 
-    /// <summary>A whole click — press AND release, which is what raises Click.</summary>
+    /// <summary>A whole click - press AND release, which is what raises Click.</summary>
     private static void Click(Window window, Control target)
     {
         var centre = target.TranslatePoint(
@@ -57,7 +57,7 @@ public class TransportControlTests
 
         // A templated control resolves its default ControlTheme by STYLE KEY, which is its own concrete
         // type unless it says otherwise. The booth theme keys the bar off {x:Type ProgressBar}, so
-        // without StyleKeyOverride the SeekBar found no theme, got no template and rendered NOTHING —
+        // without StyleKeyOverride the SeekBar found no theme, got no template and rendered NOTHING -
         // every playing cue showed an empty gap where its progress should be.
         Assert.NotEmpty(bar.GetVisualChildren());
     });
@@ -101,7 +101,7 @@ public class TransportControlTests
         Dispatcher.UIThread.RunJobs();
 
         // Button marks PointerPressed handled in its own class handler, which runs before any instance
-        // handler on the same control — so the markup-declared hold handlers were never called and
+        // handler on the same control - so the markup-declared hold handlers were never called and
         // PANIC did nothing at all, on any press.
         Assert.True(shell.Cues.IsPanicArming, "pressing PANIC did not begin the hold");
     });
@@ -167,7 +167,7 @@ public class TransportControlTests
         var inspector = TransportButton(view, "Show or hide cue inspector");
         var standby = TransportButton(view, "Move standby up");
 
-        // Avalonia resolves an implicit ControlTheme by STYLE KEY — the control's own concrete type.
+        // Avalonia resolves an implicit ControlTheme by STYLE KEY - the control's own concrete type.
         // ToggleButton is not Button, so the booth theme keyed off {x:Type Button} never reached it: it
         // drew in SimpleTheme's stock chrome beside eight mono booth keys, and `.tight`, which is
         // declared INSIDE that theme, styled nothing at all.
@@ -198,8 +198,8 @@ public class TransportControlTests
         var row = (ActiveGroupRow)expander.DataContext!;
 
         // The chevron theme templates a Path and flips its geometry on :checked. SimpleTheme's stock
-        // ToggleButton — which is what this got, because an implicit ControlTheme matches the exact type
-        // and the booth theme is keyed off {x:Type Button} — templates a ContentPresenter and would have
+        // ToggleButton - which is what this got, because an implicit ControlTheme matches the exact type
+        // and the booth theme is keyed off {x:Type Button} - templates a ContentPresenter and would have
         // drawn the literal "▾" that used to be its Content, in Inter, in a stock box.
         Assert.Single(expander.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>());
 
@@ -223,7 +223,7 @@ public class TransportControlTests
 
         var listScope = cues.Scopes.First(scope => scope.IsList);
 
-        // This threw ArgumentOutOfRangeException out of the selection-changed handler — and, because
+        // This threw ArgumentOutOfRangeException out of the selection-changed handler - and, because
         // the scope is set by a two-way binding, out of a binding setter, where Avalonia swallowed it
         // as a validation error and the rest of the refresh silently never ran.
         cues.SelectedScope = listScope;

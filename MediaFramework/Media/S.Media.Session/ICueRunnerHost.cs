@@ -39,7 +39,7 @@ internal interface ICueRunnerHost
         (TimeSpan Duration, FadeShape Curve)? crossfade);
 
     /// <summary>Fires one cue on a caller-owned transport group, waiting at the batch barriers: once when
-    /// armed (before commit), and — when <paramref name="waitForStartEdge"/> is given — once more when
+    /// armed (before commit), and - when <paramref name="waitForStartEdge"/> is given - once more when
     /// fully prepared, so every sibling's clocks start on one edge instead of staggering behind the
     /// serialized commits.</summary>
     Task<CueExecutionStatus> FireCueIndependentAtBarrierAsync(

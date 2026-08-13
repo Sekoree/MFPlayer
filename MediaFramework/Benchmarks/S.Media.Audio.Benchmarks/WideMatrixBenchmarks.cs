@@ -8,7 +8,7 @@ namespace S.Media.Audio.Benchmarks;
 /// "Performance budgets"): the fused kernel's published 8×8 datapoint says nothing about whether it
 /// scales linearly in cells to the 64-wide matrices the project audio patch allows, so the plan's
 /// cell-op budgets must come from these numbers, not from extrapolation. This class sweeps the dense
-/// S×S settled pass at the widths the design allows — linear-in-cells means Width=64 lands at ~64×
+/// S×S settled pass at the widths the design allows - linear-in-cells means Width=64 lands at ~64×
 /// the Width=8 time; a super-linear knee (SIMD efficiency loss, cache pressure) is exactly what
 /// Phase 0 exists to find before the budgets are frozen.
 /// </summary>
@@ -47,7 +47,7 @@ public class WideMatrixBenchmarks
 /// <summary>
 /// One whole audio chunk of the plan's program-sum topology at its stated maximums: 8 voices each
 /// sending N=2 source channels into a V=64-wide logical program bus, then one dense 64×64 pass per
-/// each of 8 terminals — the shape behind the plan's "≈1.6 ms per 10 ms chunk" claim. The bus is
+/// each of 8 terminals - the shape behind the plan's "≈1.6 ms per 10 ms chunk" claim. The bus is
 /// per-chunk scratch, exactly as the design requires (no queue). A per-pair (P×R) comparison is
 /// deliberately absent: the plan already rejects that topology arithmetically (~5× over deadline);
 /// measuring it would only characterize something nobody is building.

@@ -16,7 +16,7 @@ public partial class AuditionPane : UserControl
     /// </summary>
     /// <remarks>
     /// The level is stored as a number and rendered back with a unit, so the box has to be refreshed
-    /// from the document after a commit — otherwise it keeps showing exactly what was typed, including
+    /// from the document after a commit - otherwise it keeps showing exactly what was typed, including
     /// a value the parser rejected.
     /// </remarks>
     private void OnFieldCommitted(object? sender, RoutedEventArgs e) =>

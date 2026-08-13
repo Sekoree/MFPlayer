@@ -9,7 +9,7 @@ namespace HaCue2.Core.Tests;
 /// The rectangle a canvas drag moves: a layer placement, or a mapping section's source and target.
 /// </summary>
 /// <remarks>
-/// What is being pinned here is that a GESTURE — many events, one intent — leaves one undo step, and
+/// What is being pinned here is that a GESTURE - many events, one intent - leaves one undo step, and
 /// that a rectangle cannot be dragged off the canvas or down to nothing. Both are properties a
 /// compiling binding does not demonstrate, and both are how a placement gets lost with one slip.
 /// </remarks>
@@ -66,13 +66,13 @@ public sealed class RectEditTests
 
         journal.Do(RectEdits.Placement(fixture.Track, placement, new NormalizedRect(5, -3, 0.5, 0.5)));
 
-        // A placement is a picture positioned ON a canvas and may hang off it — a caption that bleeds
+        // A placement is a picture positioned ON a canvas and may hang off it - a caption that bleeds
         // off the bottom, a reveal that slides in from outside. It is still BOUNDED: a slip that threw
         // a layer a thousand canvases away would leave nothing on screen to drag back.
         Assert.Equal(1 + NormalizedRect.FreeReach, placement.X, 4);
         Assert.Equal(-NormalizedRect.FreeReach, placement.Y, 4);
 
-        // A drag that would collapse the box keeps enough of it to grab again — losing a layer to one
+        // A drag that would collapse the box keeps enough of it to grab again - losing a layer to one
         // slip with nothing left to click on is the failure this guards.
         journal.Do(RectEdits.Placement(fixture.Track, placement, new NormalizedRect(0.5, 0.5, 0, 0)));
 

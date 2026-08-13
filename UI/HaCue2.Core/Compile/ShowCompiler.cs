@@ -12,15 +12,15 @@ namespace HaCue2.Core.Compile;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The document is a PLAYBACK GRAPH, not a copy of the project: it carries what has to be playable —
-/// cues, the media each plays, the canvases, the audio endpoints — and nothing about how the show is
+/// The document is a PLAYBACK GRAPH, not a copy of the project: it carries what has to be playable -
+/// cues, the media each plays, the canvases, the audio endpoints - and nothing about how the show is
 /// authored. Numbers, notes, colour tags, the patch's editing conveniences and every control-flow cue
 /// stay on the project side, because none of them changes a sound or a picture.
 /// </para>
 /// <para>
 /// Modelled on HaPlay's <c>HaPlayShowMapper</c>, which has been compiling the same engine for real
 /// shows: media cues become clips, groups become runtime transport groups, and control-flow cues
-/// (action, fade, jump, patch, comment) have no document representation at all — they execute at the
+/// (action, fade, jump, patch, comment) have no document representation at all - they execute at the
 /// app's transport layer, which is the only place that can decide what they mean.
 /// </para>
 /// </remarks>
@@ -30,7 +30,7 @@ public static class ShowCompiler
     public const int DocumentVersion = ShowDocumentValidator.CurrentVersion;
 
     /// <summary>
-    /// Compiles the whole project — every cue list, merged into one document.
+    /// Compiles the whole project - every cue list, merged into one document.
     /// </summary>
     /// <remarks>
     /// Merged rather than one document per list because a show has one transport and one patch, and
@@ -76,7 +76,7 @@ public static class ShowCompiler
         };
     }
 
-    /// <summary>The runtime group id for a whole cue list — its own transport unit.</summary>
+    /// <summary>The runtime group id for a whole cue list - its own transport unit.</summary>
     public static string GroupId(CueList list) => list.Id.ToString("N");
 
     /// <summary>The runtime group id for a group cue inside a list.</summary>
@@ -88,7 +88,7 @@ public static class ShowCompiler
     /// <remarks>
     /// <para>
     /// A session group holds exactly one active voice: firing a second cue into it releases the first.
-    /// That is right for a PLAYLIST, where the whole point is that items replace each other — and wrong
+    /// That is right for a PLAYLIST, where the whole point is that items replace each other - and wrong
     /// for every mode whose children are meant to sound at once, which is both the timeline (a stab at
     /// five seconds must play over the bed rather than cut it) and all-together.
     /// </para>
@@ -106,7 +106,7 @@ public static class ShowCompiler
     /// Whether a group's children each need their own transport, rather than sharing one.
     /// </summary>
     /// <remarks>
-    /// The question is "do two of these ever sound at the same time". Only a playlist can answer no —
+    /// The question is "do two of these ever sound at the same time". Only a playlist can answer no -
     /// playlist/armed-list items succeed one another, and first-only can only fire one child. Those
     /// modes keep a shared transport; timeline and all-together require concurrent child voices.
     /// </remarks>
@@ -149,7 +149,7 @@ public static class ShowCompiler
                         // Nested PLAYLISTS collapse into their outermost ancestor, as HaPlay's mapper
                         // does: the whole chain moves on one clock rather than splitting across a
                         // clock per subgroup. A group whose children sound together is the exception,
-                        // and Walk gives its children one group each — see LayersChildren for why.
+                        // and Walk gives its children one group each - see LayersChildren for why.
                         Walk(
                             group.Children,
                             id == listGroup ? GroupId(list, group) : id,
@@ -167,8 +167,8 @@ public static class ShowCompiler
                     case MediaCueNode media:
                         cues.Add(Definition(media, ++running, id));
 
-                        // A cue with no file yet still gets its CUE — numbering and order have to stay
-                        // stable while a show is being built — but no clip. Emitting an empty
+                        // A cue with no file yet still gets its CUE - numbering and order have to stay
+                        // stable while a show is being built - but no clip. Emitting an empty
                         // MediaPath would make the engine refuse the WHOLE document, so one unfinished
                         // cue would stop the show loading in the middle of a rehearsal. The project
                         // validator reports it by name instead.
@@ -196,7 +196,7 @@ public static class ShowCompiler
                     case TextCueNode text:
                         cues.Add(Definition(text, ++running, id));
 
-                        // A card with no words is a cue with no clip — the same honest state as a
+                        // A card with no words is a cue with no clip - the same honest state as a
                         // media cue with no file, and the state every text cue is in between being
                         // added and typed into.
                         if (text.Text.Trim().Length > 0)
@@ -204,7 +204,7 @@ public static class ShowCompiler
 
                         break;
 
-                    // Every remaining kind — visualizer, action, fade, jump, patch, comment — is a cue
+                    // Every remaining kind - visualizer, action, fade, jump, patch, comment - is a cue
                     // with NO CLIP. A visualizer has a canvas presence and no media to open; the rest
                     // are decisions about the show rather than something to play, and the app's
                     // transport resolves them by id when they fire.
@@ -212,7 +212,7 @@ public static class ShowCompiler
                     // They are emitted rather than omitted because the cursor is the session's: a cue
                     // absent from the document cannot be made standby (SetStandbyCueAsync refuses an
                     // unknown id) and GO would step straight over it. A clipless CueDefinition is an
-                    // already-exercised state — an unfinished media cue is one too.
+                    // already-exercised state - an unfinished media cue is one too.
                     default:
                         cues.Add(Definition(node, ++running, id));
                         break;
@@ -229,7 +229,7 @@ public static class ShowCompiler
     /// </summary>
     /// <remarks>
     /// <see cref="CueDefinition.Number"/> is an <c>int</c> and stays one: it is a POSITION, assigned
-    /// here in list order, not the number the operator calls over comms — that is
+    /// here in list order, not the number the operator calls over comms - that is
     /// <see cref="CueNode.Number"/>, which is dotted and lives only on the project. GO's "lowest
     /// number greater than the cursor" therefore walks the list in the order the tree shows it, which
     /// is the order somebody is reading down during the show.
@@ -314,7 +314,7 @@ public static class ShowCompiler
             StartOffset = TimeSpan.FromMilliseconds(media.TrimInMs),
             // The document's EndOffset is measured from the SOURCE END; the project stores an ABSOLUTE
             // out-point, so converting one to the other needs the file's length. With a probed length
-            // the out-point is honoured; without one it stays zero — "through to the end" — because a
+            // the out-point is honoured; without one it stays zero - "through to the end" - because a
             // guessed length would cut the cue somewhere nobody chose.
             EndOffset = EndOffset(media, fileLength),
             FadeIn = TimeSpan.FromMilliseconds(media.FadeInMs),
@@ -334,7 +334,7 @@ public static class ShowCompiler
                 _ => media.Loop ? ClipEndBehavior.Loop : ClipEndBehavior.Stop,
             },
             // Always on. The engine now monitors every clip with a known end, so the POSITION path
-            // (playhead reaches the out-point) no longer needs this flag — but the STALL path does, and
+            // (playhead reaches the out-point) no longer needs this flag - but the STALL path does, and
             // it is the one that catches a source whose real content is SHORTER than its metadata says.
             // A mis-tagged VBR file simply stops: its playhead never reaches the declared out-point, so
             // without this the cue sits in the Active panel forever with nothing having ended it. HaCue2
@@ -380,7 +380,7 @@ public static class ShowCompiler
     /// The out-point as a distance back from the END of the file, which is how the document counts it.
     /// </summary>
     /// <remarks>
-    /// Zero — play through — for an untrimmed cue, for a cue whose file nobody probed, and for an
+    /// Zero - play through - for an untrimmed cue, for a cue whose file nobody probed, and for an
     /// out-point at or past the end. An out-point BEFORE the in-point is treated as untrimmed rather
     /// than as a negative window: it is a half-finished edit, not an instruction to play backwards.
     /// </remarks>
@@ -423,7 +423,7 @@ public static class ShowCompiler
     /// The clip's N×V matrix: which source channel feeds which logical output, at what gain.
     /// </summary>
     /// <remarks>
-    /// Only the FIRST matrix goes in the document. The second — logical outputs onto device channels —
+    /// Only the FIRST matrix goes in the document. The second - logical outputs onto device channels -
     /// belongs to the program-audio target, because it is a property of the RIG rather than of the
     /// show: the same document played in another venue keeps its sends and gets a different patch.
     /// <para>
@@ -434,13 +434,13 @@ public static class ShowCompiler
     private static IEnumerable<ShowClipLogicalSend> Sends(MediaCueNode media) => LogicalSends(media);
 
     /// <summary>
-    /// One cue's sends as the engine takes them — the same values a fire would compile.
+    /// One cue's sends as the engine takes them - the same values a fire would compile.
     /// </summary>
     /// <remarks>
     /// Public because the inspector pushes these at a PLAYING voice when the operator edits a send or a
     /// level, rather than reloading the document (which would restart the cue). Composing the gain a
-    /// second time in the view would be a second implementation of the level rule — including the
-    /// detail that a muted send is emitted at silence rather than dropped — and the two would drift.
+    /// second time in the view would be a second implementation of the level rule - including the
+    /// detail that a muted send is emitted at silence rather than dropped - and the two would drift.
     /// </remarks>
     public static IReadOnlyList<ShowClipLogicalSend> LogicalSends(MediaCueNode media)
     {
@@ -465,7 +465,7 @@ public static class ShowCompiler
     /// mean what they say.
     /// </para>
     /// <para>
-    /// No audio at all — a text cue has no sends and asks the decoder for no audio stream, so a card
+    /// No audio at all - a text cue has no sends and asks the decoder for no audio stream, so a card
     /// standing over a running bed cannot interrupt it.
     /// </para>
     /// </remarks>
@@ -516,7 +516,7 @@ public static class ShowCompiler
     /// The document stores sizes as FRACTIONS of the canvas so a card survives a composition resize;
     /// the source wants pixels against its own canvas, and this is the one place that knows both.
     /// Colours are stored as "#RRGGBB" because that is what a designer is handed, and packed to ARGB
-    /// here — an empty background means transparent, which is alpha zero rather than black.
+    /// here - an empty background means transparent, which is alpha zero rather than black.
     /// </remarks>
     public static TextSourceSpec TextSource(TextCueNode text) => new()
     {
@@ -542,7 +542,7 @@ public static class ShowCompiler
     /// <remarks>
     /// Fixed rather than the composition's, and the placement scales it from there: a card is placed
     /// like any other picture, and tying the render to a canvas size would re-encode every card's URI
-    /// — and so re-open every card — the moment somebody resized a composition.
+    /// - and so re-open every card - the moment somebody resized a composition.
     /// </remarks>
     private const int TextCanvasWidth = 1920;
 
@@ -568,7 +568,7 @@ public static class ShowCompiler
     /// </summary>
     /// <remarks>
     /// The crop, the rotation, the layer mapping and the two colour effects all existed on
-    /// <see cref="ShowVideoPlacement"/> and were never filled — the document had nowhere to say them.
+    /// <see cref="ShowVideoPlacement"/> and were never filled - the document had nowhere to say them.
     /// The fit name is passed as TEXT the framework maps by name, so the two enums can be read side by
     /// side rather than through a table that drifts.
     /// </remarks>
@@ -634,7 +634,7 @@ public static class ShowCompiler
     /// </summary>
     /// <remarks>
     /// The destination is measured in the same normalized space the section stores, because a layer
-    /// mapping has no output raster to resolve against — it happens before the layer is placed, and the
+    /// mapping has no output raster to resolve against - it happens before the layer is placed, and the
     /// destination rectangle does the placing afterwards.
     /// </remarks>
     private static ClipOutputMappingSpec? LayerMapping(LayerPlacement placement)
@@ -663,7 +663,7 @@ public static class ShowCompiler
                 MeshPoints: section.HasMesh ? MeshPoints(section) : null))
             .ToList();
 
-        // Every section switched off is the same as no mapping — and NOT the same as a mapping with
+        // Every section switched off is the same as no mapping - and NOT the same as a mapping with
         // nothing in it, which would render the layer black.
         return sections.Count == 0 ? null : new ClipOutputMappingSpec(sections, 1, 1);
     }
@@ -980,7 +980,7 @@ public static class ShowCompiler
     /// <see cref="OutputPatchRoute"/> is a source→output channel remap, which is the v1 direct-route
     /// model the program-audio target supersedes. Emitting both would give the engine two answers
     /// about where a cue's audio goes, and the fallback path would win on any session without a
-    /// program target — quietly playing the show through a patch nobody edited.
+    /// program target - quietly playing the show through a patch nobody edited.
     /// </remarks>
     private static IReadOnlyList<OutputPatchRoute> Routes(HaCueProject project) => [];
 

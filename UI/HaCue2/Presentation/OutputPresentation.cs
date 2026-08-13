@@ -16,7 +16,7 @@ namespace HaCue2.Presentation;
 /// The counterpart of <see cref="BayPresentation"/> for everything an output can be that a bay
 /// terminal cannot: a screen that never opened, a canvas rendering behind its clock, a timecode sender
 /// on the other end of a cable. All three used to be invented, and all three are read on the same
-/// sweep as the meters — a chip that only refreshed when something was armed would sit on "fine" over
+/// sweep as the meters - a chip that only refreshed when something was armed would sit on "fine" over
 /// a projector that had dropped out ten minutes ago.
 /// </remarks>
 public static class OutputPresentation
@@ -26,8 +26,8 @@ public static class OutputPresentation
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Audio first because that is the order the question gets asked in — "why is there no sound"
-    /// before "why is there no picture" — and because the audio side is the one with a clock master to
+    /// Audio first because that is the order the question gets asked in - "why is there no sound"
+    /// before "why is there no picture" - and because the audio side is the one with a clock master to
     /// point at.
     /// </para>
     /// <para>
@@ -85,7 +85,7 @@ public static class OutputPresentation
                     $"{terminal.NativeSampleRate / 1000d:0.#}k · {stats.Dropped} drop · "
                     + $"{terminal.InFlight}/{stats.PumpCapacityChunks}"),
                 // A drop is amber at one. There is no acceptable number of dropped chunks on a show
-                // output — one of them is a click somebody in the room heard.
+                // output - one of them is a click somebody in the room heard.
                 Gel = terminal.State switch
                 {
                     TerminalState.Quarantined => Gel.Red,
@@ -137,7 +137,7 @@ public static class OutputPresentation
     /// The composition table (screen 15), given an achieved frame rate per composition.
     /// </summary>
     /// <remarks>
-    /// The rate is passed in rather than read here because it is a DELTA — only something that has
+    /// The rate is passed in rather than read here because it is a DELTA - only something that has
     /// been watching across ticks can compute it. See <see cref="CompositionRates"/>, which is the
     /// thing that has been.
     /// </remarks>
@@ -175,7 +175,7 @@ public static class OutputPresentation
     /// <para>
     /// Four states, and they are worth keeping apart. "input off" is the operator's own switch and must
     /// never be mistaken for a fault; "no signal" is a cable or a stopped sender; "undecodable" is the
-    /// one the framework's chase clock can see and nobody else can — timecode that ARRIVES and never
+    /// one the framework's chase clock can see and nobody else can - timecode that ARRIVES and never
     /// assembles, which without a name looks exactly like an unplugged cable and sends people to check
     /// the wrong end of it; "held" is a sender that has stalled or parked, where the position on screen
     /// is the last one it actually reached rather than one predicted past the evidence.
@@ -200,7 +200,7 @@ public static class OutputPresentation
     private static string Name(HaCueProject project, ClipCompositionRuntimeStats stats)
     {
         // The audition canvas is a real composition with real telemetry and no document behind it. It
-        // is worth a row — a monitor rig that is dropping frames is a thing to know — but it must not
+        // is worth a row - a monitor rig that is dropping frames is a thing to know - but it must not
         // read as one of the show's own.
         if (stats.CompositionId == ShowSession.AuditionCompositionId)
             return "Audition monitor";
@@ -223,7 +223,7 @@ public static class OutputPresentation
         var target = stats.TargetFramesPerSecond;
 
         if (achieved < 0)
-            return new Status(string.Create(CultureInfo.InvariantCulture, $"— / {target:0.##}"));
+            return new Status(string.Create(CultureInfo.InvariantCulture, $"- / {target:0.##}"));
 
         var text = string.Create(CultureInfo.InvariantCulture, $"{achieved:0.#} / {target:0.##}");
 
@@ -262,7 +262,7 @@ public static class OutputPresentation
 /// Measures each composition's ACHIEVED frame rate across ticks.
 /// </summary>
 /// <remarks>
-/// The runtime reports a frame COUNT, which is the only thing it can report — a rate is a count over an
+/// The runtime reports a frame COUNT, which is the only thing it can report - a rate is a count over an
 /// interval and the runtime does not know when anyone last looked. This is the thing that knows. It is
 /// stateful for exactly that reason and belongs to the sweep that owns the interval.
 /// </remarks>

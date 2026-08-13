@@ -964,7 +964,7 @@ public sealed unsafe class SDL3GLVideoOutput : INonBlockingVideoOutput, IVideoOu
     {
         // The GL attribute block, the window list and SDL's EGL state are process-global, and every
         // video output builds its window on its OWN render thread. Overlapping this with the
-        // composition compositor's context creation segfaults inside SDL_CreateWindow — see
+        // composition compositor's context creation segfaults inside SDL_CreateWindow - see
         // SDL3Runtime.EnterVideoDevice. Held for the whole sequence, released before the render loop.
         using var videoDevice = SDL3Runtime.EnterVideoDevice();
 

@@ -108,7 +108,7 @@ public sealed class StatusTests
         Assert.Equal(0, report.ExitCode);
     }
 
-    /// <summary>Register item 25: the flag is inverted — required-and-absent is an error.</summary>
+    /// <summary>Register item 25: the flag is inverted - required-and-absent is an error.</summary>
     [Fact]
     public void AnAbsentRequiredLineIsAnError()
     {
@@ -228,7 +228,7 @@ public sealed class StatusTests
     public void AMachineThatCannotDecodeAnythingIsReportedAsAnError_NotAsAHealthyProject()
     {
         // The failure this row exists for: the decoder's natives do not load, so every probe comes back
-        // empty and every cue row badges "offline" — while the files are all present, so the media check
+        // empty and every cue row badges "offline" - while the files are all present, so the media check
         // passes and the status bar says "no issues" over a show that cannot play a note.
         var fixture = new TestProject().WithFoldbackFed();
         var environment = new FakeEnvironment

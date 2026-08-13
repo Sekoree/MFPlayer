@@ -13,7 +13,7 @@ namespace HaCue2.Machine;
 /// checked" into an answer.
 /// <para>
 /// Video outputs stay Unknown for now: screen enumeration needs a windowing system, and this library
-/// is deliberately reachable from a console. Saying so beats guessing — an output reported present
+/// is deliberately reachable from a console. Saying so beats guessing - an output reported present
 /// because nobody looked is the failure this whole seam exists to avoid.
 /// </para>
 /// </remarks>

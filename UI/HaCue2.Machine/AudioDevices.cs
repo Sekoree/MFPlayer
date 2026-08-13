@@ -11,7 +11,7 @@ namespace HaCue2.Machine;
 /// The backend is INJECTED rather than chosen here: PortAudio and miniaudio see different devices on
 /// the same box, and which one a show should be checked against is the app's decision, not this
 /// library's. Passing none is legitimate and answers <see cref="DeviceAvailability.Unknown"/> for
-/// everything — the same honest blank a headless check gives.
+/// everything - the same honest blank a headless check gives.
 /// </remarks>
 public sealed class AudioDevices
 {
@@ -52,7 +52,7 @@ public sealed class AudioDevices
             }
             catch (Exception failure) when (failure is not OutOfMemoryException)
             {
-                // A backend that will not start is not an absent device — it is a machine nobody could
+                // A backend that will not start is not an absent device - it is a machine nobody could
                 // ask, which stays Unknown rather than turning every line red.
             }
 
@@ -62,7 +62,7 @@ public sealed class AudioDevices
             }
             catch (Exception failure) when (failure is not OutOfMemoryException)
             {
-                // Separately, because a backend can list outputs and refuse inputs — a box with no
+                // Separately, because a backend can list outputs and refuse inputs - a box with no
                 // capture hardware at all is one of them, and that must not blank the output list.
             }
         }
@@ -83,14 +83,14 @@ public sealed class AudioDevices
     /// <remarks>
     /// Empty for a backend with no such concept, which is why a caller must treat "no host APIs" as
     /// "do not offer the filter" rather than "no devices". On a typical Linux box this is ALSA, JACK
-    /// and OSS, and the SAME interface appears under two of them with different names — which is the
+    /// and OSS, and the SAME interface appears under two of them with different names - which is the
     /// whole reason a picker needs to group by it.
     /// </remarks>
     public IReadOnlyList<string> HostApis =>
         [.. _devices.Select(device => device.HostApi).Where(name => name.Length > 0).Distinct()];
 
     /// <summary>
-    /// Every CAPTURE device found — what a live-input cue plays.
+    /// Every CAPTURE device found - what a live-input cue plays.
     /// </summary>
     /// <remarks>
     /// A separate list rather than a flag on the other one: a device is an input, an output, or both,
@@ -121,7 +121,7 @@ public sealed class AudioDevices
     /// </summary>
     /// <remarks>
     /// The hint is deliberately a HINT and not an identity (see <see cref="AudioLineDefinition"/>), so
-    /// the match is by name, case-insensitively, and accepts a substring in either direction — device
+    /// the match is by name, case-insensitively, and accepts a substring in either direction - device
     /// names pick up and lose suffixes between driver versions ("Scarlett 18i20 USB" vs
     /// "Scarlett 18i20"). A line with an empty hint means "the default device", which always exists
     /// once anything was enumerated.
@@ -146,7 +146,7 @@ public sealed class AudioDevices
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A hint is a NAME and a backend wants its own id — PortAudio's is a global device index, and
+    /// A hint is a NAME and a backend wants its own id - PortAudio's is a global device index, and
     /// handing it "Scarlett 2i2 3rd Gen Pro" makes it refuse the line outright. Every device on the
     /// rig then fails to open, the bay ends up with no clock master, and the first cue throws.
     /// </para>

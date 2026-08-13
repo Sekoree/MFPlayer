@@ -49,7 +49,7 @@ public class DevicePickerTests
         var combos = window.GetVisualDescendants().OfType<ComboBox>().ToList();
 
         // The template builds every control kind and hides the unused ones, so there is a ComboBox per
-        // FIELD, each bound to that field's option list — empty for a plain text field, and populated
+        // FIELD, each bound to that field's option list - empty for a plain text field, and populated
         // for the driver and device pickers AND for the sample-rate suggestions, whose own control is
         // a flyout rather than this combo. Assert on the two that the picker fills rather than on how
         // many fields happen to carry options, which is a fact about the dialog's shape and not about
@@ -107,7 +107,7 @@ public class DevicePickerTests
         var rate = prompt.Fields.Single(field => field.Label == "Sample rate");
         var device = prompt.Fields.Single(field => field.Label == "Device");
 
-        // Opens already pointing at the default device, which here is the 44.1 one — no click needed.
+        // Opens already pointing at the default device, which here is the 44.1 one - no click needed.
         Assert.Equal(0, device.SelectedIndex);
 
         // Forcing a 44.1 interface to open at the show's 48 is exactly what this field exists to
@@ -183,7 +183,7 @@ public class DevicePickerTests
         Assert.Equal("REMOVE", prompt.Confirm);
         Assert.Contains(line.Name, prompt.Title, StringComparison.Ordinal);
 
-        // Nothing has happened yet — opening the dialog must not be the edit.
+        // Nothing has happened yet - opening the dialog must not be the edit.
         Assert.Contains(shell.Project.AudioLines, item => item.Id == line.Id);
 
         prompt.Commit();
@@ -213,7 +213,7 @@ public class DevicePickerTests
         video.Refresh();
 
         // The panes were built once in the constructor and never rebuilt, so an added composition
-        // simply never appeared — the pane looked broken rather than empty.
+        // simply never appeared - the pane looked broken rather than empty.
         Assert.Equal(before + 1, video.Compositions.Count);
         Assert.Contains(video.Compositions, pane => pane.Name == "Cyc");
     });
@@ -243,7 +243,7 @@ public class DevicePickerTests
         video.Refresh();
 
         // The pane header is a snapshot of the composition, so an edit that changes it has to rebuild
-        // the pane — otherwise the canvas is labelled with a name the show no longer uses.
+        // the pane - otherwise the canvas is labelled with a name the show no longer uses.
         Assert.Contains(video.Compositions, pane => pane.Name == "Renamed");
     });
 
@@ -261,7 +261,7 @@ public class DevicePickerTests
         prompt.Commit();
 
         // A dropdown taught the operator that the common rates were the only ones. A projector at
-        // 23.976 or a wall at 47.95 is an ordinary thing to have to match — and a comma is what a
+        // 23.976 or a wall at 47.95 is an ordinary thing to have to match - and a comma is what a
         // German keyboard types.
         Assert.Equal(expected, Assert.Single(journal.Project.Compositions).FramesPerSecond, 3);
     }
@@ -318,7 +318,7 @@ public class DevicePickerTests
         prompt.Fields.Single(f => f.Label == "Window size").Value = "960×540";
         prompt.Commit();
 
-        // Fullscreen already existed on the model, defaulted to true, and was unreachable — so every
+        // Fullscreen already existed on the model, defaulted to true, and was unreachable - so every
         // local output was created fullscreen with no windowed option at all.
         var output = Assert.Single(journal.Project.VideoOutputs);
         Assert.False(output.Fullscreen);
@@ -335,7 +335,7 @@ public class DevicePickerTests
     public void AWindowSizeIsReadHoweverItIsTyped(string typed, int width, int height)
     {
         // ×, x or a space, because all three are what somebody types. Anything else is zeros, which
-        // means "the composition's own size" — the same as leaving it empty, so a half-typed value
+        // means "the composition's own size" - the same as leaving it empty, so a half-typed value
         // opens at the canvas size rather than at something arbitrary.
         Assert.Equal((width, height), Dialogs.WindowSize(typed));
     }

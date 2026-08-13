@@ -9,14 +9,14 @@ namespace HaCue2.Machine;
 /// <para>
 /// A machine fact like the device list, and asked the same way: once, on demand, with the answer
 /// handed to whoever is drawing a picker. Discovery is a network scan with a timeout rather than an
-/// enumeration, so it is a method and not a property — a caller has to decide how long it is willing
+/// enumeration, so it is a method and not a property - a caller has to decide how long it is willing
 /// to wait, and a dialog opening is a different budget from a status pass.
 /// </para>
 /// <para>
 /// Every failure is EMPTY plus a reason, never an exception. A machine without the NDI runtime
 /// installed, a machine on no network, and a machine where nothing happens to be sending are three
 /// different situations that all mean "there is nothing to pick from this list", and none of them is
-/// a reason for the dialog not to open — a name can still be typed, and it will resolve at the venue.
+/// a reason for the dialog not to open - a name can still be typed, and it will resolve at the venue.
 /// </para>
 /// </remarks>
 public static class NdiSources
@@ -25,7 +25,7 @@ public static class NdiSources
     public static TimeSpan DefaultTimeout { get; } = TimeSpan.FromSeconds(2);
 
     /// <summary>What a scan found, and why it found nothing when it did.</summary>
-    /// <param name="Names">Sender names exactly as NDI advertises them — "STUDIO-PC (CAM 1)".</param>
+    /// <param name="Names">Sender names exactly as NDI advertises them - "STUDIO-PC (CAM 1)".</param>
     /// <param name="Unavailable">Null when the scan ran; the reason when NDI could not be asked at all.</param>
     public sealed record Scan(IReadOnlyList<string> Names, string? Unavailable = null)
     {
@@ -33,7 +33,7 @@ public static class NdiSources
 
         /// <summary>A line for the dialog: what was found, or why nothing could be.</summary>
         public string Note => Unavailable is { Length: > 0 } reason
-            ? $"NDI is not available on this machine — {reason}"
+            ? $"NDI is not available on this machine - {reason}"
             : Names.Count == 0
                 ? "no senders found · type a name and it will resolve when the sender appears"
                 : $"{Names.Count} sender{(Names.Count == 1 ? "" : "s")} on the network";

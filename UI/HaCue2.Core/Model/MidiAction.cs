@@ -27,7 +27,7 @@ public readonly record struct MidiAction(
 /// <remarks>
 /// <para>
 /// <b>In <c>HaCue2.Core</c> on purpose.</b> The engine sends these, but the STATUS PASS has to be able
-/// to tell an operator that Q42 will not send anything — before the show, on a laptop, with no MIDI
+/// to tell an operator that Q42 will not send anything - before the show, on a laptop, with no MIDI
 /// interface anywhere near it. A parser that lived in the engine could only report the failure at the
 /// moment the cue was fired, which is the one moment nobody can act on it.
 /// </para>
@@ -60,10 +60,10 @@ public static class MidiActions
             .Split([' ', '\t', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         if (tokens.Length == 0)
-            return $"no message to send — {Syntax}";
+            return $"no message to send - {Syntax}";
 
         if (Kind(tokens[0]) is not { } kind)
-            return $"“{tokens[0]}” is not a MIDI message — {Syntax}";
+            return $"“{tokens[0]}” is not a MIDI message - {Syntax}";
 
         // A program change carries no value, so it needs one fewer number than the others.
         var wanted = kind == MidiActionKind.ProgramChange ? 2 : 3;
@@ -87,12 +87,12 @@ public static class MidiActions
                     break;
                 }
 
-                return $"“{$"{address} {arguments}".Trim()}” is missing a number — {Syntax}";
+                return $"“{$"{address} {arguments}".Trim()}” is missing a number - {Syntax}";
             }
 
             if (!int.TryParse(
                     tokens[index + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
-                return $"“{tokens[index + 1]}” is not a number — {Syntax}";
+                return $"“{tokens[index + 1]}” is not a number - {Syntax}";
 
             numbers[index] = value;
         }

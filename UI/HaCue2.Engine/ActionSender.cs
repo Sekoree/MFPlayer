@@ -16,7 +16,7 @@ namespace HaCue2.Engine;
 /// <para>
 /// <b>Both protocols, one entry point.</b> OSC is a datagram this class sends itself; MIDI is a port
 /// <see cref="MidiOut"/> holds over S.Control's device layer. A cue does not care which it is, and the
-/// one thing an action cue must never do is report success for a message that went nowhere — so both
+/// one thing an action cue must never do is report success for a message that went nowhere - so both
 /// return their refusal, which is surfaced on the transport and reported by Project status.
 /// </para>
 /// </remarks>
@@ -60,7 +60,7 @@ public sealed class ActionSender : IDisposable
     }
 
     /// <summary>
-    /// What each endpoint was last sent, and when — the Targets screen's "Last seen" column.
+    /// What each endpoint was last sent, and when - the Targets screen's "Last seen" column.
     /// </summary>
     /// <remarks>
     /// <b>Successes only.</b> A send that threw did not reach the desk, and recording it here would
@@ -108,7 +108,7 @@ public sealed class ActionSender : IDisposable
         }
         catch (Exception failure) when (failure is FormatException or ArgumentException or SocketException)
         {
-            return $"“{endpoint.Name}” could not be reached — {failure.Message}";
+            return $"“{endpoint.Name}” could not be reached - {failure.Message}";
         }
 
         try
@@ -120,7 +120,7 @@ public sealed class ActionSender : IDisposable
         }
         catch (Exception failure) when (failure is SocketException or ObjectDisposedException or IOException)
         {
-            return $"“{cue.Label}” → {endpoint.Name} failed — {failure.Message}";
+            return $"“{cue.Label}” → {endpoint.Name} failed - {failure.Message}";
         }
     }
 
@@ -162,8 +162,8 @@ public sealed class ActionSender : IDisposable
     /// </summary>
     /// <remarks>
     /// Whitespace-separated, each token typed by what it looks like: an integer stays an integer, a
-    /// decimal becomes a float, everything else is a string. Consoles distinguish these — an EOS cue
-    /// number sent as the string "7.2" is not the float 7.2 — so guessing by shape beats sending
+    /// decimal becomes a float, everything else is a string. Consoles distinguish these - an EOS cue
+    /// number sent as the string "7.2" is not the float 7.2 - so guessing by shape beats sending
     /// everything as text.
     /// </remarks>
     private static List<OSCArgument> Arguments(string text) =>

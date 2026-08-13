@@ -9,7 +9,7 @@ namespace HaCue2.Core.Tests;
 /// </summary>
 /// <remarks>
 /// The sender exposes an <c>IVideoOutput</c> and an <c>IAudioOutput</c>, so it attaches exactly like a
-/// screen or an interface — which is what made this the obvious one to do after recording. These open a
+/// screen or an interface - which is what made this the obvious one to do after recording. These open a
 /// real sender against the machine's NDI runtime; there is no way to prove the wiring works without one.
 /// </remarks>
 public class NdiOutputTests
@@ -33,7 +33,7 @@ public class NdiOutputTests
     {
         var (project, output) = Show("HACUE2-TEST-PROG");
 
-        // headless: true — an NDI feed is not a window, and a booth box with no display is exactly
+        // headless: true - an NDI feed is not a window, and a booth box with no display is exactly
         // where an unattended NDI send belongs.
         using var outputs = ProjectVideoOutputs.OpenAll(project, headless: true);
 

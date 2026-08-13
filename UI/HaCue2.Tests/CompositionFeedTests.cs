@@ -16,8 +16,8 @@ namespace HaCue2.Tests;
 /// <remarks>
 /// <para>
 /// The reported defect: assigning an output to a composition appeared to do nothing. It reached the
-/// document and it reached the FEEDS chips, but the canvas — the large picture that is the reason the
-/// screen exists — went on drawing whatever screens the composition had when its pane was built.
+/// document and it reached the FEEDS chips, but the canvas - the large picture that is the reason the
+/// screen exists - went on drawing whatever screens the composition had when its pane was built.
 /// <c>Refresh</c> updated every other projection on the pane and not that one, so the boxes were only
 /// ever correct until the first assignment.
 /// </para>
@@ -182,7 +182,7 @@ public class CompositionFeedTests
         video.Refresh();
 
         // Every pane is open at once and each edits itself, so without a mark nothing on screen said
-        // which canvas the FEEDS rail belonged to — an operator could press + ASSIGN having just read
+        // which canvas the FEEDS rail belonged to - an operator could press + ASSIGN having just read
         // the name on a different pane.
         Assert.False(PaneOf(video, canvas).IsSelected);
         Assert.True(PaneOf(video, second).IsSelected);
@@ -258,7 +258,7 @@ public class CompositionFeedTests
     {
         var (video, _, _) = Unassigned(shell);
 
-        // Unassigned, so it is not showing a slice of anything — the rail says so rather than offering
+        // Unassigned, so it is not showing a slice of anything - the rail says so rather than offering
         // four numbers that write nowhere.
         Assert.False(video.HasScreenSelected);
     });
@@ -302,7 +302,7 @@ public class CompositionFeedTests
 
         // The whole point of dividing a canvas: a cue can be dropped exactly onto ONE screen of a wall
         // without anybody working out what fraction that is. The pane built these seams from the start
-        // and nothing consumed them — the canvas an operator drags a picture on never saw them.
+        // and nothing consumed them - the canvas an operator drags a picture on never saw them.
         Assert.Contains(0.5, shell.Cues.Inspector.PlacementGuidesX);
     });
 
@@ -341,7 +341,7 @@ public class CompositionFeedTests
         inspector.ExpandPlacement(1);
 
         // A cue can be on several canvases at once. Offering the wall's seam while editing the lobby
-        // placement would snap it to a join that is not on that screen — worse than no guide at all.
+        // placement would snap it to a join that is not on that screen - worse than no guide at all.
         Assert.DoesNotContain(0.5, inspector.PlacementGuidesX);
     });
 
@@ -354,7 +354,7 @@ public class CompositionFeedTests
             new VideoOutputDefinition { Name = "Stream", Kind = VideoOutputKind.Ndi, CompositionId = wall.Id });
         video.Refresh();
 
-        // It takes the WHOLE canvas, so its edges are the canvas's own — already snap targets. Counting
+        // It takes the WHOLE canvas, so its edges are the canvas's own - already snap targets. Counting
         // it would only add duplicates, which is what the view-model's own copy of this used to do.
         Assert.Equal([0, 0.5, 1], shell.Cues.Inspector.PlacementGuidesX);
     });
@@ -377,7 +377,7 @@ public class CompositionFeedTests
 
         // ONE, and it takes drags. There used to be two: a read-only illustration on the pane and a
         // full-screen editor behind an EDIT › button drawing the same rectangles, which is what made
-        // the screen unreadable — the one an operator was looking at was the one that did nothing.
+        // the screen unreadable - the one an operator was looking at was the one that did nothing.
         var canvas = Assert.Single(canvases);
         Assert.True(canvas.IsEditable);
         Assert.Single(canvas.Boxes);

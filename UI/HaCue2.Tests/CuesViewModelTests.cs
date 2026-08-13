@@ -8,7 +8,7 @@ namespace HaCue2.Tests;
 /// The cue view's own behaviour: the tree, the scope navigator, and the transport's editor half.
 /// </summary>
 /// <remarks>
-/// These are the surfaces where a defect is invisible until somebody is driving a show — a navigator
+/// These are the surfaces where a defect is invisible until somebody is driving a show - a navigator
 /// that has gone stale, a panel that stopped updating, a STOP that takes the wrong thing down.
 /// </remarks>
 public class CuesViewModelTests
@@ -57,7 +57,7 @@ public class CuesViewModelTests
     {
         shell.Cues.SelectedScope = shell.Cues.CueLists.First(scope => scope.Name == "Video");
 
-        // It was the literal "GROUPS IN ACT 1" — a heading from a show that only ever existed in the
+        // It was the literal "GROUPS IN ACT 1" - a heading from a show that only ever existed in the
         // mockup, shown over whatever the operator had actually scoped to.
         Assert.Equal("GROUPS IN VIDEO", shell.Cues.GroupsHeader);
     });

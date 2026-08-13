@@ -1,12 +1,12 @@
 namespace S.Media.Present.SDL3;
 
 /// <summary>One attached display, as the compositor pipeline should describe a canvas for it.</summary>
-/// <param name="Index">Position in SDL's display order — the same index window placement uses.</param>
+/// <param name="Index">Position in SDL's display order - the same index window placement uses.</param>
 /// <param name="RefreshNumerator">Exact refresh numerator, or 0 when the platform reports only the
 /// rounded <paramref name="RefreshHz"/> (or nothing at all).</param>
 /// <remarks>
 /// The exact rational matters more than the rounded number: a canvas authored at 60.000 against a
-/// panel running 59.94 beats once every ~17 s — the drop cadence nobody can attribute — and
+/// panel running 59.94 beats once every ~17 s - the drop cadence nobody can attribute - and
 /// "59.94" typed from the rounded float is still not 60000/1001. Callers that build a canvas rate
 /// should prefer the numerator/denominator when present.
 /// </remarks>
@@ -24,7 +24,7 @@ public static class SDL3Displays
 {
     /// <summary>
     /// The attached displays, best-effort: a headless box, a failed SDL init, or a display that
-    /// reports no mode simply contributes nothing. Never throws — this feeds pickers and hints,
+    /// reports no mode simply contributes nothing. Never throws - this feeds pickers and hints,
     /// and "no presets" is the correct degradation everywhere it is used.
     /// </summary>
     public static IReadOnlyList<SDL3DisplayInfo> Enumerate()

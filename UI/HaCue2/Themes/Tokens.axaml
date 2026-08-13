@@ -5,7 +5,7 @@
        HaCue2 booth-dark tokens.
 
        Straight transcription of the `.screen` skin in
-       Plans/MockUps/HaCue2/HaCue2 — UI design, all screens.html. The mockup's palette is semantic,
+       Plans/MockUps/HaCue2/HaCue2 - UI design, all screens.html. The mockup's palette is semantic,
        not decorative: the five "gels" are the booth's vocabulary (congo = chrome/selection,
        amber = standby/warning, green = running/healthy, red = fault, steel = monitor/preview) and
        nothing in the app should introduce a sixth accent.
@@ -30,7 +30,7 @@
   <SolidColorBrush x:Key="BoothPanel2" Color="{StaticResource BoothPanel2Color}" />
   <SolidColorBrush x:Key="BoothRule" Color="{StaticResource BoothRuleColor}" />
   <SolidColorBrush x:Key="BoothRule2" Color="{StaticResource BoothRule2Color}" />
-  <!-- rule @ 55 % — the softer separator between rows inside a panel -->
+  <!-- rule @ 55 % - the softer separator between rows inside a panel -->
   <SolidColorBrush x:Key="BoothRuleSoft" Color="#8C232935" />
 
   <!-- ── ink ──────────────────────────────────────────────────────────────────────────────── -->
@@ -93,7 +93,7 @@
   <SolidColorBrush x:Key="BadgeRedBorder" Color="#73E46B78" />
   <SolidColorBrush x:Key="BadgeGreenBorder" Color="#7352B788" />
 
-  <!-- ── patch / send matrix cells (mixed over the panel — cells butt against each other) ─── -->
+  <!-- ── patch / send matrix cells (mixed over the panel - cells butt against each other) ─── -->
   <SolidColorBrush x:Key="MatrixOnBg" Color="#2E3552" />     <!-- congo @ 26 % -->
   <SolidColorBrush x:Key="MatrixUnityBg" Color="#3D456F" />  <!-- congo @ 40 % -->
   <SolidColorBrush x:Key="MatrixMuteBg" Color="#3C272F" />   <!-- red   @ 20 % -->
@@ -122,7 +122,7 @@
   <SolidColorBrush x:Key="LineChipWarnBorder" Color="#73E0A85C" />
   <SolidColorBrush x:Key="LineChipErrBorder" Color="#80E46B78" />
   <SolidColorBrush x:Key="LineChipErrBg" Color="#1AE46B78" />
-  <!-- amber @ 9 % over panel-2 — the launcher's recovery banner -->
+  <!-- amber @ 9 % over panel-2 - the launcher's recovery banner -->
   <SolidColorBrush x:Key="RecoveryBannerBg" Color="#2A2A2B" />
 
   <!-- meter fill: green to the top of the safe zone, amber shoulder, red at the ceiling.

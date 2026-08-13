@@ -92,7 +92,7 @@ public sealed class CurveEditTests
 
         CurveEdits.Move(target, 0, typed, typed).Apply(fixture.Project);
 
-        // A point off the canvas is not an error to report — it is a drag that went too far, and the
+        // A point off the canvas is not an error to report - it is a drag that went too far, and the
         // only useful answer is the edge. NaN is in here because a divide by a zero-width lane
         // produces one, and CustomFadeCurve rejects anything non-finite.
         foreach (var point in fixture.Track.FadeInCurve.Points!)
@@ -109,7 +109,7 @@ public sealed class CurveEditTests
         var target = new CurveSpecTarget(fixture.Track.Id, "fadeIn", fixture.Track.FadeInCurve);
 
         // The gesture that reaches Remove is "drag a point off the canvas", which is easy to do by
-        // accident — so it refuses rather than leaving a curve the engine will throw on.
+        // accident - so it refuses rather than leaving a curve the engine will throw on.
         Assert.Null(CurveEdits.Remove(target, 0));
         Assert.Null(CurveEdits.Remove(target, 1));
     }
@@ -142,7 +142,7 @@ public sealed class CurveEditTests
         var target = new EffectLaneTarget(fixture.Track.Id, lane);
 
         // There is no step in the lane model to write a hold into, so the edit is refused rather than
-        // accepted and dropped — a control that offered it would be lying about what it does.
+        // accepted and dropped - a control that offered it would be lying about what it does.
         Assert.False(target.SupportsHold);
         Assert.Null(CurveEdits.SetHold(target, 0, hold: true));
     }
@@ -202,8 +202,8 @@ public sealed class CurveEditTests
         journal.CloseGroup();
         journal.Undo();
 
-        // One step, both halves. Restoring the shape under the new law — or the law under the old
-        // shape — would leave a curve nobody drew and nobody chose.
+        // One step, both halves. Restoring the shape under the new law - or the law under the old
+        // shape - would leave a curve nobody drew and nobody chose.
         Assert.Equal(FadeCurve.Exponential, fixture.Track.FadeInCurve.Law);
         Assert.Equal(drawn, target.Read());
     }
@@ -312,7 +312,7 @@ public sealed class CurveEditTests
     [Fact]
     public void EveryPickerThumbnailNamesTheLawItDraws() =>
         // The thumbnails are drawings of these. Out of step, the picker's pictures and its effects
-        // would disagree — the one failure nobody would think to look for.
+        // would disagree - the one failure nobody would think to look for.
         Assert.All(
             CurveEdits.Laws,
             law => Assert.Equal(law, CurveEdits.Laws[CurveEdits.LawIndex(law)]));

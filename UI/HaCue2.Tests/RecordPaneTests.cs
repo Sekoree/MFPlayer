@@ -8,7 +8,7 @@ namespace HaCue2.Tests;
 /// The record pane edits the document (register item 30).
 /// </summary>
 /// <remarks>
-/// The pane was drawn complete — Directory, Pattern, an insert-token dropdown, a format line — with
+/// The pane was drawn complete - Directory, Pattern, an insert-token dropdown, a format line - with
 /// every value a literal in the markup and every button inert. It looked finished from the screenshot
 /// and edited nothing, which is the fifth time on this branch that a fully drawn surface turned out to
 /// be wired to nothing. These are the assertions that tell the two apart.
@@ -188,7 +188,7 @@ public class RecordPaneTests
         audio.SelectedLine = audio.Lines.Single(row => row.Id == second.Id);
         audio.Record.Pattern = "b.mka";
 
-        // The pane follows the selection rather than editing whichever line it first saw — the bug that
+        // The pane follows the selection rather than editing whichever line it first saw - the bug that
         // would put every recording in the show under one filename.
         Assert.Equal("a.mka", first.Record!.Pattern);
         Assert.Equal("b.mka", second.Record!.Pattern);
@@ -232,7 +232,7 @@ public class RecordPaneTests
         var video = new VideoViewModel(shell.Project, shell.Runtime, shell.Journal);
         video.SelectedOutput = video.Outputs.Single(row => row.Id == output.Id);
 
-        // .mka is right for a record LINE and wrong for an output — the same editor, told what it is
+        // .mka is right for a record LINE and wrong for an output - the same editor, told what it is
         // recording, has to reach opposite conclusions about the same extension.
         video.Record.Pattern = "capture.mka";
 

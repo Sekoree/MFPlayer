@@ -4,7 +4,7 @@
 
   <!-- The plain DARK palette: the booth ramp with the blue cast taken out.
 
-       Booth dark is deliberately cool — it is what the mockup specifies and what a dark room wants.
+       Booth dark is deliberately cool - it is what the mockup specifies and what a dark room wants.
        This is for the operator who finds a tinted grey distracting: same lightness ramp, same five
        gels, neutral surfaces. Only the tokens that carry the cast are re-stated; see Light.axaml for
        why the alpha washes are absent. -->
@@ -30,7 +30,7 @@
   <SolidColorBrush x:Key="BoothInk2" Color="{StaticResource BoothInk2Color}" />
   <SolidColorBrush x:Key="BoothInk3" Color="{StaticResource BoothInk3Color}" />
 
-  <!-- The opaque mixes, re-mixed against the neutral surfaces. The gels themselves are unchanged —
+  <!-- The opaque mixes, re-mixed against the neutral surfaces. The gels themselves are unchanged -
        they are the vocabulary, and neutralising them would remove the only colour that means something. -->
   <SolidColorBrush x:Key="GoButtonBg" Color="#1E3733" />
   <SolidColorBrush x:Key="PrimaryButtonBg" Color="#2E2F3D" />

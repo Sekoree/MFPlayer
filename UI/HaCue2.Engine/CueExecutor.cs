@@ -12,7 +12,7 @@ namespace HaCue2.Engine;
 /// <para>
 /// The compiled document carries a <c>CueDefinition</c> for every cue so the session's cursor can
 /// stand on any of them, but only media and visualizer cues have anything to play. Groups, jumps,
-/// fades, patches, actions and comments are resolved here — the session has no vocabulary for them and
+/// fades, patches, actions and comments are resolved here - the session has no vocabulary for them and
 /// should not grow one.
 /// </para>
 /// <para>
@@ -24,7 +24,7 @@ namespace HaCue2.Engine;
 public sealed class CueExecutor(ICueExecutionHost host)
 {
     /// <param name="Pass">
-    /// Which pass through the list this is, one-based. Counted so <c>LoopCount</c> can end the run —
+    /// Which pass through the list this is, one-based. Counted so <c>LoopCount</c> can end the run -
     /// "play this twice and then hold" needs a pass number, and there was nowhere to keep one.
     /// </param>
     private sealed record PlaylistRun(Guid GroupId, IReadOnlyList<Guid> Order, int Index, int Pass = 1);
@@ -147,7 +147,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
     private TimeSpan _timelineMaxLateness;
     private TimeSpan _timelineLastLateness;
 
-    /// <summary>Timeline dispatch timing since load — dispatch count, how many slipped past one frame,
+    /// <summary>Timeline dispatch timing since load - dispatch count, how many slipped past one frame,
     /// and the worst/most recent slip. For the rig report: this is the number that says whether authored
     /// times are actually being honoured, which no per-voice clock readout can.</summary>
     public (long Dispatched, long Late, TimeSpan MaxLateness, TimeSpan LastLateness) TimelineDispatchTiming
@@ -173,7 +173,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         if (lateness > LateDispatchReportThreshold)
             host.Report(
-                $"timeline event at {due:mm\\:ss\\.fff} fired {lateness.TotalMilliseconds:0} ms late — " +
+                $"timeline event at {due:mm\\:ss\\.fff} fired {lateness.TotalMilliseconds:0} ms late - " +
                 "its media was still preparing at the due time, or the release queued behind other work");
     }
 
@@ -208,7 +208,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         if (depth > MaxChainDepth)
         {
             host.Report(
-                $"the chain from this GO ran past {MaxChainDepth} cues and was stopped — check for a jump loop");
+                $"the chain from this GO ran past {MaxChainDepth} cues and was stopped - check for a jump loop");
             return false;
         }
 
@@ -250,7 +250,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
             return false;
 
         // Auto-continue is resolved here for every kind. The session chains on a clip's natural end,
-        // which a jump or a comment never has — left to the session those chains would simply stall.
+        // which a jump or a comment never has - left to the session those chains would simply stall.
         var sequenceOwned = IsSequenceOwned(cue.Id);
         if (!sequenceOwned && cue.Trigger == CueTrigger.Continue && list is not null)
         {
@@ -286,7 +286,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// offset, on the show's own clock rather than by chaining, because a timeline's whole point is
     /// that its cues do not depend on each other's lengths.
     /// <para>
-    /// The group itself holds no voice — its CHILDREN do — so it is never remembered as sounding. The
+    /// The group itself holds no voice - its CHILDREN do - so it is never remembered as sounding. The
     /// Active panel shows the children, which is what is actually making noise.
     /// </para>
     /// </remarks>
@@ -326,7 +326,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// <remarks>
     /// <para>
     /// Firing them one after another meant each child's media was opened before the next was even
-    /// asked for, so the group started as a staircase — each cue late by the sum of every open before
+    /// asked for, so the group started as a staircase - each cue late by the sum of every open before
     /// it. On eleven stems plus two 1080p60 ProRes clips that is flam between the stems, two video
     /// layers arriving at visibly different moments, and a GO that costs the sum of thirteen opens
     /// rather than the longest one. The mode's entire meaning is simultaneity.
@@ -336,7 +336,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// definition; one with a post-wait would hold the session's fire lock after starting, which is the
     /// one thing a batch must not do; one that auto-continues starts a chain; and a nested group, a
     /// jump or an action is not a clip at all. Those keep the ordinary one-at-a-time path, which is
-    /// also the fallback if the batch itself cannot run — a staircase start beats a silent group.
+    /// also the fallback if the batch itself cannot run - a staircase start beats a silent group.
     /// </para>
     /// </remarks>
     private async Task<bool> FireTogetherAsync(IReadOnlyList<CueNode> children, int depth)
@@ -460,7 +460,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         {
             if (ResolveEndTarget(media) is not ({ } target, { } targetList))
             {
-                host.Report($"“{media.Label}” has no live end target — the chain stopped");
+                host.Report($"“{media.Label}” has no live end target - the chain stopped");
                 return;
             }
 
@@ -624,7 +624,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         }
         catch (Exception failure)
         {
-            host.Report($"the prepared next cue failed to start — {failure.Message}; opening it from cold");
+            host.Report($"the prepared next cue failed to start - {failure.Message}; opening it from cold");
             return false;
         }
 
@@ -633,7 +633,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         // nothing is still a failed preparation - fall back to the cold open.
         if (started.Count == 0)
         {
-            host.Report("the prepared next cue had nothing to start — opening it from cold instead");
+            host.Report("the prepared next cue had nothing to start - opening it from cold instead");
             return false;
         }
 
@@ -709,7 +709,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
             // handles the fallback itself or finds no entry and advances from cold.
             if (started.Count == 0 && prepared.Edge.TrySetCanceled())
                 DropDeadPreparation(cueId, prepared,
-                    "follow pre-open started nothing — the next cue will open at its edge instead");
+                    "follow pre-open started nothing - the next cue will open at its edge instead");
         }
         catch (OperationCanceledException)
         {
@@ -719,7 +719,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         {
             if (prepared.Edge.TrySetCanceled())
                 DropDeadPreparation(cueId, prepared,
-                    $"follow pre-open failed — the next cue will open at its edge instead ({failure.Message})");
+                    $"follow pre-open failed - the next cue will open at its edge instead ({failure.Message})");
         }
         finally
         {
@@ -1200,8 +1200,8 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// Moves a list's cursor, and optionally fires what it lands on.
     /// </summary>
     /// <remarks>
-    /// The target may be in ANOTHER list — jumping from a preshow list into act one is the ordinary
-    /// use — so the list is resolved from the target cue rather than assumed to be the jump's own.
+    /// The target may be in ANOTHER list - jumping from a preshow list into act one is the ordinary
+    /// use - so the list is resolved from the target cue rather than assumed to be the jump's own.
     /// </remarks>
     private async Task<bool> JumpAsync(JumpCueNode jump, int depth)
     {
@@ -1230,7 +1230,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         if (targets.Count == 0)
         {
-            host.Report($"“{jump.Label}” has no live target — the jump did nothing");
+            host.Report($"“{jump.Label}” has no live target - the jump did nothing");
             return false;
         }
 
@@ -1252,13 +1252,13 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// </summary>
     /// <remarks>
     /// The document is written ONCE, with the destination values, and the audible move is a ramp the
-    /// bay is fed frame by frame. The write is deliberately not journaled — firing a cue during a show
+    /// bay is fed frame by frame. The write is deliberately not journaled - firing a cue during a show
     /// is not an edit, and an undo stack full of "the show changed the patch" would bury every real
     /// change the operator made. It is the same rule the standby cursor already follows.
     /// </remarks>
     private async Task<bool> PatchAsync(PatchCueNode patch)
     {
-        // The state to ramp FROM has to be copied before the recall overwrites it — the cells are live
+        // The state to ramp FROM has to be copied before the recall overwrites it - the cells are live
         // objects, and holding references would give us the destination twice.
         var origin = Project.AudioPatch.Cells.Select(cell => cell with { }).ToList();
 
@@ -1302,7 +1302,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// </summary>
     /// <remarks>
     /// Two kinds of target, two mechanisms. CUES ride the session's own stop, which fades the voice and
-    /// releases it — and when the fade is to something audible rather than to silence, the level is
+    /// releases it - and when the fade is to something audible rather than to silence, the level is
     /// what changes and the voice keeps playing. LOGICAL OUTPUTS are the patch, so they ramp through
     /// the same path a patch cue uses; the two cannot disagree because they are the same code.
     /// </remarks>
@@ -1312,7 +1312,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         var toSilence = fade.ToLevelDb <= GainRange.SilenceFloorDb;
 
         // SNAPSHOT, not the live list. Stopping a target below calls Forget, which removes it from
-        // what the host reports as sounding — iterating that list while emptying it throws. It never
+        // what the host reports as sounding - iterating that list while emptying it throws. It never
         // bit in production only because ShowHost happens to hand back a copy; the contract does not
         // promise one, and a fade-everything cue crashing mid-show is not a bug to leave to luck.
         var cues = fade.FadeEverythingSounding
@@ -1383,7 +1383,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         host.SetStandbyAsync(list, CueOrder.NextEnabled(list, fired)?.Id);
 
     /// <summary>
-    /// Runs a timeline group from a position inside it — the whole of it when <paramref name="from"/>
+    /// Runs a timeline group from a position inside it - the whole of it when <paramref name="from"/>
     /// is zero, which is what firing the group means.
     /// </summary>
     /// <remarks>
@@ -1391,7 +1391,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// Three cases, and the third is the one that makes this worth having. A child entirely BEFORE the
     /// playhead is skipped; one entirely after is scheduled at its own offset less the playhead; and
     /// one that STRADDLES it is fired now and moved to the right place inside its own media. Skipping
-    /// the third would mean rehearsing the second half of a scene with no bed under it — which is the
+    /// the third would mean rehearsing the second half of a scene with no bed under it - which is the
     /// half of the scene an operator is least able to judge without one.
     /// </para>
     /// <para>
@@ -1401,7 +1401,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// </para>
     /// <para>
     /// A cue nobody has probed has no length, so whether it straddles cannot be known. It is treated as
-    /// starting at its offset — the answer that plays something rather than the one that silently
+    /// starting at its offset - the answer that plays something rather than the one that silently
     /// leaves a hole.
     /// </para>
     /// </remarks>
@@ -1593,7 +1593,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            host.Report($"“{group.Label}” timeline stopped — {failure.Message}");
+            host.Report($"“{group.Label}” timeline stopped - {failure.Message}");
         }
         finally
         {
@@ -1737,7 +1737,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            host.Report($"a timeline event at {timelineEvent.Due:c} did not fire — {failure.Message}");
+            host.Report($"a timeline event at {timelineEvent.Due:c} did not fire - {failure.Message}");
         }
     }
 

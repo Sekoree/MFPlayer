@@ -11,7 +11,7 @@ namespace HaCue2.Engine;
 /// The <see cref="ICueExecutionHost"/> surface: everything firing a cue can ask the rig to do.
 /// </summary>
 /// <remarks>
-/// This is the DEVICE half of firing a cue, and it is deliberately dumb — play this, send that, wait,
+/// This is the DEVICE half of firing a cue, and it is deliberately dumb - play this, send that, wait,
 /// write these sends. What a cue MEANS lives in <see cref="CueExecutor"/>, which is the code with the
 /// most at stake and can be tested against a fake host because this interface is the only thing it
 /// touches.
@@ -220,7 +220,7 @@ public sealed partial class ShowHost
         }
     }
     /// <summary>
-    /// What firing a cue means, for every kind — extracted so it can be tested without devices.
+    /// What firing a cue means, for every kind - extracted so it can be tested without devices.
     /// </summary>
     /// <remarks>
     /// This class stays the DEVICE half: it owns the session, the bay, the sockets and the windows,
@@ -1072,7 +1072,7 @@ public sealed partial class ShowHost
     /// </summary>
     /// <remarks>
     /// A VISUALIZER is playable but is not a clip: it has nothing to decode and nothing to seek, so it
-    /// takes the composition-visualizer seam instead. It still counts as sounding — it is holding a
+    /// takes the composition-visualizer seam instead. It still counts as sounding - it is holding a
     /// canvas, it appears in the Active panel, and STOP has to be able to take it down.
     /// </remarks>
     async Task<bool> ICueExecutionHost.PlayAsync(
@@ -1165,7 +1165,7 @@ public sealed partial class ShowHost
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            Report($"“{list?.Name ?? "a timeline"}” could not prepare its scheduled media — {failure.Message}");
+            Report($"“{list?.Name ?? "a timeline"}” could not prepare its scheduled media - {failure.Message}");
             return [];
         }
 
@@ -1219,7 +1219,7 @@ public sealed partial class ShowHost
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            Report($"scheduled visualizers could not prepare — {failure.Message}");
+            Report($"scheduled visualizers could not prepare - {failure.Message}");
             return [];
         }
         foreach (var problem in problems)
@@ -1313,7 +1313,7 @@ public sealed partial class ShowHost
     /// </summary>
     /// <remarks>
     /// This is the live send path, so it changes what a voice is doing without reopening it. The cue's
-    /// authored per-send gains are kept as the SHAPE — the fade moves the whole cue, so a send trimmed
+    /// authored per-send gains are kept as the SHAPE - the fade moves the whole cue, so a send trimmed
     /// 6 dB below its neighbour stays 6 dB below it.
     /// </remarks>
     async Task ICueExecutionHost.SetCueLevelAsync(Guid cueId, double levelDb)

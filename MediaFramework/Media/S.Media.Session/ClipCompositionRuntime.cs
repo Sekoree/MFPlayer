@@ -29,7 +29,7 @@ public sealed record ClipCompositionDefinition(
 /// <para>Opt-in because it decides what an output DOES between cues, and the two answers are both
 /// right for somebody. A media player attaches an output to show a clip, and a pump running over an
 /// empty canvas would light a screen the user never asked for. A cue player's projector is switched
-/// on for the evening: it has to show the idle image — or black — from the moment it is patched, and
+/// on for the evening: it has to show the idle image - or black - from the moment it is patched, and
 /// with no pump it shows nothing at all, which on most sinks means the window is never even created
 /// (an <c>IVideoOutput</c> is configured by its first submit).</para>
 /// </param>
@@ -819,7 +819,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// <param name="alignmentTimeline">The transport timeline THIS layer's frames are stamped
     /// against, when the caller has one. A canvas hosts layers from independent transports whose
     /// PTS live in different domains (two clips with different trims), and judging them all against
-    /// the single canvas master aligned only the clock-owning layer — the other churned its pending
+    /// the single canvas master aligned only the clock-owning layer - the other churned its pending
     /// frames on the too-old/too-future fallbacks (a steady slot-overflow trickle and a visible
     /// single-frame judder that grew as the domains drifted). With its own timeline the layer is
     /// PTS-aligned regardless of which transport owns the canvas clock.</param>

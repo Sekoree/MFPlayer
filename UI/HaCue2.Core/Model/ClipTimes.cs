@@ -8,13 +8,13 @@ namespace HaCue2.Core.Model;
 /// <remarks>
 /// <para>
 /// The fields used to be seconds with one decimal, which meant half an hour was typed as
-/// <c>1800.0</c>. That is fine for a two-second sting and useless for the case this exists for —
-/// trimming thirty minutes off the front of a recording — so <c>30:00</c> and <c>1:05:30.250</c> read
+/// <c>1800.0</c>. That is fine for a two-second sting and useless for the case this exists for -
+/// trimming thirty minutes off the front of a recording - so <c>30:00</c> and <c>1:05:30.250</c> read
 /// too, and seconds still do.
 /// </para>
 /// <para>
 /// <b>A leading minus counts back from the END.</b> The document stores an out-point as an absolute
-/// position, so "ten minutes off the end" was <c>length − 600</c> — arithmetic the operator had to do
+/// position, so "ten minutes off the end" was <c>length − 600</c> - arithmetic the operator had to do
 /// themselves, against a length the app never showed them. <c>-10:00</c> is the same thing said the way
 /// it is meant, and it is resolved against the probed length at the moment it is typed.
 /// </para>
@@ -29,7 +29,7 @@ public static class ClipTimes
     /// </summary>
     /// <param name="length">
     /// The file's probed length, for a from-the-end value. Without one a negative time cannot be
-    /// resolved and is refused rather than guessed — an out-point placed against an assumed length
+    /// resolved and is refused rather than guessed - an out-point placed against an assumed length
     /// would cut the cue somewhere nobody chose.
     /// </param>
     public static int? Parse(string text, TimeSpan? length = null)
@@ -86,7 +86,7 @@ public static class ClipTimes
     /// Milliseconds as the shortest sensible clock reading.
     /// </summary>
     /// <remarks>
-    /// Hours only when there are hours, and thousandths only when they are not zero — a trim window on
+    /// Hours only when there are hours, and thousandths only when they are not zero - a trim window on
     /// a sting reads <c>2.250</c> rather than <c>0:00:02.250</c>, and one on a concert reads
     /// <c>1:05:30</c> rather than trailing three zeros nobody set.
     /// </remarks>

@@ -15,7 +15,7 @@ namespace HaCue2.Engine;
 /// <para>
 /// The document stores destination geometry in FRACTIONS of the output; the engine wants output
 /// PIXELS. The conversion needs the output's real size, which is why it is done when the output opens
-/// rather than at compile time — a fraction survives the projector being swapped for one of a
+/// rather than at compile time - a fraction survives the projector being swapped for one of a
 /// different resolution, and a baked pixel rectangle does not.
 /// </para>
 /// </remarks>
@@ -26,7 +26,7 @@ public static class OutputMapping
     /// </summary>
     /// <remarks>
     /// Null rather than an empty section list: "no mapping" is the common case and means the canvas is
-    /// presented whole, which is a different code path from "mapped, with nothing in it" — the latter
+    /// presented whole, which is a different code path from "mapped, with nothing in it" - the latter
     /// would render a black output and look exactly like a dead one.
     /// </remarks>
     public static ClipOutputMappingSpec? Spec(VideoOutputDefinition output, int width, int height)
@@ -91,7 +91,7 @@ public static class OutputMapping
     /// <remarks>
     /// The document stores OFFSETS from an even grid, so a section that is moved or resized carries its
     /// warp with it; the engine wants absolute positions within the destination rect. The even grid is
-    /// added back here — the one place that knows both conventions.
+    /// added back here - the one place that knows both conventions.
     /// </remarks>
     private static List<ClipMeshPoint> Points(MappingSection section)
     {

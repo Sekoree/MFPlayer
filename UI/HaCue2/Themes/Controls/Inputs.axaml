@@ -3,15 +3,15 @@
 
   <!-- Tokens are merged into THIS dictionary (not just into the bundle) so every {StaticResource}
        below resolves against the file's own root. Avalonia resolves StaticResource by walking the
-       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it —
+       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it -
        which is why Avalonia's own themes never reach across control files for a key. -->
   <ResourceDictionary.MergedDictionaries>
     <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
   </ResourceDictionary.MergedDictionaries>
 
   <!-- The mockup's `.inputish`: a small dark well with a rule-2 hairline, mono 10.5 px, 2 px corners.
-       Everything an operator types into looks like this — text, numbers, and the closed state of a
-       picker — so a value is recognisable as editable without reading it. -->
+       Everything an operator types into looks like this - text, numbers, and the closed state of a
+       picker - so a value is recognisable as editable without reading it. -->
 
   <ControlTheme x:Key="{x:Type TextBox}" TargetType="TextBox">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
@@ -81,7 +81,7 @@
     <!-- The mockup's `.inputish.ro`: a value the app computed, shown in the same well so the reading
          is comparable, but visibly not yours to type into. The HTML used a dashed border; Avalonia's
          Border has no dash, so the same "hands off" reading comes from a recessed border and ink-2
-         text — which survives a low-resolution screenshot better than a 1 px dash would anyway. -->
+         text - which survives a low-resolution screenshot better than a 1 px dash would anyway. -->
     <Style Selector="^.ro">
       <Setter Property="IsReadOnly" Value="True" />
       <Setter Property="Foreground" Value="{DynamicResource BoothInk2}" />
@@ -103,7 +103,7 @@
     <!-- An editable value that lives INSIDE a list row: the mapping section's name. It reads as the
          row's label until you click it, because a row of wells looks like a form and a mapping list
          with eight of them looks like eight forms. The well appears on hover and focus, so it is still
-         discoverable — an unstyled label that silently accepts typing is worse than either. -->
+         discoverable - an unstyled label that silently accepts typing is worse than either. -->
     <Style Selector="^.bare">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderBrush" Value="Transparent" />
@@ -228,7 +228,7 @@
 
   <!-- ── CheckBox ─────────────────────────────────────────────────────────────────────────────
        The mockup's `.check` row: a 10 px box, a 7 px gap, 11 px label in ink-2 that brightens to ink
-       when ticked. The label brightening is load-bearing — it is how a settings pane reads its own
+       when ticked. The label brightening is load-bearing - it is how a settings pane reads its own
        state from across a room. -->
   <ControlTheme x:Key="{x:Type CheckBox}" TargetType="CheckBox">
     <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
@@ -282,7 +282,7 @@
 
        Not a from-scratch template like the others: NumericUpDown's own template already contains a
        TextBox and a ButtonSpinner, and both pick up this file's themes on their own. What is left is
-       the sizing, which Simple's defaults get wrong for a booth panel — a 32 px-tall spinner in a grid
+       the sizing, which Simple's defaults get wrong for a booth panel - a 32 px-tall spinner in a grid
        of 10.5 px mono wells makes the whole pane look like a different application.
 
        Values commit on LOST FOCUS as well as on Enter, which is the behaviour a stage operator

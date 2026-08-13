@@ -30,8 +30,8 @@ public static class AvaloniaHeadlessTestApp
 /// </summary>
 /// <remarks>
 /// <para>
-/// It carries the SAME two style slots the real application declares — Simple in slot 0 for control
-/// infrastructure, the booth bundle over it — because several controls the app hosts declare required
+/// It carries the SAME two style slots the real application declares - Simple in slot 0 for control
+/// infrastructure, the booth bundle over it - because several controls the app hosts declare required
 /// template parts and throw out of <c>OnApplyTemplate</c> when a bare fallback template does not supply
 /// them. A test that realises a real view would fail on that, and the failure looks like a bug in the
 /// view rather than a missing theme.

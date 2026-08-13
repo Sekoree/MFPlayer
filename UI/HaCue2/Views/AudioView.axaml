@@ -13,7 +13,7 @@
 
        The headline feature is the first pane. A logical output is a named channel that exists whether
        or not any hardware does; cues send to these and nothing else, and the show file never contains
-       a device name. That is the venue-swap seam — the show keeps "Lobby", each venue patches it. -->
+       a device name. That is the venue-swap seam - the show keeps "Lobby", each venue patches it. -->
 
   <DockPanel>
 
@@ -51,13 +51,13 @@
                 <Button Grid.Column="4" Classes="tight" Content="REORDER" Click="OnDialog" Tag="reorder" />
                 <!-- Register item 11: no refuse-while-fed gate. Deleting strips the sends from every
                      cue as ONE undoable edit, which is the only version of this that an operator can
-                     safely reverse. The footer said so for months with no button behind it — the
+                     safely reverse. The footer said so for months with no button behind it - the
                      cascade existed in ProjectEdits and nothing in the app called it. -->
                 <Button Grid.Column="5" Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="output:remove"
                         IsEnabled="{Binding HasSelectedOutput}" />
                 <TextBlock Grid.Column="6" Classes="mono dim3 small" HorizontalAlignment="Right"
                            VerticalAlignment="Center"
-                           Text="delete cleans up its cue sends automatically — one undoable edit" />
+                           Text="delete cleans up its cue sends automatically - one undoable edit" />
               </Grid>
             </Border>
           </c:PanelBox.Footer>
@@ -131,7 +131,7 @@
           <ScrollViewer>
             <StackPanel Margin="0,6,0,8" IsEnabled="{Binding CanAuthor}">
               <!-- A real rename. This was bound to a get-only property, so it took typing and threw
-                   it away — the only working rename was the footer button. -->
+                   it away - the only working rename was the footer button. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
                 <TextBox Text="{Binding OutputName}" IsEnabled="{Binding HasSelectedOutput}" />
               </HeaderedContentControl>
@@ -157,7 +157,7 @@
               <ContentControl Theme="{StaticResource Subhead}" Content="Patched to" />
               <TextBlock Margin="10,4,10,8" FontSize="{DynamicResource FontSizeSmall}" TextWrapping="Wrap"
                          Classes="err" IsVisible="{Binding IsSelectedOutputUnpatched}"
-                         Text="No device channel receives Lobby on this machine. Cues sending here run silent — never redirected to a default device." />
+                         Text="No device channel receives Lobby on this machine. Cues sending here run silent - never redirected to a default device." />
               <ContentControl Theme="{StaticResource FieldWide}">
                 <Button Classes="primary block" Content="PATCH → PICK DEVICE CHANNELS…" Click="OnDialog"
                         Tag="patch" IsEnabled="{Binding CanPatchToDevice}" />
@@ -188,7 +188,7 @@
                 <!-- An absent line keeps its cells and routes silent. Dropping the patch would lose
                      show data the moment someone unplugs a box. -->
                 <TextBlock Grid.Column="3" Classes="mono dim2 small" VerticalAlignment="Center"
-                           Text="Wedge absent — cells kept, routed silent" />
+                           Text="Wedge absent - cells kept, routed silent" />
               </Grid>
             </Border>
           </c:PanelBox.Footer>
@@ -225,7 +225,7 @@
                   </StackPanel>
                 </Border>
                 <TextBlock Margin="10,6,10,2" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
-                           Text="A snapshot stores only the cells it was saved with — recalling “Interval” touches Lobby and nothing else. Used by patch cues in the list." />
+                           Text="A snapshot stores only the cells it was saved with - recalling “Interval” touches Lobby and nothing else. Used by patch cues in the list." />
                 <!-- Recall is not undoable (it is an operator action on the patch, not a document
                      edit), so what it did has to be said out loud. -->
                 <TextBlock Margin="10,0,10,9" FontSize="10.5" Classes="mono dim2"
@@ -349,7 +349,7 @@
                 <ComboBox ItemsSource="{Binding ClockMasters}" SelectedIndex="{Binding ClockMasterIndex}" />
               </HeaderedContentControl>
               <TextBlock Margin="10,4,10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
-                         Text="The clock master must run natively at the mix rate — it is never resampled, so the show clock never drifts against it. Lines that cannot be one are not offered." />
+                         Text="The clock master must run natively at the mix rate - it is never resampled, so the show clock never drifts against it. Lines that cannot be one are not offered." />
               <!-- Register item 14: never a silent rebuild. The button only lights up when the running
                    bay actually differs from the document, so it says something rather than sitting
                    there inviting a restart nobody needs. -->
@@ -374,7 +374,7 @@
                   <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
                     <TextBox Grid.Column="0" Text="{Binding Record.Pattern}" />
                     <!-- Register item 30: insert-token dropdown plus a "?" listing every token with a
-                         rendered example — the tokens are unguessable otherwise. -->
+                         rendered example - the tokens are unguessable otherwise. -->
                     <!-- {}-escaped: a value starting with "{" is otherwise read as a markup extension. -->
                     <Button Grid.Column="1" Classes="icon" Content="{}{ } ▾">
                       <Button.Flyout>
@@ -450,7 +450,7 @@
       </Grid>
 
       <!-- ══ 08b · AUDITION ═════════════════════════════════════════════════════════════════ -->
-      <!-- One rig, one pane, duplicated verbatim in the Video view — an audition rig is a single
+      <!-- One rig, one pane, duplicated verbatim in the Video view - an audition rig is a single
            thing (an audio device plus a video surface) and splitting its two halves across two views
            would make it look like two. -->
       <Panel IsVisible="{Binding IsAuditionPane}">

@@ -10,7 +10,7 @@ namespace HaCue2.Core.Journal;
 /// One implementation for both callers. The Renumber dialog and auto-renumber-on-insert are the same
 /// operation asked for two different reasons, and they disagreed: the dialog carried each group's
 /// number down to its children, and the insert path assigned bare integers at every depth. So adding
-/// one cue inside a group renumbered <c>1.1, 1.2, 1.3</c> to <c>1, 2, 3</c> — which collides with the
+/// one cue inside a group renumbered <c>1.1, 1.2, 1.3</c> to <c>1, 2, 3</c> - which collides with the
 /// top level and destroys the numbering an operator calls over comms.
 /// </para>
 /// <para>
@@ -77,7 +77,7 @@ public static class CueRenumber
             }
 
             // Children always restart at 1 in steps of 1: the step belongs to the level the operator
-            // asked about, and "start at 10, step 10" means 10, 20, 30 with 10.1, 10.2 inside — not
+            // asked about, and "start at 10, step 10" means 10, 20, 30 with 10.1, 10.2 inside - not
             // 10.10, 10.20.
             if (cue is GroupCueNode group)
                 Apply(journal, group.Children, number, start: 1, step: 1, depth + 1);

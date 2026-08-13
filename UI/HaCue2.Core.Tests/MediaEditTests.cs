@@ -221,7 +221,7 @@ public sealed class MediaEditTests
     /// <remarks>
     /// The cases here are written with POSIX paths because they read as paths that way, but the code
     /// under test hands the store whatever <see cref="Path.GetFullPath"/> and <see cref="Path.Combine"/>
-    /// produced — which on Windows is <c>D:\new\root\sfx\storm-bed.flac</c>, drive and backslashes and
+    /// produced - which on Windows is <c>D:\new\root\sfx\storm-bed.flac</c>, drive and backslashes and
     /// all. A real filesystem does not care which of the two a caller wrote; the fake did, and the two
     /// relink/consolidate cases that build a destination path rather than echoing a stored one failed on
     /// the Windows leg for that reason alone. Normalising both what the store HOLDS and what it is ASKED

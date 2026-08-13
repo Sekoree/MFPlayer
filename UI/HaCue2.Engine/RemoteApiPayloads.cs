@@ -10,7 +10,7 @@ namespace HaCue2.Engine;
 /// <para>
 /// Real records with a source-generated serializer, not anonymous types. Two reasons, and the second
 /// is what forced it: an API payload IS a contract with somebody else's show-control system and
-/// deserves a named type that a reader can find, and the repo is NativeAOT-clean by policy — the
+/// deserves a named type that a reader can find, and the repo is NativeAOT-clean by policy - the
 /// reflection-based serializer fails the build, which is the rule doing its job.
 /// </para>
 /// <para>

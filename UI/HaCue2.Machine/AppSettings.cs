@@ -32,7 +32,7 @@ public sealed record RecentProject
 /// operator's font size to the next venue would be carrying the wrong thing.
 /// </para>
 /// <para>
-/// <b>Every property uses <c>set</c>, never <c>init</c></b>, and defaults live on the property — the
+/// <b>Every property uses <c>set</c>, never <c>init</c></b>, and defaults live on the property - the
 /// same rule the document model follows, for the same reason: the JSON source generator assigns every
 /// init-only property, so one absent from the file would be written as the CLR default and the
 /// initializer beside it silently lost.
@@ -55,7 +55,7 @@ public sealed record AppSettings
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A MACHINE setting, never a project one — the two see different devices on the same box (this one
+    /// A MACHINE setting, never a project one - the two see different devices on the same box (this one
     /// enumerates fifteen outputs through PortAudio and two through miniaudio), so a show carrying its
     /// own choice would arrive at a venue and change what that venue's rig looks like.
     /// </para>
@@ -169,7 +169,7 @@ public sealed record AppSettings
     /// Records that a project was opened, moving it to the top.
     /// </summary>
     /// <remarks>
-    /// Matched by PATH, case-insensitively on the platforms where that is right — reopening the same
+    /// Matched by PATH, case-insensitively on the platforms where that is right - reopening the same
     /// file must move its row rather than add a second one. A project that has never been saved has no
     /// path and is not recorded: there would be nothing to reopen.
     /// </remarks>
@@ -193,7 +193,7 @@ public sealed record AppSettings
             Recents.RemoveRange(MaxRecents, Recents.Count - MaxRecents);
     }
 
-    /// <summary>Forgets one recent — the row's own "remove", and what a discarded project deserves.</summary>
+    /// <summary>Forgets one recent - the row's own "remove", and what a discarded project deserves.</summary>
     public void Forget(string path) => Recents.RemoveAll(recent => SamePath(recent.Path, FullPath(path)));
 
     /// <summary>
@@ -246,7 +246,7 @@ public static class AppSettingsStore
                 File.ReadAllText(path), AppSettingsJsonContext.Default.AppSettings);
 
             // A file from a NEWER build is read as far as it goes rather than refused. Unlike a show
-            // document, losing a preference costs nothing — and refusing to start because the settings
+            // document, losing a preference costs nothing - and refusing to start because the settings
             // are too new would be the worst possible trade.
             return settings ?? new AppSettings();
         }
@@ -260,7 +260,7 @@ public static class AppSettingsStore
     /// <summary>
     /// Writes the settings atomically.
     /// </summary>
-    /// <returns>False when they could not be written — a read-only profile, or a full disk.</returns>
+    /// <returns>False when they could not be written - a read-only profile, or a full disk.</returns>
     public static bool Save(AppSettings settings, string? path = null)
     {
         ArgumentNullException.ThrowIfNull(settings);

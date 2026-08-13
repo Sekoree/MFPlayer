@@ -34,7 +34,7 @@ public partial class PromptWindow : Window
     /// </summary>
     /// <remarks>
     /// Opens where the field already points, so browsing from a half-typed path continues from there
-    /// rather than from the home directory. A cancelled picker leaves what was typed alone — the one
+    /// rather than from the home directory. A cancelled picker leaves what was typed alone - the one
     /// thing worse than no browse button is one that clears the box.
     /// </remarks>
     private async void OnBrowse(object? sender, RoutedEventArgs e)
@@ -77,8 +77,8 @@ public partial class PromptWindow : Window
     /// Opens a prompt over whatever window the control lives in, and refreshes after.
     /// </summary>
     /// <remarks>
-    /// Every caller wants the same three things — find the owner, show modally, re-read the document
-    /// when it closes — so they say it once here rather than twenty times.
+    /// Every caller wants the same three things - find the owner, show modally, re-read the document
+    /// when it closes - so they say it once here rather than twenty times.
     /// </remarks>
     public static void Show(Control from, PromptViewModel? prompt, Action? afterClose = null)
     {

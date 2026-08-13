@@ -12,7 +12,7 @@ namespace HaCue2.Engine;
 /// Frames or audio chunks the encoder could not keep up with. The encode queue is bounded and drops
 /// the OLDEST under a burst, deliberately: a recording that blocked would stall the show it is
 /// recording. That makes drops the honest measure of a recording going wrong, and the only warning an
-/// operator gets before the file starts gapping — so it is carried here rather than left in a metric
+/// operator gets before the file starts gapping - so it is carried here rather than left in a metric
 /// nobody reads.
 /// </param>
 public sealed record RecorderStatus(
@@ -32,13 +32,13 @@ public sealed record RecorderStatus(
 /// <remarks>
 /// <para>
 /// One encode session per armed target. Audio recorders join <see cref="ProjectPatchBay"/> as ordinary
-/// terminals, so what lands in the file is exactly what the operator patched to that line — recording
+/// terminals, so what lands in the file is exactly what the operator patched to that line - recording
 /// the foldback mix instead of the program needs no feature, only a different patch. Video recorders sit
 /// behind a <see cref="RecordVideoOutput"/> the compositor has been rendering into all along.
 /// </para>
 /// <para>
 /// <b>Arming is explicit and disarming is a flush.</b> A recording that is never disarmed is a file with
-/// no trailer, which most players will not open — so disposal disarms everything and waits for the
+/// no trailer, which most players will not open - so disposal disarms everything and waits for the
 /// trailers, and that is the one place in the show's teardown allowed to take a moment.
 /// </para>
 /// </remarks>
@@ -158,7 +158,7 @@ public sealed class ProjectRecorders : IAsyncDisposable
         var target = line?.Record ?? output?.Record;
 
         if (target is null)
-            return "this target has nowhere to write — set a folder and a filename pattern";
+            return "this target has nowhere to write - set a folder and a filename pattern";
 
         var streaming = line?.Kind == AudioLineKind.Stream || output?.Kind == VideoOutputKind.Stream;
 
@@ -370,7 +370,7 @@ public sealed class ProjectRecorders : IAsyncDisposable
     /// <summary>Adopts a reloaded document, so status keeps naming what the operator sees.</summary>
     /// <remarks>
     /// Armed sessions are LEFT ALONE. Their file is already open with a chosen format, and an edit to
-    /// the pattern cannot retroactively rename it — the change applies to the next arm, which is the
+    /// the pattern cannot retroactively rename it - the change applies to the next arm, which is the
     /// same rule an encode setting follows everywhere else.
     /// </remarks>
     public void Adopt(HaCueProject project) => _project = project ?? throw new ArgumentNullException(nameof(project));
@@ -443,7 +443,7 @@ public sealed class ProjectRecorders : IAsyncDisposable
     /// A stream URL with its key removed, for logs and the devices list.
     /// </summary>
     /// <remarks>
-    /// An ingest URL's last segment is a credential — printing it into a log the operator later pastes
+    /// An ingest URL's last segment is a credential - printing it into a log the operator later pastes
     /// into a bug report hands out the ability to broadcast as them.
     /// </remarks>
     internal static string Redact(string url)

@@ -11,8 +11,8 @@ namespace HaCue2.Core.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This writes real files with a real encoder. The cheaper alternative — asserting that arming built
-/// the right options object — would have passed for every mistake worth catching here: a container that
+/// This writes real files with a real encoder. The cheaper alternative - asserting that arming built
+/// the right options object - would have passed for every mistake worth catching here: a container that
 /// refuses its codec, a path that could not be created, a wrapper that never forwarded a frame. A
 /// recording either produces a file somebody can open or it does not.
 /// </para>
@@ -87,7 +87,7 @@ public sealed class RecorderTests : IDisposable
         await SubmitPacedAsync(recorders, output.Id, sink, frames: 25);
 
         // Every frame reached the encoder. Asserting only that a FILE APPEARED would have passed while
-        // the queue silently dropped two thirds of them — which is what an unpaced burst does here.
+        // the queue silently dropped two thirds of them - which is what an unpaced burst does here.
         Assert.Equal(0, recorders.Status().Single().Dropped);
 
         await recorders.DisarmAsync(output.Id);
@@ -107,7 +107,7 @@ public sealed class RecorderTests : IDisposable
     /// Submits frames at a rate the encoder can absorb.
     /// </summary>
     /// <remarks>
-    /// The encode queue is bounded and drops the oldest frame when it fills — correct for a live
+    /// The encode queue is bounded and drops the oldest frame when it fills - correct for a live
     /// recording, which must never stall the show to keep up. A synthetic producer with no decode work
     /// to do outruns any encoder, so a test that wants every frame in the file has to pace itself; one
     /// that does not is testing the drop path.
@@ -133,7 +133,7 @@ public sealed class RecorderTests : IDisposable
         sink.Configure(new VideoFormat(160, 120, PixelFormat.Bgra32, new Rational(25, 1)));
 
         // Deliberately unpaced. A recording that blocked here would hold up the compositor, and through
-        // it the show — so the queue drops instead, and the operator is told rather than left to
+        // it the show - so the queue drops instead, and the operator is told rather than left to
         // discover a gapped file afterwards.
         for (var index = 0; index < 400; index++)
             sink.Submit(Frame(160, 120, index));
@@ -161,7 +161,7 @@ public sealed class RecorderTests : IDisposable
         sink.Configure(new VideoFormat(160, 120, PixelFormat.Bgra32, new Rational(25, 1)));
 
         // The compositor renders into a record output from the moment the show loads. Those frames
-        // must go nowhere rather than accumulate — a recording starts when it is armed.
+        // must go nowhere rather than accumulate - a recording starts when it is armed.
         for (var index = 0; index < 10; index++)
             sink.Submit(Frame(160, 120, index));
 
@@ -240,7 +240,7 @@ public sealed class RecorderTests : IDisposable
         for (var index = 0; index < 25; index++)
             sink.Submit(Frame(160, 120, index));
 
-        // The show closing with a recording running must still produce a file with a trailer — one
+        // The show closing with a recording running must still produce a file with a trailer - one
         // without is a file most players refuse to open, which loses the whole performance.
         await recorders.DisposeAsync();
 

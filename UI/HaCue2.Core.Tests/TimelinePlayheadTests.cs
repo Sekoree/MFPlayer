@@ -8,7 +8,7 @@ namespace HaCue2.Core.Tests;
 /// ▶ FROM PLAYHEAD: running a timeline group from a moment inside it.
 /// </summary>
 /// <remarks>
-/// The point of the feature is the state the show would be IN at that moment — the cues after the
+/// The point of the feature is the state the show would be IN at that moment - the cues after the
 /// playhead scheduled, and the bed already running under them part-way through. Skipping the bed would
 /// mean rehearsing the second half of a scene without the half of it an operator is least able to
 /// judge by imagination.

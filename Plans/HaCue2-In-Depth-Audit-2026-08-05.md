@@ -106,7 +106,7 @@ That last number is not a compositor-only benchmark, but it is a useful warning:
 
 ## Detailed findings
 
-### HAC-001 — the production session never selects the GL compositor
+### HAC-001 - the production session never selects the GL compositor
 
 `UI/HaCue2.Engine/ShowHost.cs` creates the session as:
 
@@ -136,7 +136,7 @@ This should not be fixed by copying another private factory into HaCue2. Move/ge
 
 Acceptance tests should assert both paths: GL is selected when the probe succeeds; CPU fallback is selected and visibly reported when it does not. A pixel-level mesh test should prove that a non-affine control point changes the rendered output.
 
-### HAC-002 — subtitles are authorable but not playable
+### HAC-002 - subtitles are authorable but not playable
 
 HaCue2 has embedded/sidecar subtitle selection, styling fields, serialization, probe data, inspector UI, validation, and tests of document editing. `ShowCompiler` carries those selections into the framework binding.
 
@@ -151,7 +151,7 @@ The result is a polished authoring dead end: a user can spend time selecting and
 
 Fix this in the same shared composition-root work as HAC-001. Add integration coverage for one sidecar and one embedded stream, including seek and loop behavior. Editing-only tests are insufficient.
 
-### HAC-003 — the hotkey screen and actual safety keys disagree
+### HAC-003 - the hotkey screen and actual safety keys disagree
 
 The Settings window labels its hotkey section WIP, but it still presents a concrete operator reference:
 
@@ -164,7 +164,7 @@ The File menu also displays `Ctrl+N` and `Ctrl+O`, but only Save/Save As are exp
 
 This is high priority because an operator may learn the shown emergency gesture and discover the mismatch during a show. Until editable profiles exist, install one authoritative keymap with command bindings and tests. Conflict resolution, focus-in-text-box rules, and whether Panic may ever be intercepted must be explicit. Do not show a gesture until it is executable.
 
-### HAC-004 — locking is incomplete and can produce partial consolidate results
+### HAC-004 - locking is incomplete and can produce partial consolidate results
 
 `ProjectSettings.OpenLocked` is only edited and serialized. Project opening never applies it to `ProjectJournal.IsReadOnly`, so “Open locked” does nothing.
 
@@ -181,7 +181,7 @@ Required tests:
 - Consolidate, relink, imports, cache-affecting project actions, and target sends cannot mutate external state while locked.
 - Unlock restores authoring without reconstructing unrelated runtime state.
 
-### HAC-005 — playlist passes contradict their own model and UI
+### HAC-005 - playlist passes contradict their own model and UI
 
 `GroupCueNode.LoopCount` says it is the number of passes, while `AtEnd` says what happens after the final pass. The inspector reinforces that separation. The example “play this twice and then hold” is even written into the model and executor comments.
 
@@ -189,7 +189,7 @@ Required tests:
 
 The executor should first decide whether another pass remains. Only after the final pass should it apply Hold, Next List, or the chosen terminal behavior. Add tests for finite and infinite passes across every end policy, shuffle stability, repeat avoidance, and crossfade final-edge handling.
 
-### HAC-006 — Keyboard trigger input is a serialized dead end
+### HAC-006 - Keyboard trigger input is a serialized dead end
 
 `TriggerInputKind.Keyboard` exists, the sample project creates a Keyboard source, and presentation copy describes it as always available. `TriggerInputs.Open` deliberately excludes it. The only live ingress is MIDI/OSC monitor records plus clock handling, and `ShellWindow` never feeds key gestures into `TriggerInputs`.
 
@@ -197,7 +197,7 @@ The editor also has no corresponding “add keyboard source” path. Existing/sa
 
 Implement keyboard gestures through the same authoritative key router recommended for HAC-003, including modifier normalization, repeat suppression, learn mode, focus policy, and conflicts with transport shortcuts. If that is not planned soon, stop creating/showing Keyboard sources so projects cannot contain a control surface that will never fire.
 
-### HAC-007 — generic external GO fires the wrong list
+### HAC-007 - generic external GO fires the wrong list
 
 Learn mode exposes `transport · go`. `ShowHost.Triggers.TransportAsync("go")` iterates project cue lists and breaks after the first. It has no connection to `CuesViewModel`'s currently selected/scoped list.
 
@@ -205,7 +205,7 @@ On a multi-list show, a MIDI or OSC GO can therefore fire list 1 while the opera
 
 Either synchronize one active-list ID into the engine or make bindings explicitly list-specific. The generic command should use exactly the same transport service as the Space/GO button. Test current-list changes, deleted lists, project reload, and simultaneous UI/external GO.
 
-### HAC-008 — the test pyramid stops below the real composition root
+### HAC-008 - the test pyramid stops below the real composition root
 
 The test suite is broad and generally well organized. It validates serialization, patch math, cue execution decisions, shell binding, view rendering, mapping commands, settings persistence, control flow, and many framework primitives. What it does not do is construct HaCue2's production `ShowHost` and verify its optional framework dependencies.
 
@@ -223,18 +223,18 @@ Add a small `HaCue2.ShowSmoke` or equivalent integration fixture that:
 
 Keep CPU fallback coverage too. The point is not “GL always”; it is “the selected backend matches the machine and the UI tells the truth.”
 
-### HAC-009 / HAC-017 — settings that persist without controlling behavior
+### HAC-009 / HAC-017 - settings that persist without controlling behavior
 
 The application settings view writes many values successfully, but the runtime never consumes these:
 
-- `RememberInspectorTab` — inspector state is remembered unconditionally per cue kind.
+- `RememberInspectorTab` - inspector state is remembered unconditionally per cue kind.
 - `RememberTimelineDock`.
 - `FlatActiveList`.
 - `OpenDrawerOnLaunch`.
-- `MeterBallistics` — framework meter code currently uses fixed behavior.
+- `MeterBallistics` - framework meter code currently uses fixed behavior.
 - `PeakHoldMs`.
-- `ClipReset` — there is no wired click/three-second policy.
-- `RunStatusChecksOnOpen` — status is constructed and surfaced regardless.
+- `ClipReset` - there is no wired click/three-second policy.
+- `RunStatusChecksOnOpen` - status is constructed and surfaced regardless.
 
 Other settings are only partly connected:
 
@@ -254,7 +254,7 @@ Cache and log directory look editable but only modify a view-model field. Recove
 
 Every setting should be placed in one of four explicit categories: applied live, applied to new projects, applied after restart, or removed. Add a binding-to-consumer test table; persistence-only tests do not prove a setting works.
 
-### HAC-010 — the cache page describes a system that is not implemented
+### HAC-010 - the cache page describes a system that is not implemented
 
 The default Cache Root label says “shared framework cache,” while HaCue2's `MediaCache` defaults to `<HaCue2 data root>/cache`. YouTube media uses the separate framework `MediaCachePaths.For("youtube-cache")`. Editing Cache Root does not persist, so it controls neither location.
 
@@ -267,7 +267,7 @@ Choose one of two honest designs:
 
 YouTube downloads, waveform data, thumbnails, and temporary probe artifacts should not silently escape a limit that claims to be global.
 
-### HAC-011 — output preflight can report Unknown as OK
+### HAC-011 - output preflight can report Unknown as OK
 
 When audio devices are available the shell uses `MachineEnvironment`. That environment deliberately reports every video output as Unknown. The richer runtime absence information exists separately in `ShowHost.Problems`/runtime output state, not in Project Status.
 
@@ -282,13 +282,13 @@ Build a composite environment:
 
 This is also the right place to report CPU fallback, unavailable mesh warp, or projectM surface support before GO.
 
-### HAC-012 — Reset Counters does not reset counters
+### HAC-012 - Reset Counters does not reset counters
 
 Diagnostics labels a command **RESET COUNTERS**. It clears the host problem list and in-memory log ring. It does not reset bay counters, meter clip state, or the displayed “since show started” baseline.
 
 Either relabel it **CLEAR PROBLEMS AND LOG**, or add a real reset/baseline API that includes throughput/drop counters and `ProgramBusMeter.ResetClip`. The latter can become the common implementation for the currently inert Clip Reset setting.
 
-### HAC-013 — mapping authoring is capable but still too indirect
+### HAC-013 - mapping authoring is capable but still too indirect
 
 HaCue2's mapping editor has improved substantially and should not be described as merely “dumbed down.” It now provides:
 
@@ -308,7 +308,7 @@ HaPlay also provides a persistent output calibration grid. HaCue2's four-second 
 
 This UX work comes after HAC-001: today the authored mesh is not rendered by HaCue2's actual compositor.
 
-### HAC-014 — remaining HaPlay parity gaps
+### HAC-014 - remaining HaPlay parity gaps
 
 The following are still present in the current retained HaPlay player and have no equivalent behavior in HaCue2:
 
@@ -325,7 +325,7 @@ Features that are now correctly present and should not be reopened as gaps inclu
 
 MMD cues were deliberately experimental and excluded. Their absence is not a defect.
 
-### HAC-015 — accessibility needs a deliberate pass
+### HAC-015 - accessibility needs a deliberate pass
 
 Across all 37 HaCue2 AXAML files (including 20 files under `Views/`), no explicit `AutomationProperties.Name` was found. There are many tooltips, but tooltips do not provide a reliable screen-reader name and are poor on touch.
 
@@ -339,7 +339,7 @@ The largest risks are:
 
 Add stable automation names/help text to icon controls, semantic peers for custom canvases, keyboard alternatives for every pointer operation, and automated focus/automation-tree checks. Test with large text/high contrast as well as a screen reader.
 
-### HAC-016 — density and resizing need product-level rules
+### HAC-016 - density and resizing need product-level rules
 
 The shell has a good booth-like information hierarchy: cue list and GO remain primary, active state is close at hand, and project/machine scopes are understandable. The same density becomes fragile at smaller sizes:
 
@@ -351,7 +351,7 @@ The shell has a good booth-like information hierarchy: cue list and GO remain pr
 
 Make the inspector resizable and collapsible, establish minimum useful widths per pane, allow long forms to scroll without shrinking controls below target size, and add screenshot/layout tests at minimum, laptop, 1440p, and scaled/high-DPI sizes. A compact booth mode and a relaxed authoring mode would serve different phases better than one fixed density.
 
-### HAC-018 / HAC-019 — smaller cleanup items
+### HAC-018 / HAC-019 - smaller cleanup items
 
 - Audio enumeration produced repeated ALSA diagnostics on launch. Enumerate once where practical and route/suppress expected native probe noise without suppressing genuine device failures.
 - `TargetsViewModel.SendTestAsync` assigns `probe.Address = parts[0]` twice. This is harmless duplication.
@@ -400,7 +400,7 @@ Finally, an application-level transport service should be authoritative for GO/S
 
 ## Recommended implementation order
 
-### Phase 1 — make rendered/runtime behavior truthful
+### Phase 1 - make rendered/runtime behavior truthful
 
 1. Extract and inject the shared GL/CPU compositor factory.
 2. Inject the subtitle overlay factory.
@@ -408,7 +408,7 @@ Finally, an application-level transport service should be authoritative for GO/S
 4. Surface compositor/capability/fallback state in preflight and Diagnostics.
 5. Verify mesh warp, projectM attachment, subtitles, document reload, and output lease replacement on the real app path.
 
-### Phase 2 — close operator-safety faults
+### Phase 2 - close operator-safety faults
 
 1. Introduce one transport command service and authoritative keymap.
 2. Correct Stop/Panic and File menu gestures; add key-routing tests.
@@ -416,7 +416,7 @@ Finally, an application-level transport service should be authoritative for GO/S
 4. Implement Keyboard trigger ingress through the same key router, or remove the dead source.
 5. Correct playlist pass/end ordering and add the missing behavior matrix.
 
-### Phase 3 — make lock, settings, and status honest
+### Phase 3 - make lock, settings, and status honest
 
 1. Apply Open Locked and propagate a single `CanAuthor` policy.
 2. Guard consolidate/relink/import side effects before they start.
@@ -425,14 +425,14 @@ Finally, an application-level transport service should be authoritative for GO/S
 5. Merge machine and live-runtime status; never summarize Unknown as OK.
 6. Rename or implement Reset Counters.
 
-### Phase 4 — finish authoring parity and UX
+### Phase 4 - finish authoring parity and UX
 
 1. Generalize HaPlay's draggable mesh overlay and persistent calibration pattern.
 2. Decide which remaining parity workflows belong in standalone HaCue2: Play Count, Armed List, First Cue Only, per-media end target, and selective visualizer feed.
 3. Add responsive inspector/density behavior and minimum-size screenshot tests.
 4. Complete the automation/accessibility pass.
 
-### Phase 5 — performance qualification
+### Phase 5 - performance qualification
 
 After GL wiring is fixed, create a repeatable HaCue-specific qualification matrix using the supplied ProRes files:
 
@@ -464,7 +464,7 @@ Those are appropriate acceptance checks after the high-priority composition-root
 
 Do not call HaCue2 feature-complete or use it as the only operator path for a production show until HAC-001 through HAC-008 are resolved and exercised through the real application host. A preview/authoring build is reasonable if the UI clearly marks GL mesh, visualizer, subtitles, keyboard controls, and locking limitations.
 
-Once those integration seams are fixed, the underlying design is strong enough that the remaining work is mostly product honesty, parity decisions, and operator polish—not another extraction rewrite.
+Once those integration seams are fixed, the underlying design is strong enough that the remaining work is mostly product honesty, parity decisions, and operator polish-not another extraction rewrite.
 
 ## Reproduction command reference
 
@@ -495,7 +495,7 @@ dotnet run --project MediaFramework/Tools/SessionSmoke/SessionSmoke.csproj -c Re
 # Independent verification pass
 
 **Verified:** 2026-08-05, same day as the audit  
-**Revision:** `cue-separation` / `0f9f393f` — unchanged since the audit; the working tree carries only this
+**Revision:** `cue-separation` / `0f9f393f` - unchanged since the audit; the working tree carries only this
 document and `CLAUDE.md` as untracked files, so no remediation had landed between the two passes.  
 **Method:** each finding re-checked against current source; the build and every audited test project
 re-run. The desktop launch, heavy-media smokes, and GL smoke were *not* re-run.
@@ -520,25 +520,25 @@ findings are correct in substance but need a nuance recorded below.**
 
 | ID | Verdict | Evidence located this pass |
 |---|---|---|
-| HAC-001 | Confirmed | `ShowHost.cs:396` constructs `new ShowSession(registry, backend, programAudioTarget: target)` — no `compositorFactory`, so `ClipCompositionRuntime.cs:155` falls to `CreateDefaultCompositor` → `CpuVideoCompositor`. HaPlay passes `CueCompositionRuntime.CreateShowSessionCompositor` at `CueShowSessionCoordinator.cs:224` and `MediaPlayerViewModel.ShowSession.cs:504`. Both consequences verified end to end: the mesh→affine fallback warning is `ClipCompositionRuntime.cs:1783`, and `VideoCompositorSource.SupportsSurfaceLayers` (`:126`) is `_compositor is IVideoCompositorSurfaceHost`, which `SetCompositionVisualizerAsync` (`ShowSession.Taps.cs:165`) requires — producing the exact “it has no GL surface” refusal at `ProjectVisualizers.cs:130`. The “GL output path only” tooltip is `VideoView.axaml:728`. |
+| HAC-001 | Confirmed | `ShowHost.cs:396` constructs `new ShowSession(registry, backend, programAudioTarget: target)` - no `compositorFactory`, so `ClipCompositionRuntime.cs:155` falls to `CreateDefaultCompositor` → `CpuVideoCompositor`. HaPlay passes `CueCompositionRuntime.CreateShowSessionCompositor` at `CueShowSessionCoordinator.cs:224` and `MediaPlayerViewModel.ShowSession.cs:504`. Both consequences verified end to end: the mesh→affine fallback warning is `ClipCompositionRuntime.cs:1783`, and `VideoCompositorSource.SupportsSurfaceLayers` (`:126`) is `_compositor is IVideoCompositorSurfaceHost`, which `SetCompositionVisualizerAsync` (`ShowSession.Taps.cs:165`) requires - producing the exact “it has no GL surface” refusal at `ProjectVisualizers.cs:130`. The “GL output path only” tooltip is `VideoView.axaml:728`. |
 | HAC-002 | Confirmed | No `subtitleFactory` at the same call site. `ShowSession.cs:1126` gates overlay creation on `_subtitleFactory is { }`. The authoring half does work: `ShowCompiler.cs:277,343` compiles the selections into the binding. HaPlay supplies `SubtitleOverlayFactory.FromFileDeferred` at both its session sites. |
 | HAC-003 | Confirmed | `AuxiliaryViewModels.cs:1185-1186` lists Stop `Esc` and Panic `Ctrl+Esc`; `ShellWindow.axaml.cs:77` is `case Key.Escape:` with no modifier test, calling `StandbyHere()`. `OnKeyDown` handles Ctrl+S and Ctrl+Shift+S only; `Ctrl+N`/`Ctrl+O` at `ShellWindow.axaml:38-39` are `InputGesture` display text. |
-| HAC-004 | Confirmed | `OpenLocked` has three references total — the model plus the settings view-model’s read/write; nothing applies it to `ProjectJournal.IsReadOnly`. `MediaEdits.Consolidate` calls `store.Copy(...)` *before* `journal.Do(...)`, and `ProjectJournal.Do` (`:97`) returns silently under `IsReadOnly` and is `void`, so there is no refusal result to observe. The button is `IsEnabled="{Binding CanEdit}"` = `_journal is not null`. |
+| HAC-004 | Confirmed | `OpenLocked` has three references total - the model plus the settings view-model’s read/write; nothing applies it to `ProjectJournal.IsReadOnly`. `MediaEdits.Consolidate` calls `store.Copy(...)` *before* `journal.Do(...)`, and `ProjectJournal.Do` (`:97`) returns silently under `IsReadOnly` and is `void`, so there is no refusal result to observe. The button is `IsEnabled="{Binding CanEdit}"` = `_journal is not null`. |
 | HAC-005 | Confirmed | `CueExecutor.FinishPlaylistAsync:250` switches on `AtEnd` first; `LoopCount` is read only inside `case AtListEnd.Loop` (`:260`). `NextList` (`:275`) and the `default` Hold arm (`:282`) remove the run after the first pass. |
 | HAC-006 | Confirmed | `TriggerInputs.Opens()` (`:151`) is `MidiIn or OscIn`. `SampleProject.cs:364` creates the Keyboard source; `VideoAndTargetPresentation.cs:242` shows it as `"always"`; `Dialogs.AddTriggerInput` offers MIDI/OSC/Schedule/Timecode only. No UI call site feeds key gestures into `Triggers`. |
-| HAC-007 | Confirmed | `ShowHost.Triggers.cs:110-114` is `foreach (list in _project.CueLists) { GoAsync(list); break; }`. The UI path uses `CuesViewModel.ScopedList` (`GoCoreAsync:329`). The engine holds no active-list state — grep for `ActiveList`/`CurrentList` in `HaCue2.Engine` returns nothing. |
+| HAC-007 | Confirmed | `ShowHost.Triggers.cs:110-114` is `foreach (list in _project.CueLists) { GoAsync(list); break; }`. The UI path uses `CuesViewModel.ScopedList` (`GoCoreAsync:329`). The engine holds no active-list state - grep for `ActiveList`/`CurrentList` in `HaCue2.Engine` returns nothing. |
 | HAC-008 | Confirmed | Neither test project references `ShowHost` at all (only the csproj’s project reference matches). `BackendName` has no HaCue2 consumer. Note: the production entry point is `ShowHost.StartAsync`, not `CreateAsync` as this document writes. |
-| HAC-009 | Confirmed | All eight listed settings resolve to settings-view-model read/write plus an AXAML binding, with no runtime consumer. The live-apply hook `ShellViewModel.ApplyApplicationSettings` (`:482`, wired at `ShellWindow.axaml.cs:405`) applies only DoubleGoGuard, ConfirmStopAll and remote settings — `MachinePanicFadeMs` is assigned once at `ShellViewModel.cs:230`. `ProjectFiles.Create` seeds fade in/out, auto-renumber, click-standby and mix rate but **not** `StopFadeMs`. `WriteApp` (`:607`) discards `AppSettingsStore.Save`’s bool. `ParseSettingNumber` (`:101`) keeps ASCII digits only, so `0.25 s` → 25 ms. |
+| HAC-009 | Confirmed | All eight listed settings resolve to settings-view-model read/write plus an AXAML binding, with no runtime consumer. The live-apply hook `ShellViewModel.ApplyApplicationSettings` (`:482`, wired at `ShellWindow.axaml.cs:405`) applies only DoubleGoGuard, ConfirmStopAll and remote settings - `MachinePanicFadeMs` is assigned once at `ShellViewModel.cs:230`. `ProjectFiles.Create` seeds fade in/out, auto-renumber, click-standby and mix rate but **not** `StopFadeMs`. `WriteApp` (`:607`) discards `AppSettingsStore.Save`’s bool. `ParseSettingNumber` (`:101`) keeps ASCII digits only, so `0.25 s` → 25 ms. |
 | HAC-010 | Confirmed | The VM label is `"(shared framework cache)"` (`:581`) while `MediaCache.RootFor` (`:30`) defaults to `StoragePaths.Root/cache`; YouTube uses the framework’s `MediaCachePaths`. `WaveformBudget`/`ThumbnailBudget` have no parser, accounting or eviction anywhere. `Clear("thumbnails")` targets a folder no HaCue2 code writes. |
 | HAC-011 | Confirmed with nuance | See “Nuances” below. |
 | HAC-012 | Confirmed | `ResetCounters` (`:1699`) is `ClearProblems()` + `Ring.Clear()` + `Refresh()`. `ProgramBusMeter.ResetClip` exists in the framework with no HaCue2 caller. |
-| HAC-013 | Confirmed | Mesh editing is a point combo box plus dx/dy `NumericUpDown` and four nudge buttons (`VideoView.axaml:744-768`); mesh sizes are 2–16 as described. HaPlay’s `MappingEditorDialog.axaml.cs` has draggable `_meshHandles` with pointer capture and `WarpMeshTessellator.Evaluate` curve drawing, plus the persistent `MappingTestPattern`. HaCue2’s Identify is 4 s (`EngineRuntime.cs:105`) and draws a flat blue field, a name, and an edge border — the border is worth crediting, but there are no corner colours, section boundaries, warp grid or stay-on mode. |
+| HAC-013 | Confirmed | Mesh editing is a point combo box plus dx/dy `NumericUpDown` and four nudge buttons (`VideoView.axaml:744-768`); mesh sizes are 2–16 as described. HaPlay’s `MappingEditorDialog.axaml.cs` has draggable `_meshHandles` with pointer capture and `WarpMeshTessellator.Evaluate` curve drawing, plus the persistent `MappingTestPattern`. HaCue2’s Identify is 4 s (`EngineRuntime.cs:105`) and draws a flat blue field, a name, and an edge border - the border is worth crediting, but there are no corner colours, section boundaries, warp grid or stay-on mode. |
 | HAC-014 | Confirmed | `GroupFireMode` is `AllTogether/Playlist/Timeline` only. `PlayCount`, `EndTargetCueId`, `FeedAll`, `FeedCueIds` and `SendToVisualizer` exist in `UI/HaPlay/Models/CueList.cs` and have zero hits across HaCue2 Core/Engine/UI. |
 | HAC-015 | Confirmed | 37 AXAML files, 20 under `Views/`, zero `AutomationProperties` occurrences. |
 | HAC-016 | Confirmed with nuance | `ShellWindow.axaml:10` is `MinWidth="1080" MinHeight="700"`; the inspector column is `CuesView.axaml:132` `ColumnDefinitions="*,4,316"`. See “Nuances”. |
-| HAC-017 | Confirmed | Cache root, log directory and recovery location are plain `TextBox` bindings to view-model fields with no `On…Changed` write-back — note the pane already uses `Classes="ro"` for the read-only “In use” field, so the read-only convention exists and simply was not applied. `FileLogProvider` reads `FileLogLevel`/`LogRetention` at construction and `CrashReports` is built conditionally at startup; unlike the audio-backend field, neither is marked restart-required. |
+| HAC-017 | Confirmed | Cache root, log directory and recovery location are plain `TextBox` bindings to view-model fields with no `On…Changed` write-back - note the pane already uses `Classes="ro"` for the read-only “In use” field, so the read-only convention exists and simply was not applied. `FileLogProvider` reads `FileLogLevel`/`LogRetention` at construction and `CrashReports` is built conditionally at startup; unlike the audio-backend field, neither is marked restart-required. |
 | HAC-018 | Not re-verified | Runtime observation. Statically, `AudioDevices` is constructed once (`HaCue2.Desktop/Program.cs:35`), so any repetition originates inside the native probe rather than in app-level re-enumeration. |
-| HAC-019 | Split | Second bullet confirmed: `TessellateBenchmarks.cs:9-11` still describes per-frame re-tessellation while `GlVideoCompositor.DrawLayerMesh` (`:1907`) calls `GetOrCreateLayerMeshBuffers(mesh)`. First bullet is incorrect — see below. |
+| HAC-019 | Split | Second bullet confirmed: `TessellateBenchmarks.cs:9-11` still describes per-frame re-tessellation while `GlVideoCompositor.DrawLayerMesh` (`:1907`) calls `GetOrCreateLayerMeshBuffers(mesh)`. First bullet is incorrect - see below. |
 
 The reachability section was also re-checked: all 20 views under `Views/` have a real construction or
 embedding site (`ClipEditorWindow` and `SubtitlePickerWindow` from `InspectorPane.axaml.cs`,
@@ -554,7 +554,7 @@ here, and this item should be struck rather than scheduled.
 
 ## Nuances on otherwise-correct findings
 
-**HAC-011 — the neutral state already exists in Core; the defect is one level up.**
+**HAC-011 - the neutral state already exists in Core; the defect is one level up.**
 `CheckOutcome.NotChecked` is implemented, `Summarise` (`ProjectStatus.cs:435`) returns it when every
 output went unchecked, and the Project Status row renders “not checked” with a neutral gel
 (`AuxiliaryViewModels.cs:1549,1558`). So the recommendation to “add an explicit neutral not-checked
@@ -566,12 +566,12 @@ recommendation stands unchanged: `MachineEnvironment.VideoOutput` returns `Unkno
 (`:34`) and the `RuntimeEnvironment` that *does* know `AbsentVideoOutputs` is selected only when no
 audio backend exists (`ShellViewModel.cs:61`).
 
-**HAC-016 — the inspector is already resizable.** `CuesView.axaml:390` places a `GridSplitter` in the
+**HAC-016 - the inspector is already resizable.** `CuesView.axaml:390` places a `GridSplitter` in the
 4 px column and the panel carries `MinWidth="240"`, so 316 px is the starting width rather than a
 fixed one. The collapsible pane, per-pane minimum widths, density modes and minimum-size screenshot
 tests are all still outstanding.
 
-**HAC-008 — method name.** The production composition root to cover is `ShowHost.StartAsync`
+**HAC-008 - method name.** The production composition root to cover is `ShowHost.StartAsync`
 (two overloads, `ShowHost.cs:360` and `:372`), not `CreateAsync`.
 
 ## Effect on the release recommendation

@@ -86,8 +86,8 @@ The long-term vocabulary should be:
 - a **curve shape** is an interpolation function used by a fade or between two keyframes. It has no
   media timeline of its own.
 
-This keeps the good part of the existing implementation—one interpolation evaluator and the runtime's
-single-authority level composition—without forcing every timed edit through a normalized square.
+This keeps the good part of the existing implementation-one interpolation evaluator and the runtime's
+single-authority level composition-without forcing every timed edit through a normalized square.
 
 ## Why this needs an architectural change
 
@@ -540,7 +540,7 @@ attached to the outgoing keyframe ID.
 This also avoids sending the shell's full document-change/recompile path on every pointer motion. In the
 first implementation, authored edits may continue to apply on the next fire/pass; the editor's local
 audition supplies feedback. If live edit of a sounding track is added, swap one immutable track snapshot
-at gesture boundaries or through a latest-only preview channel—never reload the show for every pixel.
+at gesture boundaries or through a latest-only preview channel-never reload the show for every pixel.
 
 ## Timing contract
 
@@ -642,7 +642,7 @@ Status.
 
 ## Delivery plan
 
-### Phase 0 — contain the current editor
+### Phase 0 - contain the current editor
 
 If the existing model must ship before replacement:
 
@@ -655,7 +655,7 @@ If the existing model must ship before replacement:
 These are worthwhile safety changes, but they do not make the normalized curve window a long-form
 automation editor.
 
-### Phase 1 — new model and single-cue editor
+### Phase 1 - new model and single-cue editor
 
 - add `AutomationTrack`, stable `AutomationKeyframe` IDs, absolute `TimeMs`, and schema migration;
 - add the explicit descriptor catalog with volume and per-placement opacity;
@@ -666,21 +666,21 @@ automation editor.
 
 This phase directly addresses the reported problem and is the recommended first milestone.
 
-### Phase 2 — runtime generalization
+### Phase 2 - runtime generalization
 
 - introduce shared evaluation snapshots and runtime target bindings;
 - make volume/opacity seek, pause, loop, and rehearsal tests target the common timing contract;
 - add explicit group trim/opacity targets; and
 - add placement transform properties only after each has a composed authored/automation runtime slot.
 
-### Phase 3 — automation cues and outbound targets
+### Phase 3 - automation cues and outbound targets
 
 - add `AutomationCueNode` and its completion policies;
 - move OSC/MIDI tracks to target descriptors and the common cue clock;
 - preserve curve shapes, send-rate/coalescing, seek offsets, and explicit stop/panic behaviour; and
 - allow multiple endpoints/controllers per cue.
 
-### Phase 4 — effect rack and parameter automation
+### Phase 4 - effect rack and parameter automation
 
 - **Done:** schema-3 stable video/audio effect instances, ordered rack values, bypass and legacy migration.
 - **Done:** ordered video-rack authoring UI, descriptor-based built-in discovery, generic lowering and
@@ -694,7 +694,7 @@ This phase directly addresses the reported problem and is the recommended first 
 - **Done:** the native audio-effect ABI appends factory descriptors and a live setter, normalizes nested
   vtables, and retains compatibility with plugins whose struct sizes end at the original fields.
 
-### Phase 5 — remove legacy authoring
+### Phase 5 - remove legacy authoring
 
 - **Done:** UI/helpers no longer create `EffectLane`; `DuckMath` and samples write native-time tracks.
 - **Done:** property creation is keyed by stable property ID rather than enum/menu position.
@@ -745,7 +745,7 @@ The feature is not complete until these behaviours are covered:
   on a 0 dB cue sampled `0.5` at its midpoint and now samples `10^(−30/20) ≈ 0.0316`.
 
   This divergence was **adopted deliberately on 2026-08-12** rather than shimmed. One value domain for cue
-  volume everywhere — editor, compiler, session, automation cue — is worth more than bit-identical replay
+  volume everywhere - editor, compiler, session, automation cue - is worth more than bit-identical replay
   of legacy interiors, and a dB-domain fade from silence is the perceptually better curve. The cost is
   real and must not be rediscovered as a bug: a schema-1 show with a volume lane sounds different through
   the middle of that lane, most audibly on fades from silence. `AShortLegacyVolumeLaneIsInterpolatedInDb`

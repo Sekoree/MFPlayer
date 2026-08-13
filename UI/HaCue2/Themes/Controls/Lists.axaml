@@ -3,14 +3,14 @@
 
   <!-- Tokens are merged into THIS dictionary (not just into the bundle) so every {StaticResource}
        below resolves against the file's own root. Avalonia resolves StaticResource by walking the
-       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it —
+       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it -
        which is why Avalonia's own themes never reach across control files for a key. -->
   <ResourceDictionary.MergedDictionaries>
     <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
   </ResourceDictionary.MergedDictionaries>
 
   <!-- Every repeating surface in HaCue2 is a ListBox: the cue tree, the active panel, the tables, and
-       all four kinds of tab strip. That is deliberate — a tab strip IS a single selection over a small
+       all four kinds of tab strip. That is deliberate - a tab strip IS a single selection over a small
        list, and modelling it as one means the view-model exposes `Items` + `Selected` and nothing else,
        whatever the strip happens to look like. The look is carried entirely by an ItemContainerTheme.
 
@@ -73,7 +73,7 @@
     </Style>
   </ControlTheme>
 
-  <!-- ── 1. title-bar view tabs (`.vtab`) — CUES · AUDIO · VIDEO · TARGETS ──────────────────── -->
+  <!-- ── 1. title-bar view tabs (`.vtab`) - CUES · AUDIO · VIDEO · TARGETS ──────────────────── -->
   <ControlTheme x:Key="ViewTabItem" TargetType="ListBoxItem">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
@@ -108,7 +108,7 @@
     </Style>
   </ControlTheme>
 
-  <!-- ── 2. section tabs (`.itab`) — the Audio/Video/Targets pane strips and the inspector ──── -->
+  <!-- ── 2. section tabs (`.itab`) - the Audio/Video/Targets pane strips and the inspector ──── -->
   <ControlTheme x:Key="SectionTabItem" TargetType="ListBoxItem">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
@@ -142,10 +142,10 @@
     </Style>
   </ControlTheme>
 
-  <!-- ── 3. bottom-edge tabs (`.itabs.bottom`) — the Cues right panel ────────────────────────
+  <!-- ── 3. bottom-edge tabs (`.itabs.bottom`) - the Cues right panel ────────────────────────
        Register item 7: Cue properties | Lists & groups live at the BOTTOM of the right column, so the
        hand that switches them is never crossing the cue list. The marker rule moves to the top edge
-       accordingly — a tab indicator always points at the content it governs. -->
+       accordingly - a tab indicator always points at the content it governs. -->
   <ControlTheme x:Key="BottomTabItem" TargetType="ListBoxItem"
                 BasedOn="{StaticResource SectionTabItem}">
     <Setter Property="BorderThickness" Value="0,2,0,0" />

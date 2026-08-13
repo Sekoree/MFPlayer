@@ -150,7 +150,7 @@
       <HeaderedContentControl Theme="{StaticResource Field}" Header="Spill">
         <NumericUpDown Minimum="0" Maximum="1" Increment="0.02" FormatString="0.##"
                        Value="{Binding ChromaSpill}"
-                       ToolTip.Tip="How much of the key colour is pulled out of what remains — the green fringe." />
+                       ToolTip.Tip="How much of the key colour is pulled out of what remains - the green fringe." />
       </HeaderedContentControl>
       <Button Classes="block" Content="AUTOMATE CHROMA ▾">
         <Button.Flyout>

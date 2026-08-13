@@ -13,7 +13,7 @@
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- The sheet, undocked. The SAME view-model as the docked one, so an edit in either is already in
-       the other — there is one timeline and two ways to look at it (register item 18). -->
+       the other - there is one timeline and two ways to look at it (register item 18). -->
 
   <v:TimelineSheet />
 </Window>

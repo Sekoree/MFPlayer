@@ -7,7 +7,7 @@
 
   <!-- Screen 03. A song-per-group show is 400–600 rows flat, so the tree scopes: pick a list or a
        group here and the main view narrows to that subtree, with the breadcrumb as the way out.
-       Scoping happens ONLY here — double-clicking a group in the tree deliberately does not scope,
+       Scoping happens ONLY here - double-clicking a group in the tree deliberately does not scope,
        leaving that gesture free for standby/open. -->
 
   <DockPanel>

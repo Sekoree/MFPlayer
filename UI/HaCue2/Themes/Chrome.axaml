@@ -5,7 +5,7 @@
         xmlns:vm="using:HaCue2.ViewModels">
 
   <!-- ══════════════════════════════════════════════════════════════════════════════════════════
-       The chrome vocabulary — everything the mockup expresses as a CSS class rather than a control.
+       The chrome vocabulary - everything the mockup expresses as a CSS class rather than a control.
        Class names are kept IDENTICAL to the HTML (`.chip`, `.badge`, `.chain`, `.is-go`, `.lchip`) so
        a screen can be checked against the mockup by reading the two side by side.
 
@@ -91,7 +91,7 @@
       </Setter>
     </ControlTheme>
 
-    <!-- ── `.subhd` — a section break inside a panel body ────────────────────────────────────- -->
+    <!-- ── `.subhd` - a section break inside a panel body ────────────────────────────────────- -->
     <ControlTheme x:Key="Subhead" TargetType="ContentControl">
       <Setter Property="Template">
         <ControlTemplate>
@@ -182,7 +182,7 @@
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
-  <!-- semantic colour — always last, so it wins over any typographic role above -->
+  <!-- semantic colour - always last, so it wins over any typographic role above -->
   <Style Selector="TextBlock.ok">
     <Setter Property="Foreground" Value="{DynamicResource GelGreen}" />
   </Style>
@@ -205,7 +205,7 @@
   <Style Selector="TextBlock.small">
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
   </Style>
-  <!-- Uppercase mono caption — used for the drawer's rotated section slabs and inline eyebrows. -->
+  <!-- Uppercase mono caption - used for the drawer's rotated section slabs and inline eyebrows. -->
   <Style Selector="TextBlock.caps">
     <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSizeNano}" />
@@ -239,7 +239,7 @@
     <Setter Property="BorderThickness" Value="0,1,0,0" />
     <Setter Property="Padding" Value="12,4" />
   </Style>
-  <!-- `.chain` — the action / explanation strip at the foot of a panel. -->
+  <!-- `.chain` - the action / explanation strip at the foot of a panel. -->
   <Style Selector="Border.chain">
     <Setter Property="Background" Value="{DynamicResource BoothPanel2}" />
     <Setter Property="BorderBrush" Value="{DynamicResource BoothRule}" />
@@ -339,7 +339,7 @@
 
   <!-- ══ cue rows ═══════════════════════════════════════════════════════════════════════════
        The washes stack on purpose: a row can be sounding AND selected, and the mockup's single-class
-       drawing is just an artefact of a static picture. The stripe, however, is exclusive — it takes
+       drawing is just an artefact of a static picture. The stripe, however, is exclusive - it takes
        the most urgent state, ordered broken > running > standby > selected, because the stripe is the
        thing scanned down the left edge and it must mean one thing. -->
   <Style Selector="Border.cuerow">
@@ -406,7 +406,7 @@
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
-  <!-- A live cue's own row: label brightens and thickens. A DISABLED cue is struck through — the
+  <!-- A live cue's own row: label brightens and thickens. A DISABLED cue is struck through - the
        mockup's deliberate choice over ghosting, because "skipped for this performance" must survive a
        glance in a dark booth. -->
   <Style Selector="TextBlock.cuelabel.is-go, TextBlock.cuelabel.is-stby">
@@ -634,7 +634,7 @@
     <Setter Property="Background" Value="{DynamicResource ClipGroupBg}" />
     <Setter Property="BorderBrush" Value="{DynamicResource ClipGroupBorder}" />
   </Style>
-  <!-- Disabled children render hatched with a struck label (register item 18) — unambiguous, unlike
+  <!-- Disabled children render hatched with a struck label (register item 18) - unambiguous, unlike
        ghosting, which a dim booth screen turns into "did I render that?". -->
   <Style Selector="Border.tlclip.off">
     <Setter Property="Background" Value="{StaticResource DisabledHatch}" />
@@ -670,7 +670,7 @@
   </Style>
   <!-- The curve canvas takes focus on a press and owns Ctrl+A/C/V, Delete and the arrow-key nudge
        while it has it. Those shortcuts are advertised in tooltips, so whether the canvas is listening
-       has to be VISIBLE — clicking a button beside it moves focus away and silently disarms them. -->
+       has to be VISIBLE - clicking a button beside it moves focus away and silently disarms them. -->
   <Style Selector="c|CurveCanvas:focus-within Border.vidcanvas">
     <Setter Property="BorderBrush" Value="{DynamicResource GelAmber}" />
   </Style>
@@ -713,7 +713,7 @@
 
   <!-- ══ fade-curve thumbnails ══════════════════════════════════════════════════════════════
        These live here rather than in the CurveOptionItem ControlTheme because the drawn shape and its
-       caption come from the item TEMPLATE, which a control theme's `/template/` scope cannot address —
+       caption come from the item TEMPLATE, which a control theme's `/template/` scope cannot address -
        and a ControlTheme is not allowed to carry a descendant selector at all. -->
   <Style Selector="ListBox.curves Path">
     <Setter Property="Stroke" Value="{DynamicResource BoothInk2}" />

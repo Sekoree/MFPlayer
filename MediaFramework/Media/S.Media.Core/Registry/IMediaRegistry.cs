@@ -108,7 +108,7 @@ public interface IMediaRegistry
     /// <remarks>
     /// The question the video router's fan-out asks while choosing a branch format, before it commits
     /// to one. False when no module registered a probe, which is the same answer a build with no
-    /// scaler would give — and the reason this is a real member rather than an assumption: a router
+    /// scaler would give - and the reason this is a real member rather than an assumption: a router
     /// that assumed conversion was always possible would wire a route and then fail on the first
     /// frame, on the audio thread, mid-cue.
     /// </remarks>

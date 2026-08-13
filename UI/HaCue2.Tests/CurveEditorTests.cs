@@ -338,7 +338,7 @@ public sealed class CurveEditorTests
 
             // Paste REPLACES the span it lands on. The copied pair spans 0 → 0.2 and the playhead
             // puts it at the clip's start, so the keyframe already at 0.2 is consumed rather than
-            // doubled — 0.4 and 0.8 are outside the span and survive.
+            // doubled - 0.4 and 0.8 are outside the span and survive.
             Assert.True(shell.Cues.Timeline.PasteKeyframes(row, clipboard));
             Assert.Equal(4, lane.Keyframes.Count);
             Assert.Equal([0L, 1_600L, 3_200L, 6_400L], lane.Keyframes.Select(key => key.TimeMs));
@@ -432,7 +432,7 @@ public sealed class CurveEditorTests
     }
 
     /// <summary>A fade knot holds; a lane point cannot. The clipboard is shared by both editors, so
-    /// the format has to carry the richer of the two — and still read what version 1 wrote.</summary>
+    /// the format has to carry the richer of the two - and still read what version 1 wrote.</summary>
     [Fact]
     public Task ClipboardKeyframesCarryHoldAndStillReadTheOlderFormat() =>
         ShellFixture.WithShell(shell =>

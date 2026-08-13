@@ -9,14 +9,14 @@ namespace HaCue2.Core.Tests;
 /// <remarks>
 /// <para>
 /// This exists because the same defect kept arriving in a different pane. Six times a screen was drawn
-/// complete against literals — cue control-flow, the audition rig, trigger bindings, effect lanes, the
-/// record pane, the video output pane — and each time it looked finished in a screenshot while editing
+/// complete against literals - cue control-flow, the audition rig, trigger bindings, effect lanes, the
+/// record pane, the video output pane - and each time it looked finished in a screenshot while editing
 /// nothing. They were found one at a time, by asking "can you actually make one?" of whatever was in
 /// front of us, which is not a method.
 /// </para>
 /// <para>
-/// The rule is narrow enough to be true and broad enough to catch that: an INPUT control — a text box,
-/// a selector, a checkbox — must take its value from a binding. Static labels, column headings and
+/// The rule is narrow enough to be true and broad enough to catch that: an INPUT control - a text box,
+/// a selector, a checkbox - must take its value from a binding. Static labels, column headings and
 /// explanatory sentences are untouched, because those are the things a literal is actually right for.
 /// A control that genuinely has nothing behind it belongs in <see cref="Unimplemented"/>, where it is a
 /// listed gap rather than a screenshot of a feature.
@@ -29,7 +29,7 @@ public class MarkupBindingGuardTests
     /// </summary>
     /// <remarks>
     /// Adding a line here is a deliberate statement that a feature is unfinished. Removing one is what
-    /// finishing it looks like. The point is that the list is SHORT, VISIBLE and has to be argued for —
+    /// finishing it looks like. The point is that the list is SHORT, VISIBLE and has to be argued for -
     /// not that it is empty.
     /// </remarks>
     private static readonly Dictionary<string, string> Unimplemented = new(StringComparer.Ordinal)
@@ -70,7 +70,7 @@ public class MarkupBindingGuardTests
 
     /// <summary>An opening tag for one of the controls the rule covers.</summary>
     private static readonly Regex Control = new(
-        // ListBox is here because the app's segmented controls ARE list boxes — the two-item
+        // ListBox is here because the app's segmented controls ARE list boxes - the two-item
         // "fullscreen / windowed" strips. Leaving it out would have exempted most of the selectors in
         // the app from a guard whose whole purpose is selectors.
         @"<(TextBox|ComboBox|ListBox|CheckBox|ToggleSwitch|Slider|NumericUpDown)\b[^>]*?(?:/>|>)",
@@ -163,13 +163,13 @@ public class MarkupBindingGuardTests
     /// <remarks>
     /// A button is the most convincing kind of dead surface: it is the thing an operator presses when
     /// they have decided what they want. These are listed rather than removed because the mockup's
-    /// design intent is worth keeping — but listed, so nobody has to rediscover them by pressing.
+    /// design intent is worth keeping - but listed, so nobody has to rediscover them by pressing.
     /// </remarks>
     private static readonly Dictionary<string, string> InertButtons = new(StringComparer.Ordinal)
     {
         // EMPTY, and that is a result rather than a stub: every button drawn in the app now does
         // something. The last out were the two audio-output verbs, IDENTIFY, and the timeline
-        // transport row — see the plan's "Interface drawn but unimplemented" table, which this list
+        // transport row - see the plan's "Interface drawn but unimplemented" table, which this list
         // was the enforcement half of.
     };
 
@@ -222,7 +222,7 @@ public class MarkupBindingGuardTests
 
         // A button that has since been wired must leave this list, or the list stops meaning anything.
         foreach (var listed in InertButtons.Keys)
-            Assert.True(content.Contains(listed), $"“{listed}” is no longer an inert button — remove it");
+            Assert.True(content.Contains(listed), $"“{listed}” is no longer an inert button - remove it");
     }
 
     // ── the same rule for the Tag verbs ───────────────────────────────────────────────────────
@@ -231,15 +231,15 @@ public class MarkupBindingGuardTests
     /// <remarks>
     /// <para>
     /// The Audio, Video and Targets views send every "…" button and menu item through one
-    /// <c>OnDialog</c>, switching on the element's <c>Tag</c>. That is a good pattern — adding a verb is
-    /// a line of markup and a case — with exactly one failure mode: a Tag whose case nobody wrote falls
+    /// <c>OnDialog</c>, switching on the element's <c>Tag</c>. That is a good pattern - adding a verb is
+    /// a line of markup and a case - with exactly one failure mode: a Tag whose case nobody wrote falls
     /// through to <c>_ => null</c>, and a control that opens nothing is indistinguishable from one
     /// whose dialog was cancelled. Nothing warns, at build or at run time.
     /// </para>
     /// <para>
-    /// Deliberately narrowed to <c>OnDialog</c>. Tags elsewhere are not verbs to switch on — the cue
+    /// Deliberately narrowed to <c>OnDialog</c>. Tags elsewhere are not verbs to switch on - the cue
     /// menu's are enum names, the effect-lane menu's are indexes, the curve buttons' are field names
-    /// the VIEW-MODEL resolves — and checking those against the code-behind would only measure whether
+    /// the VIEW-MODEL resolves - and checking those against the code-behind would only measure whether
     /// somebody happened to spell the value twice.
     /// </para>
     /// </remarks>
@@ -266,7 +266,7 @@ public class MarkupBindingGuardTests
 
             foreach (Match element in DispatchedElement.Matches(markup))
             {
-                // Click straight to the dispatcher, or a list whose Delete key forwards to it — both
+                // Click straight to the dispatcher, or a list whose Delete key forwards to it - both
                 // read the same Tag and both fall silently through the same default arm.
                 var dispatched =
                     element.Value.Contains(@"Click=""OnDialog""", StringComparison.Ordinal)
@@ -278,7 +278,7 @@ public class MarkupBindingGuardTests
 
                 var tag = Regex.Match(element.Value, @"\bTag=""([^""]*)""").Groups[1].Value;
 
-                // No tag at all is fine — a list's Delete key can name its own verb. A BOUND tag
+                // No tag at all is fine - a list's Delete key can name its own verb. A BOUND tag
                 // carries a run-time value (a filename token, an output id) and cannot be checked here.
                 if (tag.Length == 0 || tag.StartsWith('{'))
                     continue;

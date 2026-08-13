@@ -17,7 +17,7 @@ namespace HaCue2.Machine;
 /// </para>
 /// <para>
 /// Every path is overridable by environment variable, which is what makes the app testable without
-/// writing into a developer's real profile — and what lets a booth machine put its state on a
+/// writing into a developer's real profile - and what lets a booth machine put its state on a
 /// different volume from the operator's home directory.
 /// </para>
 /// </remarks>
@@ -26,7 +26,7 @@ public static class StoragePaths
     /// <summary>The directory name under the platform's local application data.</summary>
     public const string AppName = "HaCue2";
 
-    /// <summary>Overrides the whole machine-local root — settings, recovery and logs together.</summary>
+    /// <summary>Overrides the whole machine-local root - settings, recovery and logs together.</summary>
     public const string RootVariable = "HACUE2_DATA_ROOT";
 
     /// <summary>Overrides just the settings file, for a test or a portable install.</summary>
@@ -50,7 +50,7 @@ public static class StoragePaths
             var local = Environment.GetFolderPath(
                 Environment.SpecialFolder.LocalApplicationData,
                 // DoNotVerify: the folder may not exist yet on a fresh profile, and the default
-                // Verify behaviour returns an EMPTY STRING for a missing one — which would silently
+                // Verify behaviour returns an EMPTY STRING for a missing one - which would silently
                 // put the app's settings in the working directory.
                 Environment.SpecialFolderOption.DoNotVerify);
 
@@ -87,7 +87,7 @@ public static class StoragePaths
 
     /// <summary>Creates a directory if it is missing, and reports whether it can be written to.</summary>
     /// <remarks>
-    /// Returns false rather than throwing. A read-only or full disk must not stop the app starting —
+    /// Returns false rather than throwing. A read-only or full disk must not stop the app starting -
     /// it makes settings and autosave unavailable, which is worth saying out loud and surviving.
     /// </remarks>
     public static bool EnsureDirectory(string path)

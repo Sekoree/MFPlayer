@@ -68,7 +68,7 @@ public sealed class FileSystemMediaStore : IMediaStore
 }
 
 /// <summary>
-/// Relink and consolidate — the two things "fixing the media" usually means.
+/// Relink and consolidate - the two things "fixing the media" usually means.
 /// </summary>
 /// <remarks>
 /// Both are single journaled commands, so each is one reviewable diff and one ⌘Z. A relink that landed
@@ -82,7 +82,7 @@ public static class MediaEdits
     /// </summary>
     /// <remarks>
     /// Only MISSING references are touched. Rewriting paths that already resolve would relink files
-    /// nobody asked about — and on a machine where the old root is still mounted, would silently move
+    /// nobody asked about - and on a machine where the old root is still mounted, would silently move
     /// the show onto a different copy of the same media.
     /// </remarks>
     /// <summary>
@@ -90,7 +90,7 @@ public static class MediaEdits
     /// </summary>
     /// <remarks>
     /// The manual counterpart to <see cref="Relink"/>, for the file a search cannot find because it
-    /// was renamed. Every reference to the SAME old path moves together — two cues pointing at one
+    /// was renamed. Every reference to the SAME old path moves together - two cues pointing at one
     /// missing file are one problem, and fixing it twice is a way to fix it inconsistently.
     /// </remarks>
     public static MediaEditResult RelinkOne(
@@ -99,7 +99,7 @@ public static class MediaEdits
         ArgumentNullException.ThrowIfNull(journal);
 
         if (journal.IsReadOnly)
-            return new MediaEditResult([], ["project is locked — no media was relinked"]);
+            return new MediaEditResult([], ["project is locked - no media was relinked"]);
 
         var references = MediaPaths.ReferencesIn(journal.Project)
             .Where(reference => reference.Path == oldPath)
@@ -130,7 +130,7 @@ public static class MediaEdits
     {
         ArgumentNullException.ThrowIfNull(journal);
         if (journal.IsReadOnly)
-            return new MediaEditResult([], ["project is locked — no media was relinked"]);
+            return new MediaEditResult([], ["project is locked - no media was relinked"]);
 
         store ??= FileSystemMediaStore.Instance;
         var project = journal.Project;
@@ -165,7 +165,7 @@ public static class MediaEdits
 
                 if (candidate is null || !store.Exists(candidate))
                 {
-                    unresolved.Add($"{reference.Describe} — {reference.Path}");
+                    unresolved.Add($"{reference.Describe} - {reference.Path}");
                     continue;
                 }
 
@@ -184,7 +184,7 @@ public static class MediaEdits
     /// </summary>
     /// <remarks>
     /// So a show transports as one directory. What it cannot copy is REPORTED and left pointing where
-    /// it already pointed — the alternative is a project that looks consolidated and half-works at the
+    /// it already pointed - the alternative is a project that looks consolidated and half-works at the
     /// venue, which is the worst of both.
     /// </remarks>
     public static MediaEditResult Consolidate(
@@ -195,7 +195,7 @@ public static class MediaEdits
     {
         ArgumentNullException.ThrowIfNull(journal);
         if (journal.IsReadOnly)
-            return new MediaEditResult([], ["project is locked — no files were copied"]);
+            return new MediaEditResult([], ["project is locked - no files were copied"]);
 
         store ??= FileSystemMediaStore.Instance;
         var project = journal.Project;
@@ -216,7 +216,7 @@ public static class MediaEdits
 
                 if (!store.Exists(source))
                 {
-                    unresolved.Add($"{reference.Describe} — {reference.Path} was not found");
+                    unresolved.Add($"{reference.Describe} - {reference.Path} was not found");
                     continue;
                 }
 
@@ -225,7 +225,7 @@ public static class MediaEdits
 
                 if (!store.Copy(source, destination))
                 {
-                    unresolved.Add($"{reference.Describe} — could not copy {reference.Path}");
+                    unresolved.Add($"{reference.Describe} - could not copy {reference.Path}");
                     continue;
                 }
 

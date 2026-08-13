@@ -3,13 +3,13 @@
 
   <!-- Tokens are merged into THIS dictionary (not just into the bundle) so every {StaticResource}
        below resolves against the file's own root. Avalonia resolves StaticResource by walking the
-       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it —
+       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it -
        which is why Avalonia's own themes never reach across control files for a key. -->
   <ResourceDictionary.MergedDictionaries>
     <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
   </ResourceDictionary.MergedDictionaries>
 
-  <!-- The mockup's `.btn` family. One template, six class variants — the classes are the mockup's own
+  <!-- The mockup's `.btn` family. One template, six class variants - the classes are the mockup's own
        names so a screen in the HTML and a screen in XAML read the same:
          (none)     flat panel-2 button                       .icon     the same, tighter padding
          .go        the GO key: green, wide tracking          .panic    red text and border
@@ -134,7 +134,7 @@
   <!-- ── title-bar / status-bar chips ──────────────────────────────────────────────────────────
        A chip is a latch or a doorway, never a verb: "Editing", "Lock", "Settings", "Diagnostics".
        Implemented on ToggleButton so the latching ones (Lock, Output info) can show their state, and
-       on Button for the doorways — both share the look through the class names below. -->
+       on Button for the doorways - both share the look through the class names below. -->
 
   <ControlTheme x:Key="ChipButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />
@@ -178,7 +178,7 @@
     <Style Selector="^:pointerover /template/ Border#root">
       <Setter Property="BorderBrush" Value="{DynamicResource BoothInk3}" />
     </Style>
-    <!-- A latched chip goes congo — the same gel the shell uses for "this is the current state". -->
+    <!-- A latched chip goes congo - the same gel the shell uses for "this is the current state". -->
     <Style Selector="^:checked /template/ Border#root">
       <Setter Property="Background" Value="{DynamicResource ChipEditBg}" />
       <Setter Property="BorderBrush" Value="{DynamicResource ChipEditBorder}" />
@@ -197,7 +197,7 @@
     </Style>
   </ControlTheme>
 
-  <!-- Status-bar buttons: no fill, hairline border, 1 px vertical padding — they must not add height
+  <!-- Status-bar buttons: no fill, hairline border, 1 px vertical padding - they must not add height
        to a 20 px bar. -->
   <ControlTheme x:Key="StatusButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
     <Setter Property="FontSize" Value="{DynamicResource FontSizeMonoSmall}" />

@@ -7,7 +7,7 @@ namespace HaCue2.Core.Model;
 /// </summary>
 /// <remarks>
 /// It owns exactly three things: size, frame rate, and an idle image (register item 21). There is no
-/// visualizer flag — that was HaPlay residue — and no composition-level mapping: mapping belongs to
+/// visualizer flag - that was HaPlay residue - and no composition-level mapping: mapping belongs to
 /// the OUTPUT BINDING, so the same composition can render warped to a projector and clean to a TV.
 /// </remarks>
 public sealed record CompositionDefinition
@@ -22,7 +22,7 @@ public sealed record CompositionDefinition
     /// </summary>
     /// <remarks>
     /// It defaulted to 30, which halves the smoothness of every pan, wipe and fade the show contains
-    /// for no gain — a compositor already running is not meaningfully cheaper at 30 than at 60, and a
+    /// for no gain - a compositor already running is not meaningfully cheaper at 30 than at 60, and a
     /// projector fed 30 into a 60 Hz panel judders visibly on horizontal movement. A show that wants 30
     /// can still say so.
     /// </remarks>
@@ -81,7 +81,7 @@ public sealed record CompositionDefinition
 
     /// <summary>How the idle image fills the canvas.</summary>
     /// <remarks>
-    /// A holding slate is rarely the canvas's own aspect ratio — it is a logo, or a photograph somebody
+    /// A holding slate is rarely the canvas's own aspect ratio - it is a logo, or a photograph somebody
     /// had. Without a choice it was stretched, which is the one option that always looks wrong.
     /// </remarks>
     public LayerFit IdleImageFit { get; set; } = LayerFit.Contain;
@@ -138,7 +138,7 @@ public sealed record VideoOutputDefinition
     /// <remarks>
     /// <para>
     /// This is what makes a video wall expressible. A 1920×2160 stacked canvas fed to two 1920×1080
-    /// projectors needs each output's destination rectangles measured against 1920×1080 — with the
+    /// projectors needs each output's destination rectangles measured against 1920×1080 - with the
     /// composition's size standing in for every output, the top projector's section would be described
     /// as the top half of a 2160-tall frame and land at half height on a screen that is not 2160 tall.
     /// </para>
@@ -153,7 +153,7 @@ public sealed record VideoOutputDefinition
     public int MappingHeight { get; set; }
 
     /// <summary>
-    /// Per-output mapping (register item 22). Null or empty means a clean feed — the common case, and
+    /// Per-output mapping (register item 22). Null or empty means a clean feed - the common case, and
     /// the reason mapping is opt-in per output rather than a property of the composition.
     /// </summary>
     public List<MappingSection> Mapping { get; set; } = [];
@@ -163,8 +163,8 @@ public sealed record VideoOutputDefinition
     /// </summary>
     /// <remarks>
     /// The two are different questions and the difference is an hour of somebody's evening. "Show this
-    /// output clean tonight" is an ordinary thing to want — a projector swapped for a flat screen, a
-    /// warp being checked against an unwarped feed — and if the only way to say it were to delete the
+    /// output clean tonight" is an ordinary thing to want - a projector swapped for a flat screen, a
+    /// warp being checked against an unwarped feed - and if the only way to say it were to delete the
     /// sections, the warp would have to be authored again to get it back.
     /// </remarks>
     public bool MappingEnabled { get; set; } = true;
@@ -242,7 +242,7 @@ public sealed record MappingSection
     /// The square mesh older documents wrote, read once and folded into <see cref="MeshColumns"/>.
     /// </summary>
     /// <remarks>
-    /// Write-only on purpose — it has no getter, so it is read from a file that has it and never
+    /// Write-only on purpose - it has no getter, so it is read from a file that has it and never
     /// written back to one. A document saved by this build carries the two axes and nothing else, and a
     /// document saved by the previous build still opens with its mesh intact.
     /// </remarks>
@@ -262,7 +262,7 @@ public sealed record MappingSection
     /// <summary>Row-major mesh offsets, 2 doubles per point. Empty until the mesh is touched.</summary>
     public List<double> WarpOffsets { get; set; } = [];
 
-    /// <summary>How many offsets a complete mesh for this section holds — zero when it has no warp.</summary>
+    /// <summary>How many offsets a complete mesh for this section holds - zero when it has no warp.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public int MeshPointCount => MeshColumns >= 2 && MeshRows >= 2 ? MeshColumns * MeshRows : 0;
 

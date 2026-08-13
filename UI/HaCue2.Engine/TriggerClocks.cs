@@ -8,15 +8,15 @@ namespace HaCue2.Engine;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The same document shape as a MIDI or OSC source — a <see cref="TriggerInputDefinition"/> with
-/// bindings — because everything an operator can say about one of those applies here too: which cue,
+/// The same document shape as a MIDI or OSC source - a <see cref="TriggerInputDefinition"/> with
+/// bindings - because everything an operator can say about one of those applies here too: which cue,
 /// which transport verb, per-source enable, and the one External-input master gate over all of them.
 /// Only the way the moment ARRIVES is different, so only that is new.
 /// </para>
 /// <para>
 /// <b>Crossings, not equality.</b> A tick that happens to land on 22:30:00.000 is a coincidence; what
 /// the operator asked for is "when the clock passes half past ten". So each pass compares the previous
-/// reading with the current one and fires what lies between — which also means a tick delayed by a
+/// reading with the current one and fires what lies between - which also means a tick delayed by a
 /// busy machine fires the cue late rather than not at all.
 /// </para>
 /// <para>
@@ -27,14 +27,14 @@ namespace HaCue2.Engine;
 /// </remarks>
 public sealed class TriggerClocks : IDisposable
 {
-    /// <summary>Four times a second — fine enough for a cue called on the clock, cheap enough to ignore.</summary>
+    /// <summary>Four times a second - fine enough for a cue called on the clock, cheap enough to ignore.</summary>
     private static readonly TimeSpan Tick = TimeSpan.FromMilliseconds(250);
 
     /// <summary>
     /// How far back a crossing may be honoured, in seconds.
     /// </summary>
     /// <remarks>
-    /// A machine that stalled for a minute — a big document load, a laptop lid — must not come back and
+    /// A machine that stalled for a minute - a big document load, a laptop lid - must not come back and
     /// fire a cue whose moment is long past. Two seconds covers a late tick and refuses a resumption.
     /// </remarks>
     private const double LateLimit = 2;
@@ -85,7 +85,7 @@ public sealed class TriggerClocks : IDisposable
         }
     }
 
-    /// <summary>Adopts an edited document. No devices to reopen — the clocks do not care.</summary>
+    /// <summary>Adopts an edited document. No devices to reopen - the clocks do not care.</summary>
     public void Adopt(HaCueProject project)
     {
         ArgumentNullException.ThrowIfNull(project);
@@ -133,8 +133,8 @@ public sealed class TriggerClocks : IDisposable
     /// Fires the schedules the wall clock has just passed.
     /// </summary>
     /// <remarks>
-    /// The reading is passed IN rather than taken here, so the crossing rules — the first pass, the
-    /// midnight wrap, the late limit — can be driven at any time of day by a test. A clock consulted
+    /// The reading is passed IN rather than taken here, so the crossing rules - the first pass, the
+    /// midnight wrap, the late limit - can be driven at any time of day by a test. A clock consulted
     /// inside this method would make every one of them untestable.
     /// </remarks>
     internal void WallPass(IReadOnlyList<TriggerInputDefinition> sources, double now)
@@ -148,7 +148,7 @@ public sealed class TriggerClocks : IDisposable
         }
 
         // The first pass has nothing to compare against, and midnight is a wrap rather than a jump
-        // backwards — in both cases the honest answer is that this window cannot be judged.
+        // backwards - in both cases the honest answer is that this window cannot be judged.
         if (before < 0 || now < before)
             return;
 
@@ -211,7 +211,7 @@ public sealed class TriggerClocks : IDisposable
     /// </summary>
     /// <remarks>
     /// A clock carries no value, so a binding pointing at a PARAMETER is refused here rather than
-    /// writing an arbitrary number into a master trim — the same rule the note-on path follows.
+    /// writing an arbitrary number into a master trim - the same rule the note-on path follows.
     /// </remarks>
     private void Fire(TriggerBinding binding, string describe)
     {

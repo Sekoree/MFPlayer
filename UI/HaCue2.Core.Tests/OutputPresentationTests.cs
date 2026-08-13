@@ -64,7 +64,7 @@ public class OutputPresentationTests
         var chips = OutputPresentation.Chips(show.Project, Bay(), new ShowRuntime(), []);
 
         // Both lines are still listed. A line that vanished from the drawer would send an operator
-        // looking for a device fault that is not there — "not patched" is the actual answer.
+        // looking for a device fault that is not there - "not patched" is the actual answer.
         Assert.Equal(2, chips.Count);
         Assert.All(chips, chip => Assert.Equal("not patched", chip.Detail));
         Assert.All(chips, chip => Assert.True(chip.IsIdle));
@@ -163,7 +163,7 @@ public class OutputPresentationTests
         Assert.Equal("Cyc · 1920×1080", row.Name);
         // Zero fps means a composition that has STOPPED. One nobody has measured yet must not read the
         // same, or the column is noise for the first quarter-second of every show.
-        Assert.Equal("— / 30", row.Fps.Text);
+        Assert.Equal("- / 30", row.Fps.Text);
         Assert.Equal("3", row.Layers);
         Assert.Equal("OpenGL", row.Gpu);
     }
@@ -208,7 +208,7 @@ public class OutputPresentationTests
             [Stats(show.Cyc.Id) with { CompositionId = ShowSession.AuditionCompositionId }],
             new Dictionary<string, double>());
 
-        // A monitor rig dropping frames is worth knowing about, so it gets a row — but it has no
+        // A monitor rig dropping frames is worth knowing about, so it gets a row - but it has no
         // document behind it and must not read as a composition the operator authored.
         Assert.Equal("Audition monitor", Assert.Single(rows).Name);
     }
@@ -236,7 +236,7 @@ public class OutputPresentationTests
 
         var sampled = rates.Sample([Stats(id, composited: 12)]);
 
-        // Twelve frames over roughly an eighth of a second. The bound is loose on purpose — this
+        // Twelve frames over roughly an eighth of a second. The bound is loose on purpose - this
         // asserts that the division happened against wall time, not that the box is a metronome.
         Assert.InRange(sampled[id.ToString()], 20, 200);
     }
@@ -266,7 +266,7 @@ public class OutputPresentationTests
 
         // Rebuilt by a reload: the counter restarts at zero. Measured across the gap this would be a
         // large NEGATIVE delta clamped to nothing, and the first real reading afterwards would be
-        // wrong too — so the anchor has to have been dropped with the composition.
+        // wrong too - so the anchor has to have been dropped with the composition.
         Assert.Empty(rates.Sample([Stats(id, composited: 0)]));
     }
 
@@ -285,7 +285,7 @@ public class OutputPresentationTests
             "MTC · no signal",
             OutputPresentation.Chase(default, inputEnabled: true));
 
-        // Timecode that ARRIVES and never assembles — two senders on one port, or a mangled stream.
+        // Timecode that ARRIVES and never assembles - two senders on one port, or a mangled stream.
         // Without a name of its own it looks exactly like an unplugged cable, which sends people to
         // check the wrong end of it.
         Assert.Equal(
@@ -318,7 +318,7 @@ public class OutputPresentationTests
     }
 
     /// <summary>
-    /// The curve table is readable without a renderer — which is what makes every view-model that
+    /// The curve table is readable without a renderer - which is what makes every view-model that
     /// offers a fade picker constructible without one.
     /// </summary>
     /// <remarks>
@@ -327,7 +327,7 @@ public class OutputPresentationTests
     /// <see cref="CurveLibrary"/>'s static initializer needed <c>IPlatformRenderInterface</c>. When it
     /// ran first from a test that had no session, .NET cached the resulting
     /// <see cref="TypeInitializationException"/> for the whole process and every later view-model test
-    /// in that assembly failed with it — 227 of them on one CI leg, none on the other, decided purely by
+    /// in that assembly failed with it - 227 of them on one CI leg, none on the other, decided purely by
     /// which test happened to run first. Reading the table here would throw again the moment the parse
     /// moves back into the constructor.
     /// </remarks>

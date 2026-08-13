@@ -43,7 +43,7 @@ public sealed record RemoteApiRoute(string Method, string Pattern, string Summar
         return true;
     }
 
-    /// <summary>Whether the PATH matches, whatever the method — the 405-versus-404 distinction.</summary>
+    /// <summary>Whether the PATH matches, whatever the method - the 405-versus-404 distinction.</summary>
     public bool MatchesPath(IReadOnlyList<string> segments)
     {
         var wanted = Segments;
@@ -66,7 +66,7 @@ public sealed record RemoteApiRoute(string Method, string Pattern, string Summar
 }
 
 /// <summary>
-/// The remote API's route table — the one place that says what the API is.
+/// The remote API's route table - the one place that says what the API is.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -89,10 +89,10 @@ public static class RemoteApiRoutes
     public static FrozenSet<RemoteApiRoute> All { get; } = new HashSet<RemoteApiRoute>
     {
         new("GET", "/api/v1/status", "what is sounding, standby per list, and any problems", "status"),
-        new("GET", "/api/v1/endpoints", "this table — every route, with its call count", "status"),
+        new("GET", "/api/v1/endpoints", "this table - every route, with its call count", "status"),
         new("GET", "/api/v1/lists", "the cue lists, with their standby", "lists"),
 
-        // The route the plan singles out. It needs per-list standby, which the session now owns — a
+        // The route the plan singles out. It needs per-list standby, which the session now owns - a
         // bare go against a list is meaningless without a per-list cursor to advance.
         new("POST", "/api/v1/lists/{list}/go", "fire the standby cue of one list", "transport"),
 
@@ -109,7 +109,7 @@ public static class RemoteApiRoutes
     public static RemoteApiRoute? Resolve(string method, IReadOnlyList<string> segments) =>
         All.FirstOrDefault(route => route.Matches(method, segments));
 
-    /// <summary>Whether some route would have answered this path under a different verb — a 405.</summary>
+    /// <summary>Whether some route would have answered this path under a different verb - a 405.</summary>
     public static bool PathExists(IReadOnlyList<string> segments) =>
         All.Any(route => route.MatchesPath(segments));
 

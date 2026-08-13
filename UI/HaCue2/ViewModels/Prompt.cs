@@ -24,7 +24,7 @@ public enum PromptFieldKind
     File,
 
     /// <summary>
-    /// Free text with a list of suggestions beside it — an editable combo box.
+    /// Free text with a list of suggestions beside it - an editable combo box.
     /// </summary>
     /// <remarks>
     /// For a value that is nearly always one of a handful and occasionally none of them. A window size
@@ -52,7 +52,7 @@ public sealed partial class PromptField : ObservableObject
     [ObservableProperty]
     private IReadOnlyList<string> _options = [];
 
-    /// <summary>Raised when the operator picks a different option — how a dependent field is refilled.</summary>
+    /// <summary>Raised when the operator picks a different option - how a dependent field is refilled.</summary>
     public event Action<PromptField>? Picked;
 
     partial void OnSelectedIndexChanged(int value) => Picked?.Invoke(this);
@@ -96,7 +96,7 @@ public sealed partial class PromptField : ObservableObject
     public bool IsChoice => Kind == PromptFieldKind.Choice;
     public bool IsToggle => Kind == PromptFieldKind.Toggle;
 
-    /// <summary>Whether this field takes a path — a text box plus a browse button.</summary>
+    /// <summary>Whether this field takes a path - a text box plus a browse button.</summary>
     public bool IsPath => Kind is PromptFieldKind.Folder or PromptFieldKind.File;
 
     public bool IsFolder => Kind == PromptFieldKind.Folder;
@@ -126,14 +126,14 @@ public sealed partial class PromptField : ObservableObject
 /// <remarks>
 /// <para>
 /// One shell for every "name a new thing" dialog in the app rather than a window each. The mockup has
-/// two dozen buttons ending in "…" and almost all of them are the same shape — a couple of fields and
-/// a verb — so the alternative is two dozen near-identical windows that drift apart in spacing, tab
+/// two dozen buttons ending in "…" and almost all of them are the same shape - a couple of fields and
+/// a verb - so the alternative is two dozen near-identical windows that drift apart in spacing, tab
 /// order and button placement. Anything genuinely different (the curve editor, the subtitle picker)
 /// still gets its own window.
 /// </para>
 /// <para>
 /// The dialog does not know what it edits. It collects values and calls <see cref="Apply"/>, which the
-/// caller supplies and which is where the journal command lives — so every dialog in the app is
+/// caller supplies and which is where the journal command lives - so every dialog in the app is
 /// undoable by construction rather than by each author remembering.
 /// </para>
 /// </remarks>
@@ -176,7 +176,7 @@ public sealed partial class PromptViewModel : ObservableObject
     /// <remarks>
     /// Added for the one question in the app that genuinely has three answers: closing a project with
     /// unsaved edits is save / discard / go back, and collapsing it to two makes one of those three
-    /// unreachable — which for "discard" means an operator who wants to abandon a bad edit has to save
+    /// unreachable - which for "discard" means an operator who wants to abandon a bad edit has to save
     /// it first.
     /// </remarks>
     public string Alternative { get; } = "";
@@ -190,7 +190,7 @@ public sealed partial class PromptViewModel : ObservableObject
 
     private Action<PromptViewModel> Apply { get; }
 
-    /// <summary>Field by label — how a caller reads back what was typed.</summary>
+    /// <summary>Field by label - how a caller reads back what was typed.</summary>
     public PromptField this[string label] =>
         Fields.FirstOrDefault(candidate => candidate.Label == label)
         ?? throw new KeyNotFoundException($"no prompt field labelled “{label}”");

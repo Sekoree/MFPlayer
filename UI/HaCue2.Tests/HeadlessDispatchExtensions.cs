@@ -16,10 +16,10 @@ namespace HaCue2.Tests;
 /// <c>Func&lt;Task&gt;</c> overload of <c>Dispatch</c>: an <c>async () =&gt; …</c> lambda binds to
 /// <c>Dispatch&lt;TResult&gt;(Func&lt;TResult&gt;)</c> with <c>TResult = Task</c>, which runs the lambda
 /// only to its first await and returns the inner task un-awaited. Every assertion after that first await
-/// then runs — or fails — after the test has already passed.
+/// then runs - or fails - after the test has already passed.
 /// </para>
 /// <para>
-/// <b>2. They survive the PerTest app-init race</b> — see <see cref="IsHeadlessAppInitRace"/>.
+/// <b>2. They survive the PerTest app-init race</b> - see <see cref="IsHeadlessAppInitRace"/>.
 /// </para>
 /// </remarks>
 internal static class HeadlessDispatchExtensions
@@ -40,11 +40,11 @@ internal static class HeadlessDispatchExtensions
         this HeadlessUnitTestSession session, Func<TResult> body, CancellationToken cancellationToken = default)
         => RetryAsync(() => session.Dispatch(body, cancellationToken));
 
-    /// <summary>Awaits an async body — the body itself, not just its scheduling.</summary>
+    /// <summary>Awaits an async body - the body itself, not just its scheduling.</summary>
     public static Task DispatchAsync(
         this HeadlessUnitTestSession session, Func<Task> body, CancellationToken cancellationToken = default)
         // Routed through the Func<Task<TResult>> overload: it keeps pumping the session's dispatcher
-        // until the inner task completes. A naive `await await session.Dispatch(body, ct)` deadlocks —
+        // until the inner task completes. A naive `await await session.Dispatch(body, ct)` deadlocks -
         // once the lambda hits its first await the session stops pumping, so the body's continuation
         // (queued back onto that dispatcher) would never run.
         => RetryAsync(() => session.Dispatch<object?>(
@@ -94,14 +94,14 @@ internal static class HeadlessDispatchExtensions
     /// <remarks>
     /// <para>
     /// <b>The race.</b> Avalonia's dispatcher does <c>s_uiThread ??= this</c>, so the first dispatcher
-    /// constructed after a reset becomes the process-wide UI thread — whichever thread constructs it.
+    /// constructed after a reset becomes the process-wide UI thread - whichever thread constructs it.
     /// Isolation is PerTest, so <c>EnsureIsolatedApplication</c> runs on every dispatch: a reset that
     /// nulls the binding, then setup that re-creates it. Between those two calls any thread touching
     /// <c>Dispatcher.UIThread</c> takes the binding, and setup then fails its access check.
     /// </para>
     /// <para>
-    /// <b>Why retrying is a fix rather than a paper-over.</b> The corruption self-heals — the next
-    /// dispatch's own reset clears the hijacked binding — and the failure happens strictly BEFORE the
+    /// <b>Why retrying is a fix rather than a paper-over.</b> The corruption self-heals - the next
+    /// dispatch's own reset clears the hijacked binding - and the failure happens strictly BEFORE the
     /// dispatched body is invoked, which the stack-frame check is what proves. A retry therefore cannot
     /// run a test body twice.
     /// </para>

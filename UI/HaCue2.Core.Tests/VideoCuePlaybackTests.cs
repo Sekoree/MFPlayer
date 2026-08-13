@@ -12,8 +12,8 @@ namespace HaCue2.Core.Tests;
 /// <remarks>
 /// Every composition test in the framework's own suite drives fake sources, so the one thing none of
 /// them can catch is the format negotiation between a real decoder and the compositor's layer input.
-/// That input is a fan-out BRANCH — the player's primary output is the discard sink it negotiates
-/// against — and a branch that needs a pixel conversion has to ask the router for a converter.
+/// That input is a fan-out BRANCH - the player's primary output is the discard sink it negotiates
+/// against - and a branch that needs a pixel conversion has to ask the router for a converter.
 /// </remarks>
 public sealed class VideoCuePlaybackTests
 {
@@ -84,7 +84,7 @@ public sealed class VideoCuePlaybackTests
         try
         {
             if (MakeClip(directory.FullName) is not { } clip)
-                return; // no ffmpeg on this box — nothing to assert about decoding
+                return; // no ffmpeg on this box - nothing to assert about decoding
 
             using var registry = MediaRegistry.Build(builder => builder.Use(new FFmpegModule()));
             await using var session = new ShowSession(registry);
@@ -159,7 +159,7 @@ public sealed class VideoCuePlaybackTests
     /// The owner's report was "once I tried to place the audio file's cover art it didn't play any
     /// more", and the crash report named the cause: the cover is MJPEG in <c>yuvj420p</c>, so the route
     /// to the composition needed a conversion the router refused, the route was rolled back, and the
-    /// exception travelled out of the fire as an unobserved task — taking the AUDIO with it.
+    /// exception travelled out of the fire as an unobserved task - taking the AUDIO with it.
     /// </para>
     /// <para>
     /// The important half is that the audio survives. A still that cannot be shown is a picture
@@ -218,7 +218,7 @@ public sealed class VideoCuePlaybackTests
     /// different failure with the same symptom: an <c>attached_pic</c> stream is one frame, and the
     /// demuxer reports its video track exhausted the moment that frame is out. If the clip's life were
     /// taken from the video track, every album-art cue would end almost immediately and the audio would
-    /// go with it — silently, a second after GO.
+    /// go with it - silently, a second after GO.
     /// </para>
     /// <para>
     /// The stream is named EXPLICITLY here, which is what "place on composition" writes for a

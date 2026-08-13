@@ -5,7 +5,7 @@ using S.Media.Core.Video;
 namespace S.Media.Compositor.Benchmarks;
 
 /// <summary>
-/// Measures <see cref="CpuVideoCompositor.Composite"/> — the CPU fallback backend that also runs
+/// Measures <see cref="CpuVideoCompositor.Composite"/> - the CPU fallback backend that also runs
 /// per frame in real deployments via <c>CompositorOutputScaler</c> (NDI format lock / logo template).
 /// The per-pixel inner loop currently re-applies the inverse transform and re-dispatches the
 /// sampling/blend switches per pixel; these numbers are the baseline for specializing it.
@@ -107,7 +107,7 @@ public class CpuCompositorMultiLayerBenchmarks
 /// <summary>
 /// The layer-effect path (chroma-key) plus the blend/crop shapes the parameterized class leaves
 /// out. Effects gate off BOTH fast paths and force the generic per-pixel loop with a per-pixel
-/// premultiplied→straight conversion — the slowest CPU shape, so it needs its own numbers to
+/// premultiplied→straight conversion - the slowest CPU shape, so it needs its own numbers to
 /// guard the kernel-scratch reuse and any future row-specialized effects loop.
 /// </summary>
 [MemoryDiagnoser]
@@ -162,7 +162,7 @@ public class CpuCompositorEffectsBenchmarks
         using var result = _compositor.Composite(_multiplyLayer, TimeSpan.Zero);
     }
 
-    /// <summary>Integer-translate blit with a sub-rect crop — exercises the crop-interval logic
+    /// <summary>Integer-translate blit with a sub-rect crop - exercises the crop-interval logic
     /// in the fast paths instead of the full-frame crop the other benchmarks use.</summary>
     [Benchmark]
     public void CompositeCropped()

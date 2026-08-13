@@ -15,7 +15,7 @@ public static class VideoPresentation
     /// The layers on a composition's canvas: every cue placed there, in layer order.
     /// </summary>
     /// <remarks>
-    /// Placements belong to CUES, not to the composition (register item 21) — the visualizer on the
+    /// Placements belong to CUES, not to the composition (register item 21) - the visualizer on the
     /// Cyc canvas is simply a visualizer cue's placement. Which is why this reads the cue list rather
     /// than anything on the composition itself.
     /// </remarks>
@@ -54,7 +54,7 @@ public static class VideoPresentation
             });
         }
 
-        // Drawn in LAYER order, lowest first, so the box painted last is the one actually on top —
+        // Drawn in LAYER order, lowest first, so the box painted last is the one actually on top -
         // and so a click, which searches back to front, grabs what the operator sees on top. Cue order
         // would have an L1 covering an L2 whenever the L1 cue happened to come later in the list.
         return [.. boxes.OrderBy(box => box.LayerIndex)];
@@ -248,7 +248,7 @@ public static class VideoPresentation
     /// <para>
     /// What makes an output layout worth more than a picture: with the screen boundaries as snap
     /// targets, a cue can be dropped exactly onto one projector of a wall without anybody working out
-    /// what fraction that is. Empty on a canvas nobody has divided — which still snaps to its own edges
+    /// what fraction that is. Empty on a canvas nobody has divided - which still snaps to its own edges
     /// and centre, as every canvas does.
     /// </para>
     /// <para>
@@ -283,7 +283,7 @@ public static class VideoPresentation
         ];
     }
 
-    /// <summary>The local screens showing a canvas, in document order — the boxes it is divided into.</summary>
+    /// <summary>The local screens showing a canvas, in document order - the boxes it is divided into.</summary>
     public static IReadOnlyList<VideoOutputDefinition> Screens(HaCueProject project, Guid compositionId)
     {
         ArgumentNullException.ThrowIfNull(project);
@@ -417,7 +417,7 @@ public static class TargetPresentation
                     ? $"OSC out · {endpoint.Host}:{endpoint.Port}"
                     : "MIDI out",
                 Bindings = $"{users} cue{(users == 1 ? "" : "s")}",
-                LastSeen = runtime.LastSent.GetValueOrDefault(endpoint.Id, "—"),
+                LastSeen = runtime.LastSent.GetValueOrDefault(endpoint.Id, "-"),
                 // An endpoint no enabled cue uses is worth saying: it is either a leftover or a cue
                 // somebody forgot to point at it.
                 State = users == 0
@@ -444,7 +444,7 @@ public static class TargetPresentation
                 _ => "keyboard",
             },
             Bindings = $"{input.Bindings.Count} cue{(input.Bindings.Count == 1 ? "" : "s")}",
-            LastSeen = runtime.LastSeen.GetValueOrDefault(input.Id, "—"),
+            LastSeen = runtime.LastSeen.GetValueOrDefault(input.Id, "-"),
             State = input.Kind switch
             {
                 // A hotkey is not gated by external input at all, so it is never "off".
@@ -477,7 +477,7 @@ public static class TargetPresentation
             ? $"Q{CuePresentation.Number(cue.Number)} {cue.Label}"
             // A binding whose cue is gone says so rather than showing a blank: it is exactly the case
             // the reverse-reference query exists to make visible.
-            : "— cue no longer in the show —",
+            : "- cue no longer in the show -",
     };
 
     private static string Filter(TriggerBinding binding)
@@ -493,6 +493,6 @@ public static class TargetPresentation
         if (binding.AllowWhileTyping)
             parts.Add("global while typing");
 
-        return parts.Count == 0 ? "—" : string.Join(" · ", parts);
+        return parts.Count == 0 ? "-" : string.Join(" · ", parts);
     }
 }

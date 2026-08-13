@@ -8,7 +8,7 @@
         <IsTestProject>true</IsTestProject>
         <!-- Test projects opt out of the repo-wide AOT/trim analysis (the same way the framework's do).
              One test here deliberately reflects over a command's private fields to prove the journal
-             holds no document snapshots — the property is about what a type may HOLD, which no public
+             holds no document snapshots - the property is about what a type may HOLD, which no public
              surface can express. The library itself stays AOT-clean. -->
         <IsAotCompatible>false</IsAotCompatible>
     </PropertyGroup>
@@ -33,7 +33,7 @@
              telemetry into rows, chips and readouts; it is pure and it is exactly where a silent
              mistake lives (a chip that reads "fine" over an absent device, an fps divided by an
              interval of nearly zero). It pulls Avalonia in transitively, but nothing here constructs
-             a control — the row types are plain records. The VIEWS are still tested from disk, by
+             a control - the row types are plain records. The VIEWS are still tested from disk, by
              MarkupBindingGuardTests, which needs the .axaml text rather than the types. -->
         <ProjectReference Include="..\HaCue2\HaCue2.csproj" />
     </ItemGroup>

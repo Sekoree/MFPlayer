@@ -14,7 +14,7 @@
         <RootNamespace>HaCue2.Desktop</RootNamespace>
         <!-- Not "HaCue2" (collides with the HaCue2 library's HaCue2.dll on case-insensitive filesystems)
              and not the "HaCue2.Desktop" project default (file managers mistake a *.Desktop binary for an
-             XDG desktop entry — same rationale as HaPlay.Desktop → HaPlayer, HaViz.Desktop → HaVizBox).
+             XDG desktop entry - same rationale as HaPlay.Desktop → HaPlayer, HaViz.Desktop → HaVizBox).
              The plan's `hacue2` check CLI verb (D9, still draft) is a separate question from this
              binary's name. -->
         <AssemblyName>HaCue2Desktop</AssemblyName>
@@ -32,8 +32,8 @@
         <!-- The SAME GC configuration HaPlay.Desktop and HaViz.Desktop ship, and for the same reason:
              this is a real-time audio application whose video path allocates canvas-sized frame buffers
              continuously. A show layering two 1080p60 ProRes clips over eleven stems allocates tens of
-             megabytes a second straight into the large-object heap, and under workstation GC — which is
-             what this head silently ran, being the only one of the three that never asked — the
+             megabytes a second straight into the large-object heap, and under workstation GC - which is
+             what this head silently ran, being the only one of the three that never asked - the
              resulting blocking gen2 pauses stall the audio drainer for long enough to drain the router's
              ring. That is heard as the stutter and the pops, and seen as a composition that will not
              hold 60 fps, with nothing in the app's own code accounting for either.
@@ -51,7 +51,7 @@
         <!-- SDL3's platform native runtimes are app-owned deployment assets: the framework libraries
              carry only the SDL3-CS binding so a packaged library never drags a native runtime in
              transitively. This head asks for an SDL3 GL context below, so it is the level that has to
-             ship one — without these a publish contained no libSDL3 at all and the offscreen context
+             ship one - without these a publish contained no libSDL3 at all and the offscreen context
              silently fell back on every machine that had no system SDL3. Same pair as HaPlay.Desktop. -->
         <PackageReference Include="SDL3-CS.Linux"/>
         <PackageReference Include="SDL3-CS.Windows" GeneratePathProperty="true"/>
@@ -60,7 +60,7 @@
     <!-- FFmpeg 8.x native runtime (avcodec-62/avformat-62/…) as a NuGet native asset. win-x64 only:
          Linux takes FFmpeg from the system (or the CI-staged build). Kept at the final app level so no
          framework package carries a GPL native runtime. Without it a Windows publish had no decoder at
-         all — every media cue would fail to open on the one platform that cannot fall back on a
+         all - every media cue would fail to open on the one platform that cannot fall back on a
          package manager. -->
     <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
         <PackageReference Include="FFmpeg.GPL"/>
@@ -82,7 +82,7 @@
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Audio.PortAudio\S.Media.Audio.PortAudio.csproj"/>
         <!-- The other local-audio backend, offered as an advanced machine setting. The two see
              different devices on the same box, so which one opens a sound card is a property of the
-             rig — and a head is where that kind of choice belongs. -->
+             rig - and a head is where that kind of choice belongs. -->
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Audio.MiniAudio\S.Media.Audio.MiniAudio.csproj"/>
         <!-- The offscreen GL context projectM renders on. A head's choice, like the audio backend:
              the engine asks for a context factory and does not care which windowing system provides

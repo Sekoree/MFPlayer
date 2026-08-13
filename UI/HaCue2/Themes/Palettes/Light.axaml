@@ -7,7 +7,7 @@
 
        Only three kinds of token need re-stating, which is why this file is short rather than a second
        copy of Tokens.axaml:
-         · the 13 base COLOURS — the surface ramp inverts, the ink ramp inverts, and the five gels
+         · the 13 base COLOURS - the surface ramp inverts, the ink ramp inverts, and the five gels
            DARKEN (a #7D8CEA that reads well on near-black is illegible on near-white; the hue is the
            vocabulary, the lightness is not);
          · the 13 brushes built from those colours, because Tokens resolves them statically at load;
@@ -17,7 +17,7 @@
        so they work on either surface unchanged. That is why the mockup's washes were authored with an
        alpha channel in the first place.
 
-       For the booth this is the wrong skin and the app knows it — booth dark stays the default. This
+       For the booth this is the wrong skin and the app knows it - booth dark stays the default. This
        exists for the paperwork half of the job: a laptop in a bright room, plotting a show at a desk.
        ══════════════════════════════════════════════════════════════════════════════════════════ -->
 

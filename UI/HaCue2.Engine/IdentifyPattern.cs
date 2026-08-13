@@ -9,7 +9,7 @@ namespace HaCue2.Engine;
 /// <remarks>
 /// <para>
 /// <b>Its own five-by-seven font, and that is the point.</b> This runs in the engine, which has no
-/// window, no Skia and no font stack — and a booth machine's font set is exactly the kind of thing
+/// window, no Skia and no font stack - and a booth machine's font set is exactly the kind of thing
 /// that differs from the laptop a show was authored on. Glyphs drawn as pixels cannot fail to
 /// resolve, cannot fall back to something unreadable, and look identical on every box.
 /// </para>
@@ -163,7 +163,7 @@ public static class IdentifyPattern
 
         var cells = (text.Length * (GlyphWidth + Tracking)) - Tracking;
 
-        // Scaled to fill about two thirds of the canvas, and never smaller than one pixel per cell —
+        // Scaled to fill about two thirds of the canvas, and never smaller than one pixel per cell -
         // a name too long for the screen shrinks rather than being cut off, because the half of a name
         // that fitted would identify the wrong output.
         var scale = Math.Max(1, Math.Min(width * 2 / (3 * cells), height * 2 / (3 * GlyphHeight)));
@@ -209,7 +209,7 @@ public static class IdentifyPattern
         }
     }
 
-    /// <summary>White, opaque — the ink both the border and the letters are drawn in.</summary>
+    /// <summary>White, opaque - the ink both the border and the letters are drawn in.</summary>
     private static void Set(byte[] pixels, int at)
     {
         pixels[at] = 0xFF;
@@ -231,7 +231,7 @@ public static class IdentifyPattern
     /// </summary>
     /// <remarks>
     /// Written as pictures of the letters, because the one thing anybody will ever do to this table is
-    /// fix a letter that looks wrong — and a run of hex is the worst possible way to find which one.
+    /// fix a letter that looks wrong - and a run of hex is the worst possible way to find which one.
     /// </remarks>
     private static Dictionary<char, string[]> Build()
     {

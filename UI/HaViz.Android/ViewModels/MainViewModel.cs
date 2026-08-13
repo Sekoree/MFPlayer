@@ -140,7 +140,7 @@ public partial class MainViewModel : ObservableObject, IPcmSink, IDisposable
             // status line on stale counters.
             _engine.Faulted += ex => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
-                StatusText = $"engine faulted: {ex.Message} — stop and start again";
+                StatusText = $"engine faulted: {ex.Message} - stop and start again";
             });
             _engine.Start();
             IsEngineRunning = true;

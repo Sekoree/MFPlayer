@@ -9,7 +9,7 @@ namespace HaCue2.Tests;
 /// </summary>
 /// <remarks>
 /// The patch labels rows "&lt;line name&gt; · Out &lt;n&gt;", and a real interface's name does not
-/// fit any fixed width — at the pane's 118 px, "Ryzen HD Audio Controller Analog Stereo · Out 1"
+/// fit any fixed width - at the pane's 118 px, "Ryzen HD Audio Controller Analog Stereo · Out 1"
 /// clipped to its first few glyphs, on exactly the row an operator reads to tell one physical
 /// output from another. The styled width is a minimum; the column widens to the longest header.
 /// </remarks>

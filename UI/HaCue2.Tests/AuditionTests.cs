@@ -9,7 +9,7 @@ namespace HaCue2.Tests;
 /// </summary>
 /// <remarks>
 /// The load-bearing property throughout is that audition is MONITORING: it never reaches the program
-/// mix, never appears in the Active list, and is therefore always safe to press — which is why it sits
+/// mix, never appears in the Active list, and is therefore always safe to press - which is why it sits
 /// on every cue's context menu rather than behind a mode.
 /// </remarks>
 public class AuditionTests
@@ -18,7 +18,7 @@ public class AuditionTests
     public Task TheRigIsOneObjectSharedByBothViews() => ShellFixture.WithShell(shell =>
     {
         // Register item 15: a rig is a single thing. Two view-models over it would drift the moment
-        // either was edited — set a surface in Video, find it unset in Audio.
+        // either was edited - set a surface in Video, find it unset in Audio.
         Assert.Same(shell.Audio.Audition, shell.Video.Audition);
     });
 
@@ -42,7 +42,7 @@ public class AuditionTests
         audition.DeviceIndex = 1;
 
         Assert.Equal(line.Id, shell.Project.Audition.AudioLineId);
-        // The width comes FROM the line — never assumed stereo, which is the whole of D8.
+        // The width comes FROM the line - never assumed stereo, which is the whole of D8.
         Assert.Contains($"{line.Channels} channel", audition.Width, StringComparison.Ordinal);
 
         shell.Undo();
@@ -100,7 +100,7 @@ public class AuditionTests
     {
         ShellFixture.Select(shell.Cues, ShellFixture.Bed(shell.Project).Id);
 
-        // No session, so nothing to audition through — and pressing it must be a no-op rather than a
+        // No session, so nothing to audition through - and pressing it must be a no-op rather than a
         // crash, because the editor is fully usable on a laptop with no rig at all.
         shell.Cues.PreviewSelected();
 

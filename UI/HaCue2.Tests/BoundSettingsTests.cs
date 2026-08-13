@@ -9,8 +9,8 @@ namespace HaCue2.Tests;
 /// The settings and endpoint panes edit something.
 /// </summary>
 /// <remarks>
-/// A sweep for hardcoded remains found eleven settings boxes rendering literals — including the fixture
-/// name <c>PROJECT · MIDSUMMER-2026</c> in the nav — and an endpoint pane whose host and port were
+/// A sweep for hardcoded remains found eleven settings boxes rendering literals - including the fixture
+/// name <c>PROJECT · MIDSUMMER-2026</c> in the nav - and an endpoint pane whose host and port were
 /// <c>10.0.1.20</c> and <c>8000</c> in the markup. An operator could change a transport default and
 /// watch nothing happen, or point an action cue at a lighting desk and have it go to a hardcoded address.
 /// </remarks>
@@ -107,7 +107,7 @@ public class BoundSettingsTests
         settings.ProjectStopFade = "2 s";
         Assert.Equal(2_000, shell.Project.Settings.StopFadeMs);
 
-        // It changes what every STOP in the show does — exactly the sort of edit to undo.
+        // It changes what every STOP in the show does - exactly the sort of edit to undo.
         shell.Undo();
         Assert.Equal(750, shell.Project.Settings.StopFadeMs);
     });
@@ -178,7 +178,7 @@ public class BoundSettingsTests
 
         Settings(shell, app).RotateRemoteToken();
 
-        // The old one must stop working — that is the entire point of the button.
+        // The old one must stop working - that is the entire point of the button.
         Assert.NotEqual(first, app.RemoteToken);
         Assert.NotEmpty(app.RemoteToken);
     });
@@ -215,7 +215,7 @@ public class BoundSettingsTests
 
         targets.EndpointPort = "70000";
 
-        // Port 0 is not "unset" to a socket, it is "pick one for me" — an action cue quietly sending to
+        // Port 0 is not "unset" to a socket, it is "pick one for me" - an action cue quietly sending to
         // an arbitrary port is worse than one that reports a bad number.
         Assert.Equal(8000, endpoint.Port);
     });

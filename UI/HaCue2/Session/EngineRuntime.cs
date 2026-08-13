@@ -16,7 +16,7 @@ namespace HaCue2.Session;
 /// <para>
 /// The Phase 5 half of the seam. The views never learn that a session exists: they read the same
 /// runtime object they always did, and this replaces the invented values with real ones as they
-/// arrive. Everything still unfilled — meters, the bay counters, the log — stays exactly as it was,
+/// arrive. Everything still unfilled - meters, the bay counters, the log - stays exactly as it was,
 /// so what is real and what is not is still visible from one place.
 /// </para>
 /// <para>
@@ -27,7 +27,7 @@ namespace HaCue2.Session;
 /// </remarks>
 public sealed class EngineRuntime : IAsyncDisposable
 {
-    /// <summary>Four times a second — fast enough to read as live, slow enough to cost nothing.</summary>
+    /// <summary>Four times a second - fast enough to read as live, slow enough to cost nothing.</summary>
     private static readonly TimeSpan Tick = TimeSpan.FromMilliseconds(250);
 
     private readonly ShowHost _host;
@@ -60,17 +60,17 @@ public sealed class EngineRuntime : IAsyncDisposable
         runtime.AbsentVideoOutputs = [.. host.AbsentVideoOutputs];
 
         // Every inbound message, matched or not. Raised on the I/O thread, so nothing here does more
-        // than append — a PortMIDI poll that blocks is a poll that drops messages.
+        // than append - a PortMIDI poll that blocks is a poll that drops messages.
         host.Triggers.Observed += OnObserved;
 
         // A fire or a stop polls IMMEDIATELY instead of waiting out the tick: the Active panel is
-        // the operator's confirmation that the GO took, and up to a quarter second of nothing —
-        // more when the UI thread is busy, which a GO makes it — reads as a button that failed.
+        // the operator's confirmation that the GO took, and up to a quarter second of nothing -
+        // more when the UI thread is busy, which a GO makes it - reads as a button that failed.
         // Raised on engine threads, so it marshals itself onto the dispatcher.
         host.SoundingChanged += OnSoundingChanged;
 
         // Input rather than Background: Background is the lowest priority there is, and it starves
-        // exactly when the operator is looking — a GO kicks off enough layout and render work that
+        // exactly when the operator is looking - a GO kicks off enough layout and render work that
         // the poll showing its result could slip far past its 250 ms.
         _timer = new DispatcherTimer(Tick, DispatcherPriority.Input, (_, _) => Poll());
         _timer.Start();
@@ -137,7 +137,7 @@ public sealed class EngineRuntime : IAsyncDisposable
     {
         // One in flight at a time: a snapshot crosses the session dispatcher, and stacking them up
         // behind a busy session would turn a 250 ms tick into an unbounded queue. A request that
-        // lands mid-poll is REMEMBERED rather than dropped — the in-flight snapshot may predate the
+        // lands mid-poll is REMEMBERED rather than dropped - the in-flight snapshot may predate the
         // change that prompted it, and losing it would put the fresh fire back on the slow tick.
         if (_polling)
         {
@@ -152,7 +152,7 @@ public sealed class EngineRuntime : IAsyncDisposable
             var state = await _host.SnapshotAsync().ConfigureAwait(true);
 
             // The Active panel's CLOCKS move on every tick even when the cue set has not changed, so
-            // this cannot early-out on "same cues sounding" the way the tree can — a progress bar that
+            // this cannot early-out on "same cues sounding" the way the tree can - a progress bar that
             // only advanced when something started or stopped would look frozen mid-cue.
             _runtime.ActiveCues = CuePresentation.Active(_project, state.Active, _runtime.MediaDurations);
             _runtime.IsPaused = state.IsPaused;
@@ -183,7 +183,7 @@ public sealed class EngineRuntime : IAsyncDisposable
             // This is an `async void` running four times a second for the whole performance, so
             // anything that escapes it reaches the dispatcher unhandled and takes the app down in
             // front of an audience. Everything else on this seam already guards broadly for the same
-            // reason — ShowHost's lifecycle callbacks and its pre-roll both do.
+            // reason - ShowHost's lifecycle callbacks and its pre-roll both do.
             //
             // The poll keeps running: a snapshot that failed once is a reading nobody got, not a
             // reason to freeze every clock and meter on screen for the rest of the night. Logged on
@@ -214,7 +214,7 @@ public sealed class EngineRuntime : IAsyncDisposable
     /// Copies the bay's own counters into the runtime the Diagnostics window and drawer read.
     /// </summary>
     /// <remarks>
-    /// Every one of these values used to come from <c>SampleShow</c> — invented numbers on the one
+    /// Every one of these values used to come from <c>SampleShow</c> - invented numbers on the one
     /// screen an operator opens to find out why there is no sound. The meters in particular have to
     /// be read on the tick rather than on a change, because a level that only updated when a cue
     /// started or stopped would sit still through the whole of it.
@@ -317,7 +317,7 @@ public sealed class EngineRuntime : IAsyncDisposable
 
         // Copy-on-write, like the monitor above and for the same reason: this runs on the MIDI/OSC
         // I/O thread while the Targets pane reads the map on the UI thread. Writing into a shared
-        // Dictionary from two threads corrupts its buckets — a fault that shows up as a wrong answer
+        // Dictionary from two threads corrupts its buckets - a fault that shows up as a wrong answer
         // or a hang rather than an exception. The copy is one entry per trigger input.
         lock (_monitor)
         {

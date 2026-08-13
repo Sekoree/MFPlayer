@@ -8,7 +8,7 @@ namespace HaCue2.Core.Tests;
 /// </summary>
 /// <remarks>
 /// This is the half that must fail LOUDLY and EARLY. A cue that sends nothing looks exactly like a
-/// desk that ignored the message, and the difference is an hour of somebody's get-in — so the status
+/// desk that ignored the message, and the difference is an hour of somebody's get-in - so the status
 /// pass runs this same parser on a laptop with no interface in it, and every refusal below has to say
 /// what is actually wrong.
 /// </remarks>

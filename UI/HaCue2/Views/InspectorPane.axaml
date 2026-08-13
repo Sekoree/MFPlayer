@@ -87,10 +87,10 @@
                 </DockPanel>
               </Border>
             </ContentControl>
-            <!-- A disabled cue stays visible and is skipped by GO and by auto-follow — deleting a cue
+            <!-- A disabled cue stays visible and is skipped by GO and by auto-follow - deleting a cue
                  to drop it for one performance is how shows lose cues. -->
             <CheckBox Margin="10,6,10,0" IsChecked="{Binding IsEnabled}"
-                      Content="Enabled — GO and auto-follow include this cue" />
+                      Content="Enabled - GO and auto-follow include this cue" />
 
             <!-- Finite-media playback is part of the cue's general identity. A silent video still has
                  an in-point and an out-point, but those controls do not warrant a separate tab. Live
@@ -132,7 +132,7 @@
                                ToolTip.Tip="Milliseconds of overlap when the loop wraps. A seamless loop is made of this; zero is a hard cut." />
               </HeaderedContentControl>
               <CheckBox Margin="10,2,10,4" IsChecked="{Binding PreRollValue}"
-                        Content="Pre-roll — open this cue's media before it fires"
+                        Content="Pre-roll - open this cue's media before it fires"
                         ToolTip.Tip="On by default. Turn it off for a clip that costs more to hold open than it saves, or whose open starts something early." />
             </StackPanel>
           </StackPanel>
@@ -140,7 +140,7 @@
           <!-- ══ AUDIO ═════════════════════════════════════════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsAudioPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
-            <!-- A concert capture routinely carries several audio tracks — a stereo mix, an isolated
+            <!-- A concert capture routinely carries several audio tracks - a stereo mix, an isolated
                  vocal, a room pair. Which one this cue plays is an authoring decision, and the sends
                  below are the channels OF THAT TRACK. -->
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Track"
@@ -189,7 +189,7 @@
                           ItemTemplate="{StaticResource CurveItemTemplate}"
                           SelectionBoxItemTemplate="{StaticResource CurveNameTemplate}" />
                 <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" Tag="fadeIn"
-                        ToolTip.Tip="Custom curve editor — drag points, smooth/hold segments, dB ⇄ linear" />
+                        ToolTip.Tip="Custom curve editor - drag points, smooth/hold segments, dB ⇄ linear" />
               </Grid>
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Fade out">
@@ -240,7 +240,7 @@
                 <Button Theme="{StaticResource ChipButton}" Content="MONO FROM L"
                         Click="OnSendPreset" Tag="monoL"
                         IsEnabled="{Binding HasSendPresetTarget}"
-                        ToolTip.Tip="Source 1 to both sides — a mono stem in the middle, not hard left" />
+                        ToolTip.Tip="Source 1 to both sides - a mono stem in the middle, not hard left" />
                 <Button Theme="{StaticResource ChipButton}" Content="SWAP"
                         Click="OnSendPreset" Tag="swap"
                         IsEnabled="{Binding HasSendPresetTarget}"
@@ -258,7 +258,7 @@
             <Border Classes="chain">
               <StackPanel Spacing="4">
                 <TextBlock Classes="mono dim3 small" IsVisible="{Binding !HasRoute}"
-                           Text="this channel reaches nothing — no send, or nothing patched under it" />
+                           Text="this channel reaches nothing - no send, or nothing patched under it" />
                 <ItemsControl ItemsSource="{Binding RouteChain}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:RouteHop">
@@ -291,7 +291,7 @@
                 <StackPanel Orientation="Horizontal" Spacing="7">
                   <Border Classes="badge"><TextBlock Text="NOT PLACED" /></Border>
                   <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
-                             Text="this cue is on no composition — add it to one to give it a canvas" />
+                             Text="this cue is on no composition - add it to one to give it a canvas" />
                 </StackPanel>
               </Border>
             </ContentControl>
@@ -384,12 +384,12 @@
                 <ComboBox Grid.Column="0" ItemsSource="{Binding PlacementCompositions}"
                           SelectedIndex="{Binding PlacementTarget}" />
                 <Button Grid.Column="1" Classes="tight" Content="ADD" Click="OnPlace"
-                        ToolTip.Tip="Show this cue on another composition — one decode, several canvases." />
+                        ToolTip.Tip="Show this cue on another composition - one decode, several canvases." />
               </Grid>
             </HeaderedContentControl>
           </StackPanel>
 
-          <!-- ══ AUTOMATION — property tracks, hidden until added (register item 18) ═══════ -->
+          <!-- ══ AUTOMATION - property tracks, hidden until added (register item 18) ═══════ -->
           <StackPanel IsVisible="{Binding IsEffectsPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <Grid ColumnDefinitions="*,*" ColumnSpacing="6" IsVisible="{Binding IsAutomationCue}">
@@ -489,7 +489,7 @@
                        Text="Tracks target concrete cue properties and use absolute cue time. Open one to zoom, scroll and seek through long media." />
           </StackPanel>
 
-          <!-- ══ NOTE — one tab on every kind; stays writable under Lock ════════════════════ -->
+          <!-- ══ NOTE - one tab on every kind; stays writable under Lock ════════════════════ -->
           <DockPanel IsVisible="{Binding IsNotePane}" Margin="10,8">
             <TextBox AcceptsReturn="True" TextWrapping="Wrap" MinHeight="160"
                      Text="{Binding NoteValue}"
@@ -504,10 +504,10 @@
               <Button Classes="primary block" Content="PREVIEW ON AUDITION OUTPUTS" Click="OnPreview" />
             </ContentControl>
             <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
-                       Text="Plays into the audition rig — the monitor path. It never touches the patch or the program bus, and never appears in the Active list." />
+                       Text="Plays into the audition rig - the monitor path. It never touches the patch or the program bus, and never appears in the Active list." />
           </StackPanel>
 
-          <!-- ══ GROUP — playlist crossfades (register item 17) ═════════════════════════════ -->
+          <!-- ══ GROUP - playlist crossfades (register item 17) ═════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsGroupPane}" Margin="0,6,0,8">
             <!-- All of this was hard-coded markup: fire mode was pinned to "playlist", so a timeline
                  group described itself as one. Bound to the cue now. -->
@@ -534,7 +534,7 @@
               <CheckBox Margin="10,3" IsChecked="{Binding AvoidRepeatValue}"
                         IsVisible="{Binding ShuffleValue}"
                         Content="Never repeat across a pass boundary"
-                        ToolTip.Tip="Without this a shuffled bed can play the same item twice in a row when a pass wraps — which reads as a fault rather than as chance." />
+                        ToolTip.Tip="Without this a shuffled bed can play the same item twice in a row when a pass wraps - which reads as a fault rather than as chance." />
 
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Play count">
                 <NumericUpDown Minimum="0" Maximum="999" Increment="1" FormatString="0"
@@ -575,7 +575,7 @@
                        Text="per-item fade-in overrides are set on each child's Audio tab" />
           </StackPanel>
 
-          <!-- ══ PATCH — snapshot recall AND inline level changes (register item 12) ════════ -->
+          <!-- ══ PATCH - snapshot recall AND inline level changes (register item 12) ════════ -->
           <StackPanel IsVisible="{Binding IsPatchPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Recall">
@@ -615,7 +615,7 @@
               <DockPanel LastChildFill="True">
                 <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="PERSISTENT" /></Border>
                 <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
-                           Text="applies to the patch and stays — stopping this cue undoes nothing" />
+                           Text="applies to the patch and stays - stopping this cue undoes nothing" />
               </DockPanel>
             </Border>
             <TextBlock Margin="10,6" Classes="mono warn small" TextWrapping="Wrap"
@@ -623,7 +623,7 @@
                        Text="{Binding PatchHint}" />
           </StackPanel>
 
-          <!-- ══ FADE — targets, duration, curve, fade-everything ══════════════════════════ -->
+          <!-- ══ FADE - targets, duration, curve, fade-everything ══════════════════════════ -->
           <StackPanel IsVisible="{Binding IsFadePane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="To level">
@@ -657,7 +657,7 @@
                        Text="{Binding FadeTargetHint}" />
           </StackPanel>
 
-          <!-- ══ JUMP — targets, random pick, fire-on-jump ═════════════════════════════════ -->
+          <!-- ══ JUMP - targets, random pick, fire-on-jump ═════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsJumpPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Jump to">
@@ -682,7 +682,7 @@
                        Text="{Binding JumpHint}" />
           </StackPanel>
 
-          <!-- ══ TEXT — words on a canvas ══════════════════════════════════════════════════
+          <!-- ══ TEXT - words on a canvas ══════════════════════════════════════════════════
                The document stores WORDS, not a picture: portable, diffable, and translatable. The
                app draws them into its media cache when the show is compiled, so a card carried to
                another booth is redrawn there with whatever faces that machine has. -->
@@ -695,7 +695,7 @@
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Face">
               <TextBox Text="{Binding CardFont}"
-                       PlaceholderText="the app's own — matched by name, like a device hint"
+                       PlaceholderText="the app's own - matched by name, like a device hint"
                        ToolTip.Tip="A hint. A booth machine that does not have this face falls back to a readable one rather than refusing to draw." />
             </HeaderedContentControl>
             <!-- A FRACTION of the frame, not points: a card authored at 72 pt on a 1280×720 canvas
@@ -752,7 +752,7 @@
             </ContentControl>
           </StackPanel>
 
-          <!-- ══ VISUALIZER — the ONLY home of visualizer settings (register item 21) ═══════ -->
+          <!-- ══ VISUALIZER - the ONLY home of visualizer settings (register item 21) ═══════ -->
           <StackPanel IsVisible="{Binding IsVisualizerPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Preset pack">
@@ -779,12 +779,12 @@
             <CheckBox Margin="10,4" IsChecked="{Binding VisualizerLocksPresetValue}"
                       Content="Lock to this preset (no auto-advance)" />
             <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
-                       Text="Placement lives on the Video tab — a visualizer is a cue, and its canvas presence is an ordinary layer." />
+                       Text="Placement lives on the Video tab - a visualizer is a cue, and its canvas presence is an ordinary layer." />
             <TextBlock Margin="10,2,10,6" Classes="mono warn small" TextWrapping="Wrap"
                        Text="{Binding VisualizerHint}" />
           </StackPanel>
 
-          <!-- ══ ACTION — endpoint, address, arguments ═════════════════════════════════════ -->
+          <!-- ══ ACTION - endpoint, address, arguments ═════════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsActionPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="Endpoint">

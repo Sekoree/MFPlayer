@@ -11,7 +11,7 @@ namespace HaCue2.Core.Tests;
 /// Building a fixture project out of a media library.
 /// </summary>
 /// <remarks>
-/// The seeder is pure — it is handed paths rather than reading a disk — so the SHAPE of what it builds
+/// The seeder is pure - it is handed paths rather than reading a disk - so the SHAPE of what it builds
 /// is testable without anybody's music on the machine running the test.
 /// </remarks>
 public class LibrarySeederTests
@@ -38,7 +38,7 @@ public class LibrarySeederTests
         var cues = LibrarySeeder.Build(Seed()).AllCues().ToList();
 
         // The control-flow kinds are resolved app-side, so a fixture without them exercises none of
-        // that code — and those are exactly the paths with no framework test behind them.
+        // that code - and those are exactly the paths with no framework test behind them.
         Assert.Contains(cues, cue => cue is MediaCueNode);
         Assert.Contains(cues, cue => cue is GroupCueNode { FireMode: GroupFireMode.Playlist });
         Assert.Contains(cues, cue => cue is GroupCueNode { FireMode: GroupFireMode.Timeline });
@@ -77,7 +77,7 @@ public class LibrarySeederTests
         var report = ProjectStatus.Run(LibrarySeeder.Build(Seed()));
 
         // A fixture that passes every check teaches nothing about the screen that reports them, so
-        // one output is fed by a cue and patched to nothing — the condition register item 25 singles
+        // one output is fed by a cue and patched to nothing - the condition register item 25 singles
         // out as an ERROR rather than a warning.
         //
         // Scoped to the routing check rather than the report total: these paths are invented, so the
@@ -88,7 +88,7 @@ public class LibrarySeederTests
         Assert.Equal(CheckOutcome.Failed, routing.Outcome);
         Assert.Contains(routing.Issues, issue => issue.Message.Contains("Sub", StringComparison.Ordinal));
 
-        // And nothing ELSE about the patch is wrong — one error, deliberately placed.
+        // And nothing ELSE about the patch is wrong - one error, deliberately placed.
         Assert.Single(routing.Issues);
     }
 
@@ -128,7 +128,7 @@ public class LibrarySeederTests
     public void ASmallLibraryStillProducesAValidProject()
     {
         // One file and nothing else. The seeder must not assume it was handed enough for a playlist
-        // AND a timeline AND a video list — a first run against a nearly empty folder is a real case.
+        // AND a timeline AND a video list - a first run against a nearly empty folder is a real case.
         var project = LibrarySeeder.Build(new LibrarySeed("Tiny", "/library", ["/library/one.flac"], []));
 
         ShowDocumentValidator.ThrowIfInvalid(ShowCompiler.Compile(project));

@@ -2,7 +2,7 @@
 
     <!-- The headless twin of the Project status view: same checks, an exit code, and a machine-readable
          report. It exists as its own console binary rather than a flag on the desktop app because that
-         app is a WinExe — on Windows it has no console attached, so a check verb there would print
+         app is a WinExe - on Windows it has no console attached, so a check verb there would print
          its report into nowhere. A pre-show script and a CI gate both need stdout.
 
          NAMING IS DRAFT (audit decision D9): the plan writes this as a flag on `hacue2`, and whether it

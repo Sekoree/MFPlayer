@@ -17,7 +17,7 @@ public partial class DiagnosticsWindow : Window
     /// </summary>
     /// <remarks>
     /// The same rendering the framework's own report writer produces, so what gets pasted into a
-    /// message is what somebody else can reproduce — rather than a screen-shaped transcription that
+    /// message is what somebody else can reproduce - rather than a screen-shaped transcription that
     /// drifts from it.
     /// </remarks>
     private async void OnCopyReport(object? sender, RoutedEventArgs e)

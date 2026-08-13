@@ -7,7 +7,7 @@ namespace HaCue2.Core.Validation;
 /// </summary>
 /// <remarks>
 /// <b><see cref="Unknown"/> is the important member.</b> A status pass run where devices cannot be
-/// enumerated — a CI box, a headless check over a fixture project — must say "not checked", never
+/// enumerated - a CI box, a headless check over a fixture project - must say "not checked", never
 /// "absent". Reporting an interface as missing because nobody looked is the failure mode that trains
 /// operators to ignore the whole screen, and it is the same reason the audio bay's terminal states
 /// deliberately have no "absent": device presence is a host fact, and inventing it is wrong exactly
@@ -39,7 +39,7 @@ public enum PreparedSourceAvailability
 /// </summary>
 /// <remarks>
 /// Injected rather than called directly so the pass is testable without hardware, and so
-/// <c>HaCue2.Core</c> keeps no dependency on PortAudio, NDI or a windowing system — which is what
+/// <c>HaCue2.Core</c> keeps no dependency on PortAudio, NDI or a windowing system - which is what
 /// lets the whole check run from a script.
 /// </remarks>
 public interface IProjectEnvironment
@@ -65,7 +65,7 @@ public interface IProjectEnvironment
     /// <remarks>
     /// Separate from <see cref="MediaExists"/> because the two failures look identical to an operator and
     /// need opposite responses. A file that is genuinely gone wants relinking. A machine whose decoder
-    /// cannot load makes EVERY file unreadable while every one of them is still sitting there — so the
+    /// cannot load makes EVERY file unreadable while every one of them is still sitting there - so the
     /// media check passes, the cue rows all go red, and the status bar says "no issues" over a show that
     /// cannot play a note. Reported as its own row so the one real fault is stated once, at the top,
     /// instead of being inferred from a project that looks simultaneously fine and broken.
@@ -78,7 +78,7 @@ public interface IProjectEnvironment
 /// </summary>
 /// <remarks>
 /// The default for a headless run. The app substitutes an implementation backed by real device
-/// enumeration; everything else — CI, a fixture check, a project opened on a laptop to do paperwork —
+/// enumeration; everything else - CI, a fixture check, a project opened on a laptop to do paperwork -
 /// gets the media half checked and the device half explicitly unchecked.
 /// </remarks>
 public sealed class FileSystemEnvironment : IProjectEnvironment

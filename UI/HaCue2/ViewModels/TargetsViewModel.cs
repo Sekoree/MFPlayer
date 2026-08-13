@@ -11,7 +11,7 @@ using HaCue2.Session;
 namespace HaCue2.ViewModels;
 
 /// <summary>
-/// Screen 11 — Action endpoints · Trigger inputs · Remote API (register item 24).
+/// Screen 11 - Action endpoints · Trigger inputs · Remote API (register item 24).
 /// </summary>
 /// <remarks>
 /// The wire monitor appears on every tab, filtered to that tab's direction, because "did it actually
@@ -174,12 +174,12 @@ public partial class TargetsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Register item 24 — each endpoint stores its own test payload.
+    /// Register item 24 - each endpoint stores its own test payload.
     /// </summary>
     /// <remarks>
     /// Reads and writes the SELECTED endpoint's own message. It used to be loaded once from the first
     /// endpoint in the project and never written back, so typing a payload and pressing SEND TEST sent
-    /// the stored one — the box proved nothing about the desk and lied about what it had proved.
+    /// the stored one - the box proved nothing about the desk and lied about what it had proved.
     /// </remarks>
     public string TestMessage
     {
@@ -228,7 +228,7 @@ public partial class TargetsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(Bindings))]
     [NotifyPropertyChangedFor(nameof(BindingsHeader))]
     // Picking a clock source turns the Caught box from a readout into a field, so the whole learn
-    // pane has to re-read itself — a stale "press LEARN" over a wall clock is an instruction that
+    // pane has to re-read itself - a stale "press LEARN" over a wall clock is an instruction that
     // cannot be followed.
     [NotifyPropertyChangedFor(nameof(IsTyped))]
     [NotifyPropertyChangedFor(nameof(CanLearn))]
@@ -241,7 +241,7 @@ public partial class TargetsViewModel : ObservableObject
 
     public bool HasSourceSelected => SelectedSource is not null;
 
-    public string BindingsHeader => $"Bindings on {SelectedSource?.Name ?? "—"}";
+    public string BindingsHeader => $"Bindings on {SelectedSource?.Name ?? "-"}";
 
     public IReadOnlyList<BindingRow> Bindings
     {
@@ -266,16 +266,16 @@ public partial class TargetsViewModel : ObservableObject
     // ── Learn (register item 24) ───────────────────────────────────────────────────────────────
     // External input runs, but until this landed a TriggerBinding could not be constructed anywhere in
     // the app: the runtime worked and the authoring surface did not exist. Learn is how a binding gets
-    // made without hand-writing a pattern — the wire monitor already prints exactly the text a binding
+    // made without hand-writing a pattern - the wire monitor already prints exactly the text a binding
     // holds, so "what you just pressed" and "what gets bound" are the same string by construction.
 
-    /// <summary>The Learn pane's listening latch — amber while it waits for any device to speak.</summary>
+    /// <summary>The Learn pane's listening latch - amber while it waits for any device to speak.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(LearnState))]
     private bool _isLearning;
 
     /// <summary>
-    /// What was caught while listening — or, for a clock source, what the operator typed.
+    /// What was caught while listening - or, for a clock source, what the operator typed.
     /// </summary>
     /// <remarks>
     /// Frozen once caught, so a later message does not move the target under the operator's hand.
@@ -313,7 +313,7 @@ public partial class TargetsViewModel : ObservableObject
         }
     }
 
-    /// <summary>The remote token, masked — it is never rendered in full.</summary>
+    /// <summary>The remote token, masked - it is never rendered in full.</summary>
     public string RemoteTokenMask =>
         _project.Settings.RemoteApi is null ? "machine setting · see Settings" : "•••••••• · see Settings";
 
@@ -328,10 +328,10 @@ public partial class TargetsViewModel : ObservableObject
                 return $"type {TriggerTimes.TimecodeSyntax}, then press BIND";
 
             return IsLearning
-                ? "● waiting for input — press something on any device"
+                ? "● waiting for input - press something on any device"
                 : LearnCaught.Length > 0
-                    ? "caught — press BIND to keep it"
-                    : "idle — press LEARN, then a button on your controller";
+                    ? "caught - press BIND to keep it"
+                    : "idle - press LEARN, then a button on your controller";
         }
     }
 
@@ -387,7 +387,7 @@ public partial class TargetsViewModel : ObservableObject
     public ShowHost? Host { get; set; }
 
     /// <summary>
-    /// What the new binding will act on — transport verbs, parameters, then every cue.
+    /// What the new binding will act on - transport verbs, parameters, then every cue.
     /// </summary>
     /// <remarks>
     /// Parameters sit between the verbs and the cues because a continuous control is almost always
@@ -460,7 +460,7 @@ public partial class TargetsViewModel : ObservableObject
                 ? cue.Label
                 : clash.ParameterId;
 
-            return $"{LearnCaught} already fires “{fires}” — binding will replace it";
+            return $"{LearnCaught} already fires “{fires}” - binding will replace it";
         }
     }
 
@@ -470,7 +470,7 @@ public partial class TargetsViewModel : ObservableObject
         : _project.TriggerInputs.FirstOrDefault(item => item.Id == SelectedSource.Id);
 
     /// <summary>
-    /// Creates the binding — the one path in the app that constructs a <c>TriggerBinding</c>.
+    /// Creates the binding - the one path in the app that constructs a <c>TriggerBinding</c>.
     /// </summary>
     /// <remarks>
     /// Journaled, and it REPLACES a clashing binding rather than adding a second on the same input:
@@ -596,7 +596,7 @@ public partial class TargetsViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Read from <see cref="RemoteApiRoutes"/> rather than authored, so the tab cannot list a route the
-    /// server does not serve — which was exactly what the sample table did, including one route that
+    /// server does not serve - which was exactly what the sample table did, including one route that
     /// had never existed.
     /// </remarks>
     public IReadOnlyList<EndpointRow> Routes =>
@@ -675,6 +675,6 @@ public partial class TargetsViewModel : ObservableObject
     public string ServedAt => Remote is { IsRunning: true, Address: { Length: > 0 } address }
         ? $"served at {address}"
         : ServerState == "on"
-            ? "not listening — see the status bar"
-            : "off — turn it on here or in application settings";
+            ? "not listening - see the status bar"
+            : "off - turn it on here or in application settings";
 }

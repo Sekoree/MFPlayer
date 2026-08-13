@@ -10,7 +10,7 @@ namespace HaCue2.Session;
 /// <remarks>
 /// <para>
 /// Register item 27: the Diagnostics event panel is a level-filtered live tail of the
-/// <c>Microsoft.Extensions.Logging</c> pipeline — <b>the same sink the file log uses</b>. One logging
+/// <c>Microsoft.Extensions.Logging</c> pipeline - <b>the same sink the file log uses</b>. One logging
 /// system, two readers. A second event-collection system beside it would drift from the archive the
 /// moment either changed, and the screen an operator reads during a fault would stop matching the file
 /// they send afterwards.
@@ -19,7 +19,7 @@ namespace HaCue2.Session;
 /// Installed into <see cref="MediaDiagnostics.LoggerFactory"/> at startup, which is what makes the
 /// FRAMEWORK's own logs appear: the session, the router and the patch bay all resolve their loggers
 /// from there. Without that the tail would only ever show what the app itself wrote, which is the
-/// least interesting half — a wedged output pump reports itself from inside the routing layer.
+/// least interesting half - a wedged output pump reports itself from inside the routing layer.
 /// </para>
 /// </remarks>
 public sealed class AppLogging : IDisposable
@@ -46,7 +46,7 @@ public sealed class AppLogging : IDisposable
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Called once, before anything that logs. The ring's own minimum level is the FLOOR — it captures
+    /// Called once, before anything that logs. The ring's own minimum level is the FLOOR - it captures
     /// at Debug so the Diagnostics filter can be turned down after something has gone wrong, rather
     /// than only forward from the moment the operator changed it. A fault that is only reproducible
     /// once is the one this matters for.

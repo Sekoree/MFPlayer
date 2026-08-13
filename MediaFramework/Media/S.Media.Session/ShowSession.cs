@@ -884,8 +884,8 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// <remarks>
     /// <para>
     /// For hosts that reload the whole merged document after any edit. Such a host has only two blunt
-    /// choices otherwise: reload always — which restarts any cue whose binding the edit touched, heard
-    /// as a pop and seen as a clip jumping back to its in-point — or defer every reload while anything
+    /// choices otherwise: reload always - which restarts any cue whose binding the edit touched, heard
+    /// as a pop and seen as a clip jumping back to its in-point - or defer every reload while anything
     /// is playing, which is safe but leaves ordinary edits (a label, a cue nobody is playing) waiting
     /// on a fifty-minute track.
     /// </para>
@@ -943,7 +943,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// </summary>
     /// <remarks>
     /// Shared by the load and by <see cref="WouldPreservePlaybackAsync"/> so the prediction cannot
-    /// drift from what the load actually does — the whole value of the prediction is that it is the
+    /// drift from what the load actually does - the whole value of the prediction is that it is the
     /// same rule.
     /// </remarks>
     private HashSet<string> PreservableCompositionIds(ShowDocument document)

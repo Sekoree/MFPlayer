@@ -8,7 +8,7 @@ namespace HaCue2.Core.Tests;
 /// </summary>
 /// <remarks>
 /// A time that will not parse is a cue that can never fire, and unlike a wire binding there is no
-/// device to blame for it — so the status pass runs this and the operator learns about it while
+/// device to blame for it - so the status pass runs this and the operator learns about it while
 /// authoring rather than from the cue's absence on the night.
 /// </remarks>
 public class TriggerTimeTests

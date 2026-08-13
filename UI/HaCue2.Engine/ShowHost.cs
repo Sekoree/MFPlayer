@@ -19,7 +19,7 @@ namespace HaCue2.Engine;
 
 /// <summary>One cue that is holding a voice, and how far into it the show is.</summary>
 /// <param name="Elapsed">
-/// The transport's own playhead — where the clip actually IS. It used to be wall time since the fire,
+/// The transport's own playhead - where the clip actually IS. It used to be wall time since the fire,
 /// which is a different number the moment anything is paused, seeked, trimmed or loops.
 /// </param>
 /// <param name="Length">
@@ -31,7 +31,7 @@ namespace HaCue2.Engine;
 /// <param name="StartedTicks">
 /// <see cref="System.Diagnostics.Stopwatch"/> timestamp of the moment the cue was fired. This is the
 /// ordering key for the Active panel: fire order never changes while a cue runs, unlike
-/// <paramref name="Elapsed"/>, which is a playhead — it rewinds on loop wraps, jumps on seeks and
+/// <paramref name="Elapsed"/>, which is a playhead - it rewinds on loop wraps, jumps on seeks and
 /// freezes on pause, and a list sorted by it reshuffles under the operator's pointer.
 /// </param>
 /// <param name="AutomatedVolumeDb">The cue volume automation is currently driving, in dB, or null when
@@ -75,7 +75,7 @@ public sealed record RuntimeDocumentChange(
 /// <remarks>
 /// <para>
 /// One object the app starts and stops. Everything thread-affine and device-holding lives behind it,
-/// and the UI never touches <c>ShowSession</c> directly — it asks for a <see cref="ShowState"/> and
+/// and the UI never touches <c>ShowSession</c> directly - it asks for a <see cref="ShowState"/> and
 /// calls transport verbs.
 /// </para>
 /// <para>
@@ -87,15 +87,15 @@ public sealed record RuntimeDocumentChange(
 /// <b>What a cue MEANS is decided here.</b> The compiled document carries a <c>CueDefinition</c> for
 /// every cue so the session's cursor can stand on any of them, but only media and visualizer cues have
 /// anything to play. Groups, jumps, fades, patches, actions and comments are resolved by this class
-/// when they fire — the session has no vocabulary for them and should not grow one.
+/// when they fire - the session has no vocabulary for them and should not grow one.
 /// </para>
 /// <para>
 /// <b>Split across partials by what each part TALKS TO</b>, not by size: this file owns the lifecycle
 /// (devices in, document in, everything back out again), <c>Transport</c> the operator's verbs and
 /// what is sounding, <c>Execution</c> the <see cref="ICueExecutionHost"/> surface the executor drives,
 /// <c>Audition</c> the monitor rig, and <c>Triggers</c> the external-input side. They are one class
-/// because they are one object's worth of state — a session, a bay and a set of windows that have to
-/// be opened and closed together — and separate files because a reader arriving with a question about
+/// because they are one object's worth of state - a session, a bay and a set of windows that have to
+/// be opened and closed together - and separate files because a reader arriving with a question about
 /// one of them should not have to walk the other four.
 /// </para>
 /// </remarks>
@@ -127,8 +127,8 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </summary>
     /// <remarks>
     /// The app debounces edits by 300 ms, which is NOT a guarantee: a reload that attaches screens or
-    /// loads a large document can outlast the interval, and a continuous edit stream — dragging a
-    /// matrix cell, dragging a placement — keeps re-arming the timer behind it. Two overlapping
+    /// loads a large document can outlast the interval, and a continuous edit stream - dragging a
+    /// matrix cell, dragging a placement - keeps re-arming the timer behind it. Two overlapping
     /// reloads would interleave <c>_project</c>, the attached-output set and the trigger reload.
     /// </remarks>
     private readonly SemaphoreSlim _reloading = new(1, 1);
@@ -191,7 +191,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// The machine's own panic fade, used when the project does not override it.
     /// </summary>
     /// <remarks>
-    /// Set by the shell from app settings. The engine cannot read them itself — machine preferences
+    /// Set by the shell from app settings. The engine cannot read them itself - machine preferences
     /// are the app's, and a session that reached for them would make the two scopes one.
     /// </remarks>
     public int MachinePanicFadeMs { get; set; } = ProjectSettings.DefaultPanicFadeMs;
@@ -201,7 +201,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </summary>
     /// <remarks>
     /// Exposed rather than hidden because the toggle lives in the transport bar and the wire monitor
-    /// lives in Targets — both are the app's, and neither belongs behind a transport verb.
+    /// lives in Targets - both are the app's, and neither belongs behind a transport verb.
     /// </remarks>
     public TriggerInputs Triggers => _triggers;
 
@@ -223,12 +223,12 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     }
 
     /// <summary>
-    /// Raised when a cue changed the DOCUMENT — a patch cue's cells, or a fade cue's target levels.
+    /// Raised when a cue changed the DOCUMENT - a patch cue's cells, or a fade cue's target levels.
     /// </summary>
     /// <remarks>
     /// These writes are deliberately not journaled: firing a cue during a show is not an edit, and an
     /// undo stack full of "the show changed the patch" would bury every real change the operator made.
-    /// But they do travel in the file, so the shell has to learn that the project now differs from it —
+    /// But they do travel in the file, so the shell has to learn that the project now differs from it -
     /// a document that changed and still reports itself clean is how a night's patch work is lost.
     /// </remarks>
     public event Action<RuntimeDocumentChange>? DocumentChangedByCue;
@@ -236,7 +236,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// <summary>A detached document for remote/status readers that may run off the UI thread.</summary>
     public HaCueProject SnapshotProject() => ProjectSnapshot.Copy(_project);
 
-    /// <summary>Forgets the runtime half of <see cref="Problems"/> — the Diagnostics reset.</summary>
+    /// <summary>Forgets the runtime half of <see cref="Problems"/> - the Diagnostics reset.</summary>
     public void ClearProblems()
     {
         lock (_gate)
@@ -256,7 +256,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// <summary>Clears sticky program clip indicators without changing audio or transport.</summary>
     public void ResetMeterClips() => _bay.Bay.ProgramMeter?.ResetClip();
 
-    /// <summary>The show's recorders and streams — what is armed, where it is writing, and how it fares.</summary>
+    /// <summary>The show's recorders and streams - what is armed, where it is writing, and how it fares.</summary>
     public ProjectRecorders Recorders => _recorders;
 
     /// <summary>
@@ -274,7 +274,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </summary>
     /// <remarks>
     /// Live, because outputs are opened and closed by every reload rather than only at start-up. It
-    /// used to be described as fixed, and the shell copied it once — so an output added mid-show read
+    /// used to be described as fixed, and the shell copied it once - so an output added mid-show read
     /// "live" whether or not a window had opened for it, and one that failed to open never turned red.
     /// </remarks>
     public IReadOnlySet<Guid> AbsentVideoOutputs => _screens.Unopened;
@@ -286,10 +286,10 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// <para>
     /// A per-OUTPUT test pattern rather than a composition-wide one. The composition-wide layer appears
     /// on every output bound to that canvas, which lights up the lobby TV and the stream while you are
-    /// trying to work out which projector is “Projector A” — the exact opposite of identifying one.
+    /// trying to work out which projector is “Projector A” - the exact opposite of identifying one.
     /// </para>
     /// <para>
-    /// It sits upstream of the output's mapping stage, so a warped output shows the pattern warped —
+    /// It sits upstream of the output's mapping stage, so a warped output shows the pattern warped -
     /// which is what makes it useful for checking the warp as well as the wiring.
     /// </para>
     /// </remarks>
@@ -320,7 +320,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         }
         catch (OperationCanceledException)
         {
-            // The show is going down. Fall through and clear it anyway — a projector left showing a
+            // The show is going down. Fall through and clear it anyway - a projector left showing a
             // blue card is worse than one showing nothing.
         }
 
@@ -372,7 +372,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     public IReadOnlyDictionary<Guid, string> LastSent => _actions.LastSent;
 
     /// <summary>
-    /// Per-composition render telemetry — frames, layers, lateness.
+    /// Per-composition render telemetry - frames, layers, lateness.
     /// </summary>
     /// <remarks>
     /// Lock-free and safe to call on the UI sweep. The ACHIEVED frame rate is deliberately not in here:
@@ -382,10 +382,10 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     public IReadOnlyList<ClipCompositionRuntimeStats> CompositionStats() =>
         _session.GetAllCompositionStats();
 
-    /// <summary>The whole rig as plain text — what "Copy report" puts on the clipboard.</summary>
+    /// <summary>The whole rig as plain text - what "Copy report" puts on the clipboard.</summary>
     /// <remarks>The VIDEO section rides along with the audio bay: the report exists so a stutter can
     /// be pasted into a bug thread, and the frame-drop symptoms (slot overflow, pump overruns,
-    /// behind-master) lived only in the on-screen table — the one place a report cannot quote.</remarks>
+    /// behind-master) lived only in the on-screen table - the one place a report cannot quote.</remarks>
     public string Report()
     {
         var report = AudioPatchBayReport.Render(Diagnostics(), $"HaCue2 · {_project.Title}");
@@ -435,7 +435,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </summary>
     /// <remarks>
     /// The backend is injected for the same reason the device enumerator's is: which one to open is a
-    /// composition-root decision, and passing null gives a session that can still be driven — useful
+    /// composition-root decision, and passing null gives a session that can still be driven - useful
     /// for a test, and honest on a machine with no audio at all.
     /// </remarks>
     /// <param name="headless">
@@ -473,7 +473,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             bay.LogicalChannelIds,
             // WITHOUT THIS a 44.1 kHz file in a 48 kHz show throws on the first GO. Media arrives at
             // whatever rate it was made at and the bus mixes at one rate by definition, so the two
-            // meeting is the normal case and not an edge one — the target refuses rather than guessing,
+            // meeting is the normal case and not an edge one - the target refuses rather than guessing,
             // and this is the caller supplying the answer.
             ResamplingAudioOutput.Wrap,
             defaultMonitorTerminalId: bay.MonitorTerminalId);
@@ -488,7 +488,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         var host = new ShowHost(registry, bay, screens, session, runtimeProject);
         host.SetActiveCueList(runtimeProject.CueLists.FirstOrDefault()?.Id);
 
-        // External input drives the show through the SAME verbs the buttons do — a triggered GO is a
+        // External input drives the show through the SAME verbs the buttons do - a triggered GO is a
         // GO, not a second code path that can drift from the one an operator tested with.
         host._triggers.Triggered += action => _ = host.ApplyAsync(action);
         host._triggers.Problem += host.Report;
@@ -497,7 +497,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             host.Report(failure);
 
         // The bay collects these the same way the screens do, and they were the ONLY failure list
-        // nobody reported: a line that failed to open left the show silently silent — the log for
+        // nobody reported: a line that failed to open left the show silently silent - the log for
         // the incident session showed no device activity at all and no reason why.
         foreach (var failure in bay.Failures)
             host.Report($"audio line {failure}");
@@ -512,13 +512,13 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
 
         // Sounding is tracked HERE rather than queried: the session's sounding bus is keyed by label,
         // and the events that matter carry the cue id. A fire adds, a natural end removes, and a stop
-        // clears — which is the whole life of a cue as far as the cue list is concerned.
+        // clears - which is the whole life of a cue as far as the cue list is concerned.
         session.ClipNaturallyEnded += id => host.OnClipNaturallyEnded(id);
         session.ClipApproachingEnd += id => host.OnClipApproachingEnd(id);
         session.VoiceEnded += id => host.Forget(id);
 
         // A preview that runs to its end releases itself, so the host has to stop claiming it is
-        // auditioning — otherwise the button stays lit over a rig that is already silent.
+        // auditioning - otherwise the button stays lit over a rig that is already silent.
         session.PreviewEnded += id =>
         {
             if (!Guid.TryParse(id, out var previewed))
@@ -549,8 +549,8 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// registered, so those URIs fell through to FFmpeg and failed to open.
     /// </para>
     /// <para>
-    /// Each optional module is registered inside its own try. NDI in particular is frequently absent —
-    /// no runtime, or a CPU it does not support — and its module throws at REGISTRATION rather than at
+    /// Each optional module is registered inside its own try. NDI in particular is frequently absent -
+    /// no runtime, or a CPU it does not support - and its module throws at REGISTRATION rather than at
     /// first open, deliberately. A booth without NDI must still be able to run the show; the absence is
     /// reported once and every other source keeps working.
     /// </para>
@@ -609,7 +609,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             // BOX, not a fault in the show, and a modal about it at every start-up is a modal nobody
             // reads. A cue that actually needs it fails by name when it fires.
             MediaDiagnostics.LogInformation(
-                "HaCue2: the {Module} source is not available on this machine — {Reason}",
+                "HaCue2: the {Module} source is not available on this machine - {Reason}",
                 name,
                 failure.Message);
         }
@@ -640,7 +640,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            Report($"{action} failed — {failure.Message}");
+            Report($"{action} failed - {failure.Message}");
         }
     }
 
@@ -653,7 +653,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// something playing content the document no longer describes.
     /// <para>
     /// The PATCH is pushed separately, because it is not in the document: the second matrix belongs to
-    /// the rig. Pushing it here is what makes a patch edit audible without reopening anything —
+    /// the rig. Pushing it here is what makes a patch edit audible without reopening anything -
     /// <see cref="ProjectPatchBay.Apply"/> reconciles cells under running voices.
     /// </para>
     /// </remarks>
@@ -678,7 +678,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </summary>
     /// <remarks>
     /// <para>
-    /// What the shell calls after an edit. A reload restarts any group whose voices the edit changed —
+    /// What the shell calls after an edit. A reload restarts any group whose voices the edit changed -
     /// re-opening the media, re-seeking it, and taking the audio with it, which on a show layering two
     /// 1080p60 ProRes clips over eleven stems is heard as a pop and a stutter and seen as the picture
     /// jumping back to its in-point. Doing that 300 ms after every drag, keystroke and matrix click is
@@ -688,7 +688,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// The overwhelming majority of edits cannot disturb anything: a label, a note, an idle cue, an
     /// output's crop, a patch cell. Those are adopted immediately, exactly as before. Only an edit that
     /// would actually restart a playing voice is refused here, and the shell holds it until the show is
-    /// idle — geometry and level edits reach the running picture and the running mix through the live
+    /// idle - geometry and level edits reach the running picture and the running mix through the live
     /// paths meanwhile, so the operator sees their edit either way.
     /// </para>
     /// </remarks>
@@ -750,7 +750,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             _durations = nextContext.Durations;
             ForgetDetachedScreens(previous, next);
 
-            // The compiled document is the ONE place that knows which transport a cue lands on — the
+            // The compiled document is the ONE place that knows which transport a cue lands on - the
             // rule is not simple (a timeline's children get one each, everything else shares its
             // outermost group's), and re-deriving it here would be a second implementation of it. The
             // Active panel's playhead and the seek verb both address a group.
@@ -775,7 +775,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             // The venue A/V trim: positive AvOffsetMs shows the picture EARLIER, which is a NEGATIVE
             // video playhead offset (the offset is subtracted from the clock before frames are
             // picked). Applied on every reload so the settings field takes effect live, against
-            // running content — that is how the number gets found in the first place.
+            // running content - that is how the number gets found in the first place.
             _session.VideoPlayheadOffset = -TimeSpan.FromMilliseconds(next.Settings.AvOffsetMs);
 
             // Outputs the operator has just ADDED open here, and ones they removed close. Opening only
@@ -821,7 +821,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// <remarks>
     /// <para>
     /// Called after every load, because <c>preserveMatchingCompositions</c> preserves the ones whose
-    /// definition is unchanged and rebuilds the rest — an output attached to a rebuilt composition is
+    /// definition is unchanged and rebuilds the rest - an output attached to a rebuilt composition is
     /// no longer attached to anything, and its window would sit black for the rest of the show with
     /// nothing to say why.
     /// </para>
@@ -897,7 +897,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </summary>
     /// <remarks>
     /// The audio counterpart of the live placement push. A send edit DOES change the cue's clip
-    /// binding, so a reload would restart the cue to apply it — on an eleven-stem group that is a pop
+    /// binding, so a reload would restart the cue to apply it - on an eleven-stem group that is a pop
     /// and eleven re-opened files, for a fader move. The session reconciles the matrix on the running
     /// voice instead, as a click-free ramp, and the document reload happens later when it is free.
     /// Returns false when the cue is not the active voice on any group, which is the ordinary case for
@@ -922,8 +922,8 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </summary>
     /// <remarks>
     /// The audio counterpart of <see cref="UpdateActivePlacementAsync"/> and
-    /// <see cref="ApplyOutputMappingAsync"/>. The patch is not part of the compiled document — the
-    /// second matrix belongs to the rig — so it can be reconciled under running voices at any time, and
+    /// <see cref="ApplyOutputMappingAsync"/>. The patch is not part of the compiled document - the
+    /// second matrix belongs to the rig - so it can be reconciled under running voices at any time, and
     /// a gain drag has no reason to wait for the debounced reload behind it. It used to: every sample
     /// restarted that debounce, so the operator heard nothing at all until they let go.
     /// </remarks>
@@ -964,7 +964,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A local screen opens as soon as it exists, before any composition is assigned to it — an
+    /// A local screen opens as soon as it exists, before any composition is assigned to it - an
     /// operator who has just added a projector needs to see WHERE it landed. Nothing in the session
     /// will paint it, because a composition is what submits frames and this output is on none, so the
     /// host does it: one black frame, which the window then holds.
@@ -989,7 +989,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             }
             catch (Exception failure) when (failure is not OutOfMemoryException)
             {
-                Report($"a video output showing no composition could not be blacked out — {failure.Message}");
+                Report($"a video output showing no composition could not be blacked out - {failure.Message}");
             }
         }
 
@@ -1034,7 +1034,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     /// </summary>
     /// <remarks>
     /// A reload rebuilds any composition whose definition changed, which silently detaches its
-    /// outputs. Without this the host would believe they were still attached and never re-add them —
+    /// outputs. Without this the host would believe they were still attached and never re-add them -
     /// so resizing a composition would blank its projector permanently.
     /// </remarks>
     private void ForgetDetachedScreens(HaCueProject previous, HaCueProject current)
@@ -1100,7 +1100,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         await _session.DisposeAsync().ConfigureAwait(false);
         _actions.Dispose();
         _bay.Dispose();
-        // After the session, because the leases declare DisposeOutputOnRuntimeDispose:false — the host
+        // After the session, because the leases declare DisposeOutputOnRuntimeDispose:false - the host
         // owns these windows and closes them itself, once the session has stopped submitting to them.
         _screens.Dispose();
         _registry.Dispose();

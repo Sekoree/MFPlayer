@@ -11,7 +11,7 @@ namespace HaCue2.Core.Tests;
 /// <remarks>
 /// The code with the most at stake in the app: it decides what happens when somebody presses GO. Until
 /// the execution seam existed it could only be reached through a running session, so none of it was
-/// tested — and two defects in it were found by reading rather than by a test.
+/// tested - and two defects in it were found by reading rather than by a test.
 /// </remarks>
 public class CueExecutorTests
 {
@@ -147,7 +147,7 @@ public class CueExecutorTests
 
         Assert.Equal([first.Id, second.Id], host.Played);
 
-        // The cursor is moved PAST the cue that is about to fire, not onto it — so with nothing after
+        // The cursor is moved PAST the cue that is about to fire, not onto it - so with nothing after
         // the second cue it clears. A cursor left sitting on a cue that has already played would fire
         // it again on the next GO.
         var (list, cursor) = Assert.Single(host.Standby);
@@ -422,8 +422,8 @@ public class CueExecutorTests
         await executor.FireAsync(group.Id);
 
         // ONE batch, not three fires. Opened one after another, each child's media is opened before the
-        // next is even asked for, so a group of eleven stems starts as a staircase — each late by the
-        // sum of every open before it — and the GO costs the sum of all of them.
+        // next is even asked for, so a group of eleven stems starts as a staircase - each late by the
+        // sum of every open before it - and the GO costs the sum of all of them.
         var batch = Assert.Single(host.PlayedTogether);
         Assert.Equal(group.Children.Select(child => child.Id), batch);
     }
@@ -474,7 +474,7 @@ public class CueExecutorTests
 
         await executor.FireAsync(group.Id);
 
-        // An action cue is not a clip and has nothing to open, so it is not part of the batch — but it
+        // An action cue is not a clip and has nothing to open, so it is not part of the batch - but it
         // still has to happen, and the batch must not swallow it.
         var batch = Assert.Single(host.PlayedTogether);
         Assert.Equal(2, batch.Count);
@@ -490,7 +490,7 @@ public class CueExecutorTests
 
         await executor.FireAsync(group.Id);
 
-        // The group holds no voice — its children do. The Active panel shows what is making noise.
+        // The group holds no voice - its children do. The Active panel shows what is making noise.
         Assert.DoesNotContain(group.Id, host.Played);
     }
 

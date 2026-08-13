@@ -14,7 +14,7 @@ namespace HaCue2.Sample;
 /// colours. Change a number here and the screens follow.
 /// </para>
 /// <para>
-/// What is NOT here is anything about a running show — see <c>Session/ShowRuntime</c>. The separation
+/// What is NOT here is anything about a running show - see <c>Session/ShowRuntime</c>. The separation
 /// is the point: a reader can tell at a glance which values a document could actually produce.
 /// </para>
 /// </remarks>
@@ -90,7 +90,7 @@ public static class SampleProject
             // Runs under the whole sequence, so it starts at zero and is the longest thing in the group.
             TrimOutMs = 134_000,
             Sends = [Send(0, mainL), Send(1, mainR, -3), Send(0, foldL, -6), Send(1, foldR, -6)],
-            Note = "Storm bed runs under the whole opening. Do not stop it on the scene change — "
+            Note = "Storm bed runs under the whole opening. Do not stop it on the scene change - "
                  + "Q14 rides the foldback instead.",
             AutomationTracks =
             [
@@ -200,9 +200,9 @@ public static class SampleProject
 
         var actTwoMarker = new CommentCueNode
         {
-            Number = "18", Label = "— Act 2 begins —",
+            Number = "18", Label = "- Act 2 begins -",
             Note = "House lights to half on the band's cue, not on a count. Stage manager calls it; "
-                 + "we follow. If the call is late, hold — Q19 has a 6 s pre-wait to absorb it.",
+                 + "we follow. If the call is late, hold - Q19 has a 6 s pre-wait to absorb it.",
         };
 
         var songs = new GroupCueNode
@@ -301,7 +301,7 @@ public static class SampleProject
                     Cell(mainR, ndi, 1, -6),
                     Cell(mainL, record, 0, 0),
                     Cell(mainR, record, 1, 0),
-                    // Kept although the device is absent, and muted rather than deleted — the two
+                    // Kept although the device is absent, and muted rather than deleted - the two
                     // states that let an operator get the wedge back when it is plugged in again.
                     Cell(stageL, wedge, 0, 0, muted: true),
                     Cell(stageR, wedge, 1, 0, muted: true),
@@ -437,7 +437,7 @@ public static class SampleProject
                 },
                 new ActionCueNode
                 {
-                    Number = number.Child(3), Label = "Chorus — full rig", Address = $"/eos/cue/{number}.3",
+                    Number = number.Child(3), Label = "Chorus - full rig", Address = $"/eos/cue/{number}.3",
                     TimelineOffsetMs = 61_500,
                 },
                 new MediaCueNode

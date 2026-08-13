@@ -47,7 +47,7 @@ public partial class VideoView : UserControl
 
         // The composition this button belongs to, not "the selected one". Each pane carries its own
         // editor now, so relying on the selection would put the picked image on whichever canvas was
-        // last clicked — which is usually the right one and occasionally, silently, is not.
+        // last clicked - which is usually the right one and occasionally, silently, is not.
         if ((sender as Control)?.DataContext is CompositionPaneViewModel pane)
             pane.IdleImage = path;
         else
@@ -123,7 +123,7 @@ public partial class VideoView : UserControl
     }
 
     /// <summary>"Edit ›" beside an output's mapping toggle jumps to the Mapping tab already scoped to
-    /// that output — mapping is always the mapping OF one output, never a global mode.</summary>
+    /// that output - mapping is always the mapping OF one output, never a global mode.</summary>
     /// <summary>Opens the mapping editor over the Outputs pane, on the output it belongs to.</summary>
     private void OnEditMapping(object? sender, RoutedEventArgs e) => Video?.OpenMapping();
 
@@ -158,7 +158,7 @@ public partial class VideoView : UserControl
         finally
         {
             // The button flipped ITSELF on the click, before the engine was asked anything. Every way
-            // out of here — refused because no show is running, no output selected, or done — has to
+            // out of here - refused because no show is running, no output selected, or done - has to
             // put the latch back onto the truth, or CALIBRATION GRID sits lit over an output that is
             // showing no grid at all. Cheap, and idempotent on the path that already notified.
             video.ReassertCalibration();
@@ -179,7 +179,7 @@ public partial class VideoView : UserControl
     /// <remarks>
     /// Through the canvas's own pane rather than the view-model's selection, because every composition
     /// draws its own layout now: an index alone would address whichever pane happened to be selected.
-    /// This is also what selects the COMPOSITION when a box is clicked — the canvas handles the press,
+    /// This is also what selects the COMPOSITION when a box is clicked - the canvas handles the press,
     /// so it never reaches the pane's own <see cref="OnSelectComposition"/>.
     /// </remarks>
     private void OnLayoutOutputSelected(object? sender, int index) =>
@@ -194,8 +194,8 @@ public partial class VideoView : UserControl
     /// </summary>
     /// <remarks>
     /// The panes are canvases, not list rows, so selection is a click on the pane rather than a
-    /// ListBox. It matters because the inspector beside them — size, rate, idle image, and which
-    /// outputs the canvas feeds — is about ONE composition, and before this the second pane could only
+    /// ListBox. It matters because the inspector beside them - size, rate, idle image, and which
+    /// outputs the canvas feeds - is about ONE composition, and before this the second pane could only
     /// be reached by selecting an output that happened to be on it.
     /// </remarks>
     private void OnSelectComposition(object? sender, PointerPressedEventArgs e)
@@ -222,7 +222,7 @@ public partial class VideoView : UserControl
     /// Writes a picked size into whichever field its dropdown belongs to.
     /// </summary>
     /// <remarks>
-    /// The picker sets the box rather than replacing it, so a preset is a shortcut and never a limit —
+    /// The picker sets the box rather than replacing it, so a preset is a shortcut and never a limit -
     /// an LED wall of 1408×768 is still typed straight in.
     /// </remarks>
     private void OnPickResolution(object? sender, RoutedEventArgs e)
@@ -237,7 +237,7 @@ public partial class VideoView : UserControl
                 // Through the SELECTION here, unlike the other per-pane editors: these buttons live in
                 // a flyout, so their DataContext is the size string rather than the pane. Opening that
                 // flyout means clicking inside the pane, and the pane's own PointerPressed selects the
-                // composition before the popup opens — so the selection is that pane by construction.
+                // composition before the popup opens - so the selection is that pane by construction.
                 video.CompositionSize = size;
                 break;
             case "window":
@@ -254,7 +254,7 @@ public partial class VideoView : UserControl
 
     // ── canvas gestures ───────────────────────────────────────────────────────────────────────
     // Handled here rather than bound to a command because a composition canvas lives inside a
-    // DataTemplate whose DataContext is one pane, and the edit belongs to the view — the pane is a
+    // DataTemplate whose DataContext is one pane, and the edit belongs to the view - the pane is a
     // projection, not the thing that owns the journal.
 
     private void OnMappingSourceGesture(object? sender, PlacementGesture e) =>
@@ -296,7 +296,7 @@ public partial class VideoView : UserControl
     /// <remarks>
     /// The key AND the context menu, because the two habits are different people: one reaches for
     /// Delete, the other right-clicks. Both land on the same confirmation, which is where the
-    /// consequences are counted — the key must not be a faster way to skip the question.
+    /// consequences are counted - the key must not be a faster way to skip the question.
     /// </remarks>
     private void OnListKeyDown(object? sender, KeyEventArgs e)
     {
@@ -317,7 +317,7 @@ public partial class VideoView : UserControl
 
         var journal = video.Journal;
 
-        // The mapping-section verbs are not prompts at all — they act on the selection directly,
+        // The mapping-section verbs are not prompts at all - they act on the selection directly,
         // because "duplicate this section" has nothing to ask.
         switch (verb)
         {
@@ -379,7 +379,7 @@ public partial class VideoView : UserControl
     /// <summary>Right-clicking a row selects it first, so the menu acts on what was clicked.</summary>
     /// <remarks>
     /// Avalonia opens a ListBox's context menu without moving the selection, so without this the menu's
-    /// REMOVE would delete whatever happened to be selected before — which is the one class of mistake
+    /// REMOVE would delete whatever happened to be selected before - which is the one class of mistake
     /// a confirmation dialog does not catch, because the dialog names the wrong thing convincingly.
     /// </remarks>
     private void OnRowRightPressed(object? sender, PointerPressedEventArgs e)

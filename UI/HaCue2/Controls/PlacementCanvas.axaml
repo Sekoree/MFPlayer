@@ -8,7 +8,7 @@
 
   <!-- The canvas every fraction-positioned box is drawn on: composition layers (screen 09), the
        inspector's placement preview, and both halves of the mapping editor (screen 10). One control so
-       the drag, the resize handles and the arrow-key nudge behave identically wherever a box appears —
+       the drag, the resize handles and the arrow-key nudge behave identically wherever a box appears -
        an operator who learns the gesture on a composition must find it true on a mapping section. -->
 
   <!-- The transparent outer border owns the work-area hit test. When overflow is enabled the real

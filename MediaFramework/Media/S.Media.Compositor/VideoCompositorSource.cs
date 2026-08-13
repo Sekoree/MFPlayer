@@ -772,7 +772,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         /// A canvas can host layers from INDEPENDENT transports whose frame timestamps live in
         /// different time domains (two clips with different trims composite together every day).
         /// Judging every slot against the one canvas master aligned only the clock-owning layer; the
-        /// other rode the too-old/too-future fallbacks, churning its pending frames — a steady
+        /// other rode the too-old/too-future fallbacks, churning its pending frames - a steady
         /// trickle of slot overflow and a visible single-frame judder that grew as the domains
         /// drifted apart. Each layer aligned against its own transport's source time is the fix.
         /// </remarks>

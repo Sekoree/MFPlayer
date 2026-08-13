@@ -11,8 +11,8 @@ namespace HaCue2.Sample;
 /// </summary>
 /// <remarks>
 /// Every value here is INVENTED, and that is the whole reason this class is separate from
-/// <see cref="SampleProject"/>. It seeds the DESIGN-TIME picture only — the shell's previews and the
-/// sample show — and is guarded so that no real project can reach it. Once a session is running,
+/// <see cref="SampleProject"/>. It seeds the DESIGN-TIME picture only - the shell's previews and the
+/// sample show - and is guarded so that no real project can reach it. Once a session is running,
 /// <c>EngineRuntime</c> overwrites all of it with measured telemetry.
 /// </remarks>
 public static class SampleRuntime
@@ -22,7 +22,7 @@ public static class SampleRuntime
     /// </summary>
     /// <remarks>
     /// The guard is load-bearing now that the app can open real files. Every value below is written
-    /// against the midsummer-2026 show by name — Q13.1, the Wedge, the Lobby TV — and none of it means
+    /// against the midsummer-2026 show by name - Q13.1, the Wedge, the Lobby TV - and none of it means
     /// anything about somebody else's project. Inventing sounding cues for a show that has none would
     /// be worse than showing an idle one; and before the guard existed, opening any other project
     /// simply threw.

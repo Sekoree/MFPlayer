@@ -33,7 +33,7 @@ public partial class InspectorPane : UserControl
     /// nothing opened it and nothing pointed it at a group the operator had chosen.
     /// </remarks>
     /// <summary>
-    /// Auditions the selected cue — the same verb the cue context menu and Ctrl+P use.
+    /// Auditions the selected cue - the same verb the cue context menu and Ctrl+P use.
     /// </summary>
     /// <remarks>
     /// Reached through the CUE view rather than the inspector's own journal, because auditioning is a
@@ -159,7 +159,7 @@ public partial class InspectorPane : UserControl
     /// Ends the coalescing group when a field loses focus.
     /// </summary>
     /// <remarks>
-    /// The journal cannot know when a gesture ended — only the UI can. Without this boundary two
+    /// The journal cannot know when a gesture ended - only the UI can. Without this boundary two
     /// separate edits of the same field merge into one undo step, and an edit made after a save merges
     /// into the command that was on top when the save happened.
     /// </remarks>
@@ -170,7 +170,7 @@ public partial class InspectorPane : UserControl
     }
 
     /// <summary>
-    /// The "✎" beside any curve picker opens the shared editor (register item 16) — one control for
+    /// The "✎" beside any curve picker opens the shared editor (register item 16) - one control for
     /// fades, crossfades and patch-cue ramps alike, so a curve authored in one place is editable in
     /// every other.
     /// </summary>

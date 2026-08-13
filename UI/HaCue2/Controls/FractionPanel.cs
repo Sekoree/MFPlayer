@@ -49,7 +49,7 @@ public static class Fraction
 /// (fractions of the visible time range), layer placements on a composition canvas, mapping sections on
 /// the source and output canvases, and the transport playhead. Canvas positions in absolute pixels, so
 /// every one of those would have to recompute on resize; expressing the position in the unit the data
-/// is actually in — a fraction of the span — makes resize free and keeps pixels out of the view-models.
+/// is actually in - a fraction of the span - makes resize free and keeps pixels out of the view-models.
 /// </remarks>
 public class FractionPanel : Panel
 {

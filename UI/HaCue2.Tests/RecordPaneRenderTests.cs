@@ -51,7 +51,7 @@ public class RecordPaneRenderTests
         var audio = new AudioViewModel(shell.Journal, shell.Runtime);
 
         // The pane lives on the Devices tab, and an unselected tab's content is not in the visual tree
-        // at all — a render test that forgot this would be asserting about a screen nobody had opened.
+        // at all - a render test that forgot this would be asserting about a screen nobody had opened.
         audio.SelectedTab = audio.DevicesTab;
         audio.SelectedLine = audio.Lines.Single(row => row.Id == line.Id);
 
@@ -75,7 +75,7 @@ public class RecordPaneRenderTests
         var audio = new AudioViewModel(shell.Journal, shell.Runtime);
 
         // The pane lives on the Devices tab, and an unselected tab's content is not in the visual tree
-        // at all — a render test that forgot this would be asserting about a screen nobody had opened.
+        // at all - a render test that forgot this would be asserting about a screen nobody had opened.
         audio.SelectedTab = audio.DevicesTab;
         audio.SelectedLine = audio.Lines.Single(row => row.Id == line.Id);
 
@@ -102,7 +102,7 @@ public class RecordPaneRenderTests
         var audio = new AudioViewModel(shell.Journal, shell.Runtime);
 
         // The pane lives on the Devices tab, and an unselected tab's content is not in the visual tree
-        // at all — a render test that forgot this would be asserting about a screen nobody had opened.
+        // at all - a render test that forgot this would be asserting about a screen nobody had opened.
         audio.SelectedTab = audio.DevicesTab;
         audio.SelectedLine = audio.Lines.Single(row => row.Id == line.Id);
 
@@ -142,7 +142,7 @@ public class RecordPaneRenderTests
         var audio = new AudioViewModel(shell.Journal, shell.Runtime);
 
         // The pane lives on the Devices tab, and an unselected tab's content is not in the visual tree
-        // at all — a render test that forgot this would be asserting about a screen nobody had opened.
+        // at all - a render test that forgot this would be asserting about a screen nobody had opened.
         audio.SelectedTab = audio.DevicesTab;
         audio.SelectedLine = audio.Lines.Single(row => row.Id == line.Id);
 

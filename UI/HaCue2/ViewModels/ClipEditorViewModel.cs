@@ -8,14 +8,14 @@ using HaCue2.Presentation;
 namespace HaCue2.ViewModels;
 
 /// <summary>
-/// Screen 04b — the clip editor: a file's waveform, its trim window, and a frame from wherever the
+/// Screen 04b - the clip editor: a file's waveform, its trim window, and a frame from wherever the
 /// playhead is.
 /// </summary>
 /// <remarks>
 /// <para>
 /// It exists because the trim fields alone could not express the thing they are most needed for.
 /// "Thirty minutes off the front and ten off the end of a two-hour recording" was <c>1800.0</c> and
-/// <c>length − 600</c> typed into two boxes, against a length nothing on screen showed — arithmetic
+/// <c>length − 600</c> typed into two boxes, against a length nothing on screen showed - arithmetic
 /// done in somebody's head, against a number they had to get elsewhere, to place a cut they could not
 /// see.
 /// </para>
@@ -80,13 +80,13 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
 
     public bool IsProbed => Length is { TotalMilliseconds: > 0 };
 
-    /// <summary>The file's length as the header states it — the number that used to be missing.</summary>
+    /// <summary>The file's length as the header states it - the number that used to be missing.</summary>
     public string LengthLabel =>
         Length is { } length ? ClipTimes.Format((int)length.TotalMilliseconds) : "not probed";
 
     public string Hint => IsProbed
         ? $"drag the handles, or type · {ClipTimes.Syntax}"
-        : "nothing has probed this file, so it cannot be shown — the trim still travels with the show";
+        : "nothing has probed this file, so it cannot be shown - the trim still travels with the show";
 
     // ── the waveform ──────────────────────────────────────────────────────────────────────────
 
@@ -100,7 +100,7 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
 
     public string ScanLabel => IsScanning
         ? "reading the file…"
-        : Peaks is { Count: > 0 } ? "" : "no waveform — this file has no audio this machine can read";
+        : Peaks is { Count: > 0 } ? "" : "no waveform - this file has no audio this machine can read";
 
     /// <summary>
     /// Starts the scan, reading a cached one first.
@@ -161,7 +161,7 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
 
     // ── the trim window ───────────────────────────────────────────────────────────────────────
 
-    /// <summary>Where the in-point sits, as a fraction of the file — what the handle is drawn at.</summary>
+    /// <summary>Where the in-point sits, as a fraction of the file - what the handle is drawn at.</summary>
     public double TrimInFraction => Fraction(_cue?.TrimInMs ?? 0);
 
     /// <summary>Where the out-point sits. An unset out-point is the END, which is where it is drawn.</summary>
@@ -179,7 +179,7 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
         get
         {
             if (_cue?.TrimmedLength(Length) is not { } kept)
-                return "—";
+                return "-";
 
             return $"{ClipTimes.Format((int)kept.TotalMilliseconds)} of {LengthLabel}";
         }
@@ -195,7 +195,7 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
     public string? SetTrimIn(string text)
     {
         if (ClipTimes.Parse(text, Length) is not { } milliseconds)
-            return $"“{text}” is not a time — {ClipTimes.Syntax}";
+            return $"“{text}” is not a time - {ClipTimes.Syntax}";
 
         if (FileLengthMilliseconds is { } fileEnd && milliseconds >= fileEnd)
             return "the in-point would be at or past the end of the file";
@@ -219,7 +219,7 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
         }
 
         if (ClipTimes.Parse(text, Length) is not { } milliseconds)
-            return $"“{text}” is not a time — {ClipTimes.Syntax}";
+            return $"“{text}” is not a time - {ClipTimes.Syntax}";
 
         if (FileLengthMilliseconds is { } fileEnd && milliseconds > fileEnd)
             return "the out-point would be past the end of the file";
@@ -294,7 +294,7 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
     /// </summary>
     /// <remarks>
     /// The accessors read and write the CUE rather than a captured value, because a drag emits many of
-    /// these and each one has to know what it is replacing at the moment it runs — and because that is
+    /// these and each one has to know what it is replacing at the moment it runs - and because that is
     /// what lets consecutive writes on the same property coalesce into one undo step.
     /// </remarks>
     private void Write(bool trimIn, int milliseconds, string description)
@@ -319,7 +319,7 @@ public sealed partial class ClipEditorViewModel : ObservableObject, IDisposable
 
     public string PlayheadLabel => Length is { } length
         ? ClipTimes.Format((int)(Playhead * length.TotalMilliseconds))
-        : "—";
+        : "-";
 
     /// <summary>The frame under the playhead, ready to draw. Null when this point has no picture.</summary>
     [ObservableProperty]

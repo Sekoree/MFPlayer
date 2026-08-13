@@ -46,11 +46,11 @@ internal interface IGrantPacedOutput
 /// <remarks>
 /// This is the group-fire alignment primitive. A batch of sibling voices prepares off one barrier
 /// and starts off a second, but each voice's audio still has to travel decode → ring → bus after
-/// its clocks start, and that journey's length is scheduler weather — measured 0–180 ms of start
+/// its clocks start, and that journey's length is scheduler weather - measured 0–180 ms of start
 /// scatter between stems of one song, quantized by the pump depth. Pre-roll removes the journey
 /// from the critical path: each sibling's router runs during PREPARE with its producer held (the
 /// ring fills with the clip's first samples; the bus skips it), and the start edge releases every
-/// sibling together — they join the same (or the adjacent) mix chunk, and their clocks anchor on
+/// sibling together - they join the same (or the adjacent) mix chunk, and their clocks anchor on
 /// that first read.
 /// </remarks>
 public interface IPreRollableOutput
@@ -605,18 +605,18 @@ public sealed class ProgramBusProducer :
 
     /// <summary>
     /// Accrues a capacity grant when the ring plus everything already in flight leaves room for one
-    /// more chunk below the pacing target — AND no more than one other chunk is already in flight.
+    /// more chunk below the pacing target - AND no more than one other chunk is already in flight.
     /// </summary>
     /// <remarks>
     /// The outstanding cap is the ring's floor. Granted-but-unsubmitted audio counts against the
     /// pacing target, so every chunk sitting in the pump queue is a chunk the RING is allowed to be
     /// short: with the pump's full eight chunks in flight the ring's share of the half-ring target
     /// fell below a single mix chunk, and every bus read in that window substituted a few
-    /// milliseconds of silence — an audible tick, roughly once a second, whenever drainer scheduling
+    /// milliseconds of silence - an audible tick, roughly once a second, whenever drainer scheduling
     /// lagged under load (the HaCue2 dropout report: tens of thousands of underrun floats per lease,
     /// zero overflow, terminal clean). Two chunks outstanding keeps the router's mix-ahead burst
     /// bounded, which pins the ring's steady state well above one chunk while changing throughput
-    /// not at all — production is still paced by consumption, just without the queue-depth wobble.
+    /// not at all - production is still paced by consumption, just without the queue-depth wobble.
     /// </remarks>
     private bool TryTakeGrant(int needFloats, int targetFloats)
     {
@@ -631,7 +631,7 @@ public sealed class ProgramBusProducer :
     /// <summary>Retires a grant as its audio lands, without letting an ungranted submit drive the
     /// counter negative (a wall-clock-paced router never calls <see cref="WaitForCapacity"/>). Wakes
     /// the pacing waiter: with the outstanding-grant cap, the waiter can be blocked on the CAP rather
-    /// than on ring space, and only a submit retires cap credit — a bus read alone cannot.</summary>
+    /// than on ring space, and only a submit retires cap credit - a bus read alone cannot.</summary>
     private void ReleaseGrant(int floats)
     {
         while (true)

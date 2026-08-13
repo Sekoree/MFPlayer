@@ -102,7 +102,7 @@ public sealed class SettingsRuntimeTests
         // What the two navs did to each other: both bound SelectedItem to ONE property, so choosing a
         // project pane left the application list holding a value it did not have, which cleared itself
         // and wrote that null straight back. Every Is*Pane below then dereferenced null and the whole
-        // right-hand side went blank — an exception per property, per pane.
+        // right-hand side went blank - an exception per property, per pane.
         settings.SelectedProjectPane = settings.ProjectPanes.Single(pane => pane.Name == "Show behaviour");
 
         Assert.True(settings.IsShowBehaviourPane);
@@ -112,7 +112,7 @@ public sealed class SettingsRuntimeTests
         // The null the application list writes on its way out is REFUSED rather than adopted.
         settings.SelectedApplicationPane = null;
         Assert.True(settings.IsShowBehaviourPane);
-        Assert.Equal("Project settings are journaled — ⌘Z works here", settings.ScopeNote);
+        Assert.Equal("Project settings are journaled - ⌘Z works here", settings.ScopeNote);
     }
 
     [Fact]

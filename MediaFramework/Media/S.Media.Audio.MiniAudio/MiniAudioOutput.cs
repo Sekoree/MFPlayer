@@ -31,17 +31,17 @@ public sealed unsafe class MiniAudioOutput :
     /// <remarks>
     /// The realtime story here differs from PortAudio's by backend, and is worth knowing when
     /// choosing between them. On miniaudio's usual backends (ALSA, the PulseAudio/PipeWire shim,
-    /// WASAPI) the callback runs on miniaudio's OWN worker thread — a GC suspension delays only
+    /// WASAPI) the callback runs on miniaudio's OWN worker thread - a GC suspension delays only
     /// this device's feed, which these periods absorb, and can never stall the audio server's
     /// graph. Its JACK backend is the exception: there the process callback runs on the server's
-    /// graph cycle, and a GC-blocked managed callback stalls EVERY client — the failure PortAudio
+    /// graph cycle, and a GC-blocked managed callback stalls EVERY client - the failure PortAudio
     /// avoids with its blocking-write mode. A fully native path here would need a shipped shim
     /// (miniaudio playback has no blocking-write API); until someone needs the JACK backend, deeper
     /// periods are the honest mitigation. ~6 × 10 ms ≈ 60 ms of cushion at the default period size.
     /// </remarks>
     private const uint PlaybackPeriods = 6;
 
-    /// <summary>Device-side buffering estimate for <see cref="SubmitToOutputLatency"/> — the
+    /// <summary>Device-side buffering estimate for <see cref="SubmitToOutputLatency"/> - the
     /// requested <see cref="PlaybackPeriods"/> (miniaudio honors it on every mainstream backend).</summary>
     private const int EstimatedDevicePeriods = (int)PlaybackPeriods;
 

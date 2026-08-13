@@ -12,7 +12,7 @@ public class AudioViewModelTests
     [Fact]
     public Task TheMixRateReachesTheDocumentAndIsUndoable() => ShellFixture.WithShell(shell =>
     {
-        // It was a ComboBox with SelectedIndex="1" and no binding — the rate on screen and the rate in
+        // It was a ComboBox with SelectedIndex="1" and no binding - the rate on screen and the rate in
         // the file had never been the same value.
         shell.Audio.MixRateIndex = 2;
 
@@ -53,7 +53,7 @@ public class AudioViewModelTests
 
         Assert.Equal(stored.GainDb, live.GainDb);
 
-        // A recall is an operator action on the patch, not an undoable edit — but it DOES travel in
+        // A recall is an operator action on the patch, not an undoable edit - but it DOES travel in
         // the file, so a document that reported itself clean afterwards would lose the change.
         Assert.True(shell.Journal.IsDirty);
         Assert.False(shell.Journal.CanUndo);
@@ -92,7 +92,7 @@ public class AudioViewModelTests
             shell.Audio.MixRateIndex = 2;
 
             // Now the bay is running at a rate the document no longer says. Register item 14: never a
-            // silent rebuild — the operator is told and presses the button.
+            // silent rebuild - the operator is told and presses the button.
             Assert.True(shell.Audio.NeedsAudioRestart);
         });
 }
@@ -133,7 +133,7 @@ public class SettingsViewModelTests
 
         settings.SpaceRule = "never";
 
-        // The machine half saves immediately and has no undo — that is what the scope split means.
+        // The machine half saves immediately and has no undo - that is what the scope split means.
         Assert.Equal("never", app.SpaceRule);
         Assert.False(shell.Journal.CanUndo);
     });

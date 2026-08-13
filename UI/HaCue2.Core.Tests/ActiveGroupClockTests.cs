@@ -49,7 +49,7 @@ public class ActiveGroupClockTests
         var children = Enumerable.Range(1, 11).Select(index => Stem($"1.{index}")).ToList();
         var (header, _) = Panel(GroupFireMode.AllTogether, children, elapsedSeconds: 30);
 
-        // Eleven three-minute stems fired at once run for three minutes, with two and a half left —
+        // Eleven three-minute stems fired at once run for three minutes, with two and a half left -
         // not thirty-three minutes with twenty-seven and a half left.
         Assert.Equal("−02:30.000 / 03:00.000", header.Clock);
         Assert.InRange(header.Progress, 0.16, 0.17);

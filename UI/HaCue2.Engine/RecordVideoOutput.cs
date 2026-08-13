@@ -9,12 +9,12 @@ namespace HaCue2.Engine;
 /// <remarks>
 /// <para>
 /// The compositor attaches outputs when the show loads and holds them for the life of a composition.
-/// Arming happens whenever the operator says so, which is usually much later — so the thing handed to
+/// Arming happens whenever the operator says so, which is usually much later - so the thing handed to
 /// the compositor cannot BE the encode session. This wrapper is the stable half: it exists from open to
 /// close, and arming swaps a session in behind it.
 /// </para>
 /// <para>
-/// The alternative — creating the session at open and reloading the document to attach it — would make
+/// The alternative - creating the session at open and reloading the document to attach it - would make
 /// arming a recording restart every clip on that composition. Pressing record must not interrupt the
 /// show it is recording.
 /// </para>
@@ -34,7 +34,7 @@ internal sealed class RecordVideoOutput : IVideoOutput
     /// </summary>
     /// <remarks>
     /// The formats <see cref="FFmpegEncodeVideoSink"/> accepts, in its own preference order, declared
-    /// even while disarmed — negotiation happens once when the compositor attaches, and it has to
+    /// even while disarmed - negotiation happens once when the compositor attaches, and it has to
     /// settle on a format the encoder will still want whenever somebody arms. Listing them here means
     /// this list and the sink's must agree; the alternative is opening an encode session against a real
     /// file before anybody has asked to record, only to read a property off it.
@@ -82,7 +82,7 @@ internal sealed class RecordVideoOutput : IVideoOutput
 
         // The lock is released before submitting: the encode sink hands the frame to the session's
         // bounded queue and can block when that queue is full, and holding the gate across it would
-        // stall a disarm — the one action an operator takes when a recording is misbehaving.
+        // stall a disarm - the one action an operator takes when a recording is misbehaving.
         lock (_gate)
             sink = _sink;
 
@@ -97,7 +97,7 @@ internal sealed class RecordVideoOutput : IVideoOutput
     /// </summary>
     /// <remarks>
     /// Typed as <see cref="IVideoOutput"/> rather than the encode sink because a CONTINUOUS recording
-    /// interposes a carrier that fills idle time with black — the wrapper must not care which it has.
+    /// interposes a carrier that fills idle time with black - the wrapper must not care which it has.
     /// </remarks>
     internal void Arm(IVideoOutput sink)
     {

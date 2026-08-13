@@ -13,7 +13,7 @@ namespace HaCue2.Presentation;
 /// <para>
 /// Everything here is measured. Before this existed the same rows came from <c>SampleShow</c>, which
 /// meant the one screen an operator opens to answer "why is there no sound" was describing a show that
-/// did not exist — the most expensive possible place for invented data.
+/// did not exist - the most expensive possible place for invented data.
 /// </para>
 /// <para>
 /// Terminal ids are line GUIDs, so the project is needed to name them. A terminal whose line has since
@@ -23,7 +23,7 @@ namespace HaCue2.Presentation;
 /// </remarks>
 public static class BayPresentation
 {
-    /// <summary>Peak dB at which the meter is called hot. Not clipping yet — the last warning before it.</summary>
+    /// <summary>Peak dB at which the meter is called hot. Not clipping yet - the last warning before it.</summary>
     private const double HotDb = -3;
 
     /// <summary>One row per terminal, then one per producer lease.</summary>
@@ -47,15 +47,15 @@ public static class BayPresentation
                 Enqueued = stats.Enqueued.ToString(CultureInfo.InvariantCulture),
                 Processed = stats.Processed.ToString(CultureInfo.InvariantCulture),
                 // A drop is amber the moment it is non-zero. There is no acceptable number of dropped
-                // chunks on a show output — one is a click somebody heard.
+                // chunks on a show output - one is a click somebody heard.
                 Dropped = stats.Dropped == 0
                     ? new Status("0")
                     : new Status(stats.Dropped.ToString(CultureInfo.InvariantCulture), Gel.Amber),
                 // A terminal has no latency or epoch of its own to report: both are properties of the
                 // producer feeding the bus, and inventing a dash-shaped one here would suggest the
                 // number exists and is simply unavailable.
-                Latency = new Status("—"),
-                Epoch = "—",
+                Latency = new Status("-"),
+                Epoch = "-",
                 Rate = terminal.NativeSampleRate == bay.MixSampleRate
                     ? $"{terminal.NativeSampleRate / 1000d:0.#}k"
                     : $"{terminal.NativeSampleRate / 1000d:0.#}k · resampled",
@@ -108,7 +108,7 @@ public static class BayPresentation
 
     /// <summary>The summary column's coarse bars, by logical output id.</summary>
     /// <remarks>
-    /// Absent means NO TELEMETRY, which is why an unmetered output reads "—" rather than showing an
+    /// Absent means NO TELEMETRY, which is why an unmetered output reads "-" rather than showing an
     /// empty bar: silence and "nobody is measuring" must not look the same in a table.
     /// </remarks>
     public static Dictionary<Guid, OutputLevel> Levels(
@@ -187,7 +187,7 @@ public static class BayPresentation
 
         return words.Length switch
         {
-            0 => "—",
+            0 => "-",
             1 => words[0][..Math.Min(3, words[0].Length)].ToUpperInvariant(),
             _ => string.Concat(words.Select(word => word[0])).ToUpperInvariant(),
         };

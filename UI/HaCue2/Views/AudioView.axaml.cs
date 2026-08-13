@@ -74,7 +74,7 @@ public partial class AudioView : UserControl
     /// <remarks>
     /// The key AND the context menu, because the two habits are different people: one reaches for
     /// Delete, the other right-clicks. Both land on the same confirmation, which is where the
-    /// consequences are stated — the key must not be a faster way to skip the question.
+    /// consequences are stated - the key must not be a faster way to skip the question.
     /// </remarks>
     private void OnLinesKeyDown(object? sender, KeyEventArgs e)
     {
@@ -110,7 +110,7 @@ public partial class AudioView : UserControl
     /// <summary>Right-clicking a row selects it first, so the menu acts on what was clicked.</summary>
     /// <remarks>
     /// Avalonia opens a ListBox's context menu without moving the selection, so without this the menu's
-    /// REMOVE would act on whatever was selected before — the one class of mistake a confirmation
+    /// REMOVE would act on whatever was selected before - the one class of mistake a confirmation
     /// dialog does not catch, because the dialog names the wrong thing convincingly.
     /// </remarks>
     private void OnRowRightPressed(object? sender, PointerPressedEventArgs e)
@@ -155,7 +155,7 @@ public partial class AudioView : UserControl
     /// </summary>
     /// <remarks>
     /// The bus width and rate are fixed when the bay opens, so this is a genuine stop and start rather
-    /// than a live change — which is exactly why it is a button the operator presses rather than
+    /// than a live change - which is exactly why it is a button the operator presses rather than
     /// something that happens under a running show when a combo box changes.
     /// </remarks>
     private async void OnRestartAudio(object? sender, RoutedEventArgs e)
@@ -170,7 +170,7 @@ public partial class AudioView : UserControl
     /// Inserts a filename token from the pattern dropdown (register item 30).
     /// </summary>
     /// <remarks>
-    /// The tokens are unguessable, which is the whole reason the dropdown exists — an operator who has
+    /// The tokens are unguessable, which is the whole reason the dropdown exists - an operator who has
     /// to already know that <c>{n}</c> is the counter has not been helped by anything.
     /// </remarks>
     private void OnInsertToken(object? sender, RoutedEventArgs e)

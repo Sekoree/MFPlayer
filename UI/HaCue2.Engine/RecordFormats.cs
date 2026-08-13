@@ -9,11 +9,11 @@ namespace HaCue2.Engine;
 /// <remarks>
 /// <para>
 /// Register item 30's patterns are whole filenames, so the extension the operator typed is the only
-/// statement of format in the document — there is no container picker beside it to disagree with. This
+/// statement of format in the document - there is no container picker beside it to disagree with. This
 /// is the one table that reads it, so the file written and the name shown always match.
 /// </para>
 /// <para>
-/// <b>Which extensions are legal is not decided here</b> — that is a rule about what a project may
+/// <b>Which extensions are legal is not decided here</b> - that is a rule about what a project may
 /// say, so it lives with the document in <see cref="RecordFormatNames"/> where project status can
 /// reach it without an encoder. This table is the other half: what each legal extension resolves to.
 /// The two cover the same set, and a test holds them to it.
@@ -57,7 +57,7 @@ public static class RecordFormats
 
     /// <summary>Builds the encode settings for a format, sized to what is actually being written.</summary>
     /// <param name="channels">Audio channel count, or 0 for a picture-only recording.</param>
-    /// <param name="sampleRate">The rate audio is submitted at — the bay's mix rate.</param>
+    /// <param name="sampleRate">The rate audio is submitted at - the bay's mix rate.</param>
     /// <param name="width">Picture width, or 0 for an audio-only recording.</param>
     public static EncodeSessionOptions Options(
         RecordFormat format, int channels, int sampleRate, int width = 0, int height = 0, int fps = 0)
@@ -80,7 +80,7 @@ public static class RecordFormats
                 Codec = format.Video,
                 // A show recording is watched back, not delivered, so quality-per-size beats a bitrate
                 // ceiling nobody chose. CRF 20 is visually clean at the sizes a projector composition
-                // runs at, and "veryfast" leaves the CPU to the show — a recording that steals frames
+                // runs at, and "veryfast" leaves the CPU to the show - a recording that steals frames
                 // from the thing being recorded has defeated itself.
                 Crf = format.Video.SupportsCrf() ? 20 : null,
                 Preset = format.Video.SupportsNamedPreset() ? "veryfast" : null,

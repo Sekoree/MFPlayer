@@ -13,7 +13,7 @@ namespace HaCue2.Core.Journal;
 /// </para>
 /// <para>
 /// <b>Invariant this relies on:</b> commands move the SAME object instances in and out of the
-/// document, never copies. That is what keeps the accessors here valid across an undo — a command
+/// document, never copies. That is what keeps the accessors here valid across an undo - a command
 /// that cloned a cue on removal would leave every closure pointing at an orphan, and the next undo
 /// would edit a cue nobody can see.
 /// </para>
@@ -66,10 +66,10 @@ public sealed class SetValueCommand<T> : ICoalescingCommand
 
     private static string Format(T value) => value switch
     {
-        null => "—",
+        null => "-",
         bool flag => flag ? "on" : "off",
         double number => number.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture),
-        _ => value.ToString() ?? "—",
+        _ => value.ToString() ?? "-",
     };
 }
 
@@ -239,7 +239,7 @@ public static class ProjectEdits
     /// Deletes a logical output and everything that pointed at it, as ONE undoable edit.
     /// </summary>
     /// <remarks>
-    /// Register item 11 — this supersedes the earlier "refuse, or ask the operator to choose
+    /// Register item 11 - this supersedes the earlier "refuse, or ask the operator to choose
     /// cancel/remove/rebind" design. Asking is worse than it sounds: the operator has to answer before
     /// they can see what the answer would do, and the reference list is exactly what they need to see.
     /// Cleaning up automatically and making the whole thing one ⌘Z is the version that can be
@@ -375,7 +375,7 @@ public static class ProjectEdits
     /// </summary>
     /// <remarks>
     /// Register item 9: changing one member's cell applies the SAME DELTA to the other members'
-    /// corresponding cells — the corresponding cell being the one on the same line at the member's own
+    /// corresponding cells - the corresponding cell being the one on the same line at the member's own
     /// offset within the group. Setting them all to the same absolute value would flatten a deliberate
     /// L/R trim the first time anyone nudged a stereo pair.
     /// <para>
@@ -428,7 +428,7 @@ public static class ProjectEdits
 /// Sets, adds or removes one N×V send: a cue's source channel into a logical output.
 /// </summary>
 /// <remarks>
-/// The twin of <see cref="SetPatchCellCommand"/>, and deliberately shaped the same way — the two
+/// The twin of <see cref="SetPatchCellCommand"/>, and deliberately shaped the same way - the two
 /// matrices are the same grid read at two levels, and an operator who learns "click routes, drag
 /// adjusts, right-click mutes" on one must find it true on the other.
 /// </remarks>
@@ -528,7 +528,7 @@ public sealed class SetCueSendCommand : ICoalescingCommand
     }
 }
 
-/// <summary>A rectangle in fractions of whatever contains it — a composition, or an output.</summary>
+/// <summary>A rectangle in fractions of whatever contains it - a composition, or an output.</summary>
 /// <remarks>
 /// Fractions rather than pixels so a placement survives a composition being resized, and so the
 /// document never has to know what a canvas is currently drawn at.
@@ -562,7 +562,7 @@ public readonly record struct NormalizedRect(double X, double Y, double Width, d
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A picture pushed off the edge of the canvas is an ordinary thing to author — a caption that
+    /// A picture pushed off the edge of the canvas is an ordinary thing to author - a caption that
     /// bleeds off the bottom, a wall of screens where each clip sits past its neighbour, a reveal that
     /// slides in from outside. <see cref="Clamped"/> is the wrong rule for it, and did more than refuse
     /// the odd case: it pins X to <c>1 − width</c>, so a placement filling the canvas could only ever
@@ -587,7 +587,7 @@ public readonly record struct NormalizedRect(double X, double Y, double Width, d
 }
 
 /// <summary>
-/// Moves or resizes one rectangle — a layer placement, or a mapping section's source or target.
+/// Moves or resizes one rectangle - a layer placement, or a mapping section's source or target.
 /// </summary>
 /// <remarks>
 /// One command for all four numbers, with one coalesce key, because a drag changes them together and
@@ -646,7 +646,7 @@ public sealed class SetRectCommand : ICoalescingCommand
 /// <remarks>
 /// Kept together because the three read almost identically and the differences are the interesting
 /// part: a layer placement is a property of the CUE (register item 21), so its coalesce subject is the
-/// cue — undoing a move undoes it wherever that cue is looked at. A mapping section's source and target
+/// cue - undoing a move undoes it wherever that cue is looked at. A mapping section's source and target
 /// are two rectangles on one object, so they take the same subject and different property names, and a
 /// drag on the left canvas never merges into a drag on the right.
 /// </remarks>

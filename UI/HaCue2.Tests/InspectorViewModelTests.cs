@@ -79,7 +79,7 @@ public class InspectorViewModelTests
 
         shell.Cues.Inspector.FadeOutValue = "6";
 
-        // It was a literal "4.0 s" in the view — the picker beside it edited a real curve while the
+        // It was a literal "4.0 s" in the view - the picker beside it edited a real curve while the
         // duration next to it edited nothing.
         Assert.Equal(6_000, bed.FadeOutMs);
     });
@@ -104,7 +104,7 @@ public class InspectorViewModelTests
         ShellFixture.Select(shell.Cues, bed.Id);
 
         // Zero means "play through" in the model; showing that as "0.0" would read as an out-point at
-        // the very start — a cue that plays nothing.
+        // the very start - a cue that plays nothing.
         Assert.Equal("end", shell.Cues.Inspector.TrimOutValue);
     });
 
@@ -175,7 +175,7 @@ public class InspectorViewModelTests
 
             shell.Cues.Inspector.Show([cues[0].Id, cues[1].Id]);
 
-            Assert.Equal("—", shell.Cues.Inspector.LabelValue);
+            Assert.Equal("-", shell.Cues.Inspector.LabelValue);
             // Untouched, so both keep their own value. Showing the lead cue's instead would invite an
             // edit that silently overwrote the other with something nobody read.
             Assert.Equal("one", cues[0].Label);

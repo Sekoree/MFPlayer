@@ -42,14 +42,14 @@ public class RecordFormatTests
     {
         // The table is the only place a container and its codecs are paired, and the encode library
         // validates that pairing at Create. A row that disagreed would fail at ARM TIME, in front of an
-        // operator, on the one night it mattered — so every row is checked here instead.
+        // operator, on the one night it mattered - so every row is checked here instead.
         foreach (var format in RecordFormats.All)
         {
             var options = format.CarriesVideo
                 ? RecordFormats.Options(format, channels: 2, sampleRate: 48_000, width: 1920, height: 1080, fps: 30)
                 : RecordFormats.Options(format, channels: 2, sampleRate: 48_000);
 
-            // probeEncoders:false — whether THIS build ships libx264 is a machine fact, not a table fact.
+            // probeEncoders:false - whether THIS build ships libx264 is a machine fact, not a table fact.
             Assert.Empty(options.Validate(probeEncoders: false));
         }
     }
@@ -79,7 +79,7 @@ public class RecordFormatTests
     public void AnExtensionThisBuildCannotWriteNamesOneItCan()
     {
         // The mockup drew "show-{date}.flac", and this build muxes five containers of which none is a
-        // raw FLAC stream — lossless audio is FLAC inside Matroska. Saying which extension to use beats
+        // raw FLAC stream - lossless audio is FLAC inside Matroska. Saying which extension to use beats
         // listing what went wrong.
         var problem = RecordFormatNames.Problem("show.flac", carriesVideo: false);
 
@@ -156,8 +156,8 @@ public class RecordFormatTests
     [Fact]
     public void TheDocumentsFormatListAndTheEncodersAgreeExactly()
     {
-        // The two halves are split on purpose — project status validates a pattern with no encoder in
-        // reach — and this is what stops them drifting. An extension the document accepts that the
+        // The two halves are split on purpose - project status validates a pattern with no encoder in
+        // reach - and this is what stops them drifting. An extension the document accepts that the
         // encoder cannot resolve would pass validation at the get-in and fail at arm time on the night.
         Assert.Equal(
             RecordFormatNames.All.OrderBy(name => name, StringComparer.Ordinal),

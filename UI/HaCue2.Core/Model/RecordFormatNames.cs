@@ -7,11 +7,11 @@ namespace HaCue2.Core.Model;
 /// <para>
 /// The document half of the format question, and it lives here rather than beside the encoder because
 /// it is a rule about what a PROJECT may say. Project status validates patterns without a session, an
-/// encoder or a machine — a bad extension has to be findable at the get-in, on a laptop, hours before
+/// encoder or a machine - a bad extension has to be findable at the get-in, on a laptop, hours before
 /// anybody arms anything.
 /// </para>
 /// <para>
-/// The encoder half — which container and codecs each extension resolves to — belongs with the encoder
+/// The encoder half - which container and codecs each extension resolves to - belongs with the encoder
 /// (<c>HaCue2.Engine.RecordFormats</c>), which covers exactly this list. The two are checked against
 /// each other by a test, so an extension offered here can never be one nothing knows how to write.
 /// </para>
@@ -22,7 +22,7 @@ public static class RecordFormatNames
     public static IReadOnlyList<string> All { get; } =
         [".mkv", ".mka", ".mp4", ".m4a", ".mov", ".ts", ".flv"];
 
-    /// <summary>The ones that carry no picture — refused to a video output, fine for an audio line.</summary>
+    /// <summary>The ones that carry no picture - refused to a video output, fine for an audio line.</summary>
     public static IReadOnlyList<string> AudioOnly { get; } = [".mka", ".m4a"];
 
     /// <summary>The audio-only default, and what a record line starts with.</summary>
@@ -36,7 +36,7 @@ public static class RecordFormatNames
     /// </summary>
     /// <remarks>
     /// Raw <c>.flac</c> and <c>.wav</c> are the ones that catch people: lossless audio here is FLAC
-    /// inside Matroska, which is <c>.mka</c>. Naming the alternative is the whole value of this table —
+    /// inside Matroska, which is <c>.mka</c>. Naming the alternative is the whole value of this table -
     /// "unsupported format" leaves an operator guessing at the one thing they need to type.
     /// </remarks>
     public static IReadOnlyDictionary<string, string> Alternatives { get; } =
@@ -60,19 +60,19 @@ public static class RecordFormatNames
     /// How each format reads in a picker or a status line.
     /// </summary>
     /// <remarks>
-    /// The codecs are named because they are the operator's real question — "will this be lossless"
+    /// The codecs are named because they are the operator's real question - "will this be lossless"
     /// and "will this open on the editor's machine" are both answered by the codec, not the extension.
     /// </remarks>
     public static IReadOnlyDictionary<string, string> Summaries { get; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            [".mkv"] = "Matroska — H.264 video, lossless FLAC audio",
-            [".mka"] = "Matroska audio — lossless FLAC",
-            [".mp4"] = "MP4 — H.264 video, AAC audio",
-            [".m4a"] = "MP4 audio — AAC",
-            [".mov"] = "QuickTime — H.264 video, AAC audio",
-            [".ts"] = "MPEG-TS — H.264 video, AAC audio",
-            [".flv"] = "FLV — H.264 video, AAC audio",
+            [".mkv"] = "Matroska - H.264 video, lossless FLAC audio",
+            [".mka"] = "Matroska audio - lossless FLAC",
+            [".mp4"] = "MP4 - H.264 video, AAC audio",
+            [".m4a"] = "MP4 audio - AAC",
+            [".mov"] = "QuickTime - H.264 video, AAC audio",
+            [".ts"] = "MPEG-TS - H.264 video, AAC audio",
+            [".flv"] = "FLV - H.264 video, AAC audio",
         };
 
     /// <summary>How the format a filename names reads, or null when it names none this build writes.</summary>
@@ -97,7 +97,7 @@ public static class RecordFormatNames
 
         if (string.IsNullOrEmpty(extension))
         {
-            return "the recording pattern needs a file extension — it is what chooses the format "
+            return "the recording pattern needs a file extension - it is what chooses the format "
                 + $"(try {(carriesVideo ? DefaultVideo : DefaultAudio)})";
         }
 
@@ -108,16 +108,16 @@ public static class RecordFormatNames
 
             // The table's suggestions are the closest EQUIVALENT, which for the audio formats is an
             // audio-only container. Handing that to a video output would answer one refusal with
-            // another — ".flac cannot be written, use .mka" is useless advice to somebody recording a
+            // another - ".flac cannot be written, use .mka" is useless advice to somebody recording a
             // picture, since .mka has no room for one.
             if (carriesVideo && AudioOnly.Contains(instead, StringComparer.OrdinalIgnoreCase))
                 instead = DefaultVideo;
 
-            return $"“{extension}” cannot be written by this build — use “{instead}” instead";
+            return $"“{extension}” cannot be written by this build - use “{instead}” instead";
         }
 
         if (carriesVideo && AudioOnly.Contains(extension, StringComparer.OrdinalIgnoreCase))
-            return $"“{extension}” carries audio only — a video recording needs {DefaultVideo}";
+            return $"“{extension}” carries audio only - a video recording needs {DefaultVideo}";
 
         return null;
     }

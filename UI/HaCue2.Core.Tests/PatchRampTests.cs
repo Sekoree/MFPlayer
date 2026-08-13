@@ -51,7 +51,7 @@ public class PatchRampTests
         var blended = PatchRamp.Blend([], [Cell(0)], 0.5);
 
         // Nothing was routed here before, so the ramp starts at the floor. Without this the cell would
-        // arrive at half of full level on the first frame — audible as a click.
+        // arrive at half of full level on the first frame - audible as a click.
         Assert.True(blended[0].GainDb < -20, $"expected a level near the floor, got {blended[0].GainDb}");
     }
 
@@ -61,7 +61,7 @@ public class PatchRampTests
         var midway = PatchRamp.Blend([Cell(0)], [Cell(-6, muted: true)], 0.5);
         var landed = PatchRamp.Blend([Cell(0)], [Cell(-6, muted: true)], 1);
 
-        // Muting at the start would silence the cell instantly and make the ramp inaudible — the mute
+        // Muting at the start would silence the cell instantly and make the ramp inaudible - the mute
         // is the destination STATE, and the gain is what the operator hears travelling toward it.
         Assert.False(midway[0].Muted);
         Assert.True(landed[0].Muted);

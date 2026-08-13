@@ -117,7 +117,7 @@ public sealed class ArchitectureTests
         ],
         // HaCue2 is the cue player leaving HaPlay. It sees the project model and MACHINE FACTS
         // (HaCue2.Machine: audio-device enumeration and media probing, plus the decoder they need).
-        // What must NOT appear here is "S.Media.Session" — the shell projects a document and asks the
+        // What must NOT appear here is "S.Media.Session" - the shell projects a document and asks the
         // box what it has; it does not run a show. That reference lands in Phase 5, when
         // `Session/ShowRuntime` stops being a stand-in, and its absence until then is what proves the
         // shell is not quietly depending on a session. "HaPlay" must never appear at all, which
@@ -131,7 +131,7 @@ public sealed class ArchitectureTests
         ],
         // The running show: the session, the project patch bay and the program-audio target that
         // joins them. Separate from HaCue2 because a session is long-lived, thread-affine and holds
-        // devices — the views must not be able to reach into it by accident, and they do not: they
+        // devices - the views must not be able to reach into it by accident, and they do not: they
         // see it through `Session/ShowRuntime`, exactly as they saw the sample before it existed.
         // The fixture generator: the project model plus the machine layer that scans for media. No
         // session and no windowing, so it runs anywhere the CLI status check does.
@@ -169,13 +169,13 @@ public sealed class ArchitectureTests
             "S.Control", "S.Control.Abstractions",
             // The other families a CUE can play, each a URI scheme with a decoder provider already
             // written: a capture device, a prepared YouTube video, a rendered text card. They are
-            // registered here because this is where the registry the session plays through is built —
+            // registered here because this is where the registry the session plays through is built -
             // every one of them was in the tree and reachable by nothing.
             "S.Media.Audio.PortAudio", "PALib", "S.Media.Source.YouTube", "S.Media.Source.Text",
         ],
         // Machine facts: what this box has and what a file turned out to be. Separate from
         // HaCue2.Core because everything here needs real hardware or a real decoder, and Core has to
-        // stay runnable where there is neither — that is what lets `hacue2-check` run in CI.
+        // stay runnable where there is neither - that is what lets `hacue2-check` run in CI.
         ["HaCue2.Machine"] =
         [
             "HaCue2.Core", "S.Media.Decode.FFmpeg", "S.Media.Session", "S.Media.Core", "S.Media.Time",
@@ -186,7 +186,7 @@ public sealed class ArchitectureTests
         ],
         // The project model: document, journal, validation, patch operations. It may see the session
         // layer (it reuses ShowValidationIssue and CustomFadeCurve, and the compiler that turns a
-        // HaCueProject into a ShowDocument lands here) but nothing above it, and no UI toolkit — this
+        // HaCueProject into a ShowDocument lands here) but nothing above it, and no UI toolkit - this
         // is what keeps the project-status pass runnable from a script.
         ["HaCue2.Core"] =
         [
@@ -200,7 +200,7 @@ public sealed class ArchitectureTests
         // where no audio backend or window system exists.
         ["HaCue2.Check"] = ["HaCue2.Core"],
         // A desktop head is a composition root: it references its app, plus the audio backend it
-        // chooses to enumerate against and the offscreen GL context it gives projectM — which backend
+        // chooses to enumerate against and the offscreen GL context it gives projectM - which backend
         // and which context are exactly the kind of decision a head makes.
         ["HaCue2.Desktop"] =
         [

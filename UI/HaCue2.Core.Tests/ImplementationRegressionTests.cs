@@ -35,7 +35,7 @@ public sealed class ImplementationRegressionTests
             },
         });
 
-        // Path.GetFullPath, because that is what the compiler resolves media through — and on Windows a
+        // Path.GetFullPath, because that is what the compiler resolves media through - and on Windows a
         // path rooted at the separator alone is relative to the CURRENT DRIVE, so "\shows\media\film.mp4"
         // comes back as "D:\shows\media\film.mp4". Comparing against the unrooted spelling failed there
         // while passing on Linux, where the two are the same string.

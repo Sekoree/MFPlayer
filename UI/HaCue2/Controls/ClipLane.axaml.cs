@@ -32,7 +32,7 @@ public sealed record ClipGesture(int Index, Guid SubjectId, ClipEdge Edge, doubl
 /// <remarks>
 /// Three gestures, matching every editor an operator has used before: drag the body to move, drag the
 /// right edge to change where it ends, drag the left edge to change where it starts. The left edge is
-/// the one worth stating — it moves the clip AND trims the same amount into the file, so the media
+/// the one worth stating - it moves the clip AND trims the same amount into the file, so the media
 /// under the cursor stays where it is instead of sliding.
 /// </remarks>
 public partial class ClipLane : UserControl
@@ -111,7 +111,7 @@ public partial class ClipLane : UserControl
         if (_draggedIndex < 0 || Surface is not { Bounds.Width: > 0 } surface)
             return;
 
-        // Recomputed from the grab origin every time, never accumulated — the same reason as on
+        // Recomputed from the grab origin every time, never accumulated - the same reason as on
         // PlacementCanvas: a clamped increment loses whatever the clamp ate, and the clip stops
         // following the pointer once it has reached zero or the end of the lane.
         var delta = (e.GetPosition(surface).X - _grabbedAt.X) / surface.Bounds.Width;
@@ -142,8 +142,8 @@ public partial class ClipLane : UserControl
     }
 
     /// <summary>
-    /// A capture that ends any other way — the window deactivated, the control was torn out of the
-    /// tree — must still complete the gesture: the view-model's journal composite stays open until
+    /// A capture that ends any other way - the window deactivated, the control was torn out of the
+    /// tree - must still complete the gesture: the view-model's journal composite stays open until
     /// <see cref="GestureCompleted"/>, and an unclosed one folds every later edit into the drag's
     /// undo step.
     /// </summary>

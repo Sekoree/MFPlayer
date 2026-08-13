@@ -11,7 +11,7 @@ namespace HaCue2.Core.Tests;
 /// <remarks>
 /// The registry and the soft-takeover arithmetic are the framework's and are tested there. What is
 /// tested here is HaCue2's own answer to "which values does a cue player offer, over what range, and
-/// reading what" — including the property that makes soft takeover work at all: a parameter must read
+/// reading what" - including the property that makes soft takeover work at all: a parameter must read
 /// what is true NOW, not a cached number.
 /// </remarks>
 public class ShowParameterTests
@@ -64,7 +64,7 @@ public class ShowParameterTests
         project.Audition.LevelDb = -18;
 
         // The registry holds delegates, not values. A cached number would make a fader latch against
-        // something the show had already moved past — which is soft takeover latching on a lie.
+        // something the show had already moved past - which is soft takeover latching on a lie.
         Assert.True(registry.TryGet(ShowParameters.AuditionLevel, out var level));
         Assert.Equal(-18, level, 3);
     }

@@ -12,7 +12,7 @@ public sealed class FFmpegRuntimeResolverTests
     /// <remarks>
     /// It used to return <c>""</c> unconditionally, i.e. "the system FFmpeg or nothing". That is fine
     /// until the distro moves to the next FFmpeg major, at which point the versioned soname stops
-    /// resolving and there is no way to run short of downgrading the whole machine — with the failure
+    /// resolving and there is no way to run short of downgrading the whole machine - with the failure
     /// showing up as every media file appearing offline. A staged build is the way out, so a non-empty
     /// answer is now correct precisely when the system cannot serve.
     /// </remarks>
@@ -27,7 +27,7 @@ public sealed class FFmpegRuntimeResolverTests
         if (resolved.Length == 0)
             return; // system has a matching set; the loader is the right answer
 
-        // Otherwise it must be a real directory holding a COMPLETE set — a partial one would let the
+        // Otherwise it must be a real directory holding a COMPLETE set - a partial one would let the
         // loader mix a staged avcodec with a system avutil, which is undefined behaviour, not a fallback.
         Assert.True(Directory.Exists(resolved), $"resolved root '{resolved}' does not exist");
         Assert.NotEmpty(Directory.GetFiles(resolved, "libavcodec.so.*"));

@@ -8,7 +8,7 @@ namespace HaCue2.Controls;
 /// <summary>Which handle a drag on the waveform grabbed.</summary>
 public enum TrimHandle
 {
-    /// <summary>Neither — the pointer landed in open water and is scrubbing.</summary>
+    /// <summary>Neither - the pointer landed in open water and is scrubbing.</summary>
     Playhead,
     In,
     Out,
@@ -18,7 +18,7 @@ public enum TrimHandle
 public sealed record TrimGesture(TrimHandle Handle, double At);
 
 /// <summary>
-/// A file's peaks, its trim window, and the playhead — the whole picture a trim is made against.
+/// A file's peaks, its trim window, and the playhead - the whole picture a trim is made against.
 /// </summary>
 /// <remarks>
 /// <para>

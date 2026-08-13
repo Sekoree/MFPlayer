@@ -7,7 +7,7 @@
              x:CompileBindings="True">
 
   <!-- The curve editor's canvas: the shape, and a grab handle on every point. Drawing and dragging
-       live together here for the same reason they do on PlacementCanvas — the gesture and the picture
+       live together here for the same reason they do on PlacementCanvas - the gesture and the picture
        have to agree about where a point is. -->
 
   <Border Classes="vidcanvas">

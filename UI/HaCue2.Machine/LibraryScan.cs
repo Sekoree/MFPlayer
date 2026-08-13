@@ -4,8 +4,8 @@ namespace HaCue2.Machine;
 /// Finds usable media in a directory tree.
 /// </summary>
 /// <remarks>
-/// Deliberately conservative. A media library is full of things that are not media — editor peak
-/// caches, artwork, playlists, project sidecars — and a fixture built by extension alone fills a cue
+/// Deliberately conservative. A media library is full of things that are not media - editor peak
+/// caches, artwork, playlists, project sidecars - and a fixture built by extension alone fills a cue
 /// list with files no decoder will open, which teaches the operator that red rows are normal.
 /// </remarks>
 public static class LibraryScan
@@ -87,7 +87,7 @@ public static class LibraryScan
             .. found
                 .OrderBy(entry => entry.Size)
                 // Ordinal by path after size, so two runs over an unchanged library produce the same
-                // fixture — a generator whose output depends on filesystem ordering is one whose
+                // fixture - a generator whose output depends on filesystem ordering is one whose
                 // diffs are noise.
                 .ThenBy(entry => entry.Path, StringComparer.Ordinal)
                 .Take(take)
@@ -97,7 +97,7 @@ public static class LibraryScan
 
     /// <summary>The deepest directory both paths live under, for use as a media root.</summary>
     /// <remarks>
-    /// Null when they share nothing — on Windows that is two different volumes, and there is then no
+    /// Null when they share nothing - on Windows that is two different volumes, and there is then no
     /// root that makes both relative. The caller stores absolute paths in that case, which the document
     /// allows.
     /// </remarks>

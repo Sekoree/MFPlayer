@@ -79,7 +79,7 @@ public sealed partial class ShowHost
     /// </summary>
     /// <remarks>
     /// <b>Soft takeover, by default.</b> A physical fader has its own position, and after a cue or the
-    /// mouse has moved a parameter the two disagree — applying the fader's value on its first move
+    /// mouse has moved a parameter the two disagree - applying the fader's value on its first move
     /// would jump the level audibly, mid-show. The binding ignores the control until it passes close to
     /// the current value and only then latches on. The binding object is kept per parameter because the
     /// latch is state: rebuilt per message, it would never latch at all.
@@ -146,7 +146,7 @@ public sealed partial class ShowHost
                 break;
 
             default:
-                Report($"“{verb}” is not a transport verb — try go, stop, pause or panic");
+                Report($"“{verb}” is not a transport verb - try go, stop, pause or panic");
                 break;
         }
     }

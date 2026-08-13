@@ -210,7 +210,7 @@ public class TriggerMatchingTests
     public void ASignalDescribesItselfTheWayABindingIsWritten()
     {
         // The monitor prints what this returns, so an operator can copy a line they can see into a
-        // binding and have it work — which is learn-by-hand, before a Learn button exists.
+        // binding and have it work - which is learn-by-hand, before a Learn button exists.
         Assert.Equal("note 3 ch 1", Note(3).Describe());
         Assert.Equal("cc 7 ch 1", Cc(7).Describe());
         Assert.Equal("/hacue/go", Osc("/hacue/go").Describe());

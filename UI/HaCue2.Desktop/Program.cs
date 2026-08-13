@@ -14,7 +14,7 @@ internal static class Program
 
     public static AppBuilder BuildAvaloniaApp()
     {
-        // The composition root picks the backend, from the MACHINE's setting — the two see different
+        // The composition root picks the backend, from the MACHINE's setting - the two see different
         // devices on the same box, so this is a property of the rig and never of the show. PortAudio is
         // the default because it is what the status pass and HaPlay both check against; miniaudio is
         // the answer when a box's PortAudio build is itself the problem.
@@ -50,7 +50,7 @@ internal static class Program
         .UsePlatformDetect()
         // Inter is the sans face the mockup's system-ui stack resolves to on a modern desktop, and
         // embedding it means a booth machine with a minimal font set still renders the shell as drawn.
-        // The mono face is deliberately NOT embedded — Themes/Tokens.axaml names a fallback stack, and
+        // The mono face is deliberately NOT embedded - Themes/Tokens.axaml names a fallback stack, and
         // every desktop in this repo's target set has at least DejaVu Sans Mono.
         .WithInterFont()
         .LogToTrace();

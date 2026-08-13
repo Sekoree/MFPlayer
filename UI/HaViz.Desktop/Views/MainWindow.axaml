@@ -3,7 +3,7 @@
         xmlns:vm="using:HaViz.Desktop.ViewModels"
         x:Class="HaViz.Desktop.Views.MainWindow"
         x:DataType="vm:MainViewModel"
-        Title="HaViz — visualizer → NDI"
+        Title="HaViz - visualizer → NDI"
         Width="600" Height="760" CanResize="True">
     <ScrollViewer>
         <StackPanel Margin="14" Spacing="10">
@@ -68,7 +68,7 @@
                           SelectedItem="{Binding SelectedOutputDevice}"
                           ToolTip.Tip="Applies from the next track" />
                 <CheckBox Content="Play on device" IsChecked="{Binding PlayOnDevice}"
-                          ToolTip.Tip="Off: audio goes only to the visualizer and NDI out — the local device stays silent" />
+                          ToolTip.Tip="Off: audio goes only to the visualizer and NDI out - the local device stays silent" />
             </StackPanel>
             <TextBlock Text="{Binding PlayerStatus}" TextWrapping="Wrap" Opacity="0.75" FontSize="12" />
 

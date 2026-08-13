@@ -88,7 +88,7 @@ public class TimecodeChaseTests
     {
         var chase = new TimecodeChase();
 
-        // A SysEx that is not MTC — every one of them arrives on this path, and the decoder is what
+        // A SysEx that is not MTC - every one of them arrives on this path, and the decoder is what
         // decides. Reporting it as consumed would hide identity replies and desk dumps from the
         // bindings and from the wire monitor.
         Assert.False(chase.Feed(new ControlMonitorRecord { RawBytes = [0xF0, 0x7E, 0x00, 0x06, 0x01, 0xF7] }));

@@ -16,7 +16,7 @@ namespace HaCue2.Core.Tests;
 /// <para>
 /// The display was right and the seek was wrong. Only the READ direction of the mapping existed (the
 /// engine's snapshot subtracted the trim so the operator saw cue time); nothing converted BACK, so a
-/// scrub to 30:50 cue time reached the transport as 30:50 FILE time — before the cue's own in-point.
+/// scrub to 30:50 cue time reached the transport as 30:50 FILE time - before the cue's own in-point.
 /// The player obeyed, and the read direction then floored the negative result at zero, which is the
 /// <c>00:00</c> the operator saw. Both halves now live on <see cref="MediaCueNode"/>, adjacent, so they
 /// cannot be written independently again.

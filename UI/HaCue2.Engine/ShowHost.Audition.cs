@@ -10,8 +10,8 @@ namespace HaCue2.Engine;
 /// </summary>
 /// <remarks>
 /// Kept apart from the transport on purpose. A preview is not in <c>ShowState.Sounding</c> and never
-/// appears in the Active list — an operator glancing at Active during a show must see what the audience
-/// can hear and nothing else — and code that lived beside the transport verbs would eventually be
+/// appears in the Active list - an operator glancing at Active during a show must see what the audience
+/// can hear and nothing else - and code that lived beside the transport verbs would eventually be
 /// wired into one of them.
 /// </remarks>
 public sealed partial class ShowHost
@@ -39,7 +39,7 @@ public sealed partial class ShowHost
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The endpoint is the rig's LINE, so the preview takes that line's own channel count — never a
+    /// The endpoint is the rig's LINE, so the preview takes that line's own channel count - never a
     /// hardcoded stereo pair (D8). Null names the bay's default monitor terminal, which is what makes
     /// audition work on a one-interface rig nobody has configured.
     /// </para>
@@ -81,7 +81,7 @@ public sealed partial class ShowHost
         {
             // A rig pointing at a line this machine did not open. Reported by name rather than thrown:
             // the operator can pick another line, and the show is unaffected either way.
-            Report($"the audition rig could not be reached — {failure.Message}");
+            Report($"the audition rig could not be reached - {failure.Message}");
             return false;
         }
 
@@ -105,7 +105,7 @@ public sealed partial class ShowHost
     /// <summary>Which logical output the monitor is carrying instead of its own patch, or null.</summary>
     public Guid? SoloedChannelId => _bay.SoloedChannelId;
 
-    /// <summary>Stops the audition. Never touches the program — that is the whole point of the rig.</summary>
+    /// <summary>Stops the audition. Never touches the program - that is the whole point of the rig.</summary>
     public async Task StopPreviewAsync()
     {
         await _session.StopPreviewAsync().ConfigureAwait(false);
@@ -136,7 +136,7 @@ public sealed partial class ShowHost
         if (_auditionWindow is not null)
             return;
 
-        // Sized to the rig, or to the biggest composition in the show — the monitor should not be
+        // Sized to the rig, or to the biggest composition in the show - the monitor should not be
         // smaller than the thing it is monitoring.
         var width = rig.SurfaceWidth > 0
             ? rig.SurfaceWidth
@@ -166,8 +166,8 @@ public sealed partial class ShowHost
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
             // No display, no GL, no window manager. Audio auditioning still works, which is the half
-            // that matters most — so this is reported and stepped past, not thrown.
-            Report($"the audition surface could not be opened — {failure.Message}");
+            // that matters most - so this is reported and stepped past, not thrown.
+            Report($"the audition surface could not be opened - {failure.Message}");
         }
     }
 

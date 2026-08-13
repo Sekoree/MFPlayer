@@ -36,7 +36,7 @@ public sealed record PatchRecallResult(int CellsApplied, IReadOnlyList<BrokenBin
 /// Pure operations over the two matrices: the N×V sends and the V×R patch.
 /// </summary>
 /// <remarks>
-/// Nothing here is journaled. Recall is an operator action on the LIVE patch, not a document edit —
+/// Nothing here is journaled. Recall is an operator action on the LIVE patch, not a document edit -
 /// undo means "un-edit my document", never "un-recall my snapshot". Editing a snapshot's stored cells
 /// is a document edit and goes through the journal like anything else.
 /// </remarks>
@@ -50,7 +50,7 @@ public static class PatchOperations
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Gains ADD because they are decibels — the dB sum is the linear product of the two stages, which
+    /// Gains ADD because they are decibels - the dB sum is the linear product of the two stages, which
     /// is what composing two gain stages means.
     /// </para>
     /// <para>
@@ -152,7 +152,7 @@ public static class PatchOperations
     /// <remarks>
     /// A change with no line means "every cell fed by this logical output"; a line with no channel
     /// means "every cell on that line". That is how "Fold L/R up 6 dB" stays one entry when the
-    /// foldback is patched to four places — and why a widened change that currently matches nothing is
+    /// foldback is patched to four places - and why a widened change that currently matches nothing is
     /// reported rather than treated as success.
     /// </remarks>
     public static PatchRecallResult ApplyLevels(
@@ -201,7 +201,7 @@ public static class PatchOperations
         return new PatchRecallResult(applied, broken);
     }
 
-    /// <summary>Captures the current patch as snapshot cells — all of it, or a chosen subset.</summary>
+    /// <summary>Captures the current patch as snapshot cells - all of it, or a chosen subset.</summary>
     public static List<PatchCell> Capture(HaCueProject project, IReadOnlyCollection<Guid>? channelIds = null) =>
     [
         .. project.AudioPatch.Cells

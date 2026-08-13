@@ -15,7 +15,7 @@
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- The one window (register item 1): four views in the title bar, a Settings window and a
-       Diagnostics window beside it, and no permanent output strip — the Output info drawer overlays
+       Diagnostics window beside it, and no permanent output strip - the Output info drawer overlays
        the content on demand and the status bar carries a one-token summary at all times. -->
 
   <Window.DataTemplates>
@@ -31,7 +31,7 @@
     <Border Classes="titlebar" DockPanel.Dock="Top">
       <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
         <!-- FILE, first and leftmost, where every application on every desktop puts it. It exists as
-             much for the answer to "where is this saved" — the menu names the path — as for the verbs:
+             much for the answer to "where is this saved" - the menu names the path - as for the verbs:
              a save that only ever happened via a hotkey gave an operator nothing to look at. -->
         <Button Grid.Column="0" Classes="tight" Content="FILE ▾" Margin="0,0,6,0"
                 AutomationProperties.Name="File menu">
@@ -99,13 +99,13 @@
         <ToggleButton Grid.Column="0" Theme="{StaticResource ChipToggle}"
                       IsChecked="{Binding IsOutputInfoOpen}"
                       Content="▸ OUTPUT INFO"
-                      ToolTip.Tip="F9 — program meters, line chips and bay counters, over the content" />
+                      ToolTip.Tip="F9 - program meters, line chips and bay counters, over the content" />
         <TextBlock Grid.Column="1" Classes="mono ok small" VerticalAlignment="Center"
                    Text="{Binding OutputSummary}" />
         <!-- The issue count is the doorway to Project status; it is the only red thing on the bar. -->
         <Button Grid.Column="2" Theme="{StaticResource LinkButton}" Foreground="{DynamicResource GelRed}"
                 Content="{Binding IssueSummary}" Click="OnProjectStatus" />
-        <!-- The undo toast names the DOMAIN as well as the edit ("undo: patch — Fold L → Out 3 gain"):
+        <!-- The undo toast names the DOMAIN as well as the edit ("undo: patch - Fold L → Out 3 gain"):
              with one journal across every view, ⌘Z can otherwise change a screen nobody is looking at. -->
         <TextBlock Grid.Column="3" Classes="mono dim2 small" VerticalAlignment="Center"
                    MaxWidth="230" TextTrimming="CharacterEllipsis"

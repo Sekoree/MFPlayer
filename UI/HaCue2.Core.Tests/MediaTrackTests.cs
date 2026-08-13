@@ -10,8 +10,8 @@ namespace HaCue2.Core.Tests;
 /// Choosing which track of a media file a cue plays.
 /// </summary>
 /// <remarks>
-/// A concert capture routinely carries several audio tracks — a stereo mix, an isolated vocal, a room
-/// pair — and files carry several subtitle tracks as a matter of course. The rule underneath all of
+/// A concert capture routinely carries several audio tracks - a stereo mix, an isolated vocal, a room
+/// pair - and files carry several subtitle tracks as a matter of course. The rule underneath all of
 /// this: a stored INDEX is positional, and re-muxing a file renumbers its streams, so an index alone
 /// can silently start pointing at the German commentary. Every test here is about not doing that.
 /// </remarks>
@@ -50,7 +50,7 @@ public sealed class MediaTrackTests
 
         var resolved = MediaFacts.Resolve(renumbered, index: 2, Vocal.Signature);
 
-        // Followed the CONTENT, not the number — index 2 is the mix now.
+        // Followed the CONTENT, not the number - index 2 is the mix now.
         Assert.Equal(1, resolved!.Value.Index);
     }
 
@@ -87,7 +87,7 @@ public sealed class MediaTrackTests
         var art = CoverArt();
         var facts = new MediaFacts { AudioTracks = [Mix], VideoTracks = [art] };
 
-        // Not "video" — a placement of it will not move...
+        // Not "video" - a placement of it will not move...
         Assert.False(facts.HasVideo);
         // ...but it IS placeable, and that is the whole point: an audio cue can put the album art on
         // a canvas for the length of the track, the same as HaPlay's cue player.

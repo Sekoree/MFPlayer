@@ -76,7 +76,7 @@ public class EffectLaneTests
         shell.Cues.Inspector.AddLane(Volume);
         shell.Cues.Inspector.AddLane(Volume);
 
-        // A cue with two volume lanes has no defined level, and the compiler takes the first — so the
+        // A cue with two volume lanes has no defined level, and the compiler takes the first - so the
         // second would be invisible rather than additive.
         Assert.Single(bed.AutomationTracks);
         Assert.False(shell.Cues.Inspector.CanAddLane(Volume));

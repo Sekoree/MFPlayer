@@ -26,7 +26,7 @@ public sealed class FFmpegModule : IMediaModule
             .SetCpuConverterFactory(static () => new VideoCpuFrameConverter())
             // The probe half. Registering the factory alone was not enough: the router picks a branch
             // pixel format by ASKING whether each candidate is reachable, and with no probe it was told
-            // "no" for every pair — so any fan-out branch needing a conversion was rejected outright.
+            // "no" for every pair - so any fan-out branch needing a conversion was rejected outright.
             .SetCpuConverterProbe(static (source, destination, width, height) =>
                 VideoCpuFrameConverter.CanConvert(source, destination, width, height))
             .SetResamplerFactory(static (inner, targetRate) =>

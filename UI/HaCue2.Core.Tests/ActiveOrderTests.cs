@@ -10,7 +10,7 @@ namespace HaCue2.Core.Tests;
 /// </summary>
 /// <remarks>
 /// Rows are ordered by WHEN each cue was fired, and that order must never change while a cue runs.
-/// The old key was the playhead, which rewinds on loop wraps, jumps on seeks and freezes on pause —
+/// The old key was the playhead, which rewinds on loop wraps, jumps on seeks and freezes on pause -
 /// so the list reshuffled under the operator's pointer whenever any of those happened.
 /// </remarks>
 public class ActiveOrderTests

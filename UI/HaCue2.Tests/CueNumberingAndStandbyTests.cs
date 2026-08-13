@@ -10,7 +10,7 @@ namespace HaCue2.Tests;
 /// </summary>
 /// <remarks>
 /// A cue number is called over comms and a standby cursor is watched all night. Both had defects that
-/// only appear on a real document — dotted numbering, or a cue disabled for one performance — so the
+/// only appear on a real document - dotted numbering, or a cue disabled for one performance - so the
 /// fixtures here are shaped like a show rather than like a minimal case.
 /// </remarks>
 public class CueNumberingAndStandbyTests
@@ -48,7 +48,7 @@ public class CueNumberingAndStandbyTests
         shell.Cues.AddCue(CueKind.Comment);
 
         // Auto-renumber-on-insert used to assign bare integers at every depth, so this produced
-        // "1 1 2 3 2" — two cues answering to Q1 and two to Q2, inside one list.
+        // "1 1 2 3 2" - two cues answering to Q1 and two to Q2, inside one list.
         Assert.Equal("1 1.1 1.2 1.3 2", Numbers(list));
     });
 
@@ -84,7 +84,7 @@ public class CueNumberingAndStandbyTests
             ShellFixture.Select(shell.Cues, list.Cues[0].Id);
             var added = shell.Cues.AddCue(CueKind.Comment)!;
 
-            // There is no room at this level — 1.1 is taken by the cue after — so the answer is a
+            // There is no room at this level - 1.1 is taken by the cue after - so the answer is a
             // level deeper. It used to hand back "1", duplicating the cue above it.
             Assert.NotEqual(list.Cues[0].Number, added.Number);
             Assert.True(list.Cues[0].Number < added.Number, $"{list.Cues[0].Number} < {added.Number}");
@@ -104,7 +104,7 @@ public class CueNumberingAndStandbyTests
 
             shell.Cues.StepStandby(1);
 
-            // It used to find no position in the enabled-only list and clamp to index 0 — jumping to
+            // It used to find no position in the enabled-only list and clamp to index 0 - jumping to
             // the top of the list mid-show.
             var expected = order.Skip(4).First(cue => cue.Enabled);
             Assert.Equal(expected.Id, list.StandbyCueId);
@@ -163,8 +163,8 @@ public class CueNumberingAndStandbyTests
         string[] paths = ["/nowhere/a.wav", "/nowhere/b.wav", "/nowhere/c.wav"];
         shell.Cues.AddMedia(paths);
 
-        // The run anchors each cue on the one before it. Without that — and without a refresh between
-        // files to move the selection — every file would land in the same place and come out reversed.
+        // The run anchors each cue on the one before it. Without that - and without a refresh between
+        // files to move the selection - every file would land in the same place and come out reversed.
         Assert.Equal(["a", "b", "c"], list.Cues.Select(cue => cue.Label));
         Assert.Equal(list.Cues[^1].Id, shell.Cues.SelectedCue?.Id);
     });
@@ -200,7 +200,7 @@ public class CueNumberingAndStandbyTests
 
         // This is what made a bulk import quadratic rather than linear: every observer of the journal
         // ran per COMMAND, and the shell's observer re-runs the whole project status pass. An import is
-        // a batch, not a gesture, so it reports once — see ProjectJournal.Composite(quiet).
+        // a batch, not a gesture, so it reports once - see ProjectJournal.Composite(quiet).
         Assert.Equal(1, changes);
         Assert.Equal(40, list.Cues.Count);
     });
@@ -224,7 +224,7 @@ public class CueNumberingAndStandbyTests
         shell.Cues.AddMedia([.. Enumerable.Range(0, 300).Select(index => $"/nowhere/bulk-{index}.wav")]);
         var late = Time(() => shell.Cues.AddMedia(Batch("late")));
 
-        // A SCALING assertion, not a benchmark, so the allowance is deliberately huge — it has to
+        // A SCALING assertion, not a benchmark, so the allowance is deliberately huge - it has to
         // survive a loaded CI box and a GC landing mid-run. The old behaviour was quadratic in the size
         // of the list and grew without bound (measured at 5 ms a file into a small list and 26 ms a
         // file into a large one, all on the UI thread), so a flat curve clears this by a wide margin

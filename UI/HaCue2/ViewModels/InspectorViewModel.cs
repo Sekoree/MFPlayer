@@ -33,7 +33,7 @@ namespace HaCue2.ViewModels;
 public partial class InspectorViewModel : ObservableObject
 {
     private static readonly IReadOnlyList<string> NoTabs = [];
-    private const string Mixed = "—";
+    private const string Mixed = "-";
 
     private readonly ProjectJournal _journal;
 
@@ -58,7 +58,7 @@ public partial class InspectorViewModel : ObservableObject
     /// <summary>The running show, used only for hot geometry edits while a cue is sounding.</summary>
     public ShowHost? Host { get; set; }
 
-    /// <summary>The lead cue — the one whose values the single-selection fields show.</summary>
+    /// <summary>The lead cue - the one whose values the single-selection fields show.</summary>
     public CueNode? Cue => _selection.Count > 0 ? Project.FindCue(_selection[0]) : null;
 
     public IReadOnlyList<CueNode> Selected =>
@@ -120,7 +120,7 @@ public partial class InspectorViewModel : ObservableObject
     {
         // Remembered for EVERY kind in the outgoing selection, not just a single one. A journal
         // change mid-multi-edit clears and restores the tree selection, and each pass comes through
-        // here — when only single selections wrote the memory, adding a send on the Audio pane of
+        // here - when only single selections wrote the memory, adding a send on the Audio pane of
         // eleven stems recalled a stale "GENERAL" on the restore and threw the operator out of the
         // pane once per edit. The open tab is in the intersection of the selected kinds' tab sets
         // (see Reload), so it is a valid memory for each of them.
@@ -145,7 +145,7 @@ public partial class InspectorViewModel : ObservableObject
     /// True for an EDIT, false for a selection change.
     /// <para>
     /// This is the difference between an inspector that stays where the operator put it and one that
-    /// snaps back to General on every keystroke — which is what it did, because every edit ran the tab
+    /// snaps back to General on every keystroke - which is what it did, because every edit ran the tab
     /// choice below from scratch and the remembered tab was only ever written when the SELECTION
     /// changed. Editing a level on the Audio pane therefore recomputed "media cue ⇒ GENERAL" and threw
     /// the operator out of the pane they were working in, once per character.
@@ -382,19 +382,19 @@ public partial class InspectorViewModel : ObservableObject
         CueKind.Visualizer => ["GENERAL", "VISUALIZER", "VIDEO", "AUTOMATION", "NOTE"],
         CueKind.Patch => ["GENERAL", "PATCH", "NOTE"],
         // A card is words plus where they sit, so it takes VIDEO for the placement and AUTOMATION for
-        // an opacity track — it is a picture from the moment it is drawn.
+        // an opacity track - it is a picture from the moment it is drawn.
         CueKind.Text => ["GENERAL", "TEXT", "VIDEO", "AUTOMATION", "NOTE"],
         _ => ["GENERAL", "NOTE"],
     };
 
     /// <summary>
-    /// The tabs a particular cue actually has — the kind's set, less anything its media cannot do.
+    /// The tabs a particular cue actually has - the kind's set, less anything its media cannot do.
     /// </summary>
     /// <remarks>
     /// <para>
     /// A media cue's kind says it MIGHT carry video; the file says whether it does. A WAV stem was
     /// offered a Video tab with an empty composition picker, a placement list that could never have an
-    /// entry, and a crop editor over nothing — eleven of them in a stem group. Worse, "place on
+    /// entry, and a crop editor over nothing - eleven of them in a stem group. Worse, "place on
     /// composition" was reachable there, and a placement on a cue with no video stream is a layer that
     /// renders nothing and cannot be told apart from a broken one.
     /// </para>
@@ -402,7 +402,7 @@ public partial class InspectorViewModel : ObservableObject
     /// Only removed when the probe has actually ANSWERED. A file nobody has looked at yet keeps its
     /// Video tab: hiding a tab because the answer has not arrived is the same failure as painting a cue
     /// red before anybody looked at it. Live sources (<c>ndi:</c> and friends) are never probed at all
-    /// and keep it for the same reason — what a camera is carrying is a fact about the moment it
+    /// and keep it for the same reason - what a camera is carrying is a fact about the moment it
     /// fires, not about the document.
     /// </para>
     /// <para>
@@ -426,7 +426,7 @@ public partial class InspectorViewModel : ObservableObject
     /// What the probe knows about one cue's file.
     /// </summary>
     /// <remarks>
-    /// The lead's copy first — the shell pushes it on selection and it is the freshest answer — then
+    /// The lead's copy first - the shell pushes it on selection and it is the freshest answer - then
     /// the lookup. The fallback matters: <see cref="Facts"/> is only written when the selection comes
     /// through the cue tree, so anything that shows a cue by id (a jump, a search result, a test) would
     /// otherwise decide the lead's tabs on a null.
@@ -449,12 +449,12 @@ public partial class InspectorViewModel : ObservableObject
     public bool IsTextPane => SelectedTab == "TEXT";
 
     // ── editable fields ───────────────────────────────────────────────────────────────────────
-    // Across a multi-selection a differing value reads "—" and stays that way until the operator types
+    // Across a multi-selection a differing value reads "-" and stays that way until the operator types
     // into it: showing the lead cue's value instead would invite an edit that silently overwrote the
     // others with something nobody read.
 
     public string MultiSelectionNote =>
-        $"{SelectionCount} cues · mixed values read — and only write when touched";
+        $"{SelectionCount} cues · mixed values read - and only write when touched";
 
     public string NumberValue
     {
@@ -492,7 +492,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public IReadOnlyList<string> EndTargetOptions => Cue is not MediaCueNode media
         ? []
-        : ["— normal follow —", .. EndTargetCandidates(media)
+        : ["- normal follow -", .. EndTargetCandidates(media)
             .Select(cue => $"Q{CuePresentation.Number(cue.Number)} · {cue.Label}")];
 
     public int EndTargetIndex
@@ -526,18 +526,18 @@ public partial class InspectorViewModel : ObservableObject
     /// <remarks>
     /// Named rather than shown raw: a URI is mostly punctuation, and what identifies the cue is the
     /// camera's name or the device's. Changing it is "Edit source…" on the cue's own menu, which
-    /// reopens the dialog that built it — there is no path here a file picker could replace.
+    /// reopens the dialog that built it - there is no path here a file picker could replace.
     /// </remarks>
     public string SourceNote => Cue is not MediaCueNode media || !SourceUri.IsSource(media.MediaPath)
         ? ""
         : SourceUri.Describe(media.MediaPath)
           + (SourceUri.IsLive(media.MediaPath)
-              ? " · live — no length, no seeking, and it opens when the cue fires"
+              ? " · live - no length, no seeking, and it opens when the cue fires"
               : "");
 
     public string LevelValue
     {
-        get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Db(media.LevelDb) : "—");
+        get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Db(media.LevelDb) : "-");
         set
         {
             if (!TryParseDb(value, out var db))
@@ -599,7 +599,7 @@ public partial class InspectorViewModel : ObservableObject
 
             var values = track.Keyframes.Select(key => key.Value).ToList();
             return $"automated by a volume track ({CuePresentation.Db(values.Min())} … "
-                   + $"{CuePresentation.Db(values.Max())}) — the value above is the base";
+                   + $"{CuePresentation.Db(values.Max())}) - the value above is the base";
         }
     }
 
@@ -660,7 +660,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public string FadeValue
     {
-        get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Seconds(media.FadeInMs) : "—");
+        get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Seconds(media.FadeInMs) : "-");
         set
         {
             if (TryParseSeconds(value, out var ms))
@@ -670,7 +670,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public string FadeOutValue
     {
-        get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Seconds(media.FadeOutMs) : "—");
+        get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Seconds(media.FadeOutMs) : "-");
         set
         {
             if (TryParseSeconds(value, out var ms))
@@ -747,7 +747,7 @@ public partial class InspectorViewModel : ObservableObject
     /// Whether pre-roll opens this cue's media ahead of time.
     /// </summary>
     /// <remarks>
-    /// Phrased as the POSITIVE on screen — "pre-roll this cue" — because the document's flag is a
+    /// Phrased as the POSITIVE on screen - "pre-roll this cue" - because the document's flag is a
     /// disable and a checkbox called "disable" that is ticked to mean "do not" is one an operator has
     /// to read twice under pressure.
     /// </remarks>
@@ -768,7 +768,7 @@ public partial class InspectorViewModel : ObservableObject
     /// A colour band on the cue's row: 0 is none, 1–8 index the palette.
     /// </summary>
     /// <remarks>
-    /// The fastest thing to read in a list of six hundred rows — an operator finds "the blue block"
+    /// The fastest thing to read in a list of six hundred rows - an operator finds "the blue block"
     /// before they find Q412.
     /// </remarks>
     public int ColorTagIndex
@@ -804,7 +804,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public string TrimInValue
     {
-        get => Shared(cue => cue is MediaCueNode media ? ClipTimes.Format(media.TrimInMs) : "—");
+        get => Shared(cue => cue is MediaCueNode media ? ClipTimes.Format(media.TrimInMs) : "-");
         set
         {
             // A clock reading, seconds, or a from-the-end time. Thirty minutes was 1800.0 here until
@@ -817,13 +817,13 @@ public partial class InspectorViewModel : ObservableObject
     /// <summary>The out-point, or "end" when the cue plays through.</summary>
     /// <remarks>
     /// Zero means "to the end" in the model, and showing that as "0.0" would read as an out-point at
-    /// the very start — a cue that plays nothing. The word is the honest rendering.
+    /// the very start - a cue that plays nothing. The word is the honest rendering.
     /// </remarks>
     public string TrimOutValue
     {
         get => Shared(cue => cue is MediaCueNode media
             ? media.TrimOutMs <= 0 ? "end" : ClipTimes.Format(media.TrimOutMs)
-            : "—");
+            : "-");
         set
         {
             if (value.Trim().Equals("end", StringComparison.OrdinalIgnoreCase))
@@ -838,7 +838,7 @@ public partial class InspectorViewModel : ObservableObject
     }
 
     /// <summary>
-    /// How this cue is reached — manual, follow, or continue.
+    /// How this cue is reached - manual, follow, or continue.
     /// </summary>
     /// <remarks>
     /// On the BASE cue type, so it is offered for every kind. "Wait two seconds then tell the lighting
@@ -883,7 +883,7 @@ public partial class InspectorViewModel : ObservableObject
     /// <remarks>
     /// The display writes "4.0 s"; a parser that only accepted bare numbers would refuse to read back
     /// the value it had just written, which is the commonest way a field appears not to work. Negative
-    /// durations are refused rather than clamped — the field keeps the old value so nothing silently
+    /// durations are refused rather than clamped - the field keeps the old value so nothing silently
     /// becomes zero.
     /// </remarks>
     private static bool TryParseSeconds(string text, out int milliseconds)
@@ -906,7 +906,7 @@ public partial class InspectorViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Ends the current coalescing group — called when a field loses focus.
+    /// Ends the current coalescing group - called when a field loses focus.
     /// </summary>
     /// <remarks>
     /// Without an explicit boundary two separate edits of the same field merge into one undo step, and
@@ -929,7 +929,7 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// This is the answer to "why is this silent" and to "why is it coming out twice", and it is
-    /// computed from the two matrices rather than described — so it cannot disagree with them.
+    /// computed from the two matrices rather than described - so it cannot disagree with them.
     /// </remarks>
     public IReadOnlyList<RouteHop> RouteChain => Cue is MediaCueNode media
         ? AudioPresentation.RouteChain(Project, media, sourceChannel: 1)
@@ -938,7 +938,7 @@ public partial class InspectorViewModel : ObservableObject
     public bool HasRoute => RouteChain.Count > 0;
 
     /// <summary>
-    /// Applies one pointer gesture to this cue's sends — the same click/drag/right-click as the patch.
+    /// Applies one pointer gesture to this cue's sends - the same click/drag/right-click as the patch.
     /// </summary>
     /// <remarks>
     /// No group linking here. An Output Group links the PATCH, where a stereo pair's two cells are the
@@ -949,7 +949,7 @@ public partial class InspectorViewModel : ObservableObject
     {
         // EVERY selected media cue, not just the lead. Routing a stem group to a different logical
         // output is the archetypal multi-selection edit, and this pane silently applied it to the first
-        // row only — leaving the other ten cues on the old send with nothing on screen saying so.
+        // row only - leaving the other ten cues on the old send with nothing on screen saying so.
         //
         // The lead still decides WHAT the gesture means (which cell, whether it is being added or
         // removed, which direction a mute toggles), because that is what the operator clicked on. The
@@ -1047,7 +1047,7 @@ public partial class InspectorViewModel : ObservableObject
     /// <summary>The pair of logical channels a stereo preset targets, in sort order.</summary>
     /// <remarks>
     /// The first Output GROUP with at least two members, because that is what a stereo pair IS in this
-    /// document (register item 9) — falling back to the first two logical channels for a project that
+    /// document (register item 9) - falling back to the first two logical channels for a project that
     /// never grouped anything. Named rather than assumed so the button can say where it is sending.
     /// </remarks>
     private IReadOnlyList<LogicalAudioChannel> StereoTarget
@@ -1069,7 +1069,7 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
-    /// <summary>Where the stereo presets would send — on the buttons, so nobody has to guess.</summary>
+    /// <summary>Where the stereo presets would send - on the buttons, so nobody has to guess.</summary>
     public string SendPresetTarget => StereoTarget switch
     {
         { Count: >= 2 } pair => $"{pair[0].Name} · {pair[1].Name}",
@@ -1077,7 +1077,7 @@ public partial class InspectorViewModel : ObservableObject
         _ => "no logical outputs",
     };
 
-    /// <summary>False on a project with nothing to send TO — the buttons say so rather than no-op.</summary>
+    /// <summary>False on a project with nothing to send TO - the buttons say so rather than no-op.</summary>
     public bool HasSendPresetTarget => StereoTarget.Count >= 2;
 
     /// <summary>
@@ -1162,7 +1162,7 @@ public partial class InspectorViewModel : ObservableObject
     /// <remarks>
     /// <para>
     /// A send or level edit changes the cue's clip binding, so the engine will not adopt it while that
-    /// cue is playing — a reload would restart the cue, which on a group of stems is a pop and eleven
+    /// cue is playing - a reload would restart the cue, which on a group of stems is a pop and eleven
     /// re-opened files for one fader move. The running voice gets the new matrix directly instead, and
     /// the document catches up when the show is idle.
     /// </para>
@@ -1209,7 +1209,7 @@ public partial class InspectorViewModel : ObservableObject
     {
         get
         {
-            // The canvas the SELECTED placement is on — a cue can be on several at once, and the
+            // The canvas the SELECTED placement is on - a cue can be on several at once, and the
             // preview shows the one being edited.
             if (Placement is not { } placement)
                 return [];
@@ -1230,7 +1230,7 @@ public partial class InspectorViewModel : ObservableObject
     /// What makes dividing a composition between projectors worth more than a picture: a cue can be
     /// dropped exactly onto ONE screen of a wall without anybody working out what fraction that is.
     /// Scoped to the composition the SELECTED placement is on, which is the same canvas
-    /// <see cref="Placements"/> draws — a cue can be on several at once, and the guides of a canvas it
+    /// <see cref="Placements"/> draws - a cue can be on several at once, and the guides of a canvas it
     /// is not being dragged on would snap it to seams that are not there.
     /// </remarks>
     public IReadOnlyList<double> PlacementGuidesX =>
@@ -1263,7 +1263,7 @@ public partial class InspectorViewModel : ObservableObject
 
     /// <summary>Which one the fields edit. A cue can be on several canvases at once.</summary>
     /// <remarks>
-    /// Both the boxes and the guides follow it, because switching placement can switch COMPOSITION —
+    /// Both the boxes and the guides follow it, because switching placement can switch COMPOSITION -
     /// and a canvas drawn from one composition with the seams of another is worse than no seams: it
     /// offers snap targets that do not exist on the screen the cue is actually going to.
     /// </remarks>
@@ -1360,7 +1360,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public string LayerValue
     {
-        get => Placement is { } placement ? placement.LayerIndex.ToString(CultureInfo.CurrentCulture) : "—";
+        get => Placement is { } placement ? placement.LayerIndex.ToString(CultureInfo.CurrentCulture) : "-";
         set
         {
             if (Placement is not { } placement
@@ -1506,7 +1506,7 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Exact by construction. Half is 0.5 and a quadrant is 0.25, and neither is reachable by dragging
-    /// — which is why HaPlay grew the same set of buttons and why they are the fastest correct route to
+    /// - which is why HaPlay grew the same set of buttons and why they are the fastest correct route to
     /// a two-up or a four-up.
     /// </remarks>
     public void ApplyLayout(string preset)
@@ -1654,7 +1654,7 @@ public partial class InspectorViewModel : ObservableObject
         set => WriteEffectParameter(ChromaEffect, "spill", 0, 1, value, "adjust key");
     }
 
-    /// <summary>The key colour as "#RRGGBB" — what a designer is given on a call sheet.</summary>
+    /// <summary>The key colour as "#RRGGBB" - what a designer is given on a call sheet.</summary>
     public string ChromaColour
     {
         get => ChromaEffect is { } key
@@ -1850,8 +1850,8 @@ public partial class InspectorViewModel : ObservableObject
     /// <remarks>
     /// <para>
     /// The general fields (label, level, trigger, waits) have always applied to every selected cue; the
-    /// per-kind panes did not. Their setters closed over the LEAD cue's payload — <c>() =&gt;
-    /// group.Shuffle</c> — so selecting five fade cues and typing a duration changed exactly one of
+    /// per-kind panes did not. Their setters closed over the LEAD cue's payload - <c>() =&gt;
+    /// group.Shuffle</c> - so selecting five fade cues and typing a duration changed exactly one of
     /// them, silently, while the field showed the new value for the whole selection.
     /// </para>
     /// <para>
@@ -1861,13 +1861,13 @@ public partial class InspectorViewModel : ObservableObject
     /// </para>
     /// <para>
     /// Cues already holding the value are left out entirely, so a multi-selection edit produces one
-    /// undo step containing only the cues it actually changed — and none at all when it changed
+    /// undo step containing only the cues it actually changed - and none at all when it changed
     /// nothing, which is what keeps a combo box re-announcing its own value from filling the stack.
     /// </para>
     /// </remarks>
     /// <param name="lead">
     /// The cue whose pane the operator is looking at. Present only so <typeparamref name="TCue"/> can
-    /// be inferred at the call site — the edit itself is resolved against the selection, and the lead
+    /// be inferred at the call site - the edit itself is resolved against the selection, and the lead
     /// gets no special treatment beyond being one of them.
     /// </param>
     private void EditEach<TCue, T>(
@@ -1913,7 +1913,7 @@ public partial class InspectorViewModel : ObservableObject
     /// The same, for a property whose new value has to be computed per cue.
     /// </summary>
     /// <remarks>
-    /// Needed by every LIST-valued property here — a fade's targets, a jump's destination, a
+    /// Needed by every LIST-valued property here - a fade's targets, a jump's destination, a
     /// visualizer's feed. Handing one <c>List&lt;Guid&gt;</c> to eleven cues would alias them all onto
     /// a single instance, so editing one afterwards would silently edit the rest; and a relative change
     /// ("add this channel") means something different on each cue and must be recomputed from that
@@ -1964,7 +1964,7 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// The preview shows the WHOLE composition, not just the selected cue, so a drag here can move any
-    /// layer on it — which is the point of showing the neighbours at all. The command is the same one
+    /// layer on it - which is the point of showing the neighbours at all. The command is the same one
     /// the Video view builds, keyed to the cue, so the two canvases share one undo step rather than
     /// producing two that disagree.
     /// </remarks>
@@ -2114,7 +2114,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public string ChildCount => Group is { } group
         ? $"{group.Children.Count} cue{(group.Children.Count == 1 ? "" : "s")}"
-        : "—";
+        : "-";
 
     public bool ShuffleValue
     {
@@ -2144,7 +2144,7 @@ public partial class InspectorViewModel : ObservableObject
     /// Never open a pass with the item that closed the previous one.
     /// </summary>
     /// <remarks>
-    /// Only meaningful while shuffling — an in-order playlist repeats by construction, and hiding the
+    /// Only meaningful while shuffling - an in-order playlist repeats by construction, and hiding the
     /// checkbox is clearer than offering one that does nothing.
     /// </remarks>
     public bool AvoidRepeatValue
@@ -2190,7 +2190,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public string CrossfadeValue
     {
-        get => Group is { } group ? $"{group.CrossfadeMs / 1000d:0.##} s" : "—";
+        get => Group is { } group ? $"{group.CrossfadeMs / 1000d:0.##} s" : "-";
         set
         {
             if (Group is not { } group
@@ -2223,7 +2223,7 @@ public partial class InspectorViewModel : ObservableObject
     // ── the per-kind panes ────────────────────────────────────────────────────────────────────
     // Every control-flow kind EXECUTES (the transport resolves them app-side), so every one of them
     // has to be authorable. Until this landed the only working fade, jump, patch and action cues in
-    // existence were the ones the fixture generator wrote — the panes were literals, so the transport
+    // existence were the ones the fixture generator wrote - the panes were literals, so the transport
     // could fire a cue the editor could not create.
 
     private FadeCueNode? Fade => Cue as FadeCueNode;
@@ -2319,7 +2319,7 @@ public partial class InspectorViewModel : ObservableObject
         }
     }
 
-    /// <summary>An outline behind the ink — what makes a caption readable over picture.</summary>
+    /// <summary>An outline behind the ink - what makes a caption readable over picture.</summary>
     public double CardOutline
     {
         get => Card?.OutlineWidth ?? 0;
@@ -2362,9 +2362,9 @@ public partial class InspectorViewModel : ObservableObject
     public string CardHint => Card is not { } card
         ? ""
         : card.Text.Trim().Length == 0
-            ? "no words yet — the cue will fire and show nothing"
+            ? "no words yet - the cue will fire and show nothing"
             : card.Placements.Count == 0
-                ? "not on any canvas yet — add a placement on the Video tab"
+                ? "not on any canvas yet - add a placement on the Video tab"
                 : card.DurationMs > 0
                     ? $"held for {card.DurationMs / 1000d:0.##} s, then ends on its own"
                     : "held on screen until something stops it";
@@ -2374,7 +2374,7 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// The DIGITS are checked, not just the length. Anything seven characters long used to be accepted,
-    /// so "#ZZZZZZ" was stored and shown back as though it were a colour — while the compiler quietly
+    /// so "#ZZZZZZ" was stored and shown back as though it were a colour - while the compiler quietly
     /// fell back to white, and the card came up a colour the inspector never displayed.
     /// </remarks>
     private static string Hex(string? value, string fallback)
@@ -2387,7 +2387,7 @@ public partial class InspectorViewModel : ObservableObject
     }
 
     // Every control on the TEXT pane goes through here, so making this one method selection-aware is
-    // what makes "select three cards, set the font" work — it used to change the first one only.
+    // what makes "select three cards, set the font" work - it used to change the first one only.
     private void EditCard<T>(
         string property, Func<TextCueNode, T> read, Action<TextCueNode, T> write, T value)
     {
@@ -2453,7 +2453,7 @@ public partial class InspectorViewModel : ObservableObject
     {
         get => Fade is { } fade
             ? fade.ToLevelDb <= GainRange.SilenceFloorDb ? "−inf" : CuePresentation.Db(fade.ToLevelDb)
-            : "—";
+            : "-";
         set
         {
             if (Fade is not { } fade)
@@ -2480,7 +2480,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public string FadeDurationValue
     {
-        get => Fade is { } fade ? CuePresentation.Seconds(fade.DurationMs) : "—";
+        get => Fade is { } fade ? CuePresentation.Seconds(fade.DurationMs) : "-";
         set
         {
             if (Fade is { } fade && TryParseSeconds(value, out var ms))
@@ -2526,9 +2526,9 @@ public partial class InspectorViewModel : ObservableObject
     public string FadeTargetHint => Fade is not { } fade
         ? ""
         : fade.FadeEverythingSounding
-            ? "everything sounding — the per-output list below is ignored"
+            ? "everything sounding - the per-output list below is ignored"
             : fade.TargetChannelIds.Count + fade.TargetCueIds.Count == 0
-                ? "no target — this cue will do nothing"
+                ? "no target - this cue will do nothing"
                 : $"{fade.TargetChannelIds.Count + fade.TargetCueIds.Count} target(s)";
 
     // ── JUMP ──────────────────────────────────────────────────────────────────────────────────
@@ -2537,7 +2537,7 @@ public partial class InspectorViewModel : ObservableObject
     public IReadOnlyList<string> JumpTargets =>
         Jump is null
             ? []
-            : ["— none —", .. Project.AllCues()
+            : ["- none -", .. Project.AllCues()
                 .Where(cue => cue.Id != Jump.Id)
                 .Select(cue => $"Q{CuePresentation.Number(cue.Number)} · {cue.Label}")];
 
@@ -2552,7 +2552,7 @@ public partial class InspectorViewModel : ObservableObject
             var at = candidates.FindIndex(cue => cue.Id == jump.TargetCueIds[0]);
 
             // A target that has been deleted reads as "none" rather than pointing at whatever now
-            // occupies that position — Project status reports the dangling reference separately.
+            // occupies that position - Project status reports the dangling reference separately.
             return at < 0 ? 0 : at + 1;
         }
         set
@@ -2651,7 +2651,7 @@ public partial class InspectorViewModel : ObservableObject
     public string JumpHint => Jump is not { } jump
         ? ""
         : jump.TargetCueIds.Count == 0
-            ? "no target — a jump with nowhere to go is an error on Project status, not a silent no-op"
+            ? "no target - a jump with nowhere to go is an error on Project status, not a silent no-op"
             : jump.TargetCueIds.Any(id => Project.FindCue(id) is null)
                 ? "a target no longer exists in this show"
                 : "";
@@ -2661,7 +2661,7 @@ public partial class InspectorViewModel : ObservableObject
     public IReadOnlyList<string> ActionEndpoints =>
         Action is null
             ? []
-            : ["— none —", .. Project.ActionEndpoints.Select(
+            : ["- none -", .. Project.ActionEndpoints.Select(
                 endpoint => $"{endpoint.Name} · {Describe(endpoint.Kind)}")];
 
     public int ActionEndpointIndex
@@ -2721,7 +2721,7 @@ public partial class InspectorViewModel : ObservableObject
     }
 
     /// <summary>
-    /// What this action will actually do — or what is wrong with it.
+    /// What this action will actually do - or what is wrong with it.
     /// </summary>
     /// <remarks>
     /// For a MIDI endpoint this is the PARSER's own verdict, and the same check runs in the status
@@ -2737,7 +2737,7 @@ public partial class InspectorViewModel : ObservableObject
 
             if (action.EndpointId is not { } id
                 || Project.ActionEndpoints.FirstOrDefault(endpoint => endpoint.Id == id) is not { } endpoint)
-                return "no endpoint — this cue will do nothing";
+                return "no endpoint - this cue will do nothing";
 
             if (endpoint.Kind == EndpointKind.MidiOut)
             {
@@ -2750,7 +2750,7 @@ public partial class InspectorViewModel : ObservableObject
             }
 
             return action.Address.Length == 0
-                ? "no address — this cue will do nothing"
+                ? "no address - this cue will do nothing"
                 : "arguments are whitespace-separated and typed by shape: 3 is an int, 3.0 a float";
         }
     }
@@ -2775,7 +2775,7 @@ public partial class InspectorViewModel : ObservableObject
     public IReadOnlyList<string> PatchSnapshots =>
         Patch is null
             ? []
-            : ["— none —", .. Project.PatchSnapshots.Select(
+            : ["- none -", .. Project.PatchSnapshots.Select(
                 snapshot => $"snapshot “{snapshot.Name}”")];
 
     public int PatchSnapshotIndex
@@ -2808,7 +2808,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public string PatchFadeValue
     {
-        get => Patch is { } patch ? CuePresentation.Seconds(patch.FadeMs) : "—";
+        get => Patch is { } patch ? CuePresentation.Seconds(patch.FadeMs) : "-";
         set
         {
             if (Patch is { } patch && TryParseSeconds(value, out var ms))
@@ -2838,7 +2838,7 @@ public partial class InspectorViewModel : ObservableObject
     public string PatchHint => Patch is not { } patch
         ? ""
         : patch.SnapshotId is null && patch.Levels.Count == 0
-            ? "nothing to recall — this cue will do nothing"
+            ? "nothing to recall - this cue will do nothing"
             : "";
 
     // ── VISUALIZER ────────────────────────────────────────────────────────────────────────────
@@ -2859,7 +2859,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public string VisualizerHoldValue
     {
-        get => Visualizer is { } visualizer ? CuePresentation.Seconds(visualizer.HoldMs) : "—";
+        get => Visualizer is { } visualizer ? CuePresentation.Seconds(visualizer.HoldMs) : "-";
         set
         {
             if (Visualizer is { } visualizer && TryParseSeconds(value, out var ms))
@@ -2873,7 +2873,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public string VisualizerBlendValue
     {
-        get => Visualizer is { } visualizer ? CuePresentation.Seconds(visualizer.BlendMs) : "—";
+        get => Visualizer is { } visualizer ? CuePresentation.Seconds(visualizer.BlendMs) : "-";
         set
         {
             if (Visualizer is { } visualizer && TryParseSeconds(value, out var ms))
@@ -2952,13 +2952,13 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// projectM is a native library a booth box may not have, and the settings above are perfectly
-    /// editable without it — so the honest hint is the machine's answer, not a fixed sentence. A cue
+    /// editable without it - so the honest hint is the machine's answer, not a fixed sentence. A cue
     /// authored on a laptop with no library still travels and still runs at the venue.
     /// </remarks>
     public string VisualizerHint =>
         HaCue2.Engine.ProjectVisualizers.IsAvailable
             ? "renders onto every composition this cue is placed on · fires and stops like any other cue"
-            : "projectM is not available on this machine — "
+            : "projectM is not available on this machine - "
               + (HaCue2.Engine.ProjectVisualizers.UnavailableReason ?? "the library was not found")
               + " · the settings still travel with the show";
 
@@ -3024,7 +3024,7 @@ public partial class InspectorViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// The path is RESOLVED here, against the project's own roots, because the editor opens a file and
-    /// the document stores a reference — the same resolution the engine does when it plays the cue, so
+    /// the document stores a reference - the same resolution the engine does when it plays the cue, so
     /// what is trimmed is what will be played.
     /// </remarks>
     public ClipEditorViewModel? ClipEditor() =>
@@ -3065,11 +3065,11 @@ public partial class InspectorViewModel : ObservableObject
     /// </remarks>
     public bool CanBePlaced => Facts is { HasPlaceableVideo: true };
 
-    /// <summary>The only video is a still frame — worth saying before somebody places it.</summary>
+    /// <summary>The only video is a still frame - worth saying before somebody places it.</summary>
     public bool IsCoverArtOnly => Facts is { IsCoverArtOnly: true };
 
     public string CoverArtNote =>
-        "this file's only video is cover art — a placement shows that still frame for the cue's length";
+        "this file's only video is cover art - a placement shows that still frame for the cue's length";
 
     /// <summary>Which composition a new placement would go on. Index into <see cref="PlacementCompositions"/>.</summary>
     [ObservableProperty]
@@ -3086,7 +3086,7 @@ public partial class InspectorViewModel : ObservableObject
     /// <para>
     /// <b>Cover art is selected explicitly here.</b> The decoder's automatic election deliberately
     /// SKIPS attached pictures, so an MP3 placed with no video-track choice would put nothing on the
-    /// canvas — the operator would see an empty layer and no reason for it. Naming the stream is what
+    /// canvas - the operator would see an empty layer and no reason for it. Naming the stream is what
     /// makes "place it and the album art appears" true.
     /// </para>
     /// </remarks>
@@ -3140,7 +3140,7 @@ public partial class InspectorViewModel : ObservableObject
         Reload();
     }
 
-    /// <summary>Removes the SELECTED placement — the cue may still appear on other canvases.</summary>
+    /// <summary>Removes the SELECTED placement - the cue may still appear on other canvases.</summary>
     public void RemovePlacement()
     {
         if (Cue is not { } cue
@@ -3169,7 +3169,7 @@ public partial class InspectorViewModel : ObservableObject
     /// One expander header per placement, so several can be organised without one anonymous editor.
     /// </summary>
     /// <remarks>
-    /// A placement carries geometry, a fit, an opacity, a crop, a chroma key and a colour adjust — the
+    /// A placement carries geometry, a fit, an opacity, a crop, a chroma key and a colour adjust - the
     /// better part of a screen each. With a picker above one editor, a cue on three canvases meant
     /// three screens of settings reachable only by remembering which entry was which. Each is now an
     /// expander, and opening one selects the placement that its nested editor projects.
@@ -3227,7 +3227,7 @@ public partial class InspectorViewModel : ObservableObject
 
     public bool HasSubtitleTracks => SubtitleTracks.Count > 0;
 
-    /// <summary>What the cue currently shows — empty is the default, subtitles are never on by accident.</summary>
+    /// <summary>What the cue currently shows - empty is the default, subtitles are never on by accident.</summary>
     public string SubtitleSummary => Cue is MediaCueNode { Subtitles.Count: > 0 } media
         ? string.Join(" · ", media.Subtitles.Select(Describe))
         : "none";
@@ -3286,7 +3286,7 @@ public partial class InspectorViewModel : ObservableObject
     /// The editor for one of this cue's curves, or null when the cue has none of that name.
     /// </summary>
     /// <remarks>
-    /// Register item 16 — one editor for fades, crossfades and patch-cue ramps alike. Building the
+    /// Register item 16 - one editor for fades, crossfades and patch-cue ramps alike. Building the
     /// TARGET here rather than handing the window a cue is what makes that possible: the window knows
     /// only "a curve", so a lane or a preset can use it unchanged.
     /// </remarks>
@@ -3342,7 +3342,7 @@ public partial class InspectorViewModel : ObservableObject
     {
         var detail = track.Keyframes.Count == 0
             // The redesign replaced double-click-only adding: click empty canvas, or press ＋ KEY.
-            ? "empty — click the lane or use ＋ KEY to add one"
+            ? "empty - click the lane or use ＋ KEY to add one"
             : $"{track.Keyframes.Count} keyframe{(track.Keyframes.Count == 1 ? "" : "s")} · absolute time";
         return AutomationPropertyCatalog.Get(track.Target.PropertyId)?.Domain == AutomationDomain.External
             ? track.Target.EndpointId is null ? detail + " · no endpoint" : detail + $" → {track.Target.Address}"
@@ -3664,8 +3664,8 @@ public partial class InspectorViewModel : ObservableObject
                     Label = "Address",
                     Value = track.Target.Address,
                     Hint = kind == EndpointKind.OscOut
-                        ? "/osc/address — the automated value is its argument"
-                        : "cc <channel> <controller> — automation supplies value 0–127",
+                        ? "/osc/address - the automated value is its argument"
+                        : "cc <channel> <controller> - automation supplies value 0–127",
                 },
                 new PromptField
                 {
@@ -3783,7 +3783,7 @@ public partial class InspectorViewModel : ObservableObject
 /// One curve picker: the four built-in laws, plus "custom" for a shape somebody drew.
 /// </summary>
 /// <remarks>
-/// "custom" is not a fifth law — it is what the list reads when an INLINE POINT LIST exists, because
+/// "custom" is not a fifth law - it is what the list reads when an INLINE POINT LIST exists, because
 /// <see cref="CurveSpec.Resolve"/> prefers those points over the law. Which is also why choosing a law
 /// has to clear them: without that, picking "linear" over a drawn curve would change the reading and
 /// nothing else, and the picker would be describing a fade that does not happen.
@@ -3876,7 +3876,7 @@ public sealed class TargetToggle(string name, bool selected, Action<bool> apply)
 
 
 /// <summary>One automation lane, as the Effects pane lists it.</summary>
-/// <param name="Index">Its position in the cue's lane list — what edit and remove act on.</param>
+/// <param name="Index">Its position in the cue's lane list - what edit and remove act on.</param>
 public sealed record EffectLaneRow(int Index, string Kind, string Detail, bool IsOutbound);
 
 public sealed record LayerEffectRackRow(

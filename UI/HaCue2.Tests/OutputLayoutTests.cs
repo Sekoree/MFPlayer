@@ -19,8 +19,8 @@ namespace HaCue2.Tests;
 /// </summary>
 /// <remarks>
 /// The capability HaPlay's cue player had and this did not: which PART of a composition each output
-/// displays. It is a question about all of them at once — overlap is a blend zone and canvas nobody
-/// covers is a gap — and neither is visible one output at a time, which is why it lives on the
+/// displays. It is a question about all of them at once - overlap is a blend zone and canvas nobody
+/// covers is a gap - and neither is visible one output at a time, which is why it lives on the
 /// composition rather than in the per-output mapping pane.
 /// </remarks>
 public class OutputLayoutTests
@@ -42,12 +42,12 @@ public class OutputLayoutTests
     }
 
     /// <summary>
-    /// The canvas as it is actually drawn — the composition's own pane.
+    /// The canvas as it is actually drawn - the composition's own pane.
     /// </summary>
     /// <remarks>
     /// These used to read <c>video.LayoutBoxes</c>, a projection scoped to "the selected composition"
     /// that fed the full-screen layout overlay. The overlay is gone and every pane draws its own
-    /// layout, so asserting on the view-model's copy would be testing a surface nobody can see —
+    /// layout, so asserting on the view-model's copy would be testing a surface nobody can see -
     /// which is exactly how the pane's boxes went stale without a test noticing.
     /// </remarks>
     private static CompositionPaneViewModel Pane(VideoViewModel video, CompositionDefinition canvas) =>
@@ -302,8 +302,8 @@ public class OutputLayoutTests
 
         // What makes the layout worth more than a picture: a cue can be dropped exactly onto one
         // projector of a wall without anybody working out what fraction that is. Asserted on the ONE
-        // source both readers share — the composition's layout and the inspector's cue-placement
-        // canvas — because a seam an operator lines a picture up against and a seam the show actually
+        // source both readers share - the composition's layout and the inspector's cue-placement
+        // canvas - because a seam an operator lines a picture up against and a seam the show actually
         // renders at have to be the same number. That it reaches the drag is CompositionFeedTests.
         Assert.Equal(
             [0, 0.5, 1],
@@ -633,7 +633,7 @@ public class PlacementCanvasInteractionTests
 /// Which canvas the FEEDS rail is assigning to.
 /// </summary>
 /// <remarks>
-/// These used to cover a right-hand form that edited "the selected composition" — name, size, rate and
+/// These used to cover a right-hand form that edited "the selected composition" - name, size, rate and
 /// idle image. Those fields live on each composition's own pane now, so the form is gone and with it
 /// the two empty states it needed. What survives is the rule underneath it, which the assignment rail
 /// still depends on: a null id follows the FIRST composition, so the rail always has a subject as long

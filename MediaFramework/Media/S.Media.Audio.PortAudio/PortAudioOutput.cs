@@ -339,7 +339,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// This exists because a managed stream callback is a realtime hazard the process cannot control:
     /// the audio server's graph thread (JACK/PipeWire runs every client's process callback on ONE
     /// cycle) enters the .NET runtime, and any GC suspension in progress at that moment blocks the
-    /// WHOLE graph cycle — a DSP-load spike and a server xrun. In the full HaCue2 app (UI allocation
+    /// WHOLE graph cycle - a DSP-load spike and a server xrun. In the full HaCue2 app (UI allocation
     /// churn, ~200 threads) the collision odds work out to roughly once a second, which was exactly
     /// the reported stutter cadence; the headless probes allocated too little to ever hit it. In
     /// blocking mode a GC pause merely delays the feeder, and PortAudio's native FIFO (sized by the
@@ -504,7 +504,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             {
                 // The feeder goes down BEFORE the stream: a Pa_WriteStream racing Pa_CloseStream on
                 // the same handle is native use-after-free. Cancel unblocks it within one chunk
-                // (~5 ms) — its write either completes or returns an error it treats as shutdown.
+                // (~5 ms) - its write either completes or returns an error it treats as shutdown.
                 if (_feeder is { } feeder)
                 {
                     _feederCts?.Cancel();
@@ -781,14 +781,14 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
 
     /// <summary>
     /// Blocking-mode pump: drains the managed ring into PortAudio's native FIFO with
-    /// <see cref="Native.Pa_WriteStream"/>, which blocks until the device has room — the pacing is
+    /// <see cref="Native.Pa_WriteStream"/>, which blocks until the device has room - the pacing is
     /// the device's own. An empty ring feeds SILENCE (counted as underrun, exactly like the callback
     /// path) so the native side never starves at our node and the stream clock stays smooth.
     /// </summary>
     /// <remarks>
     /// The whole point of this thread is that it may be late: a GC pause lands HERE instead of on
     /// the audio server's graph cycle, and PortAudio's FIFO (sized by the suggested latency) rides
-    /// it out. Reuses the callback path's counters — <c>_callbackCount</c> becomes "feed cycles" and
+    /// it out. Reuses the callback path's counters - <c>_callbackCount</c> becomes "feed cycles" and
     /// the calibration block mirrors the one the callback ran, with <c>Pa_GetStreamTime</c> (legal
     /// outside a stream callback).
     /// </remarks>

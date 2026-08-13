@@ -269,7 +269,7 @@ public sealed class ValidationTests
 
         var issues = ProjectValidator.Validate(fixture.Project);
 
-        // "document"-scoped rules may have no id, but every issue says what KIND of thing it is about —
+        // "document"-scoped rules may have no id, but every issue says what KIND of thing it is about -
         // otherwise the status view has nowhere to send the operator.
         Assert.All(issues, issue => Assert.False(string.IsNullOrEmpty(issue.SubjectKind)));
     }

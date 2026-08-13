@@ -5,12 +5,12 @@ using Xunit;
 namespace HaCue2.Tests;
 
 /// <summary>
-/// Authoring a trigger binding — Learn, conflicts, and removal.
+/// Authoring a trigger binding - Learn, conflicts, and removal.
 /// </summary>
 /// <remarks>
 /// External input ran before this existed, but a <c>TriggerBinding</c> could not be constructed
 /// anywhere in the app: the runtime worked and the authoring surface did not. These tests are about
-/// the gesture that closes that — press LEARN, press a button, choose what it fires, BIND.
+/// the gesture that closes that - press LEARN, press a button, choose what it fires, BIND.
 /// </remarks>
 public class TriggerBindingTests
 {

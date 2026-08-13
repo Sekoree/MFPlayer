@@ -23,7 +23,7 @@ the patches are part of the compositor contract.
 
 That target also *builds* the tree on demand: publishing a desktop head for the host RID with nothing
 staged runs `scripts/build-projectm.sh` itself, so a fresh clone can `dotnet publish` without a
-separate setup step (a few minutes, once — it needs cmake, a C++17 compiler, OpenGL headers and glm).
+separate setup step (a few minutes, once - it needs cmake, a C++17 compiler, OpenGL headers and glm).
 A plain `dotnet build` never triggers it and keeps degrading to "no visualizer". Escape hatches:
 `-p:SkipProjectMNativeBuild=true` skips the build *and* the publish gate, `-p:MfpProjectMAutoBuild=false`
 keeps the gate but leaves the build to you. A cross-RID publish cannot auto-build (the script is bash

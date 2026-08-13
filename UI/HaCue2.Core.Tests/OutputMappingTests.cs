@@ -10,7 +10,7 @@ namespace HaCue2.Core.Tests;
 /// <remarks>
 /// The document stores destination geometry in FRACTIONS and warp points as OFFSETS from an even
 /// grid; the engine wants output pixels and absolute positions. Getting either wrong produces a
-/// picture that is subtly in the wrong place — which on a projector is discovered at a get-in, by
+/// picture that is subtly in the wrong place - which on a projector is discovered at a get-in, by
 /// eye, with no error anywhere.
 /// </remarks>
 public class OutputMappingTests
@@ -53,7 +53,7 @@ public class OutputMappingTests
 
         var resolved = Assert.Single(OutputMapping.Spec(Output(section), 1920, 1080)!.Sections);
 
-        // The SOURCE is a slice of the canvas and stays in canvas fractions — only the destination is
+        // The SOURCE is a slice of the canvas and stays in canvas fractions - only the destination is
         // measured in the output's pixels.
         Assert.Equal(0.25, resolved.SrcX);
         Assert.Equal(0.5, resolved.SrcWidth);
@@ -144,7 +144,7 @@ public class OutputMappingTests
     public void AnUnevenMeshKeepsItsTwoAxes()
     {
         // Panels are not square: a three-projector blend across a flat cyc wants 5×2, and the old
-        // square-grid model could only offer 5×5 — fifteen handles the operator has to leave alone.
+        // square-grid model could only offer 5×5 - fifteen handles the operator has to leave alone.
         var section = new MappingSection
         {
             MeshColumns = 5, MeshRows = 2, WarpOffsets = [.. new double[20]],
@@ -156,10 +156,10 @@ public class OutputMappingTests
         Assert.Equal(2, resolved.MeshRows);
         Assert.Equal(10, resolved.MeshPoints!.Count);
 
-        // Row 1, column 4 — the last point of the top row sits at x = 1, y = 0.
+        // Row 1, column 4 - the last point of the top row sits at x = 1, y = 0.
         Assert.Equal(1, resolved.MeshPoints[4].X, 6);
         Assert.Equal(0, resolved.MeshPoints[4].Y, 6);
-        // Row 2, column 0 — first point of the bottom row, x = 0, y = 1.
+        // Row 2, column 0 - first point of the bottom row, x = 0, y = 1.
         Assert.Equal(0, resolved.MeshPoints[5].X, 6);
         Assert.Equal(1, resolved.MeshPoints[5].Y, 6);
     }

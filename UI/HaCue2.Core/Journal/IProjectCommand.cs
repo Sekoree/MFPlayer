@@ -13,7 +13,7 @@ namespace HaCue2.Core.Journal;
 /// </para>
 /// <para>
 /// <b>What is not a command:</b> firing cues, transport, arming, and patch-cue recalls. Undo means
-/// "un-edit my document", never "un-play my show". The distinction has to be structural — if a GO
+/// "un-edit my document", never "un-play my show". The distinction has to be structural - if a GO
 /// could reach this interface, the first stressed operator would press ⌘Z on one.
 /// </para>
 /// </remarks>
@@ -21,14 +21,14 @@ public interface IProjectCommand
 {
     /// <summary>
     /// What the operator did, in their words: "set fade 2.0 → 3.0 on Q13.1". Shown on the undo toast
-    /// and in the edit log ("what changed since I last saved" — the question people ask after a
+    /// and in the edit log ("what changed since I last saved" - the question people ask after a
     /// rehearsal).
     /// </summary>
     string Description { get; }
 
-    /// <summary>Which surface this edit belongs to — "cues", "patch", "outputs", "settings".</summary>
+    /// <summary>Which surface this edit belongs to - "cues", "patch", "outputs", "settings".</summary>
     /// <remarks>
-    /// The undo toast names it ("undid: patch — Fold L → Out 3 gain") because with one journal across
+    /// The undo toast names it ("undid: patch - Fold L → Out 3 gain") because with one journal across
     /// every view, an undo can otherwise change a screen the operator is not looking at.
     /// </remarks>
     string Domain { get; }
@@ -39,7 +39,7 @@ public interface IProjectCommand
 }
 
 /// <summary>
-/// A command the UI emits in streams — a slider drag, a spinner, a timeline move, a matrix scrub.
+/// A command the UI emits in streams - a slider drag, a spinner, a timeline move, a matrix scrub.
 /// </summary>
 /// <remarks>
 /// Consecutive commands sharing a <see cref="CoalesceKey"/> collapse into ONE undo step, keyed by

@@ -5,7 +5,7 @@
         x:Class="HaCue2.Views.OutputInfoWindow"
         x:DataType="vm:OutputInfoViewModel"
         x:CompileBindings="True"
-        Title="HaCue2 — Output info"
+        Title="HaCue2 - Output info"
         Width="1020" Height="140"
         SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
@@ -14,7 +14,7 @@
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- The drawer, popped out for a second monitor (screen 02b, round-2 decision). Same content, no
-       toggle of its own — closing the window is how it goes away, and the shell's drawer is closed
+       toggle of its own - closing the window is how it goes away, and the shell's drawer is closed
        while this exists so the same meters are never live in two places. -->
 
   <Grid ColumnDefinitions="Auto,Auto,*" Background="{DynamicResource BoothPanel}">

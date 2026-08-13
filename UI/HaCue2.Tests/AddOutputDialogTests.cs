@@ -70,7 +70,7 @@ public class AddOutputDialogTests
         Assert.Equal(PromptFieldKind.Suggestion, size.Kind);
         Assert.NotEmpty(size.Options);
 
-        // A preset is a shortcut, never a fence — an old projector at 1024×768 has to be sayable.
+        // A preset is a shortcut, never a fence - an old projector at 1024×768 has to be sayable.
         size.Value = "1366×768";
         Assert.Equal("1366×768", size.Value);
     }

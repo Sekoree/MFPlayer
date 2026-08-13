@@ -10,7 +10,7 @@ namespace HaCue2.Tests;
 /// </summary>
 /// <remarks>
 /// Every row is DERIVED from the two scopes rather than authored, so the ledger cannot claim an
-/// override the document does not hold — which is exactly what the sample version did, permanently
+/// override the document does not hold - which is exactly what the sample version did, permanently
 /// listing two on every project including ones that overrode nothing.
 /// </remarks>
 public class OverrideLedgerTests
@@ -65,7 +65,7 @@ public class OverrideLedgerTests
         Assert.Null(shell.Project.Settings.PanicFadeMs);
         Assert.Empty(settings.Overrides);
 
-        // Removing an override changes what the show DOES — a project that had pinned 150 ms and now
+        // Removing an override changes what the show DOES - a project that had pinned 150 ms and now
         // inherits 250 ms behaves differently, which is exactly the sort of change to be able to undo.
         shell.Undo();
         Assert.Equal(150, shell.Project.Settings.PanicFadeMs);

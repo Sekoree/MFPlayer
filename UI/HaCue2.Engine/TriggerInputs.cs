@@ -48,11 +48,11 @@ public sealed class TriggerInputs : IAsyncDisposable
         Clocks.Triggered += action => Triggered?.Invoke(action);
     }
 
-    /// <summary>Raised when an inbound message matched a binding. Off the I/O thread's back — the
+    /// <summary>Raised when an inbound message matched a binding. Off the I/O thread's back - the
     /// handler marshals; this must not block a UDP receive or a PortMIDI poll.</summary>
     public event Action<TriggerAction>? Triggered;
 
-    /// <summary>Raised for everything that arrived, matched or not — the Targets wire monitor.</summary>
+    /// <summary>Raised for everything that arrived, matched or not - the Targets wire monitor.</summary>
     public event Action<TriggerSignal>? Observed;
 
     /// <summary>Raised when a source could not be opened, or a binding could not be resolved.</summary>
@@ -74,7 +74,7 @@ public sealed class TriggerInputs : IAsyncDisposable
     /// </summary>
     /// <remarks>
     /// Behind the SAME master gate as the wires, which is the whole point of collapsing HaPlay's three
-    /// arms into one toggle — an operator has a single answer to "can anything fire this show without
+    /// arms into one toggle - an operator has a single answer to "can anything fire this show without
     /// me?". Constructed here rather than in the host so that answer cannot drift into two switches.
     /// </remarks>
     public TriggerClocks Clocks { get; private set; }
@@ -120,7 +120,7 @@ public sealed class TriggerInputs : IAsyncDisposable
     /// <summary>Adopts an edited document. Reopens the sources only when the CONFIG actually changed.</summary>
     /// <remarks>
     /// Compared rather than reopened blindly, because a reload happens on every edit and closing a MIDI
-    /// port to reopen the identical one would drop whatever arrived in between — during a show, that is
+    /// port to reopen the identical one would drop whatever arrived in between - during a show, that is
     /// a missed GO.
     /// </remarks>
     public async Task ReloadAsync(HaCueProject project)
@@ -187,7 +187,7 @@ public sealed class TriggerInputs : IAsyncDisposable
                         IsEnabled = true,
                         Binding = new ControlDeviceBindingConfig
                         {
-                            // A HINT, matched by name the way an audio line's is — device ids are not
+                            // A HINT, matched by name the way an audio line's is - device ids are not
                             // stable across reboots, let alone across machines.
                             MIDIInputDeviceName = input.DeviceHint.Length > 0 ? input.DeviceHint : null,
                         },
@@ -209,7 +209,7 @@ public sealed class TriggerInputs : IAsyncDisposable
         {
             // A port another application already holds, or a UDP port in use. Reported and survived:
             // external input is an addition to a show that already works without it.
-            Problem?.Invoke($"external input could not be opened — {failure.Message}");
+            Problem?.Invoke($"external input could not be opened - {failure.Message}");
         }
     }
 
@@ -347,7 +347,7 @@ public sealed class TriggerInputs : IAsyncDisposable
     /// <remarks>
     /// A hardware button bounces and a fader sends a stream; without this, one press fires a cue
     /// several times. Keyed per BINDING rather than per message, so two bindings on the same note both
-    /// still fire — they are two things the operator asked for.
+    /// still fire - they are two things the operator asked for.
     /// </remarks>
     private bool Admit(TriggerBinding binding)
     {

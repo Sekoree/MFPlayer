@@ -8,7 +8,7 @@ namespace HaCue2.Core.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The NDI runtime is proprietary and separately installed, so a CI runner does not have one — both
+/// The NDI runtime is proprietary and separately installed, so a CI runner does not have one - both
 /// legs failed these with an empty <c>Open</c> list, which is the engine doing exactly what it promises
 /// (an NDI runtime this machine lacks is reported, never thrown). A test that asserts a sender OPENED
 /// is asserting about the runtime as much as about the code, and cannot be answered without one.
@@ -16,7 +16,7 @@ namespace HaCue2.Core.Tests;
 /// <para>
 /// This probes rather than taking the framework's env-var opt-in (<c>MFP_RUN_NDI_TESTS=1</c>): those
 /// tests need a live source on the NETWORK, which no probe can conjure, while these need only a
-/// loadable library — so on any box that has NDI installed they keep running by themselves, which is
+/// loadable library - so on any box that has NDI installed they keep running by themselves, which is
 /// where their value is.
 /// </para>
 /// </remarks>
@@ -29,7 +29,7 @@ public sealed class NdiRuntimeFactAttribute : FactAttribute
         try
         {
             // The runtime itself, NOT a sender: creating a sender to find out would announce a source on
-            // the network — briefly, but on every discovery pass, on every machine that HAS NDI. Loading
+            // the network - briefly, but on every discovery pass, on every machine that HAS NDI. Loading
             // the library and initialising it is the whole question, and NDIlib_version answers the first
             // half by throwing when there is nothing to load.
             if (NDIRuntime.Version.Length == 0)

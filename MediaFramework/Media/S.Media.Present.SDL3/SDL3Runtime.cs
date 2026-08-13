@@ -30,7 +30,7 @@ public static class SDL3Runtime
     /// <remarks>
     /// <para>
     /// <b>This is not defensive; it fixes a reproducible SIGSEGV.</b> Four call sites build SDL GL
-    /// windows on four different threads — the compositor probe, the shared compositor context, the
+    /// windows on four different threads - the compositor probe, the shared compositor context, the
     /// visualizer's offscreen context, and each video output's own render thread. Two of them
     /// overlapping crashes inside <c>SDL_CreateWindow</c> (SEGV_MAPERR), or fails with
     /// "EGL context already created" when the same global EGL state is read mid-mutation.
@@ -39,7 +39,7 @@ public static class SDL3Runtime
     /// <c>SDL_GL_SetAttribute</c> makes the ordering requirement stricter than "one call at a time":
     /// the attributes live in ONE process-global block that the following <c>SDL_CreateWindow</c> and
     /// <c>SDL_GL_CreateContext</c> consume. Two threads interleaving there silently give each other's
-    /// windows the wrong pixel format even when nothing crashes — which is why the scope has to span
+    /// windows the wrong pixel format even when nothing crashes - which is why the scope has to span
     /// the whole sequence rather than each call.
     /// </para>
     /// <para>

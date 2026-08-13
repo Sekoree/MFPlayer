@@ -3,13 +3,13 @@
 
   <!-- Tokens are merged into THIS dictionary (not just into the bundle) so every {StaticResource}
        below resolves against the file's own root. Avalonia resolves StaticResource by walking the
-       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it —
+       runtime parent stack, and a sibling dictionary merged only by the outer bundle is not on it -
        which is why Avalonia's own themes never reach across control files for a key. -->
   <ResourceDictionary.MergedDictionaries>
     <ResourceInclude Source="avares://HaCue2/Themes/Tokens.axaml" />
   </ResourceDictionary.MergedDictionaries>
 
-  <!-- The mockup has no scrollbars drawn — every screen is sized to fit. A real show does not fit, so
+  <!-- The mockup has no scrollbars drawn - every screen is sized to fit. A real show does not fit, so
        the bars exist here but are made as quiet as possible: 8 px, no line buttons, no track fill, a
        rule-2 thumb that brightens under the pointer. A scrollbar in a cue list is a position readout,
        not a control anyone aims at; the wheel and the keyboard do the work. -->

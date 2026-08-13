@@ -6,7 +6,7 @@ namespace OSCLib.Benchmarks;
 /// <summary>
 /// Measures <see cref="OSCPacketCodec"/> encode/decode for the three shapes that dominate real
 /// control traffic: a fader message, an X32-style meter blob (string + 384-byte blob at 20-50 Hz),
-/// and a small bundle. Allocated B/op is the number to watch — the decode path currently allocates
+/// and a small bundle. Allocated B/op is the number to watch - the decode path currently allocates
 /// the type-tag string per message and copies blobs with ToArray().
 /// </summary>
 [MemoryDiagnoser]

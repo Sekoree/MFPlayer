@@ -12,7 +12,7 @@
   <DockPanel>
 
     <!-- ══ transport ═══════════════════════════════════════════════════════════════════════
-         GO always works. There are no arming gates on playback (register item 3) — the only arm
+         GO always works. There are no arming gates on playback (register item 3) - the only arm
          left is External input, which covers MIDI/OSC/hotkey triggers, schedules and MTC chase, and
          never gates GO. -->
     <Border Classes="transport" DockPanel.Dock="Top">
@@ -66,7 +66,7 @@
         <!-- A Button, not a ToggleButton, and the click handler is the ONLY writer.
              As a ToggleButton it did nothing at all: IsChecked binds two-way by default, so the click
              wrote IsRightPanelOpen through the binding and the handler then inverted it straight back.
-             It was also off-skin, because Avalonia matches an implicit ControlTheme on the exact type —
+             It was also off-skin, because Avalonia matches an implicit ControlTheme on the exact type -
              ToggleButton never saw the `{x:Type Button}` theme, so it fell through to Simple's stock
              chrome and `.tight`, which lives inside that theme, applied to nothing.
              The label already carries the state, exactly like PAUSE beside it, so there is no latch to
@@ -98,8 +98,8 @@
               <MenuItem Header="Text" Click="OnAddCue" Tag="Text" />
               <Separator />
               <!-- Sources rather than files. Each is an ordinary media cue whose path is a URI the
-                   registry knows how to open, so everything below it — level, sends, placements,
-                   fades — means exactly what it means for a file on disk. -->
+                   registry knows how to open, so everything below it - level, sends, placements,
+                   fades - means exactly what it means for a file on disk. -->
               <MenuItem Header="NDI input…" Click="OnAddNdi" />
               <MenuItem Header="Local input…" Click="OnAddCapture" />
               <MenuItem Header="YouTube…" Click="OnAddYouTube" />
@@ -142,7 +142,7 @@
     <Grid DockPanel.Dock="Bottom"
           IsVisible="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).IsTimelineOpen}">
       <!-- A CONCRETE row height, not Auto: the sheet stretches to its row (it carries no height of
-           its own so the floating window can size it), and a splitter cannot resize an Auto row —
+           its own so the floating window can size it), and a splitter cannot resize an Auto row -
            the old pairing left the split visibly draggable and doing nothing. -->
       <Grid.RowDefinitions>
         <RowDefinition Height="4" />
@@ -174,19 +174,19 @@
           <!-- A list nobody has put a cue in yet says so and names the way out. -->
           <c:EmptyState IsVisible="{Binding IsEmpty}"
                         Headline="No cues in this list"
-                        Detail="Use + ADD above to make one. GO still works — it simply has nothing to fire." />
+                        Detail="Use + ADD above to make one. GO still works - it simply has nothing to fire." />
 
           <!-- The tree proper. A TreeDataGrid rather than an indented flat list because a group
                has to LOOK like a group: it carries a chevron, it opens and closes, and its cues are
                visibly inside it. An indent margin alone could not tell a group apart from a cue that
-               happened to be nested — which is what this replaced. -->
+               happened to be nested - which is what this replaced. -->
           <TreeDataGrid IsVisible="{Binding !IsEmpty}" Source="{Binding CueSource}"
                         CanUserResizeColumns="True"
                         CanUserSortColumns="False"
                         AutomationProperties.Name="Cue list tree">
             <TreeDataGrid.ContextMenu>
               <ContextMenu>
-                <!-- Not edits, so they stay live under Lock — but they need a selected cue, and with
+                <!-- Not edits, so they stay live under Lock - but they need a selected cue, and with
                      none they used to sit enabled and do nothing. -->
                 <MenuItem Header="Fire this cue now" Click="OnFireSelected"
                           IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).HasSelection}" />
@@ -331,7 +331,7 @@
             <ListBox.DataTemplates>
 
               <DataTemplate DataType="vm:ActiveGroupRow">
-                <!-- Double-tap anywhere on the header toggles the expander — the chevron works too, but
+                <!-- Double-tap anywhere on the header toggles the expander - the chevron works too, but
                      a 10-pixel target is a small one for a booth in the dark. -->
                 <Border Classes="actrow grp" Classes.near="{Binding IsNearEnd}"
                         DoubleTapped="OnToggleGroupRow">
@@ -342,7 +342,7 @@
                       <!-- Expanded by default: a group that hid its children would show LESS than the
                            flat list it replaced.
                            The cue TREE's chevron, deliberately. As a bare ToggleButton this drew in
-                           SimpleTheme's stock chrome — Avalonia matches an implicit ControlTheme on the
+                           SimpleTheme's stock chrome - Avalonia matches an implicit ControlTheme on the
                            exact type, so the booth theme keyed off {x:Type Button} never reached it and
                            `.tight` styled nothing. The tree already answers this exact gesture on this
                            exact object, a group, so it gets the tree's answer: one glyph, flipped when
@@ -364,7 +364,7 @@
                       <TextBlock Grid.Column="5" Classes="clock" Text="{Binding Clock}"
                                  ToolTip.Tip="the WHOLE group's remaining and total" />
                       <!-- Seekable for a together-group: one drag lands every stem and every video on
-                           the same absolute time. A playlist header stays a plain progress readout —
+                           the same absolute time. A playlist header stays a plain progress readout -
                            its children play in sequence, so its bar has no one place to seek to. -->
                       <c:SeekBar Grid.Column="6" Maximum="1" Value="{Binding Progress}"
                                  AutomationProperties.Name="Seek active group"
@@ -429,7 +429,7 @@
                     <TextBlock Grid.Column="5" Classes="clock dim3" Text="{Binding Length}"
                                ToolTip.Tip="whole clip" />
                     <!-- Draggable. The bar follows the finger during a gesture and the show follows on
-                         release — a seek per pointer-move would re-buffer the clip on every pixel. -->
+                         release - a seek per pointer-move would re-buffer the clip on every pixel. -->
                     <c:SeekBar Grid.Column="6" Maximum="1" Value="{Binding Progress}"
                                AutomationProperties.Name="Seek active cue"
                                IsSeekable="{Binding CanSeek}"

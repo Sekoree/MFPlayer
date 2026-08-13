@@ -72,7 +72,7 @@
           </HeaderedContentControl>
 
           <CheckBox Margin="10,6,10,0" IsChecked="{Binding AudioOnly}"
-                    Content="Sound only — do not download the picture" />
+                    Content="Sound only - do not download the picture" />
           <!-- The thumbnail rides along as an attached picture, exactly like MP3 cover art, so an
                audio-only cue still has something to put on a screen. -->
           <CheckBox Margin="10,2,10,0" IsChecked="{Binding IncludeThumbnail}"

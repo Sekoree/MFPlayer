@@ -15,7 +15,7 @@ using Xunit;
 namespace HaCue2.Tests;
 
 /// <summary>
-/// Adding and editing cues that play a SOURCE — a camera, an input, a video.
+/// Adding and editing cues that play a SOURCE - a camera, an input, a video.
 /// </summary>
 /// <remarks>
 /// The dialogs are the interesting half: the URI they build is the entire contract with the framework,
@@ -207,7 +207,7 @@ public class SourceCueTests
     /// Editing repoints the cue rather than replacing it.
     /// </summary>
     /// <remarks>
-    /// Everything else about the cue — its number, its placements, its sends, its position in the list —
+    /// Everything else about the cue - its number, its placements, its sends, its position in the list -
     /// is the work. Re-adding it to change which camera it watches would throw all of that away.
     /// </remarks>
     [Fact]
@@ -265,7 +265,7 @@ public class SourceCueTests
             Assert.Equal("/cache/old.vtt", Assert.Single(cue.Subtitles).Path);
         });
 
-    /// <summary>The row names the camera, not the URI — which is unreadable at that width.</summary>
+    /// <summary>The row names the camera, not the URI - which is unreadable at that width.</summary>
     [Fact]
     public Task TheRowNamesTheSourceAndMarksItLive() => ShellFixture.WithShell(shell =>
     {

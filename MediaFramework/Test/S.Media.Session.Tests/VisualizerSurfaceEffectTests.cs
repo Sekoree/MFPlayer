@@ -13,7 +13,7 @@ namespace S.Media.Session.Tests;
 
 /// <summary>
 /// A visualizer placement's color-stage effects (chroma key, brightness/contrast) must reach the
-/// compositor's surface layer exactly like a media placement's reach its frame layer — the
+/// compositor's surface layer exactly like a media placement's reach its frame layer - the
 /// 2026-07-21 report was chroma key/color adjust silently ignored on visualizer cues because the
 /// placement chain dropped them before the surface slot (which also never built the chain).
 /// </summary>

@@ -22,7 +22,7 @@ public enum ResizeEdges
 
 /// <summary>One move or resize, in fractions of the canvas.</summary>
 /// <param name="Index">Which box, by its position in <see cref="PlacementCanvas.Boxes"/>.</param>
-/// <param name="SubjectId">The document object it stands for — a cue, or a mapping section.</param>
+/// <param name="SubjectId">The document object it stands for - a cue, or a mapping section.</param>
 /// <param name="Layer">
 /// Which of the subject's placements. A cue can appear on several canvases at once, so the cue id
 /// alone does not say which rectangle was dragged.
@@ -75,7 +75,7 @@ public partial class PlacementCanvas : UserControl
     private const double CoarseNudgeStep = 0.05;
 
     /// <summary>
-    /// The panel the boxes are laid out in — the surface every coordinate here is measured against.
+    /// The panel the boxes are laid out in - the surface every coordinate here is measured against.
     /// </summary>
     /// <remarks>
     /// Not the control's own bounds: the canvas border insets the panel by a pixel, and measuring
@@ -109,7 +109,7 @@ public partial class PlacementCanvas : UserControl
     /// Extra vertical guides to snap to, in fractions of the canvas.
     /// </summary>
     /// <remarks>
-    /// The canvas supplies its own edges and centre; these are what the SHOW adds — the boundaries
+    /// The canvas supplies its own edges and centre; these are what the SHOW adds - the boundaries
     /// between the output slices of a composition layout, so a picture can be lined up exactly with one
     /// screen of a wall without arithmetic.
     /// </remarks>
@@ -293,7 +293,7 @@ public partial class PlacementCanvas : UserControl
         if (keepAspect)
             moved = WithAspect(_grabbedRect, moved, _edges);
 
-        // Alt suspends snapping for one gesture — the escape hatch for placing something a few pixels
+        // Alt suspends snapping for one gesture - the escape hatch for placing something a few pixels
         // off a guide, which is otherwise impossible once the guide has it.
         if (SnapEnabled && !modifiers.HasFlag(KeyModifiers.Alt))
             moved = Snap(moved, _edges, surface);
@@ -322,7 +322,7 @@ public partial class PlacementCanvas : UserControl
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A MOVE snaps whichever of the box's own edges — and its centre — comes nearest a guide, and
+    /// A MOVE snaps whichever of the box's own edges - and its centre - comes nearest a guide, and
     /// carries the whole box with it, so a rectangle can be aligned by its left edge, its right edge or
     /// its middle without choosing a mode. A RESIZE snaps only the edges being dragged, because the
     /// opposite side is the thing being measured from.
@@ -382,7 +382,7 @@ public partial class PlacementCanvas : UserControl
     /// </summary>
     /// <remarks>
     /// The canvas edges and its centre always, the caller's own guides, and the edges and centres of
-    /// every OTHER box on the canvas — lining two placements up with each other is the commonest
+    /// every OTHER box on the canvas - lining two placements up with each other is the commonest
     /// alignment there is and the one arithmetic helps with least.
     /// </remarks>
     private List<double> Guides(IReadOnlyList<double> extra, bool horizontal)
@@ -509,7 +509,7 @@ public partial class PlacementCanvas : UserControl
     /// The topmost box under the pointer.
     /// </summary>
     /// <remarks>
-    /// Searched back to front so an overlapping box on top is the one grabbed — the same order it is
+    /// Searched back to front so an overlapping box on top is the one grabbed - the same order it is
     /// drawn in, which is the only order that matches what the operator sees.
     /// </remarks>
     private int BoxAt(Point position)

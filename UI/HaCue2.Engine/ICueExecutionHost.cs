@@ -24,8 +24,8 @@ public readonly record struct TimelineControlStart(CueNode Cue, TimeSpan StartPo
 /// </summary>
 /// <remarks>
 /// <para>
-/// The seam that makes cue execution testable. <see cref="CueExecutor"/> holds the DECISION — what a
-/// group's fire mode means, where a jump lands, whether an auto-continue chain carries on — and this
+/// The seam that makes cue execution testable. <see cref="CueExecutor"/> holds the DECISION - what a
+/// group's fire mode means, where a jump lands, whether an auto-continue chain carries on - and this
 /// interface is every effect that decision can have. Nothing here knows about a session, a bay or a
 /// socket, so the whole of the interesting logic can be driven against a recording fake.
 /// </para>
@@ -33,13 +33,13 @@ public readonly record struct TimelineControlStart(CueNode Cue, TimeSpan StartPo
 /// It exists because the split in this assembly's test coverage was never about importance: the pure
 /// arithmetic was tested and every device-holding class was not, purely because it could not be
 /// constructed without hardware. The code that decides what every cue does was on the wrong side of
-/// that line, and two defects in it — a group's auto-continue firing its first child twice, and effect
-/// lanes silently dropped from untrimmed cues — were found by reading rather than by a test.
+/// that line, and two defects in it - a group's auto-continue firing its first child twice, and effect
+/// lanes silently dropped from untrimmed cues - were found by reading rather than by a test.
 /// </para>
 /// </remarks>
 public interface ICueExecutionHost
 {
-    /// <summary>The document as it stands. Read per call — an edit lands between two cues in a chain.</summary>
+    /// <summary>The document as it stands. Read per call - an edit lands between two cues in a chain.</summary>
     HaCueProject Project { get; }
 
     /// <summary>True while a cue is being fired by an external input binding.</summary>
@@ -79,7 +79,7 @@ public interface ICueExecutionHost
     /// <summary>Stops one cue, fading it out.</summary>
     Task StopCueAsync(Guid cueId);
 
-    /// <summary>Rewrites a sounding cue's send gains — a fade to a level that is not silence.</summary>
+    /// <summary>Rewrites a sounding cue's send gains - a fade to a level that is not silence.</summary>
     Task SetCueLevelAsync(Guid cueId, double levelDb);
 
     /// <summary>Ramps one sounding cue with the fade cue's own duration and resolved shape.</summary>
@@ -107,7 +107,7 @@ public interface ICueExecutionHost
         TimeSpan initialPosition,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Cue ids currently holding a voice — what "fade everything sounding" means.</summary>
+    /// <summary>Cue ids currently holding a voice - what "fade everything sounding" means.</summary>
     IReadOnlyList<Guid> Sounding { get; }
 
     /// <summary>Notes that something has asked a cue to come down, for the Active panel's stripe.</summary>

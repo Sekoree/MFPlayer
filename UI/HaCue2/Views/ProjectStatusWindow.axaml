@@ -5,7 +5,7 @@
         x:Class="HaCue2.Views.ProjectStatusWindow"
         x:DataType="vm:ProjectStatusViewModel"
         x:CompileBindings="True"
-        Title="HaCue2 — Project status"
+        Title="HaCue2 - Project status"
         Width="1060" Height="560"
         MinWidth="900" MinHeight="460"
         WindowStartupLocation="CenterOwner"
@@ -14,7 +14,7 @@
         FontSize="{DynamicResource FontSizeBase}">
 
   <!-- Screen 14, the renamed Preflight. It is a COLLECTOR of the project's errors and warnings, each
-       with the fix action attached — missing media, unfed or unpatched logical outputs, absent
+       with the fix action attached - missing media, unfed or unpatched logical outputs, absent
        devices, dead jump targets, past schedules. Relink and consolidate live here because they are
        what fixing usually means.
 
@@ -72,7 +72,7 @@
                   <TextBlock Grid.Column="2" Classes="mono dim3 small ellipsis" Text="{Binding Detail}" />
                   <!-- Every failing row carries its own fix; a status list that only reports is a list
                        the operator has to translate into actions under time pressure. The click takes
-                       the operator to the screen that owns the thing — without it the button was
+                       the operator to the screen that owns the thing - without it the button was
                        decoration, which is worse than no button. -->
                   <Button Grid.Column="3" Theme="{StaticResource LinkButton}"
                           Foreground="{DynamicResource GelCongo}"

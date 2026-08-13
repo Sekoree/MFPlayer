@@ -10,7 +10,7 @@ namespace HaCue2.Tests;
 /// </summary>
 /// <remarks>
 /// Every test here stands for something that LOOKED like it worked. A tab that snapped back, a preset
-/// strip that was a caption, a multi-selection edit that landed on one cue — none of them threw, none
+/// strip that was a caption, a multi-selection edit that landed on one cue - none of them threw, none
 /// of them were visible in a screenshot, and all of them were found by using the app rather than by
 /// reading it. That is what these are for.
 /// </remarks>
@@ -28,7 +28,7 @@ public class EditorRegressionTests
         shell.Cues.Inspector.SelectedTab = "AUDIO";
         shell.Cues.Inspector.LevelValue = "-6";
 
-        // It used to land back on GENERAL — once per keystroke — because every edit re-ran the
+        // It used to land back on GENERAL - once per keystroke - because every edit re-ran the
         // opening-tab choice from scratch.
         Assert.Equal("AUDIO", shell.Cues.Inspector.SelectedTab);
         Assert.Equal(-6, bed.LevelDb);
@@ -44,7 +44,7 @@ public class EditorRegressionTests
             list.Cues.AddRange([left, right]);
 
             // Eleven stems selected, operator on the Audio pane adding sends. Applying an edit runs
-            // the journal-changed refresh, which clears and then restores the tree selection — the
+            // the journal-changed refresh, which clears and then restores the tree selection - the
             // inspector sees exactly this Show sequence. With the tab memory only written for
             // SINGLE selections, the clear forgot "AUDIO" and the restore landed on GENERAL, once
             // per edit, with the operator mid-workflow.
@@ -69,7 +69,7 @@ public class EditorRegressionTests
             shell.Cues.Inspector.Show([bed.Id]);
             shell.Cues.Inspector.SelectedTab = "AUDIO";
 
-            // A group has no AUDIO tab at all, so keeping the open one is not even an option — but the
+            // A group has no AUDIO tab at all, so keeping the open one is not even an option - but the
             // rule is about the SELECTION changing, not about the tab disappearing.
             shell.Cues.Inspector.Show([group.Id]);
 
@@ -96,7 +96,7 @@ public class EditorRegressionTests
         shell.Cues.Inspector.Show([stem.Id]);
 
         Assert.DoesNotContain("VIDEO", shell.Cues.Inspector.Tabs);
-        // The rest of the media tabs are untouched — an audio cue still has fades and a waveform.
+        // The rest of the media tabs are untouched - an audio cue still has fades and a waveform.
         Assert.Contains("AUDIO", shell.Cues.Inspector.Tabs);
         Assert.Contains("PREVIEW", shell.Cues.Inspector.Tabs);
     });
@@ -135,7 +135,7 @@ public class EditorRegressionTests
 
         Assert.True(shell.Cues.Inspector.CanAddVolumeLane);
         Assert.False(shell.Cues.Inspector.CanAddOpacityLane);
-        // Outbound ramps need nothing from the media — they send over the cue's length.
+        // Outbound ramps need nothing from the media - they send over the cue's length.
         Assert.True(shell.Cues.Inspector.CanAddOutboundLane);
     });
 
@@ -313,7 +313,7 @@ public class EditorRegressionTests
                 Assert.All(cue.Sends, send => Assert.False(send.Muted));
             }
 
-            // The two sends land on DIFFERENT logical outputs — a preset that put both on one would be
+            // The two sends land on DIFFERENT logical outputs - a preset that put both on one would be
             // the mono fault it exists to prevent.
             Assert.Equal(2, first.Sends.Select(send => send.LogicalChannelId).Distinct().Count());
         });

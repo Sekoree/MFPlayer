@@ -12,7 +12,7 @@ namespace HaCue2.ViewModels;
 /// <remarks>
 /// <para>
 /// This has its own window rather than a prompt because of what it does between the URL and the cue.
-/// Resolving the manifest is a network round trip, the stream lists that come back are a real choice —
+/// Resolving the manifest is a network round trip, the stream lists that come back are a real choice -
 /// a 4 K VP9 leg and a 1080p H.264 leg are different decode costs on show night. None of that fits a
 /// box with two fields and a verb; the resulting download is handed to the app-wide background queue.
 /// </para>
@@ -138,7 +138,7 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
 
         if (!YouTubeSourceUri.TryParse(Url.Trim(), out var videoId, out var selection))
         {
-            Problem = "that is not a YouTube link — paste a watch, share or youtu.be URL";
+            Problem = "that is not a YouTube link - paste a watch, share or youtu.be URL";
             return;
         }
 
@@ -160,12 +160,12 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
             OnPropertyChanged(nameof(AudioStreams));
             OnPropertyChanged(nameof(SubtitleTracks));
 
-            // What the URI already asked for, if anything, else the best on offer — the lists come back
+            // What the URI already asked for, if anything, else the best on offer - the lists come back
             // in the module's own preference order, so index 0 is that.
             VideoIndex = Pick(manifest.VideoStreams.Select(item => item.Descriptor), selection.Video);
             AudioIndex = selection.Audio is { Length: > 0 }
                 ? Pick(manifest.AudioStreams.Select(item => item.Descriptor), selection.Audio)
-                // Nothing asked for: the track the video calls its own language, not simply the first —
+                // Nothing asked for: the track the video calls its own language, not simply the first -
                 // a video with a dub track can list the dub ahead of the original.
                 : Math.Max(0, manifest.AudioStreams.ToList().FindIndex(item => item.IsDefaultLanguage));
             SubtitleIndex = selection.SubtitleLanguage is { Length: > 0 } language
@@ -192,7 +192,7 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
             // The provider's own words. The app must not promise every link is playable.
-            Problem = $"could not resolve — {failure.Message}";
+            Problem = $"could not resolve - {failure.Message}";
             HasManifest = false;
         }
         finally
@@ -225,7 +225,7 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
             {
                 Problem = Cues.CanEditDocument
                     ? "the cue no longer exists"
-                    : "the show is locked — unlock it to save this prepared cue";
+                    : "the show is locked - unlock it to save this prepared cue";
                 return;
             }
 
@@ -234,7 +234,7 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            Problem = $"could not queue download — {failure.Message}";
+            Problem = $"could not queue download - {failure.Message}";
         }
     }
 
@@ -300,7 +300,7 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
     /// </summary>
     /// <remarks>
     /// Worth saying out loud, because it is the difference between a button that finishes instantly and
-    /// one that downloads 300 MB — and because changing the audio leg alone keeps the video leg cached,
+    /// one that downloads 300 MB - and because changing the audio leg alone keeps the video leg cached,
     /// which is not obvious from anything else on screen.
     /// </remarks>
     private void RefreshCacheNote()
@@ -316,11 +316,11 @@ public sealed partial class YouTubeCueViewModel : ObservableObject
         var uri = YouTubeSourceUri.Build(manifest.VideoId, selection);
         CacheNote = _downloads.StateOf(uri) switch
         {
-            YouTubeCacheState.Ready => "already downloaded — adding is instant",
+            YouTubeCacheState.Ready => "already downloaded - adding is instant",
             YouTubeCacheState.Queued => "already queued for background download",
             YouTubeCacheState.Downloading => "currently downloading in the background",
-            YouTubeCacheState.Failed => "last download failed — adding will retry it",
-            _ => "not downloaded yet — adding queues it in the background",
+            YouTubeCacheState.Failed => "last download failed - adding will retry it",
+            _ => "not downloaded yet - adding queues it in the background",
         };
     }
 

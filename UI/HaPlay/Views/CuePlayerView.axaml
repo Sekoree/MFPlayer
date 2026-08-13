@@ -1507,7 +1507,7 @@
                        Text="{Binding CueSearchStatus}"
                        IsVisible="{Binding HasCueSearchText}" />
             <TextBox Name="CueSearchBox"
-                     PlaceholderText="Search cues (Ctrl+F) — Enter: next match"
+                     PlaceholderText="Search cues (Ctrl+F) - Enter: next match"
                      Text="{Binding CueSearchText, Mode=TwoWay}"
                      KeyDown="OnCueSearchBoxKeyDown" />
           </DockPanel>

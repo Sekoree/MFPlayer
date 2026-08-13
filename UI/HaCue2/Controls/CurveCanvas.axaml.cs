@@ -15,7 +15,7 @@ public enum CurveGestureKind
     /// <summary>Add a point here.</summary>
     Add,
 
-    /// <summary>Delete this point — a drag that ended off the canvas.</summary>
+    /// <summary>Delete this point - a drag that ended off the canvas.</summary>
     Remove,
 
     /// <summary>Just select it, without changing anything.</summary>
@@ -231,7 +231,7 @@ public partial class CurveCanvas : UserControl
 
         if (e.ClickCount >= 2)
         {
-            // Double-clicking an existing point is not an add — it would drop a duplicate exactly on
+            // Double-clicking an existing point is not an add - it would drop a duplicate exactly on
             // top of the one being aimed at, which is the opposite of what the gesture looks like.
             if (index < 0)
             {
@@ -328,7 +328,7 @@ public partial class CurveCanvas : UserControl
     }
 
     /// <summary>
-    /// A capture that ends any other way — the window deactivated, the lane torn out of the tree —
+    /// A capture that ends any other way - the window deactivated, the lane torn out of the tree -
     /// must still complete the gesture: the view-model's journal composite stays open until
     /// <see cref="GestureCompleted"/>, and an unclosed one folds every later edit into the drag's undo
     /// step. Leaving the drag fields set is the second half of the same bug: the next pointer MOVE

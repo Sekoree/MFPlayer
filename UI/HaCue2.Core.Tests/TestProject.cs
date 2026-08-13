@@ -8,7 +8,7 @@ namespace HaCue2.Core.Tests;
 /// </summary>
 /// <remarks>
 /// Deliberately not minimal. A fixture with one channel and one cue passes rules that a real project
-/// breaks — most of the interesting cases here (a group, two cells on one channel, a cue targeted by
+/// breaks - most of the interesting cases here (a group, two cells on one channel, a cue targeted by
 /// two other cues) only exist because the fixture has enough in it to express them.
 /// </remarks>
 internal sealed class TestProject

@@ -12,12 +12,12 @@ namespace HaCue2.Session;
 /// <para>
 /// The bridge between the probe and <see cref="ShowRuntime"/>: durations, broken files and stream
 /// facts are MACHINE answers, so they arrive here rather than in the document. Nothing is written
-/// back into the project — two machines with different copies of the same file may legitimately
+/// back into the project - two machines with different copies of the same file may legitimately
 /// disagree, and a length baked into a show would be wrong on the other one.
 /// </para>
 /// <para>
 /// Probing is asynchronous and the views never wait for it. A cue whose file has not been looked at
-/// yet reads "—", which is the same thing the shell said before any of this existed: the honest
+/// yet reads "-", which is the same thing the shell said before any of this existed: the honest
 /// answer to "how long is it" is "nobody has looked".
 /// </para>
 /// </remarks>
@@ -37,7 +37,7 @@ public sealed class MediaFactsCache
             return _byPath.TryGetValue(path, out var facts) ? facts : null;
     }
 
-    /// <summary>Cue ids whose media could not be opened — what <see cref="ShowRuntime.Broken"/> wants.</summary>
+    /// <summary>Cue ids whose media could not be opened - what <see cref="ShowRuntime.Broken"/> wants.</summary>
     public IReadOnlyDictionary<Guid, TimeSpan> DurationsIn(HaCueProject project, string? projectPath)
     {
         var durations = new Dictionary<Guid, TimeSpan>();
@@ -47,7 +47,7 @@ public sealed class MediaFactsCache
             if (cue.MediaPath.Length == 0)
                 continue;
 
-            // A source that told us its length when it was added — a prepared YouTube video. Nothing
+            // A source that told us its length when it was added - a prepared YouTube video. Nothing
             // on this machine can be probed for it, and the number is not a guess.
             if (cue.SourceDurationMs > 0)
             {
@@ -67,7 +67,7 @@ public sealed class MediaFactsCache
     /// Cues whose file has been looked at and could not be opened.
     /// </summary>
     /// <remarks>
-    /// Two things are deliberately NOT broken. A path nobody has probed yet is unknown — painting a
+    /// Two things are deliberately NOT broken. A path nobody has probed yet is unknown - painting a
     /// cue red before anybody looked is the failure this whole seam exists to avoid. And a RELATIVE
     /// path with no media root configured is UNRESOLVED: nobody has said where this show's media
     /// lives, so "not found" would be reporting a question as an answer. The project-status pass
@@ -156,7 +156,7 @@ public sealed class MediaFactsCache
     /// Probes every media file the project references that has not been looked at yet.
     /// </summary>
     /// <remarks>
-    /// Fire and forget by design — the caller carries on drawing and the answers arrive through
+    /// Fire and forget by design - the caller carries on drawing and the answers arrive through
     /// <see cref="Changed"/>. Paths already in flight are skipped, so calling this on every document
     /// edit costs nothing after the first pass.
     /// </remarks>

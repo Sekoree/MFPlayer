@@ -5,7 +5,7 @@ using Avalonia.Controls.Primitives;
 namespace HaCue2.Controls;
 
 /// <summary>
-/// The mockup's <c>.pnl</c> — a bordered surface with a header strip. Every framed region in HaCue2
+/// The mockup's <c>.pnl</c> - a bordered surface with a header strip. Every framed region in HaCue2
 /// is one of these, so the header's typography, height and rule are decided once.
 /// </summary>
 /// <remarks>
@@ -14,9 +14,9 @@ namespace HaCue2.Controls;
 /// bed" + "media cue", "Act 1 › all cues" + "84 cues · undo: …". Folding those into a single string
 /// would force every view-model to do its own formatting and lose the ink-3 hint styling.
 /// <list type="bullet">
-///   <item><see cref="HeaderedContentControl.Header"/> — the name, in ink-2 mono caps.</item>
-///   <item><see cref="Subhead"/> — an optional qualifier beside it, brighter.</item>
-///   <item><see cref="Hint"/> — right-aligned, ink-3, never uppercase (it is prose, not a label).</item>
+///   <item><see cref="HeaderedContentControl.Header"/> - the name, in ink-2 mono caps.</item>
+///   <item><see cref="Subhead"/> - an optional qualifier beside it, brighter.</item>
+///   <item><see cref="Hint"/> - right-aligned, ink-3, never uppercase (it is prose, not a label).</item>
 /// </list>
 /// </remarks>
 public class PanelBox : HeaderedContentControl

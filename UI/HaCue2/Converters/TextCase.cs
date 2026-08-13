@@ -7,7 +7,7 @@ namespace HaCue2.Converters;
 /// CSS <c>text-transform: uppercase</c>, which Avalonia has no equivalent for.
 /// </summary>
 /// <remarks>
-/// Applied only where the mockup uppercases <i>bound</i> text — panel headers, whose content is a cue
+/// Applied only where the mockup uppercases <i>bound</i> text - panel headers, whose content is a cue
 /// label or a list name coming from the document. Literal chrome (button captions, chips, tab names) is
 /// authored uppercase in the XAML instead, because running a converter over a constant only hides what
 /// the screen says from anyone reading the source.

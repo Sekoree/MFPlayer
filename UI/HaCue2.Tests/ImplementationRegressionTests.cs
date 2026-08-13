@@ -170,7 +170,7 @@ public sealed class ImplementationRegressionTests
     /// </summary>
     /// <remarks>
     /// Wanting one more column is an ordinary adjustment, and re-throwing the whole mesh for it means
-    /// re-aligning every point that was already right — which on a warped surface is the slow part.
+    /// re-aligning every point that was already right - which on a warped surface is the slow part.
     /// </remarks>
     [Fact]
     public void ResizingAMeshCarriesTheOffsetsThatStillHaveAHome()
@@ -321,7 +321,7 @@ public sealed class ImplementationRegressionTests
     /// Renaming a section keeps the row that is being typed into.
     /// </summary>
     /// <remarks>
-    /// The name box lives inside the list, and a rename goes through the journal — which refreshes the
+    /// The name box lives inside the list, and a rename goes through the journal - which refreshes the
     /// whole view. Rebuilding the rows on that refresh would replace the text box after every
     /// keystroke, taking the caret with it, so a section could only be renamed one letter at a time.
     /// </remarks>
@@ -345,7 +345,7 @@ public sealed class ImplementationRegressionTests
         Assert.Same(row, video.Sections[0]);
         Assert.Equal("Left wall", video.Sections[0].Name);
 
-        // Toggling is the same story — and it must not journal a rename for the row beside it.
+        // Toggling is the same story - and it must not journal a rename for the row beside it.
         video.Sections[1].Enabled = false;
         Assert.False(output.Mapping[1].Enabled);
         Assert.Same(row, video.Sections[0]);
@@ -396,7 +396,7 @@ public sealed class ImplementationRegressionTests
     /// </summary>
     /// <remarks>
     /// Undoing a 3×1 split one section at a time would leave the output showing a mapping nobody
-    /// authored — a state that is worse than either the before or the after.
+    /// authored - a state that is worse than either the before or the after.
     /// </remarks>
     [Fact]
     public void SplittingIsOneUndoStep()
@@ -445,7 +445,7 @@ public sealed class ImplementationRegressionTests
         Assert.Equal("OUTPUTS · 1", video.OutputsTab.Label);
         Assert.Equal("COMPOSITIONS · 1", video.CompositionsTab.Label);
 
-        // The selection has to survive its own tab being relabelled — the whole reason the counts were
+        // The selection has to survive its own tab being relabelled - the whole reason the counts were
         // frozen in the first place.
         Assert.True(video.IsOutputsPane);
     }
@@ -455,7 +455,7 @@ public sealed class ImplementationRegressionTests
     /// </summary>
     /// <remarks>
     /// One output shows one canvas, so assigning a taken output MOVES it rather than adding a second
-    /// binding — and the picker says so before it is pressed.
+    /// binding - and the picker says so before it is pressed.
     /// </remarks>
     [Fact]
     public void AssigningAnOutputMovesItToTheSelectedComposition()
@@ -490,7 +490,7 @@ public sealed class ImplementationRegressionTests
     /// </summary>
     /// <remarks>
     /// The dialog used to write the picker's whole label ("2 · 1920×1080") into the hint, which every
-    /// reader of it then failed to parse — so the chosen screen was silently discarded and the window
+    /// reader of it then failed to parse - so the chosen screen was silently discarded and the window
     /// opened wherever SDL felt like.
     /// </remarks>
     [Fact]
@@ -525,7 +525,7 @@ public sealed class ImplementationRegressionTests
     }
 
     /// <summary>
-    /// Removing a logical output cleans up after itself — the cascade the footer has always promised.
+    /// Removing a logical output cleans up after itself - the cascade the footer has always promised.
     /// </summary>
     /// <remarks>
     /// <c>ProjectEdits.DeleteLogicalChannel</c> existed with nothing in the app calling it, so an
@@ -645,7 +645,7 @@ public sealed class ImplementationRegressionTests
         Assert.Equal(3, device.Options.Count);
         Assert.StartsWith("default · 128ch · default", device.Choice, StringComparison.Ordinal);
 
-        // Picking a driver narrows the list — the difference between choosing from one device and
+        // Picking a driver narrows the list - the difference between choosing from one device and
         // reading fifteen near-identical names to find the interface.
         driver.SelectedIndex = 2;
         Assert.Equal(["Scarlett 2i2 3rd Gen Pro · 2ch"], device.Options);

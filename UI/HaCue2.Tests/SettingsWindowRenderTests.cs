@@ -49,7 +49,7 @@ public class SettingsWindowRenderTests
                     .Single(pane => pane.Name == "Show behaviour");
                 Dispatcher.UIThread.RunJobs();
 
-                // The application nav clears itself — its item is not the chosen one — and that null
+                // The application nav clears itself - its item is not the chosen one - and that null
                 // must NOT become the window's selection.
                 Assert.Null(navs[0].SelectedItem);
                 Assert.NotNull(settings.SelectedPane);
@@ -88,7 +88,7 @@ public class SettingsWindowRenderTests
                         nav.SelectedItem = pane;
                         Dispatcher.UIThread.RunJobs();
 
-                        // Not "no exception" — CONTENT. A nav row that leads to an empty right-hand
+                        // Not "no exception" - CONTENT. A nav row that leads to an empty right-hand
                         // side cannot be told apart from a broken one, which is exactly what "Project
                         // status" was before it gained a pane.
                         var visibleText = window.GetVisualDescendants()

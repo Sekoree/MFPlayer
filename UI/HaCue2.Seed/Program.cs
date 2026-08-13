@@ -99,7 +99,7 @@ internal static class Program
         Console.WriteLine($"  {project.AllCues().Count()} cues across {project.CueLists.Count} lists");
 
         // Run the same pass hacue2-check runs, so the tool cannot hand back a project its own status
-        // screen would reject — and so the deliberate unpatched output is visible rather than a
+        // screen would reject - and so the deliberate unpatched output is visible rather than a
         // surprise on first open.
         var report = ProjectStatus.Run(project, output);
         Console.WriteLine();

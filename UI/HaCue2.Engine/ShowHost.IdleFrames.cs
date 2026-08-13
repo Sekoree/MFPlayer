@@ -11,7 +11,7 @@ public sealed partial class ShowHost
     /// What each surface's idle frame was last built FROM, so an unchanged one is not rebuilt.
     /// </summary>
     /// <remarks>
-    /// Every edit reloads the document, and reloads are debounced at 300 ms rather than rare — so
+    /// Every edit reloads the document, and reloads are debounced at 300 ms rather than rare - so
     /// without this, typing a cue label re-decodes every composition's idle image FROM DISK three times
     /// a second, and re-allocates a canvas-sized buffer per output while it does. The signature is the
     /// authored path plus the size, which is the whole of what the frame is built from.
@@ -73,7 +73,7 @@ public sealed partial class ShowHost
 
             // Black as the last resort, so an output ALWAYS has something to show. Without it a
             // composition with nothing playing submits no frames at all, and a sink that is configured
-            // by its first submit never opens its window — an operator who has just added a projector
+            // by its first submit never opens its window - an operator who has just added a projector
             // sees no window and no error, and concludes the output does not work. The composition
             // pane has always labelled an empty idle path "black"; this is what makes that true.
             await _session.SetOutputIdleFrameAsync(
@@ -82,8 +82,8 @@ public sealed partial class ShowHost
                 frame ?? IdleFrames.Black(canvas.Width, canvas.Height)).ConfigureAwait(false);
         }
 
-        // A surface that is gone must lose its signature, or re-adding an output with the same id — an
-        // undo, most obviously — would find its idle "unchanged" and never submit the frame that opens
+        // A surface that is gone must lose its signature, or re-adding an output with the same id - an
+        // undo, most obviously - would find its idle "unchanged" and never submit the frame that opens
         // its window.
         foreach (var stale in _idleSignatures.Keys.Where(key => !wanted.Contains(key)).ToList())
             _idleSignatures.Remove(stale);
@@ -95,7 +95,7 @@ public sealed partial class ShowHost
     /// <remarks>
     /// Size AND rate, because those are exactly what the session keys "unchanged" on: a composition
     /// whose rate changed is rebuilt, taking every attached output's idle frame with it. Leaving rate
-    /// out of the signature would call that unchanged and never re-apply — so an operator who moved a
+    /// out of the signature would call that unchanged and never re-apply - so an operator who moved a
     /// canvas from 30 to 29.97 fps would watch their projector go dark for the rest of the show.
     /// </remarks>
     private static string Canvas(CompositionDefinition composition) =>
@@ -141,7 +141,7 @@ public sealed partial class ShowHost
             failure is IOException or UnauthorizedAccessException or InvalidOperationException
                 or NotSupportedException or ArgumentException)
         {
-            Report($"{label} could not be loaded — {failure.Message}");
+            Report($"{label} could not be loaded - {failure.Message}");
             return null;
         }
     }

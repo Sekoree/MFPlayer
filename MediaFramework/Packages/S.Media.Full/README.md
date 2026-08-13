@@ -1,13 +1,13 @@
 # S.Media.Full
 
-Batteries-included MFPlayer framework feature set — everything a full HaPlay-class application
+Batteries-included MFPlayer framework feature set - everything a full HaPlay-class application
 uses. Composes the entry packages `S.Media.Show` (which brings `S.Media`), `S.Media.Encoding`,
 `S.Media.Presentation.SDL3` and `S.Media.Control`, plus Avalonia embedding
 (`S.Media.Present.Avalonia`), NDI send/receive (`S.Media.NDI`), projectM visualization
 (`S.Media.Visualizer.ProjectM`), MMD and YouTube sources (`S.Media.Source.MMD`,
 `S.Media.Source.YouTube`) and the native plugin/C-ABI surfaces (`S.Abi`, `S.Media.Interop`).
 
-**Framework only** — this package never contains the HaPlay executable or its view models.
+**Framework only** - this package never contains the HaPlay executable or its view models.
 HaPlay remains the reference/full application.
 
 This package is a supported **entry point** of the MFPlayer framework. It is dependency-only:

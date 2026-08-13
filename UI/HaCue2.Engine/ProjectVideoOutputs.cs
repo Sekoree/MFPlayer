@@ -9,7 +9,7 @@ namespace HaCue2.Engine;
 
 /// <summary>One output that opened, and what the session knows it as.</summary>
 /// <param name="CompositionId">
-/// The canvas it shows, or null when it shows none yet — which a LOCAL SCREEN is allowed to be. Its
+/// The canvas it shows, or null when it shows none yet - which a LOCAL SCREEN is allowed to be. Its
 /// window still opens, because an operator who has just added a projector needs to see WHERE it landed
 /// before they decide what to put on it.
 /// </param>
@@ -32,7 +32,7 @@ internal sealed record OpenVideoOutput(Guid Id, Guid? CompositionId, IVideoOutpu
 /// <para>
 /// <b>Every kind opens.</b> A local screen is a window; an NDI output is a sender's own
 /// <c>IVideoOutput</c>; a record or stream output is a <see cref="RecordVideoOutput"/> the compositor
-/// renders into from the moment the show loads, holding no file until somebody arms it — the encode
+/// renders into from the moment the show loads, holding no file until somebody arms it - the encode
 /// session is swapped in behind it, because pressing record must not restart the clips on that
 /// composition. Only NDI and the recorders open when this machine has no display: neither is a window,
 /// and a booth box running headless is exactly where an unattended send or capture belongs.
@@ -61,7 +61,7 @@ public sealed class ProjectVideoOutputs : IDisposable
     private readonly List<RetargetedOutput> _retargeted = [];
     private bool _headless;
 
-    /// <summary>What could not be opened, and why — joined into the host's problem list.</summary>
+    /// <summary>What could not be opened, and why - joined into the host's problem list.</summary>
     public IReadOnlyList<string> Failures => _failures;
 
     /// <summary>
@@ -71,7 +71,7 @@ public sealed class ProjectVideoOutputs : IDisposable
     /// The same events as <see cref="Failures"/>, addressed rather than described: a sentence is what
     /// the Problems list wants and an id is what the Video screen and the status pass want, and
     /// deriving one from the other means parsing prose. An output that names no composition is in here
-    /// too — it opened nothing and shows nothing, which is what the row has to say.
+    /// too - it opened nothing and shows nothing, which is what the row has to say.
     /// </remarks>
     public IReadOnlySet<Guid> Unopened => _unopened;
 
@@ -81,7 +81,7 @@ public sealed class ProjectVideoOutputs : IDisposable
     internal IReadOnlyList<RetargetedOutput> Retargeted => _retargeted;
 
     /// <summary>
-    /// Outputs that are OPEN but show no canvas — a local screen created before any composition.
+    /// Outputs that are OPEN but show no canvas - a local screen created before any composition.
     /// </summary>
     /// <remarks>
     /// Its window exists and has to be painted, and nothing in the session will do it: a composition is
@@ -99,7 +99,7 @@ public sealed class ProjectVideoOutputs : IDisposable
     /// <remarks>
     /// <paramref name="headless"/> is what makes this testable and what makes a booth machine with no
     /// display survive: nothing is opened, every output is reported as skipped, and the rest of the
-    /// show still runs. It is not a mode the product exposes — it is what a CI box and a preview are.
+    /// show still runs. It is not a mode the product exposes - it is what a CI box and a preview are.
     /// </remarks>
     public static ProjectVideoOutputs OpenAll(HaCueProject project, bool headless = false)
     {
@@ -116,7 +116,7 @@ public sealed class ProjectVideoOutputs : IDisposable
     /// <remarks>
     /// Called on every reload, which is what makes adding an output to a RUNNING show do something.
     /// Before this it opened once at start-up, so a newly added screen stayed dark until the whole show
-    /// was restarted — and an operator adding a projector mid-get-in had no way to know that.
+    /// was restarted - and an operator adding a projector mid-get-in had no way to know that.
     /// <para>
     /// Outputs already open are left ALONE. Re-opening one because an unrelated cue was edited would
     /// close and re-create the operator's projector window on a keystroke.
@@ -155,7 +155,7 @@ public sealed class ProjectVideoOutputs : IDisposable
                 ? wantedCanvas
                 : (Guid?)null;
 
-            // Already open. Left alone unless the canvas it shows has CHANGED — assigning a
+            // Already open. Left alone unless the canvas it shows has CHANGED - assigning a
             // composition to an output that is already on screen has to move it, and before this the
             // open record kept its original canvas forever, so the assignment did nothing at all.
             if (_open.FirstOrDefault(open => open.Id == output.Id) is { } existing)
@@ -189,13 +189,13 @@ public sealed class ProjectVideoOutputs : IDisposable
                     // The honest reason, and a different one: on a box with a display this window
                     // would have opened. Reporting "shows no composition" here would describe a
                     // decision this build no longer makes.
-                    failures.Add($"“{output.Name}” not opened — no display");
+                    failures.Add($"“{output.Name}” not opened - no display");
                     unopened.Add(output.Id);
                     continue;
                 }
 
                 // 1280×720 rather than the output's own zeros. A fullscreen output carries no window
-                // size at all — the add dialog greys that field out — so passing them through opened a
+                // size at all - the add dialog greys that field out - so passing them through opened a
                 // 160×90 stub (the floor in OpenWindow) and asked the window manager to promote THAT to
                 // fullscreen. A refused or slow promotion left a chip of a window nobody could find,
                 // which reads exactly like an output that never opened.
@@ -223,7 +223,7 @@ public sealed class ProjectVideoOutputs : IDisposable
             if (output.Kind == VideoOutputKind.Ndi)
             {
                 // Opened whether or not this machine has a display, like a recorder: an NDI feed is not
-                // a window. It is also NOT armed — an NDI source is a live feed that receivers connect
+                // a window. It is also NOT armed - an NDI source is a live feed that receivers connect
                 // to when they choose, so "armed" would be a switch with nothing behind it.
                 try
                 {
@@ -249,7 +249,7 @@ public sealed class ProjectVideoOutputs : IDisposable
 
             if (headless)
             {
-                failures.Add($"“{output.Name}” not opened — no display");
+                failures.Add($"“{output.Name}” not opened - no display");
                 unopened.Add(output.Id);
                 continue;
             }
@@ -289,7 +289,7 @@ public sealed class ProjectVideoOutputs : IDisposable
     /// </summary>
     /// <remarks>
     /// The window's size falls back to <paramref name="fallbackWidth"/>×<paramref name="fallbackHeight"/>
-    /// — the composition's, when it shows one, and a plain 1280×720 when it does not yet. Reported
+    /// - the composition's, when it shows one, and a plain 1280×720 when it does not yet. Reported
     /// rather than thrown: one screen that will not open must not take the show down.
     /// </remarks>
     private SDL3GLVideoOutput? OpenWindow(
@@ -311,7 +311,7 @@ public sealed class ProjectVideoOutputs : IDisposable
 
             // The document says which screen and whether to fill it, so a show carried to a venue puts
             // its projector feed on the projector rather than on whichever display SDL opened first. An
-            // unparseable or absent hint leaves the window where it is rather than guessing — moving a
+            // unparseable or absent hint leaves the window where it is rather than guessing - moving a
             // feed to the wrong screen is worse than not moving it.
             if (ScreenNumber(output.TargetHint) is { } display)
                 window.ApplyWindowPlacement(display - 1, output.Fullscreen, null, null);
@@ -358,7 +358,7 @@ public sealed class ProjectVideoOutputs : IDisposable
     /// The hint is a NUMBER, and the leading number of a picker label is the same number: the add-output
     /// dialog used to store the whole label ("2 · 1920×1080"), so every output authored through it
     /// silently opened on whichever display SDL answered with. Reading the leading digits rescues those
-    /// documents without a migration pass, and rejects anything else rather than guessing — moving a
+    /// documents without a migration pass, and rejects anything else rather than guessing - moving a
     /// feed to the wrong screen is worse than not moving it.
     /// </remarks>
     public static int? ScreenNumber(string? hint)
@@ -408,7 +408,7 @@ public sealed class ProjectVideoOutputs : IDisposable
                     Mapping: OutputMapping.Spec(definition, composition.Width, composition.Height),
                     // A show's outputs are on for the evening, not for the duration of a cue. Without
                     // this the composition only starts pumping when something plays on it, so a
-                    // freshly added projector shows nothing — and never opens its window at all.
+                    // freshly added projector shows nothing - and never opens its window at all.
                     PresentWhenIdle: true));
         }
     }

@@ -6,7 +6,7 @@ namespace HaCue2.Core.Tests;
 
 /// <summary>
 /// Field incident 2026-08-10: fire a video cue alone, PANIC, then fire its parent all-together group
-/// — the same cue's video layer froze on its first frame (slot overflow + sampling repeats climbing
+/// - the same cue's video layer froze on its first frame (slot overflow + sampling repeats climbing
 /// at pump rate, every sibling fine) until another panic and re-fire cleared it.
 /// </summary>
 public sealed class RefireAfterPanicTests

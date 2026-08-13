@@ -10,7 +10,7 @@ namespace HaCue2.Session;
 /// <remarks>
 /// The adapter between <see cref="ShowRuntime"/> and the model's <see cref="IProjectEnvironment"/>.
 /// It exists so <c>HaCue2.Core</c> never has to know what a session is, and so the same status pass
-/// runs identically here and under <c>hacue2-check</c> — only the answers differ.
+/// runs identically here and under <c>hacue2-check</c> - only the answers differ.
 /// </remarks>
 public sealed class RuntimeEnvironment(
     ShowRuntime runtime,
@@ -23,7 +23,7 @@ public sealed class RuntimeEnvironment(
     /// <remarks>
     /// In the shell the sample runtime decides; once media probing is real this reads the probe's
     /// result. Either way it is a machine answer, which is why it does not touch <c>File.Exists</c>
-    /// here — a shell that hit the filesystem per row would stall the cue list on a slow mount.
+    /// here - a shell that hit the filesystem per row would stall the cue list on a slow mount.
     /// </remarks>
     public bool MediaExists(string resolvedPath) =>
         !MediaPaths.ReferencesIn(project)

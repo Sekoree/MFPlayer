@@ -51,7 +51,7 @@ public sealed class CueRenumberTests
         CueRenumber.Apply(journal, list.Cues);
 
         // The whole point: a group's children hang off ITS number. Bare integers here would collide
-        // with the top level — two cues answering to Q1 and two to Q2.
+        // with the top level - two cues answering to Q1 and two to Q2.
         Assert.Equal("1 1.1 1.2 1.3 1.3.1 2", Numbers(list));
     }
 
@@ -77,7 +77,7 @@ public sealed class CueRenumberTests
 
         CueRenumber.Apply(journal, list.Cues, start: 10, step: 10);
 
-        // "Start at 10, step 10" means 10 and 20 with 10.1, 10.2 inside — not 10.10, 10.20. The step
+        // "Start at 10, step 10" means 10 and 20 with 10.1, 10.2 inside - not 10.10, 10.20. The step
         // belongs to the level the operator asked about.
         Assert.Equal("10 10.1 10.2 10.3 10.3.1 20", Numbers(list));
     }
@@ -90,7 +90,7 @@ public sealed class CueRenumberTests
 
         CueRenumber.Apply(journal, list.Cues);
 
-        // Every number already reads that way, so there is nothing to undo — a renumber that rewrote
+        // Every number already reads that way, so there is nothing to undo - a renumber that rewrote
         // each cue would mark a clean document dirty for changing nothing.
         Assert.False(journal.CanUndo);
     }
@@ -106,8 +106,8 @@ public sealed class CueRenumberTests
         using (journal.Composite("renumber", "cues", quiet: true))
             CueRenumber.Apply(journal, list.Cues, start: 5, step: 5);
 
-        // An observer of this journal can be expensive — the shell re-runs the whole project status
-        // pass on every change — so a batch that reported per cue cost that pass per cue.
+        // An observer of this journal can be expensive - the shell re-runs the whole project status
+        // pass on every change - so a batch that reported per cue cost that pass per cue.
         Assert.Equal(1, changes);
     }
 
@@ -122,8 +122,8 @@ public sealed class CueRenumberTests
         using (journal.Composite("renumber", "cues"))
             CueRenumber.Apply(journal, list.Cues, start: 5, step: 5);
 
-        // Silence is OPT-IN. A continuous gesture can be wrapped in a composite too — a patch-gain
-        // drag, a layer move — and those want the views following the pointer.
+        // Silence is OPT-IN. A continuous gesture can be wrapped in a composite too - a patch-gain
+        // drag, a layer move - and those want the views following the pointer.
         Assert.True(changes > 1, $"an ordinary composite reported {changes} time(s)");
     }
 

@@ -46,7 +46,7 @@ public partial class ProjectStatusWindow : Window
             status.RelinkOne(status.MissingPath, chosen);
     }
 
-    /// <summary>Runs the checks again — after fixing something outside the app, or plugging a device in.</summary>
+    /// <summary>Runs the checks again - after fixing something outside the app, or plugging a device in.</summary>
     private void OnRerun(object? sender, RoutedEventArgs e) =>
         (DataContext as ProjectStatusViewModel)?.Rerun();
 
@@ -55,7 +55,7 @@ public partial class ProjectStatusWindow : Window
     /// </summary>
     /// <remarks>
     /// The whole point of "copy report" is pasting it into a message to somebody who is not in the
-    /// building, so it is the CLI's text rather than a screen-shaped rendering — one format, and the
+    /// building, so it is the CLI's text rather than a screen-shaped rendering - one format, and the
     /// person reading it can run the same command and compare.
     /// </remarks>
     private async void OnCopyReport(object? sender, RoutedEventArgs e)
@@ -73,7 +73,7 @@ public partial class ProjectStatusWindow : Window
     /// <remarks>
     /// The status window is a collector: it can say an output is unpatched but the patch itself lives
     /// on the Audio screen, so the only useful thing a fix button can do is put that screen in front of
-    /// the operator. The window stays open behind it — the list is a work queue, and closing it after
+    /// the operator. The window stays open behind it - the list is a work queue, and closing it after
     /// one fix would mean re-running the checks to find the next.
     /// </remarks>
     private void OnFix(object? sender, RoutedEventArgs e)

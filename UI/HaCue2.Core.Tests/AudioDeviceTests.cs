@@ -41,7 +41,7 @@ public sealed class AudioDeviceTests
     public void AHintMatchesEitherWayAndIgnoresCase(string deviceName, string hint)
     {
         // Device names pick up and lose suffixes between driver versions, and the hint is documented
-        // as a hint rather than an identity — so a substring in either direction counts.
+        // as a hint rather than an identity - so a substring in either direction counts.
         var devices = new AudioDevices(new FakeBackend(deviceName));
 
         Assert.Equal(DeviceAvailability.Present, devices.Match(Line(hint)));
@@ -190,7 +190,7 @@ public sealed class AudioDeviceTests
         var devices = new HostBackend().EnumerateOutputDevices();
 
         // PortAudio's id is a global device INDEX. Handing it the name instead made it refuse the
-        // line outright — every configured device failed to open, the bay ended up with no clock
+        // line outright - every configured device failed to open, the bay ended up with no clock
         // master, and the first cue threw.
         Assert.Equal("2", AudioDevices.DeviceIdFor(devices, "Scarlett 2i2 3rd Gen Pro"));
         Assert.Equal("1", AudioDevices.DeviceIdFor(devices, "default"));
@@ -226,7 +226,7 @@ public sealed class AudioDeviceTests
         var devices = new AudioDevices(new HostBackend());
         var line = new AudioLineDefinition { Name = "Main", DeviceHint = "Scarlett 2i2" };
 
-        // Two matching rules — one for reporting presence, one for opening — is a green row over a
+        // Two matching rules - one for reporting presence, one for opening - is a green row over a
         // silent output. They are the same rule.
         Assert.Equal(DeviceAvailability.Present, devices.Match(line));
         Assert.NotNull(AudioDevices.DeviceIdFor(devices.Outputs, line.DeviceHint));

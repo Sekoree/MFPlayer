@@ -9,7 +9,7 @@ namespace HaCue2.Presentation;
 /// <para>
 /// An INDEX in the document rather than a colour, so the palette can be restyled with the theme and so
 /// a show does not carry hex codes chosen against a skin it may not be opened under. Eight, because a
-/// palette an operator has to scroll is a palette they stop using — and because eight is roughly the
+/// palette an operator has to scroll is a palette they stop using - and because eight is roughly the
 /// number of meanings anybody assigns before they start writing them in the note instead.
 /// </para>
 /// <para>

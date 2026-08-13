@@ -18,7 +18,7 @@ namespace HaCue2.Tests;
 /// </remarks>
 /// <remarks>
 /// These share one process-wide pipeline, which is safe because this assembly disables test
-/// parallelization wholesale (see <c>AvaloniaHeadlessTestApp</c>) — the headless session requires it.
+/// parallelization wholesale (see <c>AvaloniaHeadlessTestApp</c>) - the headless session requires it.
 /// Each test clears the ring first rather than assuming it is empty.
 /// </remarks>
 public class LogTailTests
@@ -75,7 +75,7 @@ public class LogTailTests
         Assert.Single(panel.Log);
 
         // Turning the filter DOWN shows what was already captured, rather than only what arrives
-        // afterwards — the whole reason the ring captures below the display threshold. A fault that
+        // afterwards - the whole reason the ring captures below the display threshold. A fault that
         // reproduces once is what this is for.
         panel.MinimumLevel = "Debug";
         Assert.Equal(2, panel.Log.Count);
