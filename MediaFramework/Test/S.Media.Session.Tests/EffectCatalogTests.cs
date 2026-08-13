@@ -17,6 +17,39 @@ namespace S.Media.Session.Tests;
 /// </summary>
 public sealed class EffectCatalogTests
 {
+    /// <summary>A host must be able to list a layer effect's authoring parameters WITHOUT constructing a
+    /// processing instance - the video half of the same contract the audio side already had. Reading them
+    /// off a live instance means every insertion menu instantiates (and configures) every plugin effect
+    /// just to draw itself.</summary>
+    [Fact]
+    public void BusRegistry_PublishesLayerEffectParametersWithoutCreatingAnInstance()
+    {
+        var created = 0;
+        var registry = BusRegistryBuilder.Build(b => b.AddLayerEffect(
+            ChromaKeyVideoEffect.EffectId,
+            "Chroma key",
+            ChromaKeyVideoEffect.Descriptor.AuthoringParameters,
+            config =>
+            {
+                created++;
+                return ChromaKeyVideoEffect.FromJson(config);
+            }));
+
+        Assert.True(registry.TryGetLayerEffectDescriptor(ChromaKeyVideoEffect.EffectId, out var descriptor));
+        Assert.Equal("Chroma key", descriptor.DisplayName);
+        Assert.Contains(descriptor.Parameters, parameter => parameter.Id == "similarity");
+        Assert.Contains(registry.LayerEffectDescriptors, entry => entry.Kind == ChromaKeyVideoEffect.EffectId);
+
+        // The factory was never invoked to answer any of that.
+        Assert.Equal(0, created);
+
+        // A factory registered WITHOUT metadata keeps its kind but publishes no parameters.
+        var bare = BusRegistryBuilder.Build(b =>
+            b.AddLayerEffect("bare", static config => ChromaKeyVideoEffect.FromJson(config)));
+        Assert.Contains("bare", bare.LayerEffectKinds);
+        Assert.False(bare.TryGetLayerEffectDescriptor("bare", out _));
+    }
+
     [Fact]
     public void BusRegistry_CreatesLayerEffectFromJsonConfig()
     {

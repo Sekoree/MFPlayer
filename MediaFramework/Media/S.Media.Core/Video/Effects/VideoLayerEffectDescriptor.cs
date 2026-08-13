@@ -88,6 +88,7 @@ public sealed class VideoLayerEffectDescriptor
         Parameters = parameters;
         CpuKernelFactory = cpuKernelFactory;
         TotalComponents = total;
+        AuthoringParameters = [.. parameters.SelectMany(parameter => parameter.Authoring ?? [])];
     }
 
     /// <summary>Stable unique id; part of the GPU program-variant cache key.</summary>
@@ -105,6 +106,12 @@ public sealed class VideoLayerEffectDescriptor
 
     /// <summary>Total packed float count across <see cref="Parameters"/>.</summary>
     public int TotalComponents { get; }
+
+    /// <summary>Every scalar authoring parameter this effect publishes, flattened out of its packed
+    /// vector parameters and in declaration order. This is the form a host's insertion menu and property
+    /// catalog want - and it is readable off the DESCRIPTOR, so listing a plugin's parameters never means
+    /// constructing (and configuring) a processing instance first.</summary>
+    public IReadOnlyList<EffectParameterDescriptor> AuthoringParameters { get; }
 }
 
 /// <summary>

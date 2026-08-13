@@ -35,7 +35,7 @@ public sealed class AbiStructLayoutTests : IDisposable
             ["abi_version", "struct_size", "configure", "process", "destroy", "set_parameter"]),
         (typeof(MfpAudioEffectFactoryVTable), "MfpAudioEffectFactoryVTable",
             ["abi_version", "struct_size", "create", "effect_vtable", "destroy",
-             "get_parameter_count", "get_parameter_descriptor"]),
+             "get_parameter_count", "get_parameter_descriptor", "display_name"]),
         (typeof(MfpVideoEffectVTable), "MfpVideoEffectVTable",
             ["abi_version", "struct_size", "configure", "process", "destroy"]),
         (typeof(MfpVideoEffectFactoryVTable), "MfpVideoEffectFactoryVTable",

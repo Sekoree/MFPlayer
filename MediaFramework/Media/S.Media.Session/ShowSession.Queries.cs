@@ -76,9 +76,16 @@ public sealed partial class ShowSession
                 }
             }
             catch { /* concurrent teardown - leave zeros for this tick */ }
+            // Plain float reads off the active voice's level, on the same terms as the position reads
+            // above: a voice replaced concurrently yields a stale value for one poll tick rather than
+            // throwing. Carried here so a UI can show what automation is doing to a cue's volume without
+            // a per-cue round trip across the dispatcher on every tick.
+            var level = v.Group.ActiveVoice?.Level;
             snaps[i] = new TransportSnapshot(
                 v.GroupId, now, pos, dur, running, active, liveDisconnected, audioChannels, audioSampleRate,
-                timeline.Generation)
+                timeline.Generation,
+                level?.CueVolume ?? 1f,
+                level?.Base ?? 1f)
             {
                 Timeline = timeline,
                 AudibleLatency = audibleLatency,

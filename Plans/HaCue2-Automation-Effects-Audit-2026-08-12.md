@@ -677,11 +677,67 @@ Full solution builds clean. HaCue2.Core **782**, HaCue2 UI **412**, S.Media.Core
 S.Abi **9**, S.Media.Session **404** — 0 failures, and the Core suite passes 3/3 consecutive runs with the
 former flake in it. `AbiSmoke` exits 0.
 
+## Still open after pass 3
+
+All three closed in pass 4 below.
+
+---
+
+# Fix log — pass 4 (2026-08-12)
+
+The last three items. Nothing from the original audit remains open.
+
+## The inspector shows base vs automated, live
+
+The design's `base −6.0 dB · automated now −12.0 dB` now renders while a cue sounds. The path reuses the
+existing 4 Hz engine poll rather than adding one:
+
+`TransportSnapshot` gained `CueVolume`/`AuthoredVolume` (plain float reads off the active voice's level,
+on the same lock-free terms as the position reads beside them, so a concurrently replaced voice yields a
+stale value for one tick rather than throwing) → `ActiveCueState.AutomatedVolumeDb`, set only when
+something is actually overriding the authored level → `ActiveCueRow` → `CuesViewModel.Tick` pushes the
+selected cue's value into `InspectorViewModel.LiveAutomatedVolumeDb`, read off rows the tick had already
+gathered. Off air the note falls back to naming the track and its range.
+
+Writing the test caught a real defect in my own change: the live value **leaked across a selection
+change**, so the outgoing cue's automated level briefly read as the incoming cue's. `Show()` now clears it.
+Test: `TheInspectorSaysWhatAutomationIsDoingToTheLevel`.
+
+## Video-side descriptor publication
+
+`AudioEffectRegistrationDescriptor` is renamed `EffectRegistrationDescriptor` (**breaking**, one file) and
+now serves both halves. `AddLayerEffect` gained the metadata overload, with `LayerEffectDescriptors` /
+`TryGetLayerEffectDescriptor` mirroring the audio surface, and `VideoLayerEffectDescriptor` publishes
+`AuthoringParameters` — its scalar parameters flattened out of the packed vector ones. The two built-in
+layer effects register with their metadata, so the API is not dead on arrival.
+
+The point is what it removes: an insertion menu can list an effect's parameters without constructing (and
+configuring) the effect first. Test:
+`BusRegistry_PublishesLayerEffectParametersWithoutCreatingAnInstance` asserts the factory is never invoked
+while reading them, and that a metadata-free registration still keeps its kind.
+
+## Native factories can publish a display name
+
+`display_name` appended to `MfpAudioEffectFactoryVTable`, surfaced as
+`NativeAudioEffectFactory.DisplayName`, used by `BindAudioEffects` with the kind as fallback — a menu
+showed `test.gain` where it should show "Test Gain".
+
+The append-only rule is now proven twice over rather than asserted: the layout test added in pass 2 was
+already in place when this field landed and confirmed every pre-existing offset unchanged, and the gcc
+fixture's `test.gain` sets `display_name` while `test.gain.legacy` keeps a `struct_size` ending before
+`get_parameter_count`. Both still load, and the legacy one still publishes no metadata.
+
+## Verification (pass 4)
+
+Full solution builds clean. HaCue2.Core **782**, HaCue2 UI **413**, S.Media.Core **844** (2 skipped),
+S.Abi **9**, S.Media.Session **406** — 0 failures. `AbiSmoke` exits 0.
+
 ## Still open
 
-- **The live "automated now" inspector readout.** The document-side note is wired (`LevelAutomationNote`
-  says the value is a base and gives the track's range); showing the *current* sampled value needs a
-  playhead reading plumbed from the engine to the inspector, which is a new query path rather than a fix.
-- **Native factories present `displayName = kind`.** The ABI has no factory-level display-name field, so
-  this needs an append-only header addition — worth doing with the next ABI change rather than alone.
-- **Video-side descriptor publication without a live instance** (audio-only today).
+Nothing from the audit. Two notes for whoever picks this up next:
+
+- The lock-free `TransportSnapshot` level reads are deliberately racy-by-one-tick, matching the position
+  reads they sit beside. If a future consumer needs an exact value it must go through
+  `GetClipAudioLevelsAsync`, not this snapshot.
+- `EffectRegistrationDescriptor` is now shared by audio and layer effects. A third effect stage should
+  reuse it rather than adding a third parallel record.

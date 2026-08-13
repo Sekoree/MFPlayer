@@ -319,6 +319,43 @@ public sealed class AutomationEditorTests
         Assert.False(journal.IsDirty);
     }
 
+    /// <summary>The inspector's static Level field must not look authoritative while a track drives the
+    /// cue. Off air it names the track and its range; while the cue sounds it shows the design's
+    /// "base … · automated now …" using the value the engine poll pushes in.</summary>
+    [Fact]
+    public void TheInspectorSaysWhatAutomationIsDoingToTheLevel()
+    {
+        var track = new AutomationTrack
+        {
+            Target = new AutomationTargetRef { PropertyId = AutomationPropertyIds.CueVolume },
+            Keyframes =
+            [
+                new AutomationKeyframe { TimeMs = 0, Value = 0 },
+                new AutomationKeyframe { TimeMs = 5_000, Value = -20 },
+            ],
+        };
+        var media = new MediaCueNode { MediaPath = "a.wav", LevelDb = -6, AutomationTracks = [track] };
+        var project = new HaCueProject { CueLists = [new CueList { Name = "Main", Cues = [media] }] };
+        var inspector = new InspectorViewModel(new ProjectJournal(project));
+        inspector.Show([media.Id]);
+
+        // Off air: the operator is told a track owns this value, and over what range.
+        Assert.True(inspector.LevelIsAutomated);
+        Assert.Contains("the value above is the base", inspector.LevelAutomationNote, StringComparison.Ordinal);
+
+        // Sounding: the engine poll supplies what automation has actually reached.
+        inspector.LiveAutomatedVolumeDb = -12;
+        Assert.Contains("automated now", inspector.LevelAutomationNote, StringComparison.Ordinal);
+        Assert.Contains("12.0", inspector.LevelAutomationNote, StringComparison.Ordinal);
+
+        // A cue with no track and nothing driving it says nothing at all.
+        var plain = new MediaCueNode { MediaPath = "b.wav", LevelDb = -6 };
+        project.CueLists[0].Cues.Add(plain);
+        inspector.Show([plain.Id]);
+        Assert.False(inspector.LevelIsAutomated);
+        Assert.Equal("", inspector.LevelAutomationNote);
+    }
+
     private static (AutomationEditorViewModel Editor, AutomationTrack Track, ProjectJournal Journal) ShortEditor(
         params AutomationKeyframe[] keys)
     {

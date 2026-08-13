@@ -152,6 +152,7 @@ public static class CuePresentation
                 CueId = cue.Id,
                 Number = Number(cue.Number),
                 Label = cue.Label,
+                AutomatedVolumeDb = state.AutomatedVolumeDb,
                 // Which list, but only when there is more than one — on a single-list show the name
                 // would be on every row and tell the operator nothing.
                 Qualifier = project.CueLists.Count > 1

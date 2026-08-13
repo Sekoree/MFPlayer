@@ -1630,6 +1630,13 @@ public partial class CuesViewModel : ObservableObject
         OnPropertyChanged(nameof(PreviewHint));
         OnPropertyChanged(nameof(ShowsTransportHint));
         OnPropertyChanged(nameof(ShowsPreviewHint));
+
+        // What automation is doing to the SELECTED cue's volume right now, so the inspector's static Level
+        // field can say it is only the base. Read off the rows already gathered by this tick rather than
+        // asking the engine again.
+        Inspector.LiveAutomatedVolumeDb = SelectedCue?.Id is { } selectedId
+            ? _runtime.ActiveCues.FirstOrDefault(row => row.CueId == selectedId)?.AutomatedVolumeDb
+            : null;
     }
 
     /// <summary>Called when the document changes under us — an undo, or an edit from another view.</summary>

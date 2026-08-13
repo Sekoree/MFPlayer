@@ -1048,6 +1048,11 @@ public sealed partial class ShowHost
         ? 0f
         : (float)Math.Pow(10, Math.Clamp(decibels, GainRange.SilenceFloorDb, 12) / 20);
 
+    /// <summary>The inverse of <see cref="Linear"/>, for reporting a runtime gain back in authoring units.</summary>
+    internal static double LinearToDb(float linear) => linear <= 0f
+        ? GainRange.SilenceFloorDb
+        : Math.Clamp(20 * Math.Log10(linear), GainRange.SilenceFloorDb, 12);
+
     /// <summary>A wait that reports whether it completed, so a cancelled show stops its chains.</summary>
     async Task<bool> ICueExecutionHost.DelayAsync(TimeSpan duration)
     {

@@ -383,7 +383,10 @@ static const MfpAudioEffectFactoryVTable g_fx_factory_vt = {
     MFP_VTABLE(MfpAudioEffectFactoryVTable),
     .create = fx_create, .effect_vtable = &g_fx_vt, .destroy = fx_factory_destroy,
     .get_parameter_count = fx_get_parameter_count,
-    .get_parameter_descriptor = fx_get_parameter_descriptor
+    .get_parameter_descriptor = fx_get_parameter_descriptor,
+    /* Newest field. The legacy factory below deliberately does NOT have it - its struct_size ends
+     * before get_parameter_count - which is what proves the extension stayed append-only. */
+    .display_name = "Test Gain"
 };
 
 /* ABI compatibility fixture: advertises exactly the pre-parameter vtable sizes. The host must zero

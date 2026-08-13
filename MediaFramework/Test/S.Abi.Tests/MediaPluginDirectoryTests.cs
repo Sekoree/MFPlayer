@@ -144,6 +144,8 @@ public sealed class MediaPluginDirectoryTests : IDisposable
         var parameter = Assert.Single(descriptor.Parameters);
         Assert.Equal("gain", parameter.Id);
         Assert.Equal(0.5f, parameter.Default);
+        // The plugin's own label reaches the menu, rather than the bare kind identifier.
+        Assert.Equal("Test Gain", descriptor.DisplayName);
         Assert.True(buses.TryCreateAudioEffect("test.gain", null, out var effect));
 
         // Configure + process straight through the C vtable: a fixed 0.5x gain.

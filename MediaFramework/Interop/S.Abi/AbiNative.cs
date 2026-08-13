@@ -403,6 +403,7 @@ internal unsafe struct MfpAudioEffectFactoryVTable
     public delegate* unmanaged<void*, void> Destroy;
     public delegate* unmanaged<void*, int*, int> GetParameterCount;
     public delegate* unmanaged<void*, int, MfpEffectParameterDescriptor*, int> GetParameterDescriptor;
+    public byte* DisplayName;
 }
 
 [StructLayout(LayoutKind.Sequential)]

@@ -128,6 +128,10 @@ public partial class InspectorViewModel : ObservableObject
             foreach (var kind in Selected.Select(KindOf).Distinct())
                 _rememberedTab[kind] = previous;
 
+        // The live automated level belongs to the cue that was selected. Clear it on the way in, so the
+        // outgoing cue's value cannot be read as the incoming one's in the gap before the next poll.
+        _liveAutomatedVolumeDb = null;
+
         _selection = cueIds;
 
         // A SELECTION change re-chooses the pane; an edit does not. See Reload.
@@ -556,17 +560,40 @@ public partial class InspectorViewModel : ObservableObject
             && track.Keyframes.Count > 0)
         : null;
 
-    public bool LevelIsAutomated => LevelAutomationTrack is not null;
+    public bool LevelIsAutomated => LevelAutomationTrack is not null || LiveAutomatedVolumeDb is not null;
+
+    private double? _liveAutomatedVolumeDb;
+
+    /// <summary>What automation is driving the selected cue's volume to RIGHT NOW, or null when nothing
+    /// is. Pushed by the engine poll (see <c>CuesViewModel.Tick</c>) rather than queried per read.</summary>
+    public double? LiveAutomatedVolumeDb
+    {
+        get => _liveAutomatedVolumeDb;
+        set
+        {
+            // Only signal on a change the operator could see - this arrives 4× a second.
+            if (_liveAutomatedVolumeDb is { } previous && value is { } next
+                ? Math.Abs(previous - next) < 0.05
+                : _liveAutomatedVolumeDb is null && value is null)
+                return;
+            _liveAutomatedVolumeDb = value;
+            OnPropertyChanged(nameof(LiveAutomatedVolumeDb));
+            OnPropertyChanged(nameof(LevelIsAutomated));
+            OnPropertyChanged(nameof(LevelAutomationNote));
+        }
+    }
 
     /// <summary>Says out loud that the box above is the BASE, not what the cue will actually play. Cue
     /// volume is replace-authored, so a track shadows this value while it runs - and a static control that
     /// looks authoritative while automation overrides it is exactly what the automation design forbids.
-    /// <para>The live "automated now" half needs a playhead value from the engine and is not wired yet.</para>
-    /// </summary>
+    /// <para>While the cue is sounding this reads the design's "base −6.0 dB · automated now −12.0 dB";
+    /// off air it falls back to naming the track and the range it covers.</para></summary>
     public string LevelAutomationNote
     {
         get
         {
+            if (LiveAutomatedVolumeDb is { } now)
+                return $"base {LevelValue} · automated now {CuePresentation.Db(now)}";
             if (LevelAutomationTrack is not { } track)
                 return "";
 

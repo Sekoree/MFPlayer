@@ -600,7 +600,12 @@ public sealed partial class ShowHost
                         elapsed,
                         length,
                         entry.Value.IsFading,
-                        entry.Value.StartedTicks);
+                        entry.Value.StartedTicks,
+                        // Only when something is actually overriding the authored level; the inspector
+                        // shows the static field alone otherwise.
+                        playhead is { IsVolumeAutomated: true }
+                            ? LinearToDb(playhead.CueVolume)
+                            : null);
                 }),
             ];
         }

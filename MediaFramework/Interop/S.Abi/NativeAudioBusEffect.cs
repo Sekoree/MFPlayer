@@ -45,6 +45,11 @@ public sealed unsafe class NativeAudioEffectFactory : IDisposable
     /// <summary>The factory-level authoring catalog. Empty for an older/native runtime-only effect.</summary>
     public IReadOnlyList<EffectParameterDescriptor> Parameters { get; }
 
+    /// <summary>The plugin's human-readable name for insertion menus, or empty when it publishes none
+    /// (including every pre-extension plugin, whose struct simply ends before this field). Callers then
+    /// fall back to the registered kind.</summary>
+    public string DisplayName => Utf8(_vt->DisplayName);
+
     /// <summary>Creates one effect instance (throws when the plugin returns NULL - the registry's
     /// factory contract; the host surfaces the plugin's last-error detail).</summary>
     public IAudioBusEffect Create(string? configJson)

@@ -197,6 +197,11 @@ public sealed partial class ActiveCueRow : ObservableObject
     /// <summary>List name or group progress, shown after the label in ink-3 ("Preshow", "3 of 28").</summary>
     public string Qualifier { get; init; } = "";
 
+    /// <summary>The cue volume automation is driving right now, in dB, or null when nothing is overriding
+    /// the authored level. The inspector reads this to say what a static Level field is not showing.</summary>
+    [ObservableProperty]
+    private double? _automatedVolumeDb;
+
     /// <summary>Where the playhead is, as the transport reports it — not wall time since the fire.</summary>
     [ObservableProperty]
     private string _clock = "";

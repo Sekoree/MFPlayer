@@ -366,7 +366,13 @@ public static unsafe class AbiPluginHost
             foreach (var (kind, factory) in BindAudioEffects(plugin))
             {
                 if (factory.Parameters.Count > 0)
-                    buses.AddAudioEffect(kind, kind, factory.Parameters, factory.Create);
+                    buses.AddAudioEffect(
+                        kind,
+                        // The plugin's own label when it publishes one; the kind is an identifier and
+                        // reads like one in a menu.
+                        string.IsNullOrWhiteSpace(factory.DisplayName) ? kind : factory.DisplayName,
+                        factory.Parameters,
+                        factory.Create);
                 else
                     buses.AddAudioEffect(kind, factory.Create);
             }

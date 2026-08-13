@@ -497,6 +497,10 @@ typedef struct MfpAudioEffectFactoryVTable {
     /* Optional authoring catalog. Supply both or neither. Descriptors are stable for the factory lifetime. */
     int   (*get_parameter_count)(void* self, int32_t* out_count);
     int   (*get_parameter_descriptor)(void* self, int32_t index, MfpEffectParameterDescriptor* out_descriptor);
+    /* Optional human-readable name for insertion menus, e.g. "Tape Saturation". UTF-8, owned by the
+     * plugin and valid for the factory's lifetime (rule 3). NULL (or absent, on a pre-extension struct)
+     * means the host falls back to the registered kind, which is an identifier and reads like one. */
+    const char* display_name;
 } MfpAudioEffectFactoryVTable;
 
 /* Video bus effect ↔ IVideoBusEffect - one processing stage on an output's pump drain thread (off the

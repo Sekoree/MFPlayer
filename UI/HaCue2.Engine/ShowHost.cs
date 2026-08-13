@@ -34,8 +34,12 @@ namespace HaCue2.Engine;
 /// <paramref name="Elapsed"/>, which is a playhead — it rewinds on loop wraps, jumps on seeks and
 /// freezes on pause, and a list sorted by it reshuffles under the operator's pointer.
 /// </param>
+/// <param name="AutomatedVolumeDb">The cue volume automation is currently driving, in dB, or null when
+/// nothing is overriding the authored level. Lets the inspector show "base −6.0 dB · automated now
+/// −12.0 dB" rather than a static field that silently lies while a track drives the cue.</param>
 public sealed record ActiveCueState(
-    Guid CueId, Guid ListId, TimeSpan Elapsed, TimeSpan? Length, bool IsFading, long StartedTicks);
+    Guid CueId, Guid ListId, TimeSpan Elapsed, TimeSpan? Length, bool IsFading, long StartedTicks,
+    double? AutomatedVolumeDb = null);
 
 /// <summary>What the show is doing right now, as one snapshot.</summary>
 /// <param name="Sounding">Cue ids currently playing.</param>
@@ -578,11 +582,17 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
                 "Gain",
                 S.Media.Routing.GainAudioEffect.ParameterDescriptors,
                 S.Media.Routing.GainAudioEffect.FromJson);
+            // Registered WITH their authoring metadata, so a host can list an effect's parameters
+            // straight off the registry rather than constructing an instance to read them back.
             builder.AddLayerEffect(
                 S.Media.Compositor.Effects.ChromaKeyVideoEffect.EffectId,
+                "Chroma key",
+                S.Media.Compositor.Effects.ChromaKeyVideoEffect.Descriptor.AuthoringParameters,
                 S.Media.Compositor.Effects.ChromaKeyVideoEffect.FromJson);
             builder.AddLayerEffect(
                 S.Media.Compositor.Effects.BrightnessContrastVideoEffect.EffectId,
+                "Colour adjust",
+                S.Media.Compositor.Effects.BrightnessContrastVideoEffect.Descriptor.AuthoringParameters,
                 S.Media.Compositor.Effects.BrightnessContrastVideoEffect.FromJson);
         });
 

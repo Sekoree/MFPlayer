@@ -31,8 +31,16 @@ public sealed record TransportSnapshot(
     bool LiveSourceDisconnected = false,
     int AudioChannels = 0,
     int AudioSampleRate = 0,
-    int TimelineGeneration = 0)
+    int TimelineGeneration = 0,
+    float CueVolume = 1f,
+    float AuthoredVolume = 1f)
 {
+    /// <summary>Whether a volume track (or a controller) is currently driving this group's cue volume,
+    /// i.e. whether <see cref="CueVolume"/> differs from the operator's authored
+    /// <see cref="AuthoredVolume"/>. Lets a host say "base −6.0 dB · automated now −12.0 dB" instead of
+    /// showing a static control that silently lies while automation overrides it.</summary>
+    public bool IsVolumeAutomated => Math.Abs(CueVolume - AuthoredVolume) > 0.0001f;
+
     /// <summary>
     /// The complete NXT-04 timeline view used by render/subtitle/output consumers. The positional properties
     /// above remain for UI/API compatibility; new timing-sensitive code should consume this contract.
