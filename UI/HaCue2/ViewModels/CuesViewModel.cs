@@ -91,22 +91,15 @@ public partial class CuesViewModel : ObservableObject
 
         CueSource.RowSelection!.SelectionChanged += (_, _) =>
         {
-            // The tree is the authority on what is selected - SelectedCue follows it rather than the
-            // other way round, so a click, a keyboard move and a programmatic set all take one path.
-            SetProperty(ref _selectedCue, CueSource.RowSelection.SelectedItem, nameof(SelectedCue));
-            OnPropertyChanged(nameof(CanEditSource));
-            OnPropertyChanged(nameof(CanOpenTimeline));
-            OnPropertyChanged(nameof(HasSelection));
-            Inspector.Facts = FactsFor(CueSource.RowSelection.SelectedItem);
-            Inspector.Show([.. CueSource.RowSelection.SelectedItems.OfType<CueRow>().Select(row => row.Id)]);
-            OnPropertyChanged(nameof(CanModifySelection));
-            OnPropertyChanged(nameof(ToggleEnabledLabel));
+            // A rebuild clears the selection, replaces every row, and puts the selection back. Those
+            // intermediate states are NOT deselections and must not be published: an empty one takes
+            // the inspector down to "select a cue to edit" and back, and a control that goes invisible
+            // loses keyboard focus - which is one character per field and then out of it, for every
+            // edit that runs through the journal. Refresh publishes ONCE, at the end, instead.
+            if (_rebuilding)
+                return;
 
-            if (!_restoringSelection
-                && Project.Settings.ClickMovesStandby
-                && CueSource.RowSelection.SelectedItem is { } selected
-                && ScopedList is { } list)
-                SetStandby(list, selected.Id);
+            PublishSelection(movesStandby: !_restoringSelection);
         };
 
         RestoreSelection(Cues.FirstOrDefault());
@@ -204,6 +197,38 @@ public partial class CuesViewModel : ObservableObject
 
     private CueRow? _selectedCue;
     private bool _restoringSelection;
+
+    /// <summary>True for the window in which <see cref="Refresh"/> is replacing the tree's rows.</summary>
+    private bool _rebuilding;
+
+    /// <summary>
+    /// Tells everything that follows the tree what the tree now has selected.
+    /// </summary>
+    /// <remarks>
+    /// The tree is the authority on what is selected - <see cref="SelectedCue"/> follows it rather than
+    /// the other way round, so a click, a keyboard move and a programmatic set all take one path.
+    /// </remarks>
+    /// <param name="movesStandby">
+    /// False for a selection the APP made. Standby follows a click, not a rebuild - an ordinary edit
+    /// would otherwise walk the standby cursor onto whatever the operator happened to have selected.
+    /// </param>
+    private void PublishSelection(bool movesStandby)
+    {
+        SetProperty(ref _selectedCue, CueSource.RowSelection!.SelectedItem, nameof(SelectedCue));
+        OnPropertyChanged(nameof(CanEditSource));
+        OnPropertyChanged(nameof(CanOpenTimeline));
+        OnPropertyChanged(nameof(HasSelection));
+        Inspector.Facts = FactsFor(CueSource.RowSelection.SelectedItem);
+        Inspector.Show([.. CueSource.RowSelection.SelectedItems.OfType<CueRow>().Select(row => row.Id)]);
+        OnPropertyChanged(nameof(CanModifySelection));
+        OnPropertyChanged(nameof(ToggleEnabledLabel));
+
+        if (movesStandby
+            && Project.Settings.ClickMovesStandby
+            && CueSource.RowSelection.SelectedItem is { } selected
+            && ScopedList is { } list)
+            SetStandby(list, selected.Id);
+    }
 
     /// <summary>
     /// The lead selected row. Setting it drives the TREE's selection, which then reports back.
@@ -910,11 +935,14 @@ public partial class CuesViewModel : ObservableObject
 
         var target = list;
 
+        // The coalescing group is deliberately left OPEN: walking the cursor is one thing the operator
+        // did, and now that selecting a cue arms it, closing here would push an undo step per click and
+        // leave Ctrl+Z walking the standby cursor backwards instead of undoing an edit. Any edit of
+        // anything else starts its own step, exactly as it does after a fader drag.
         _journal.Do(new SetValueCommand<Guid?>(
             list.Id, "standby", "cues",
             () => target.StandbyCueId, value => target.StandbyCueId = value, id,
             id is null ? "clear standby" : "move standby"));
-        _journal.CloseGroup();
 
         Refresh();
     }
@@ -1138,12 +1166,20 @@ public partial class CuesViewModel : ObservableObject
     /// False for a bulk run, which renumbers ONCE at the end instead. Auto-renumber rewrites the whole
     /// sibling level, so doing it per file is the other half of what made importing an album quadratic.
     /// </param>
+    /// <param name="droppedOn">
+    /// A cue the operator aimed at, which stands in for the selection - what a file drop lands on.
+    /// </param>
     private CueNode InsertCore(
-        CueList list, CueNode cue, string what, CueNode? after = null, bool renumber = true)
+        CueList list,
+        CueNode cue,
+        string what,
+        CueNode? after = null,
+        bool renumber = true,
+        CueNode? droppedOn = null)
     {
         cue.Trigger = Project.Settings.NewCueTrigger;
 
-        var (siblings, at) = InsertionPoint(list, after);
+        var (siblings, at) = InsertionPoint(list, after, droppedOn);
         cue.Number = AutoNumber(siblings, at);
 
         using (_journal.Composite($"add {what} cue", "cues"))
@@ -1162,11 +1198,17 @@ public partial class CuesViewModel : ObservableObject
     /// ONE rebuild for the whole run, and each cue anchored on the one before it so the files land in
     /// the order they were chosen. Rebuilding per file was quadratic in the size of the list.
     /// </remarks>
-    public void AddMedia(IReadOnlyList<string> paths)
+    /// <param name="droppedOn">
+    /// The cue a file DROP landed on, which takes the selection's place for the first file: dropped on
+    /// a group the files go into it, dropped on a cue they follow it, dropped past the last row they
+    /// append. Null for the file picker, where "where the operator is looking" is the selection.
+    /// </param>
+    public void AddMedia(IReadOnlyList<string> paths, Guid? droppedOn = null)
     {
         if (!CanEditDocument || paths.Count == 0 || ScopedList is not { } list)
             return;
 
+        var anchor = droppedOn is { } id ? Project.FindCue(id) : null;
         CueNode? last = null;
         var failed = new List<string>();
 
@@ -1191,7 +1233,7 @@ public partial class CuesViewModel : ObservableObject
                     if (cue is MediaCueNode still && IsStill(path))
                         still.EndBehavior = CueEndBehavior.FreezeLastFrame;
 
-                    last = InsertCore(list, cue, "media", last, renumber: false);
+                    last = InsertCore(list, cue, "media", last, renumber: false, droppedOn: anchor);
                 }
                 catch (Exception failure) when (
                     failure is IOException or UnauthorizedAccessException or ArgumentException)
@@ -1365,12 +1407,113 @@ public partial class CuesViewModel : ObservableObject
         Refresh();
     }
 
+    /// <summary>
+    /// Moves cues to where they were dropped - the tree's drag reorder (register item 8).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Through the journal, like every other structural edit, so a drag is one undo step and a moved
+    /// cue survives the refresh that follows. The tree control has its own row-reordering that mutates
+    /// the ROW objects directly: those are a projection rebuilt from the document on the next refresh,
+    /// so a move made that way would vanish a moment later and could never be undone. The view
+    /// suppresses it and calls here instead.
+    /// </para>
+    /// <para>
+    /// <b>Numbers are left alone.</b> A cue's number is what the running order on paper says, and the
+    /// list's fire order is its ORDER, not its numbering - moving a cue does not renumber the show.
+    /// RENUMBER… is the deliberate way to make numbers follow positions again.
+    /// </para>
+    /// </remarks>
+    /// <param name="cueIds">What is being dragged. A group brings its children with it.</param>
+    /// <param name="targetId">The cue that was dropped on.</param>
+    /// <param name="placement">Which edge of the target, or inside it when it is a group.</param>
+    /// <returns>True when the document changed.</returns>
+    public bool MoveCues(IReadOnlyList<Guid> cueIds, Guid targetId, CueDrop placement)
+    {
+        ArgumentNullException.ThrowIfNull(cueIds);
+
+        if (!CanEditDocument || cueIds.Count == 0 || ScopedList is not { } list)
+            return false;
+
+        if (Project.FindCue(targetId) is not { } target)
+            return false;
+
+        // In the tree's own order, so a multi-row drag lands in the order it was read on screen, and
+        // without the children of a group that is being dragged - moving the group moves them already.
+        var dragged = cueIds.ToHashSet();
+        var moving = list.Flatten().Where(cue => dragged.Contains(cue.Id)).ToList();
+        moving = [.. moving.Where(cue =>
+            !moving.Any(other => !ReferenceEquals(other, cue) && Holds(other, cue.Id)))];
+
+        // A group cannot be dropped into itself, and nothing can be dropped onto itself.
+        if (moving.Count == 0 || moving.Any(cue => cue.Id == targetId || Holds(cue, targetId)))
+            return false;
+
+        var (destination, at) = DropPoint(list, target, placement);
+        var moved = 0;
+        CueNode? previous = null;
+
+        using (_journal.Composite(
+            moving.Count == 1 ? "move cue" : $"move {moving.Count} cues", "cues", quiet: true))
+        {
+            foreach (var cue in moving)
+            {
+                if (Owner(list.Cues, cue.Id) is not { } owner)
+                    continue;
+
+                var from = owner.IndexOf(cue);
+                // Each cue after the first goes behind the one before it, so the dragged block keeps
+                // its shape. Read fresh, because the inserts before it have moved the anchor.
+                var to = previous is null ? at : destination.IndexOf(previous) + 1;
+                previous = cue;
+
+                // Dropped on its own edge: nothing to do, and journalling it would be an undo step
+                // that undoes nothing.
+                if (ReferenceEquals(owner, destination) && (to == from || to == from + 1))
+                    continue;
+
+                _journal.Do(new MoveItemCommand<CueNode>(
+                    owner, from, destination, to, cue, "cues",
+                    $"move Q{CuePresentation.Number(cue.Number)}"));
+                moved++;
+            }
+        }
+
+        if (moved == 0)
+            return false;
+
+        // Nothing has to re-open the group a cue was dropped into: rebuilt rows start expanded, so the
+        // cue is visible in its new home the moment the refresh lands.
+        Refresh();
+        return true;
+    }
+
+    /// <summary>Which list a drop lands in, and where in it - as an index read BEFORE the move.</summary>
+    private (List<CueNode> Destination, int At) DropPoint(CueList list, CueNode target, CueDrop placement)
+    {
+        if (placement == CueDrop.Inside && target is GroupCueNode group)
+            return (group.Children, group.Children.Count);
+
+        var owner = Owner(list.Cues, target.Id) ?? list.Cues;
+        return (owner, owner.IndexOf(target) + (placement == CueDrop.Before ? 0 : 1));
+    }
+
+    /// <summary>Whether a cue's subtree contains an id - what stops a group being dropped into itself.</summary>
+    private static bool Holds(CueNode cue, Guid id) =>
+        cue is GroupCueNode group
+        && group.Children.Any(child => child.Id == id || Holds(child, id));
+
     /// <summary>Where a new cue goes: inside the selected group, or after the selected cue.</summary>
     /// <param name="after">
     /// An explicit anchor, for a bulk run. A group anchor is only descended INTO when it is the
     /// operator's selection - a run anchored on the cue it just added must stay beside it.
     /// </param>
-    private (List<CueNode> Siblings, int At) InsertionPoint(CueList list, CueNode? after = null)
+    /// <param name="droppedOn">
+    /// Where the operator aimed, which takes the selection's place: a file dropped on a group belongs
+    /// in that group whatever happens to be selected in the tree.
+    /// </param>
+    private (List<CueNode> Siblings, int At) InsertionPoint(
+        CueList list, CueNode? after = null, CueNode? droppedOn = null)
     {
         if (after is { } previous)
         {
@@ -1378,7 +1521,7 @@ public partial class CuesViewModel : ObservableObject
             return (host, host.IndexOf(previous) + 1);
         }
 
-        if (SelectedCue is not { } row || Project.FindCue(row.Id) is not { } selected)
+        if ((droppedOn ?? (SelectedCue is { } row ? Project.FindCue(row.Id) : null)) is not { } selected)
             return (list.Cues, list.Cues.Count);
 
         if (selected is GroupCueNode group)
@@ -1654,14 +1797,28 @@ public partial class CuesViewModel : ObservableObject
             .Select(row => row.Id)
             .Where(id => id != SelectedCue?.Id));
 
-        // Scopes FIRST: the rows are built for whichever scope is selected, and a scope whose group was
-        // just deleted has to be resolved before anything tries to list its contents.
-        RebuildScopes();
-        Rebuild();
-        // By ID, not by reference: Rebuild replaces every row object, so the old instance is gone even
-        // though the cue it stood for is still there.
-        RestoreSelection(selected);
-        Inspector.Facts = FactsFor(SelectedCue);
+        // Quiet for the whole rebuild: the clear, the row replacement and the restore are one movement,
+        // and the only state worth publishing is the one it ends in. See the selection handler.
+        _rebuilding = true;
+
+        try
+        {
+            // Scopes FIRST: the rows are built for whichever scope is selected, and a scope whose group
+            // was just deleted has to be resolved before anything tries to list its contents.
+            RebuildScopes();
+            Rebuild();
+            // By ID, not by reference: Rebuild replaces every row object, so the old instance is gone
+            // even though the cue it stood for is still there.
+            RestoreSelection(selected);
+        }
+        finally
+        {
+            _rebuilding = false;
+        }
+
+        // Unconditional, because the restore may have found nothing: a cue that was deleted, or one
+        // whose scope went with it, leaves the tree with no selection and no event to say so.
+        PublishSelection(movesStandby: false);
         Inspector.Reload();
         Timeline.Refresh();
 

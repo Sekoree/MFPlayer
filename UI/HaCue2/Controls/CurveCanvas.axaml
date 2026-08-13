@@ -17,6 +17,12 @@
                        WaveBrush="{DynamicResource GelGreen}" />
       <c:CanvasGrid Columns="10" Rows="4" />
 
+      <!-- The other side of the same gesture, under the editable curve and behind it in weight: it is
+           context, not something to grab. Amber against the congo of the curve being dragged. -->
+      <c:EnvelopeGraph Points="{Binding CompanionShape, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}"
+                       IsHitTestVisible="False" Opacity="0.55"
+                       Stroke="{DynamicResource GelAmber}" StrokeThickness="1.2" />
+
       <!-- A polyline over the fractions, not a stretched geometry: Stretch="Fill" maps the geometry's
            BOUNDING BOX, so a curve that never reaches 1 would be drawn as if it did. -->
       <c:EnvelopeGraph Points="{Binding Shape, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}"

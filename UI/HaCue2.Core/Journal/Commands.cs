@@ -119,6 +119,73 @@ public sealed class RemoveItemCommand<T> : IProjectCommand
 }
 
 /// <summary>
+/// Moves one item between two positions in the document - the same list, or another one.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A move is ONE command rather than a remove and an add, because it is one thing the operator did:
+/// dragging a cue into a group and pressing undo must put it back where it was, in one press, and a
+/// pair of commands leaves an intermediate state in which the cue exists nowhere. It also keeps the
+/// same instance in the document throughout, which is the invariant every other command's closures
+/// rely on - see <see cref="SetValueCommand{T}"/>.
+/// </para>
+/// <para>
+/// <b>The destination index is read BEFORE the removal</b>, which is how a caller naturally computes
+/// it - "in front of the row I dropped on". Moving down within one list therefore has to step the
+/// index back by one, because taking the item out shifts everything after it up.
+/// </para>
+/// </remarks>
+public sealed class MoveItemCommand<T> : IProjectCommand
+{
+    private readonly IList<T> _from;
+    private readonly int _fromIndex;
+    private readonly IList<T> _to;
+    private readonly int _toIndex;
+    private readonly T _item;
+
+    /// <param name="toIndex">Where it lands, as an index into <paramref name="to"/> before the move.</param>
+    public MoveItemCommand(
+        IList<T> from,
+        int fromIndex,
+        IList<T> to,
+        int toIndex,
+        T item,
+        string domain,
+        string description)
+    {
+        ArgumentNullException.ThrowIfNull(from);
+        ArgumentNullException.ThrowIfNull(to);
+
+        _from = from;
+        _fromIndex = fromIndex;
+        _to = to;
+        _toIndex = toIndex;
+        _item = item;
+        Domain = domain;
+        Description = description;
+    }
+
+    public string Description { get; }
+    public string Domain { get; }
+
+    /// <summary>Where the item ends up once its own removal has been accounted for.</summary>
+    private int Landing =>
+        ReferenceEquals(_from, _to) && _fromIndex < _toIndex ? _toIndex - 1 : _toIndex;
+
+    public void Apply(HaCueProject project)
+    {
+        _from.RemoveAt(_fromIndex);
+        _to.Insert(Math.Clamp(Landing, 0, _to.Count), _item);
+    }
+
+    public void Revert(HaCueProject project)
+    {
+        _to.RemoveAt(Math.Clamp(Landing, 0, _to.Count - 1));
+        _from.Insert(Math.Clamp(_fromIndex, 0, _from.Count), _item);
+    }
+}
+
+/// <summary>
 /// Sets, adds or removes one V×R patch cell.
 /// </summary>
 /// <remarks>

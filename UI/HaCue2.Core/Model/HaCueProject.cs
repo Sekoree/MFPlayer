@@ -149,10 +149,22 @@ public sealed record ProjectSettings
     public bool ExternalInputOffOnOpen { get; set; } = true;
 
     /// <summary>
-    /// Register item 6, default off: a single click view-selects, and standby moves only on a
-    /// double-click or an explicit Stby command. Shows that want QLab-style click-to-target flip it.
+    /// Whether selecting a cue arms it - QLab-style click-to-target.
     /// </summary>
-    public bool ClickMovesStandby { get; set; }
+    /// <remarks>
+    /// <para>
+    /// Register item 6 specified this off, so a single click view-selected and standby moved only on an
+    /// explicit Stby command. On by DEFAULT now, because the decoupled version is a trap in the one
+    /// gesture everybody makes: click the cue you want, press GO, and watch a different cue play. The
+    /// operator has no reason to think the row they highlighted is not the row GO will fire.
+    /// </para>
+    /// <para>
+    /// It stays a setting, and off is still a coherent answer - standby has its own ↑/↓ keys and its own
+    /// marker, and a show driven strictly from those wants the selection free to wander while it runs.
+    /// A project that recorded <c>false</c> keeps it: this is a default, not a migration.
+    /// </para>
+    /// </remarks>
+    public bool ClickMovesStandby { get; set; } = true;
 
     /// <summary>
     /// D6: what an auto-follow chain does when it reaches a disabled cue. Skipping onward is what an

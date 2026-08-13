@@ -562,6 +562,35 @@
                             Tag="crossfade" ToolTip.Tip="Edit exact points and shaped segments" />
                   </Grid>
                 </HeaderedContentControl>
+
+                <!-- BOTH halves of the join. The picker above shows one line, which is the departure;
+                     what an operator is actually judging is whether the two together hold the level
+                     across the seam or leave a hole in it. Sampled from the session's own fade math,
+                     so this is the crossfade rather than a drawing of one. -->
+                <ContentControl Theme="{StaticResource FieldWide}">
+                  <Border Classes="vidcanvas" Height="76"
+                          AutomationProperties.Name="Crossfade shape">
+                    <Panel Margin="6">
+                      <c:CanvasGrid Columns="8" Rows="4" />
+                      <c:EnvelopeGraph Points="{Binding CrossfadeOutShape}"
+                                       Stroke="{DynamicResource GelCongo}" StrokeThickness="1.4" />
+                      <c:EnvelopeGraph Points="{Binding CrossfadeInShape}"
+                                       Stroke="{DynamicResource GelAmber}" StrokeThickness="1.4" />
+                    </Panel>
+                  </Border>
+                </ContentControl>
+                <ContentControl Theme="{StaticResource FieldWide}">
+                  <StackPanel Orientation="Horizontal" Spacing="7">
+                    <Rectangle Width="18" Height="2" VerticalAlignment="Center"
+                               Fill="{DynamicResource GelCongo}" />
+                    <TextBlock Classes="mono dim2 small" VerticalAlignment="Center"
+                               Text="item going out" />
+                    <Rectangle Width="18" Height="2" VerticalAlignment="Center"
+                               Fill="{DynamicResource GelAmber}" />
+                    <TextBlock Classes="mono dim2 small" VerticalAlignment="Center"
+                               Text="item coming in" />
+                  </StackPanel>
+                </ContentControl>
               </StackPanel>
             </StackPanel>
 

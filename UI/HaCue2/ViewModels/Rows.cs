@@ -33,6 +33,23 @@ public enum CueKind
     Text,
 }
 
+/// <summary>
+/// Where a dragged cue lands relative to the row it was dropped on.
+/// </summary>
+/// <remarks>
+/// The tree control's own drop-position type says the same three things, but it belongs to a control
+/// library - the view-model that performs the move should not have to reference one to be told where
+/// the operator let go.
+/// </remarks>
+public enum CueDrop
+{
+    Before,
+    After,
+
+    /// <summary>Into a group, at the end of its children. Falls back to <see cref="After"/> otherwise.</summary>
+    Inside,
+}
+
 /// <summary>Colour role for a badge or a status word, named after the mockup's gels.</summary>
 public enum Gel
 {

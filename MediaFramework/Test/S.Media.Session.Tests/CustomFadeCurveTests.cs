@@ -21,6 +21,51 @@ public class CustomFadeCurveTests
         Assert.Equal(1f, curve.Evaluate(1), 5);
     }
 
+    /// <summary>
+    /// The two halves of a crossfade go opposite ways, drawn curve or not.
+    /// </summary>
+    /// <remarks>
+    /// A built-in law is inverted by the ramps themselves - down is up read backwards - but a drawing is
+    /// used AS DRAWN everywhere else, which is right for a cue's own fade-in and was catastrophic for a
+    /// crossfade: one drawing serves both ramps, so the incoming clip followed the same falling shape as
+    /// the tail it was replacing and the pair faded to silence together.
+    /// </remarks>
+    [Fact]
+    public void AMirroredShapeIsTheOtherHalfOfTheCrossfade()
+    {
+        // Drawn as the OUTGOING side, which is where a crossfade curve starts (unity → silence).
+        var drawn = new FadeShape(FadeCurve.Linear, new CustomFadeCurve(
+            [new FadeCurvePoint(0, 1), new FadeCurvePoint(0.25, 0.5), new FadeCurvePoint(1, 0)]));
+        var incoming = drawn with { Mirrored = true };
+        var window = TimeSpan.FromSeconds(1);
+
+        // The tail rides the drawing forwards: full, then down through the authored knee.
+        Assert.Equal(1f, FadeCurves.LevelDown(TimeSpan.Zero, window, drawn), 3);
+        Assert.Equal(0.5f, FadeCurves.LevelDown(TimeSpan.FromMilliseconds(250), window, drawn), 3);
+        Assert.Equal(0f, FadeCurves.LevelDown(window, window, drawn), 3);
+
+        // The incoming half reads the same drawing from its far end: silent, then up.
+        Assert.Equal(0f, FadeCurves.LevelUp(TimeSpan.Zero, window, incoming), 3);
+        Assert.Equal(0.5f, FadeCurves.LevelUp(TimeSpan.FromMilliseconds(750), window, incoming), 3);
+        Assert.Equal(1f, FadeCurves.LevelUp(window, window, incoming), 3);
+
+        // Un-mirrored is the behaviour every other custom fade relies on and must not change.
+        Assert.Equal(1f, FadeCurves.LevelUp(TimeSpan.Zero, window, drawn), 3);
+    }
+
+    /// <summary>A built-in law must be left alone: the ramps already mirror it.</summary>
+    [Fact]
+    public void MirroringABuiltInLawChangesNothing()
+    {
+        var law = new FadeShape(FadeCurve.EqualPower);
+        var window = TimeSpan.FromSeconds(1);
+
+        Assert.Equal(
+            FadeCurves.LevelUp(TimeSpan.FromMilliseconds(300), window, law),
+            FadeCurves.LevelUp(TimeSpan.FromMilliseconds(300), window, law with { Mirrored = true }),
+            5);
+    }
+
     [Fact]
     public void ClampsOutsideTheDrawnRange()
     {

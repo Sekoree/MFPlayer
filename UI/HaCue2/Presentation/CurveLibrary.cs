@@ -146,6 +146,67 @@ public static class CurveLibrary
         return handles;
     }
 
+    /// <summary>
+    /// The two ramps a crossfade actually plays: the outgoing cue's fall and the incoming cue's rise.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Sampled through the session's OWN fade math rather than redrawn here, so the picture cannot
+    /// disagree with the show. That matters most for the case a drawing cannot express: a named law is
+    /// stored as a law, and a curve editor opened on one shows its editable starting line, not the
+    /// equal-power shape the engine will play.
+    /// </para>
+    /// <para>
+    /// Y is inverted, like <see cref="Shape"/>: the canvas draws unity at the top.
+    /// </para>
+    /// </remarks>
+    public static (IReadOnlyList<CurvePoint> Out, IReadOnlyList<CurvePoint> In) CrossfadeRamps(
+        CurveSpec spec, HaCueProject project)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+
+        var shape = spec.Resolve(project);
+        // The incoming half of a DRAWING is that drawing read backwards; a law is already mirrored by
+        // the up-ramp itself. Exactly what ShowSession does - see FadeShape.Mirrored.
+        return (Ramp(shape, rising: false), Ramp(shape with { Mirrored = shape.IsCustom }, rising: true));
+    }
+
+    private static IReadOnlyList<CurvePoint> Ramp(FadeShape shape, bool rising)
+    {
+        const int samples = 48;
+        var window = TimeSpan.FromSeconds(1);
+        var points = new List<CurvePoint>(samples + 1);
+
+        for (var step = 0; step <= samples; step++)
+        {
+            var progress = (double)step / samples;
+            var at = TimeSpan.FromSeconds(progress);
+            var level = rising
+                ? FadeCurves.LevelUp(at, window, shape)
+                : FadeCurves.LevelDown(at, window, shape);
+            points.Add(new CurvePoint(progress, 1 - level));
+        }
+
+        return points;
+    }
+
+    /// <summary>
+    /// The same drawing read from its far end - the other half of a crossfade.
+    /// </summary>
+    /// <remarks>
+    /// A crossfade is ONE authored curve and two ramps: the outgoing cue rides it forwards and the
+    /// incoming cue reads it backwards, which is what makes an equal-power drawing hold the level
+    /// across the join. Mirroring in X rather than negating in Y, because that is exactly what the
+    /// session does - see <c>FadeShape.Mirrored</c>.
+    /// </remarks>
+    public static IReadOnlyList<CurvePoint> Mirror(IReadOnlyList<CurvePoint> shape)
+    {
+        ArgumentNullException.ThrowIfNull(shape);
+        return shape.Count < 2
+            ? []
+            : [.. shape.Select(point => point with { X = 1 - point.X }).Reverse()];
+    }
+
     private static string Thumbnail(IReadOnlyList<CurveKnot> knots)
     {
         var sampled = Shape(knots);

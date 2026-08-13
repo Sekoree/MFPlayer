@@ -1,7 +1,9 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using Avalonia.Interactivity;
+using Avalonia.VisualTree;
 using HaCue2.Core.Media;
 using HaCue2.Engine;
 using HaCue2.Machine;
@@ -22,9 +24,27 @@ public partial class CuesView : UserControl
 {
     private bool _collapsedForWidth;
 
+    /// <summary>What a row drag picked up, captured when it started - the drop args do not carry it.</summary>
+    private IReadOnlyList<Guid> _draggedCues = [];
+
     public CuesView()
     {
         InitializeComponent();
+
+        // Reordering by dragging a row. The grid raises both halves; the drop is answered rather than
+        // left to its built-in move. See OnCueRowDrop.
+        if (this.FindControl<TreeDataGrid>("CueTree") is { } tree)
+        {
+            tree.RowDragStarted += OnCueRowDragStarted;
+            tree.RowDrop += OnCueRowDrop;
+        }
+
+        // Files dragged in from a file manager become media cues - the same import + MEDIA… runs, which
+        // is how a show gets built. handledEventsToo, because this has to see a drag the tree's own
+        // row-reorder handling has already looked at.
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnFilesDragOver, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(DragDrop.DropEvent, OnFilesDrop, RoutingStrategies.Bubble, handledEventsToo: true);
 
         // PANIC is the one control in the app that is HELD rather than clicked, so it needs the raw
         // pointer edges - and Button marks PointerPressed and PointerReleased HANDLED in its own class
@@ -179,6 +199,129 @@ public partial class CuesView : UserControl
                     cues.Refresh);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Remembers what the drag picked up, and refuses one that may not happen.
+    /// </summary>
+    /// <remarks>
+    /// The drop event carries the target but not the dragged rows, so they are captured here - and the
+    /// grid only starts a drag at all when this leaves an effect on the args.
+    /// </remarks>
+    private void OnCueRowDragStarted(object? sender, TreeDataGridRowDragStartedEventArgs e)
+    {
+        _draggedCues = DataContext is CuesViewModel { CanEditDocument: true }
+            ? [.. e.Models.OfType<CueRow>().Select(row => row.Id)]
+            : [];
+
+        e.AllowedEffects = _draggedCues.Count > 0 ? DragDropEffects.Move : DragDropEffects.None;
+    }
+
+    /// <summary>
+    /// Performs the reorder the operator just dropped.
+    /// </summary>
+    /// <remarks>
+    /// Marked handled unconditionally, which is what stops the grid doing the move itself: its
+    /// built-in reorder mutates the ROW collection, and those rows are a projection rebuilt from the
+    /// document on the next refresh - a move made that way would be gone a moment later and would
+    /// never have reached the journal, so it could not be undone either.
+    /// </remarks>
+    private void OnCueRowDrop(object? sender, TreeDataGridRowDragEventArgs e)
+    {
+        e.Handled = true;
+        var dragged = _draggedCues;
+        _draggedCues = [];
+
+        if (DataContext is not CuesViewModel cues
+            || dragged.Count == 0
+            || e.Position == TreeDataGridRowDropPosition.None
+            || e.TargetRow?.DataContext is not CueRow target)
+            return;
+
+        cues.MoveCues(dragged, target.Id, e.Position switch
+        {
+            TreeDataGridRowDropPosition.Before => CueDrop.Before,
+            TreeDataGridRowDropPosition.Inside => CueDrop.Inside,
+            _ => CueDrop.After,
+        });
+    }
+
+    /// <summary>
+    /// Says a file drag would be accepted, and ONLY a file drag.
+    /// </summary>
+    /// <remarks>
+    /// The narrowness is the point. This runs after the tree's own row-drag handling, and answering
+    /// every drag would answer that one too - with <c>None</c>, which stops the platform ever
+    /// dispatching the drop, so a row reorder would show its indicator and then do nothing.
+    /// </remarks>
+    private void OnFilesDragOver(object? sender, DragEventArgs e)
+    {
+        if (!e.DataTransfer.Contains(DataFormat.File) || !IsOverCueList(e))
+            return;
+
+        // Importing is authoring, so it is behind the same lock as everything else that writes cues.
+        e.DragEffects = DataContext is CuesViewModel { CanEditDocument: true }
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Whether a drag is over the cue list rather than somewhere else on the screen.
+    /// </summary>
+    /// <remarks>
+    /// The whole view accepts drops so the handlers see the drag at all; only this panel ACTS on one.
+    /// Dropping an album on the inspector or the Active panel and having cues appear elsewhere is a
+    /// gesture nobody made. The panel rather than the tree, because an empty list hides the tree and
+    /// shows its no-cues state instead - which is precisely when somebody drags files in.
+    /// </remarks>
+    private bool IsOverCueList(DragEventArgs e)
+    {
+        if (this.FindControl<Panel>("CueListSurface") is not { } surface)
+            return true;
+
+        var at = e.GetPosition(surface);
+        return at.X >= 0 && at.Y >= 0 && at.X <= surface.Bounds.Width && at.Y <= surface.Bounds.Height;
+    }
+
+    /// <summary>
+    /// Makes a media cue of each dropped file, where they were dropped.
+    /// </summary>
+    /// <remarks>
+    /// The row under the pointer is the anchor, so files land where the operator aimed rather than at
+    /// the end of the list - dropped on a group they go inside it, dropped on a cue they follow it, and
+    /// dropped on empty space they append. One undo step for the whole drop, like + MEDIA….
+    /// </remarks>
+    private void OnFilesDrop(object? sender, DragEventArgs e)
+    {
+        if (DataContext is not CuesViewModel { CanEditDocument: true } cues
+            || !IsOverCueList(e)
+            || e.DataTransfer.TryGetFiles() is not { } files)
+            return;
+
+        var paths = files
+            .Select(file => file.TryGetLocalPath())
+            .OfType<string>()
+            .Where(path => path.Length > 0)
+            .ToList();
+
+        if (paths.Count == 0)
+            return;
+
+        e.Handled = true;
+        cues.AddMedia(paths, AnchorAt(e));
+    }
+
+    /// <summary>The cue a drop landed on, or nothing when it landed past the last row.</summary>
+    private static Guid? AnchorAt(DragEventArgs e)
+    {
+        for (var visual = e.Source as Visual; visual is not null; visual = visual.GetVisualParent())
+        {
+            if (visual is Control { DataContext: CueRow row })
+                return row.Id;
+        }
+
+        return null;
     }
 
     private void OnDuplicate(object? sender, RoutedEventArgs e) =>

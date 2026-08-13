@@ -40,6 +40,33 @@ public sealed class ImplementationRegressionTests
         Assert.Null(project.AudioPatch.ClockMasterLineId);
     }
 
+    /// <summary>
+    /// Out of the box a media cue starts hard and stops hard.
+    /// </summary>
+    /// <remarks>
+    /// A cue fades because somebody asked it to. The house-style seed used to be 100 ms in and 2 s out,
+    /// which is invisible in the cue list and audible in the room: a cue authored to hit a frame arrives
+    /// late, and one meant to butt-cut dissolves under the next for two seconds. A show that wants a
+    /// house fade sets it once, deliberately, in New project defaults.
+    /// </remarks>
+    [Fact]
+    public void ANewProjectFadesNothingUnlessAskedTo()
+    {
+        Assert.Equal(0, new AppSettings().NewProjectFadeInMs);
+        Assert.Equal(0, new AppSettings().NewProjectFadeOutMs);
+
+        var project = ProjectFiles.Create("Show", "/media", new AppSettings());
+
+        Assert.Equal(0, project.Settings.DefaultFadeInMs);
+        Assert.Equal(0, project.Settings.DefaultFadeOutMs);
+
+        var cues = new CuesViewModel(new ProjectJournal(project), new ShowRuntime());
+        var added = Assert.IsType<MediaCueNode>(cues.AddCue(CueKind.Media, "/media/sting.wav"));
+
+        Assert.Equal(0, added.FadeInMs);
+        Assert.Equal(0, added.FadeOutMs);
+    }
+
     [Fact]
     public void NewMediaCuesUseProjectTriggerAndFadeDefaults()
     {

@@ -13,6 +13,27 @@ using System.Text;
 
 namespace S.Media.Session;
 
+/// <summary>
+/// One voice inside a transport group, as a poller sees it.
+/// </summary>
+/// <remarks>
+/// A group's own <see cref="TransportSnapshot.ClipPosition"/> is its ACTIVE voice's, which is the right
+/// answer for everything transport commands target. It is the wrong answer for a crossfade tail: during
+/// the overlap the outgoing clip is still sounding, still has its own playhead, and a panel that reads
+/// the group reports the incoming clip's position and duration for both of them. That is what this
+/// exists for - a per-clip readout for the seconds in which one group holds two clips.
+/// </remarks>
+/// <param name="ClipId">The binding's clip id - for a cue-driven host, the cue that is sounding.</param>
+/// <param name="IsActive">
+/// True for the one voice transport commands target; false for a tail playing itself out. A loop
+/// crossfade has the SAME clip id on both voices, so this is what tells them apart.
+/// </param>
+public readonly record struct VoicePlayhead(
+    string ClipId,
+    TimeSpan Position,
+    TimeSpan Duration,
+    bool IsActive);
+
 /// <summary>Immutable per-group transport snapshot - a query result, never mutated by the caller (D5).</summary>
 /// <param name="IsActive">True when the group currently holds a clip (playing, paused, or frozen) - the reliable
 /// "is this cue still up" signal. Distinct from <paramref name="IsRunning"/> (the clock is advancing), which a
@@ -61,6 +82,13 @@ public sealed record TransportSnapshot(
     /// ones, or cues that ARE playing together read ~100-200 ms apart.
     /// </remarks>
     public TimeSpan AudibleLatency { get; init; }
+
+    /// <summary>
+    /// Every voice the group is holding, oldest first - the active clip and any crossfade tails still
+    /// playing out under it. Empty for an idle group. See <see cref="VoicePlayhead"/> for why a caller
+    /// that shows one row per CUE has to read this rather than the group's own position.
+    /// </summary>
+    public IReadOnlyList<VoicePlayhead> Voices { get; init; } = [];
 }
 
 /// <summary>A soundboard voice's playhead - for the UI's per-tile progress/countdown.</summary>
@@ -1369,10 +1397,15 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
         var fadeIn = binding.FadeIn > TimeSpan.Zero || crossfade is not null;
         var fadeInDuration = binding.FadeIn > TimeSpan.Zero ? binding.FadeIn : crossfade?.Duration ?? TimeSpan.Zero;
         // A user-drawn shape on the binding wins over the built-in law; a crossfade-implied fade-in has
-        // no binding of its own, so it keeps the crossfade's law.
+        // no binding of its own, so it keeps the crossfade's law - MIRRORED when that law is a drawing,
+        // because the outgoing tail is ramping down through the same one and a drawing has no law to
+        // invert. Without the mirror both halves followed the identical falling shape and the incoming
+        // clip started at unity and faded out: a crossfade to silence. See FadeShape.Mirrored.
         FadeShape fadeInCurve = binding.FadeIn > TimeSpan.Zero
             ? new FadeShape(binding.FadeInCurve, binding.FadeInShape)
-            : crossfade?.Curve ?? FadeCurve.Linear;
+            : crossfade?.Curve is { } crossfadeCurve
+                ? crossfadeCurve with { Mirrored = crossfadeCurve.IsCustom }
+                : FadeCurve.Linear;
         cueElapsed = cueElapsed < TimeSpan.Zero ? TimeSpan.Zero : cueElapsed;
         var opacityEnvelopes = PlacementOpacityEnvelopes(binding);
         var transformEnvelopes = binding.PlacementTransformEnvelopes ?? [];

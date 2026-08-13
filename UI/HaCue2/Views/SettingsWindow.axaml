@@ -381,7 +381,8 @@
               <CheckBox Margin="10,3" IsChecked="{Binding ExternalInputOffOnOpen}"
                         Content="External input off when the project opens" />
               <CheckBox Margin="10,3" IsChecked="{Binding ClickMovesStandby}"
-                        Content="Clicking a cue row moves standby (default: view only)" />
+                        Content="Clicking a cue row moves standby, so GO fires it"
+                        ToolTip.Tip="On by default. Turn it off to drive the show strictly from the STBY keys and leave the selection free to wander while it runs." />
             </StackPanel>
           </c:PanelBox>
 

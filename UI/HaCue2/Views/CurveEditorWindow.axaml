@@ -35,6 +35,24 @@
         </ListBox.ItemTemplate>
       </ListBox>
 
+      <!-- A crossfade is ONE drawing and TWO ramps, so the editor says which line is which. Only on a
+           crossfade: every other curve here genuinely has one side, and a legend for a line that is not
+           drawn would be worse than none. -->
+      <Border DockPanel.Dock="Bottom" Classes="chain" Margin="10,0,10,8"
+              IsVisible="{Binding IsCrossfade}">
+        <StackPanel Orientation="Horizontal" Spacing="7">
+          <Border Classes="badge"><TextBlock Text="CROSSFADE" /></Border>
+          <Rectangle Width="18" Height="2" VerticalAlignment="Center"
+                     Fill="{DynamicResource GelCongo}" />
+          <TextBlock Classes="mono dim2 small" VerticalAlignment="Center" Text="going out" />
+          <Rectangle Width="18" Height="2" VerticalAlignment="Center" Opacity="0.55"
+                     Fill="{DynamicResource GelAmber}" />
+          <TextBlock Classes="mono dim2 small" VerticalAlignment="Center" Text="coming in" />
+          <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
+                     Text="{Binding CompanionNote}" />
+        </StackPanel>
+      </Border>
+
       <Grid ColumnDefinitions="*,220" ColumnSpacing="7" Margin="10,2,10,10">
 
         <c:CurveCanvas Grid.Column="0"
@@ -42,6 +60,7 @@
                        AutomationProperties.HelpText="Drag points to shape the curve. Exact keyboard-editable values are beside the canvas."
                        Points="{Binding Points}"
                        Shape="{Binding Shape}"
+                       CompanionShape="{Binding Companion}"
                        Tangents="{Binding Tangents}"
                        Gesture="OnCurveGesture"
                        GestureCompleted="OnCurveGestureCompleted"

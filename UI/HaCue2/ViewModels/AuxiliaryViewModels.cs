@@ -251,14 +251,20 @@ public partial class CurveEditorViewModel : ObservableObject
         _knots = [new CurveKnot(0, 1), new CurveKnot(0.35, 0.55), new CurveKnot(1, 0)];
     }
 
+    /// <param name="crossfade">
+    /// True when this ONE curve drives two ramps at once, so the editor draws both. See
+    /// <see cref="Companion"/>.
+    /// </param>
     public CurveEditorViewModel(
         ProjectJournal journal,
         ICurveTarget target,
         string title,
-        TimeSpan? duration = null)
+        TimeSpan? duration = null,
+        bool crossfade = false)
     {
         _journal = journal;
         _target = target;
+        _crossfade = crossfade;
         Title = title;
         Hint = duration is { TotalMilliseconds: > 0 }
             ? $"{ClipTimes.Format((int)duration.Value.TotalMilliseconds)} · double-click to add a timed point"
@@ -276,6 +282,7 @@ public partial class CurveEditorViewModel : ObservableObject
 
     private IReadOnlyList<CurveKnot> _knots;
     private readonly bool _supportsHold = true;
+    private readonly bool _crossfade;
 
     public IReadOnlyList<CurveOption> Curves => _journal is { } journal
         ? CurveLibrary.Choices(journal.Project)
@@ -384,6 +391,25 @@ public partial class CurveEditorViewModel : ObservableObject
     /// </remarks>
     public IReadOnlyList<CurvePoint> Shape
         => CurveLibrary.Shape(_knots);
+
+    /// <summary>
+    /// The OTHER half of a crossfade, drawn behind the one being edited.
+    /// </summary>
+    /// <remarks>
+    /// A crossfade is one curve and two ramps: the cue going out rides the drawing forwards, the cue
+    /// coming in reads the same drawing from its far end. Only one of them was ever on screen, so an
+    /// operator shaping a crossfade could see the departure and had to imagine the arrival - which is
+    /// the half that decides whether the join has a hole in it or a bump. Empty for every other curve,
+    /// which genuinely has one side.
+    /// </remarks>
+    public IReadOnlyList<CurvePoint> Companion =>
+        _crossfade ? CurveLibrary.Mirror(Shape) : [];
+
+    public bool IsCrossfade => _crossfade;
+
+    /// <summary>Which line is which, because two curves in one box need saying.</summary>
+    public string CompanionNote =>
+        _crossfade ? "the cue going OUT rides the curve · the cue coming IN reads it backwards" : "";
 
     public IReadOnlyList<string> Scales { get; } = ["dB", "linear"];
     public IReadOnlyList<string> Segments => _supportsHold
@@ -992,6 +1018,7 @@ public partial class CurveEditorViewModel : ObservableObject
 
         OnPropertyChanged(nameof(Points));
         OnPropertyChanged(nameof(Shape));
+        OnPropertyChanged(nameof(Companion));
         OnPropertyChanged(nameof(Tangents));
         OnPropertyChanged(nameof(SelectedPoint));
         OnPropertyChanged(nameof(HasSelection));

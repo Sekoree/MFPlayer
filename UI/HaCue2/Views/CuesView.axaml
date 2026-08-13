@@ -170,7 +170,9 @@
         <!-- ── the cue tree ─────────────────────────────────────────────────────────────── -->
         <c:PanelBox Grid.Row="0" MinHeight="240"
                     Header="{Binding Breadcrumb}" Hint="{Binding TreeHint}">
-          <Panel>
+          <!-- Named because it is the FILE-DROP surface, and the tree alone would not do: an empty list
+               hides the tree entirely, which is exactly when dropping files matters most. -->
+          <Panel Name="CueListSurface">
           <!-- A list nobody has put a cue in yet says so and names the way out. -->
           <c:EmptyState IsVisible="{Binding IsEmpty}"
                         Headline="No cues in this list"
@@ -180,7 +182,14 @@
                has to LOOK like a group: it carries a chevron, it opens and closes, and its cues are
                visibly inside it. An indent margin alone could not tell a group apart from a cue that
                happened to be nested - which is what this replaced. -->
-          <TreeDataGrid IsVisible="{Binding !IsEmpty}" Source="{Binding CueSource}"
+          <!-- Rows drag to reorder. AutoDragDropRows is what turns the gesture on at all (it also
+               sets AllowDrop); the MOVE itself is refused in code-behind and done through the journal
+               instead, because the grid's own reorder rewrites the row objects - a projection the next
+               refresh rebuilds from the document, so the move would vanish and could never be undone.
+               Off under Lock, where nothing else edits the show either. -->
+          <TreeDataGrid Name="CueTree"
+                        IsVisible="{Binding !IsEmpty}" Source="{Binding CueSource}"
+                        AutoDragDropRows="{Binding CanEditDocument}"
                         CanUserResizeColumns="True"
                         CanUserSortColumns="False"
                         AutomationProperties.Name="Cue list tree">

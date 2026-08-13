@@ -218,22 +218,54 @@ public partial class AudioViewModel : ObservableObject
     // ── 06 · logical outputs ──────────────────────────────────────────────────────────────────
     public IReadOnlyList<LogicalOutputRow> Outputs { get; private set; }
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(Senders))]
-    [NotifyPropertyChangedFor(nameof(SelectedGroupId))]
-    [NotifyPropertyChangedFor(nameof(HasGroupToRemove))]
-    [NotifyPropertyChangedFor(nameof(HasSelectedOutput))]
-    [NotifyPropertyChangedFor(nameof(SelectedOutputName))]
-    [NotifyPropertyChangedFor(nameof(OutputName))]
-    [NotifyPropertyChangedFor(nameof(SelectedOutputLines))]
-    [NotifyPropertyChangedFor(nameof(SelectedOutputCarries))]
-    [NotifyPropertyChangedFor(nameof(MeterInSummaryIndex))]
-    [NotifyPropertyChangedFor(nameof(SelectedOutputHint))]
-    [NotifyPropertyChangedFor(nameof(IsSelectedOutputUnpatched))]
-    // A refusal and a SOLO/CLEAR label are both about the output that was selected when they were
-    // produced, so both follow the selection.
-    [NotifyPropertyChangedFor(nameof(SoloLabel))]
     private LogicalOutputRow? _selectedOutput;
+
+    /// <summary>
+    /// The output the inspector beside the list is editing.
+    /// </summary>
+    /// <remarks>
+    /// Hand-written rather than generated for the guard alone. <see cref="Refresh"/> replaces
+    /// <see cref="Outputs"/> on every edit, and a list control drops its selection whenever its source
+    /// is replaced - so this arrived as null in the middle of a rename, emptied the inspector, and
+    /// disabled the field being typed in, which takes keyboard focus with it. One character per rename,
+    /// then out of the box. The refresh puts the selection back BY ID (the rows are new objects, so the
+    /// old instance matches nothing even though the output is still there); the null in between is the
+    /// control reacting to the rebuild, never the operator.
+    /// </remarks>
+    public LogicalOutputRow? SelectedOutput
+    {
+        get => _selectedOutput;
+        set
+        {
+            if (_rebuilding)
+                return;
+
+            SelectOutput(value);
+        }
+    }
+
+    private void SelectOutput(LogicalOutputRow? row)
+    {
+        if (ReferenceEquals(_selectedOutput, row))
+            return;
+
+        _selectedOutput = row;
+        OnPropertyChanged(nameof(SelectedOutput));
+        OnPropertyChanged(nameof(Senders));
+        OnPropertyChanged(nameof(SelectedGroupId));
+        OnPropertyChanged(nameof(HasGroupToRemove));
+        OnPropertyChanged(nameof(HasSelectedOutput));
+        OnPropertyChanged(nameof(SelectedOutputName));
+        OnPropertyChanged(nameof(OutputName));
+        OnPropertyChanged(nameof(SelectedOutputLines));
+        OnPropertyChanged(nameof(SelectedOutputCarries));
+        OnPropertyChanged(nameof(MeterInSummaryIndex));
+        OnPropertyChanged(nameof(SelectedOutputHint));
+        OnPropertyChanged(nameof(IsSelectedOutputUnpatched));
+        // A refusal and a SOLO/CLEAR label are both about the output that was selected when they were
+        // produced, so both follow the selection.
+        OnPropertyChanged(nameof(SoloLabel));
+    }
 
     public string SelectedOutputName => SelectedOutput?.Name ?? "no output selected";
 
@@ -500,12 +532,33 @@ public partial class AudioViewModel : ObservableObject
             ? ""
             : "no audio lines yet - add one under DEVICES, then patch this output onto its channels";
 
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(SelectedLineName))]
-    [NotifyPropertyChangedFor(nameof(HasSelectedLine))]
     private AudioLineRow? _selectedLine;
 
-    partial void OnSelectedLineChanged(AudioLineRow? value) => ShowRecordPane();
+    /// <summary>The line whose recording settings the pane below the list is editing.</summary>
+    /// <remarks>Guarded and restored by id for the same reason as <see cref="SelectedOutput"/>.</remarks>
+    public AudioLineRow? SelectedLine
+    {
+        get => _selectedLine;
+        set
+        {
+            if (_rebuilding)
+                return;
+
+            SelectLine(value);
+        }
+    }
+
+    private void SelectLine(AudioLineRow? row)
+    {
+        if (ReferenceEquals(_selectedLine, row))
+            return;
+
+        _selectedLine = row;
+        OnPropertyChanged(nameof(SelectedLine));
+        OnPropertyChanged(nameof(SelectedLineName));
+        OnPropertyChanged(nameof(HasSelectedLine));
+        ShowRecordPane();
+    }
 
     public string SelectedLineName => SelectedLine?.Name ?? "no line selected";
 
@@ -822,14 +875,37 @@ public partial class AudioViewModel : ObservableObject
     private IDisposable? _drag;
 
     /// <summary>Re-reads the document after an edit here, or an undo from anywhere.</summary>
+    /// <summary>True while the row lists are being replaced - see <see cref="SelectedOutput"/>.</summary>
+    private bool _rebuilding;
+
     public void Refresh()
     {
+        var output = SelectedOutput?.Id;
+        var line = SelectedLine?.Id;
+
         Outputs = AudioPresentation.LogicalOutputs(_project, _runtime);
         Lines = AudioPresentation.Lines(_project, _runtime);
         CountTabs();
 
-        OnPropertyChanged(nameof(Outputs));
-        OnPropertyChanged(nameof(Lines));
+        // Quiet across the announcement: the lists tell their controls to drop their selections, and
+        // the operator's place is restored below rather than being lost and re-found.
+        _rebuilding = true;
+
+        try
+        {
+            OnPropertyChanged(nameof(Outputs));
+            OnPropertyChanged(nameof(Lines));
+        }
+        finally
+        {
+            _rebuilding = false;
+        }
+
+        // By ID: every row is a new object, so the old instance no longer matches anything even though
+        // the output or line it stood for is still there.
+        SelectOutput(Outputs.FirstOrDefault(row => row.Id == output));
+        SelectLine(Lines.FirstOrDefault(row => row.Id == line));
+
         OnPropertyChanged(nameof(HasNoLines));
         OnPropertyChanged(nameof(CanPatchToDevice));
         OnPropertyChanged(nameof(PatchHint));

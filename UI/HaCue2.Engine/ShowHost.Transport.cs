@@ -558,6 +558,21 @@ public sealed partial class ShowHost
                 {
                     var wall = Stopwatch.GetElapsedTime(entry.Value.StartedTicks);
                     var playhead = playheads.GetValueOrDefault(entry.Value.GroupId);
+                    var automation = automationPlayheads.TryGetValue(entry.Key, out var run)
+                        ? run
+                        : ((TimeSpan Position, TimeSpan Duration)?)null;
+
+                    // THIS CUE's voice, not the group's. A crossfade is the seconds in which one group
+                    // holds two clips, and the group's own position is the INCOMING one's - so the
+                    // outgoing row jumped to the new cue's clock and length the instant the fade began
+                    // and stayed there until its tail ran out.
+                    var voice = VoiceOf(playhead, entry.Key);
+
+                    // A tail whose group has already handed its transport on still has a position of
+                    // its own, so a matched voice counts as a transport even when the group reads idle.
+                    var playing = voice is not null || playhead is { IsActive: true };
+                    var position = voice?.Position ?? playhead?.ClipPosition ?? TimeSpan.Zero;
+                    var clipLength = voice?.Duration ?? playhead?.ClipDuration ?? TimeSpan.Zero;
 
                     // The group's position when it has one, and wall time otherwise - a visualizer
                     // cue holds no transport at all, and counting up is better than standing still.
@@ -568,24 +583,19 @@ public sealed partial class ShowHost
                     // glass (its start was deferred by exactly that depth). Shown raw, cues that ARE
                     // playing together read ~100–200 ms apart; subtracting AudibleLatency puts every
                     // readout at the speaker/glass truth.
-                    var elapsed = playhead is { IsActive: true }
-                        ? playhead.ClipPosition > playhead.AudibleLatency
-                            ? playhead.ClipPosition - playhead.AudibleLatency
-                            : TimeSpan.Zero
-                        : automationPlayheads.TryGetValue(entry.Key, out var automation)
-                            ? automation.Position
-                            : wall;
-                    var length = playhead is { ClipDuration.Ticks: > 0 }
-                        ? (TimeSpan?)playhead.ClipDuration
-                        : automationPlayheads.TryGetValue(entry.Key, out automation)
-                            ? automation.Duration
-                            : null;
+                    var audible = playhead?.AudibleLatency ?? TimeSpan.Zero;
+                    var elapsed = playing
+                        ? position > audible ? position - audible : TimeSpan.Zero
+                        : automation?.Position ?? wall;
+                    var length = clipLength.Ticks > 0
+                        ? (TimeSpan?)clipLength
+                        : automation?.Duration;
 
                     // The transport reports MEDIA time; the operator reads CUE time. A trimmed cue's
                     // playhead therefore starts at its trim-in and its transport duration is the whole
                     // file - a cue trimmed to start at 36:00 read "38:17 of 2:36:09" two minutes in,
                     // beside siblings reading "02:17", and the panel looked half an hour out of sync.
-                    if (playhead is { IsActive: true }
+                    if (playing
                         && _project.FindCue(entry.Key) is MediaCueNode media)
                     {
                         elapsed = media.CueTimeAt(elapsed);
@@ -621,5 +631,37 @@ public sealed partial class ShowHost
         }
 
         return new ShowState(sounding, standby, active, paused, Problems);
+    }
+
+    /// <summary>
+    /// The voice one cue owns inside its transport group, when the group is holding more than one.
+    /// </summary>
+    /// <remarks>
+    /// Null for the ordinary case - a group with a single clip - so nothing about the common path
+    /// changes: the group's own position IS that clip's. It answers only during an overlap, which for a
+    /// playlist is the crossfade window and for a looping clip is the wrap.
+    /// </remarks>
+    private static VoicePlayhead? VoiceOf(TransportSnapshot? group, Guid cueId)
+    {
+        if (group is not { Voices.Count: > 1 })
+            return null;
+
+        var id = cueId.ToString();
+        VoicePlayhead? tail = null;
+
+        foreach (var voice in group.Voices)
+        {
+            if (!string.Equals(voice.ClipId, id, StringComparison.Ordinal))
+                continue;
+
+            // A loop crossfade has the SAME cue on both voices. The active one is the pass that is
+            // coming up, which is the one a row counting toward the end should follow.
+            if (voice.IsActive)
+                return voice;
+
+            tail = voice;
+        }
+
+        return tail;
     }
 }

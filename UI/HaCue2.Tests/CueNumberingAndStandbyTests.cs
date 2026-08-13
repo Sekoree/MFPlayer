@@ -245,6 +245,106 @@ public class CueNumberingAndStandbyTests
             $"40 files into the grown list took {late} ms against {early} ms into the small one");
     });
 
+    /// <summary>
+    /// Selecting a cue arms it, so GO fires the row the operator highlighted.
+    /// </summary>
+    /// <remarks>
+    /// Reported: with a different cue in standby, GO played the standby cue and not the selected one -
+    /// which is exactly what a decoupled cursor does and is indefensible in the one gesture everybody
+    /// makes. On by default now; see <c>ProjectSettings.ClickMovesStandby</c>.
+    /// </remarks>
+    [Fact]
+    public Task SelectingACueArmsItSoGoFiresIt() => ShellFixture.WithShell(shell =>
+    {
+        var list = shell.Cues.ScopedList!;
+        var order = list.Flatten().Where(cue => cue.Enabled).ToList();
+        list.StandbyCueId = order[0].Id;
+
+        ShellFixture.Select(shell.Cues, order[3].Id);
+
+        Assert.Equal(order[3].Id, list.StandbyCueId);
+
+        // With no session GO moves the cursor, which is the half that can be right without one: it
+        // steps past the cue that was armed rather than starting from where standby used to be.
+        shell.Cues.Go();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(CueOrder.NextEnabled(list, order[3].Id)?.Id, list.StandbyCueId);
+    });
+
+    /// <summary>Off, the cursor is the operator's alone - a click is a view change and nothing else.</summary>
+    [Fact]
+    public Task WithClickToArmOffSelectingACueLeavesStandbyAlone() => ShellFixture.WithShell(shell =>
+    {
+        shell.Project.Settings.ClickMovesStandby = false;
+
+        var list = shell.Cues.ScopedList!;
+        var order = list.Flatten().Where(cue => cue.Enabled).ToList();
+        list.StandbyCueId = order[0].Id;
+
+        ShellFixture.Select(shell.Cues, order[3].Id);
+
+        Assert.Equal(order[0].Id, list.StandbyCueId);
+    });
+
+    /// <summary>
+    /// Walking the cursor is ONE undo step, not one per click.
+    /// </summary>
+    /// <remarks>
+    /// Now that a click arms a cue, closing the coalescing group per move would fill the undo stack
+    /// with standby moves - and Ctrl+Z after an afternoon of clicking would walk the cursor backwards
+    /// instead of undoing the edit the operator meant.
+    /// </remarks>
+    [Fact]
+    public Task WalkingTheStandbyCursorIsOneUndoStep() => ShellFixture.WithShell(shell =>
+    {
+        var order = shell.Cues.ScopedList!.Flatten().Where(cue => cue.Enabled).ToList();
+
+        ShellFixture.Select(shell.Cues, order[1].Id);
+        ShellFixture.Select(shell.Cues, order[2].Id);
+        ShellFixture.Select(shell.Cues, order[3].Id);
+
+        Assert.Single(shell.Journal.Log);
+    });
+
+    /// <summary>
+    /// Files dropped on the tree become cues where they were dropped.
+    /// </summary>
+    /// <remarks>
+    /// The row under the pointer stands in for the selection, so a drop onto a group goes INTO it -
+    /// otherwise every drop would land wherever the tree happened to be selected, which is not where
+    /// the operator was pointing.
+    /// </remarks>
+    [Fact]
+    public Task DroppedFilesLandWhereTheyWereDropped() => ShellFixture.WithShell(shell =>
+    {
+        var list = shell.Cues.ScopedList!;
+        var group = list.Cues.OfType<GroupCueNode>().First();
+        var children = group.Children.Count;
+        var roots = list.Cues.Count;
+
+        shell.Cues.AddMedia(["/library/Music/dropped-a.flac", "/library/Music/dropped-b.flac"], group.Id);
+
+        Assert.Equal(roots, list.Cues.Count);
+        Assert.Equal(children + 2, group.Children.Count);
+        Assert.Equal(
+            ["dropped-a", "dropped-b"],
+            group.Children.TakeLast(2).Select(cue => cue.Label));
+    });
+
+    /// <summary>Without a drop anchor - the file picker - the selection still decides, as before.</summary>
+    [Fact]
+    public Task TheFilePickerStillFollowsTheSelection() => ShellFixture.WithShell(shell =>
+    {
+        var list = shell.Cues.ScopedList!;
+        ShellFixture.Select(shell.Cues, list.Cues[0].Id);
+
+        shell.Cues.AddMedia(["/library/Music/dropped.flac"]);
+        var afterSelection = list.Cues.IndexOf(list.Cues.First(cue => cue.Label == "dropped"));
+
+        Assert.Equal(1, afterSelection);
+    });
+
     private static long Time(Action body)
     {
         var watch = Stopwatch.StartNew();

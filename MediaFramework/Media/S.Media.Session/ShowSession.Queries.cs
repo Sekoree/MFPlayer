@@ -48,6 +48,7 @@ public sealed partial class ShowSession
             var audioSampleRate = 0;
             var timeline = v.Group.Timeline.GetSnapshot();
             var active = v.Player is not null; // has a clip (playing/paused/frozen) - independent of the clock
+            var voices = PlayheadsOf(v.Group);
             try
             {
                 now = timeline.MasterTime;
@@ -89,9 +90,50 @@ public sealed partial class ShowSession
             {
                 Timeline = timeline,
                 AudibleLatency = audibleLatency,
+                Voices = voices,
             };
         }
         return snaps;
+    }
+
+    /// <summary>
+    /// Each of a group's voices with its OWN playhead, for the overlap in which one group holds two clips.
+    /// </summary>
+    /// <remarks>
+    /// Read on the same lock-free terms as everything else in <see cref="Snapshot"/>: the voice list is
+    /// dispatcher-confined, so it is walked by index against a re-read count and the whole walk is
+    /// guarded. A voice added or retired mid-walk costs this one poll tick its per-clip detail - the
+    /// group's own position is still there - which is the trade every other read here already makes.
+    /// </remarks>
+    private static IReadOnlyList<VoicePlayhead> PlayheadsOf(TransportGroup group)
+    {
+        try
+        {
+            var voices = group.Voices;
+            if (voices.Count == 0)
+                return [];
+
+            var active = group.ActiveVoice;
+            var playheads = new List<VoicePlayhead>(voices.Count);
+
+            for (var i = 0; i < voices.Count; i++)
+            {
+                var voice = voices[i];
+                var player = voice.Player;
+                playheads.Add(new VoicePlayhead(
+                    voice.Binding.ClipId,
+                    player.Position,
+                    player.Duration,
+                    ReferenceEquals(voice, active)));
+            }
+
+            return playheads;
+        }
+        catch
+        {
+            // Concurrent teardown, exactly as the position reads above: no per-clip detail this tick.
+            return [];
+        }
     }
 
     /// <summary>An immutable snapshot of the loaded cue definitions, ordered by cue number.</summary>

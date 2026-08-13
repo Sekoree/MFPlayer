@@ -175,12 +175,17 @@ public class SettingsViewModelTests
     {
         var settings = new SettingsViewModel(shell.Project, shell.Journal, new AppSettings());
 
-        settings.ClickMovesStandby = true;
+        // AWAY from the default, which is on: selecting a cue arms it, so GO fires what the operator
+        // highlighted. Toggling a setting to the value it already has is not an edit and would leave
+        // this asserting against whatever the undo stack happened to hold.
         Assert.True(shell.Project.Settings.ClickMovesStandby);
+
+        settings.ClickMovesStandby = false;
+        Assert.False(shell.Project.Settings.ClickMovesStandby);
 
         // Register items 26 and 28: the project half is journaled and travels in the file.
         shell.Undo();
-        Assert.False(shell.Project.Settings.ClickMovesStandby);
+        Assert.True(shell.Project.Settings.ClickMovesStandby);
     });
 
     [Fact]

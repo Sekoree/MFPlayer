@@ -79,6 +79,18 @@ public partial class CurveCanvas : UserControl
     public static readonly StyledProperty<IReadOnlyList<CurvePoint>> ShapeProperty =
         AvaloniaProperty.Register<CurveCanvas, IReadOnlyList<CurvePoint>>(nameof(Shape), []);
 
+    /// <summary>
+    /// A second, read-only curve drawn behind the editable one.
+    /// </summary>
+    /// <remarks>
+    /// What the OTHER side of the same gesture does. A crossfade is one drawing and two ramps - the
+    /// outgoing cue rides it forwards, the incoming one reads it from the far end - and an editor that
+    /// showed only the half being dragged left the operator to imagine the half they were also authoring.
+    /// Empty for every curve that has only one side, which is most of them.
+    /// </remarks>
+    public static readonly StyledProperty<IReadOnlyList<CurvePoint>> CompanionShapeProperty =
+        AvaloniaProperty.Register<CurveCanvas, IReadOnlyList<CurvePoint>>(nameof(CompanionShape), []);
+
     public static readonly StyledProperty<IReadOnlyList<CurveTangent>> TangentsProperty =
         AvaloniaProperty.Register<CurveCanvas, IReadOnlyList<CurveTangent>>(nameof(Tangents), []);
 
@@ -137,6 +149,12 @@ public partial class CurveCanvas : UserControl
     {
         get => GetValue(ShapeProperty);
         set => SetValue(ShapeProperty, value);
+    }
+
+    public IReadOnlyList<CurvePoint> CompanionShape
+    {
+        get => GetValue(CompanionShapeProperty);
+        set => SetValue(CompanionShapeProperty, value);
     }
 
     public IReadOnlyList<CurveTangent> Tangents

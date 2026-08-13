@@ -38,10 +38,66 @@ public sealed class JournalTests
             fixture.Project.AudioPatch, fixture.MainL.Id, fixture.Interface.Id, 0, -6, null, "trim"));
         journal.Do(new SetPatchCellCommand(
             fixture.Project.AudioPatch, fixture.FoldL.Id, fixture.Interface.Id, 2, null, null, "unroute"));
+        journal.Do(new MoveItemCommand<CueNode>(
+            fixture.List.Cues, 0, fixture.List.Cues, 2, fixture.Track, "cues", "move cue"));
 
         while (journal.Undo())
         {
         }
+
+        Assert.Equal(before, HaCueProjectFile.Serialize(fixture.Project));
+    }
+
+    /// <summary>
+    /// A move down has to account for its own removal; a move up must not.
+    /// </summary>
+    /// <remarks>
+    /// The destination index is what the caller can see - the position in the list as it stands before
+    /// anything happens. Taking the cue out first shifts everything after it up by one, so only a move
+    /// DOWN steps back. Getting this wrong puts a dragged cue one row from where it was dropped, which
+    /// reads as the drag being imprecise rather than as an off-by-one.
+    /// </remarks>
+    [Theory]
+    [InlineData(0, 3, new[] { "2", "3", "1" })]
+    [InlineData(0, 2, new[] { "2", "1", "3" })]
+    [InlineData(2, 0, new[] { "3", "1", "2" })]
+    [InlineData(2, 1, new[] { "1", "3", "2" })]
+    public void AMoveLandsWhereTheIndexReadBeforeItSaid(int from, int to, string[] expected)
+    {
+        var fixture = new TestProject();
+        var journal = new ProjectJournal(fixture.Project);
+        var cues = fixture.List.Cues;
+        var before = HaCueProjectFile.Serialize(fixture.Project);
+
+        journal.Do(new MoveItemCommand<CueNode>(
+            cues, from, cues, to, cues[from], "cues", "move cue"));
+
+        Assert.Equal(expected, cues.Select(cue => cue.Number.Text));
+
+        journal.Undo();
+        Assert.Equal(before, HaCueProjectFile.Serialize(fixture.Project));
+
+        journal.Redo();
+        Assert.Equal(expected, cues.Select(cue => cue.Number.Text));
+    }
+
+    /// <summary>A move between two different lists: no shift to account for, in either direction.</summary>
+    [Fact]
+    public void AMoveIntoAnotherListPutsTheCueBackWhereItCameFrom()
+    {
+        var fixture = new TestProject();
+        var journal = new ProjectJournal(fixture.Project);
+        var group = new GroupCueNode { Number = "4", Label = "Underscore" };
+        fixture.List.Cues.Add(group);
+        var before = HaCueProjectFile.Serialize(fixture.Project);
+
+        journal.Do(new MoveItemCommand<CueNode>(
+            fixture.List.Cues, 1, group.Children, 0, fixture.Jump, "cues", "move cue into group"));
+
+        Assert.Equal(["1", "3", "4"], fixture.List.Cues.Select(cue => cue.Number.Text));
+        Assert.Same(fixture.Jump, Assert.Single(group.Children));
+
+        journal.Undo();
 
         Assert.Equal(before, HaCueProjectFile.Serialize(fixture.Project));
     }

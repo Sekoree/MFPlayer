@@ -204,10 +204,30 @@ public readonly record struct FadeShape(FadeCurve Law, CustomFadeCurve? Custom =
     /// <summary>True when this shape is a user-drawn curve rather than a built-in law.</summary>
     public bool IsCustom => Custom is not null;
 
+    /// <summary>
+    /// Reads a CUSTOM drawing from its far end - progress p evaluates the shape at 1−p.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For the OTHER half of a crossfade. A built-in law needs nothing here: the session derives the two
+    /// halves from one law by ramping down with <see cref="FadeCurves.LevelDown"/> and up with
+    /// <see cref="FadeCurves.LevelUp"/>, which are already mirror images. A drawing has no law to invert
+    /// - "used as drawn" is the rule everywhere else, and rightly so for a cue's own fade-in - so both
+    /// halves of a crossfade evaluated the SAME falling shape and the incoming clip started at unity and
+    /// faded out under the one it was replacing. A crossfade to silence, with a curve picker that looked
+    /// like it was working.
+    /// </para>
+    /// <para>
+    /// Ignored for a built-in law, deliberately: those are handed to the up-ramp and the down-ramp as
+    /// they are, and mirroring one would undo exactly what makes the pair complementary.
+    /// </para>
+    /// </remarks>
+    public bool Mirrored { get; init; }
+
     /// <summary>Shapes linear progress (0..1) into a gain.</summary>
     public float Evaluate(double progress) =>
         Custom is { } custom
-            ? custom.Evaluate(progress)
+            ? custom.Evaluate(Mirrored ? 1d - Math.Clamp(progress, 0d, 1d) : progress)
             : FadeCurves.LevelUp(
                 TimeSpan.FromSeconds(Math.Clamp(progress, 0d, 1d)), TimeSpan.FromSeconds(1), Law);
 }

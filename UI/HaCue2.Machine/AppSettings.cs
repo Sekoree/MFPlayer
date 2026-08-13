@@ -78,7 +78,9 @@ public sealed record AppSettings
     public string SpaceRule { get; set; } = "GO unless typing";
     public string DoubleGoGuard { get; set; } = "250 ms";
     public string ConfirmStopAll { get; set; } = "3 cues";
-    public bool StandbyFollowsClick { get; set; }
+    /// <summary>The machine-scope seed for <c>ProjectSettings.ClickMovesStandby</c> - see that property
+    /// for why selecting a cue arms it by default.</summary>
+    public bool StandbyFollowsClick { get; set; } = true;
 
     /// <summary>The base command layout; per-command entries below are edits to that profile.</summary>
     public string HotkeyProfile { get; set; } = "Cue standard";

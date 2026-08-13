@@ -67,8 +67,33 @@ public partial class InspectorViewModel : ObservableObject
     /// <summary>Whether document-authoring controls should be interactive under the shell Lock.</summary>
     public bool CanAuthor => !_journal.IsReadOnly;
 
-    [ObservableProperty]
     private IReadOnlyList<string> _tabs = NoTabs;
+
+    /// <summary>
+    /// The tab set for the current selection.
+    /// </summary>
+    /// <remarks>
+    /// Assigned only when the set actually CHANGED, which is why this is not an
+    /// <c>[ObservableProperty]</c>: <see cref="Reload"/> builds a fresh list every time it runs, and a
+    /// generated setter compares by reference, so an ordinary edit replaced the tab strip's
+    /// <c>ItemsSource</c> with an identical list on every keystroke. Avalonia resets a
+    /// <c>SelectingItemsControl</c> when its source is replaced, so the strip pushed a null
+    /// <see cref="SelectedTab"/> back through its two-way binding before the view-model set the tab
+    /// again - and the pane that was open went invisible for that instant, taking keyboard focus with
+    /// it. One character in a field, then out of the field: renaming anything was almost impossible.
+    /// </remarks>
+    public IReadOnlyList<string> Tabs
+    {
+        get => _tabs;
+        private set
+        {
+            if (_tabs.SequenceEqual(value))
+                return;
+
+            _tabs = value;
+            OnPropertyChanged();
+        }
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsGeneralPane))]
@@ -282,6 +307,8 @@ public partial class InspectorViewModel : ObservableObject
         OnPropertyChanged(nameof(FadeInCurve));
         OnPropertyChanged(nameof(FadeOutCurve));
         OnPropertyChanged(nameof(CrossfadeCurve));
+        OnPropertyChanged(nameof(CrossfadeOutShape));
+        OnPropertyChanged(nameof(CrossfadeInShape));
         OnPropertyChanged(nameof(FadeCurve));
         OnPropertyChanged(nameof(PatchCurve));
         OnPropertyChanged(nameof(AudioTrack));
@@ -3258,6 +3285,25 @@ public partial class InspectorViewModel : ObservableObject
     public CurvePickerViewModel FadeCurve => Picker("fade");
     public CurvePickerViewModel PatchCurve => Picker("patch");
 
+    /// <summary>
+    /// The crossfade as it will be PLAYED - both halves of it.
+    /// </summary>
+    /// <remarks>
+    /// A crossfade is the one curve in the app that is two ramps, and the picker beside this shows one
+    /// line: the operator could see the shape of the departure and had to imagine the arrival, which is
+    /// the half that decides whether the join dips or bumps. Drawn from the session's own fade math, so
+    /// this is the join rather than an illustration of one - and it answers for a named LAW too, whose
+    /// equal-power shape no editable point list can express.
+    /// </remarks>
+    public IReadOnlyList<CurvePoint> CrossfadeOutShape => CrossfadeRamps.Out;
+
+    public IReadOnlyList<CurvePoint> CrossfadeInShape => CrossfadeRamps.In;
+
+    private (IReadOnlyList<CurvePoint> Out, IReadOnlyList<CurvePoint> In) CrossfadeRamps =>
+        Cue is GroupCueNode group
+            ? CurveLibrary.CrossfadeRamps(group.CrossfadeCurve, Project)
+            : ([], []);
+
     /// <summary>Direct binding endpoints for Avalonia. A two-way binding through a getter-only,
     /// newly-created nested picker can read but cannot reliably write the leaf; that was the preset
     /// selector which visibly snapped back. These properties put the setter on the inspector object
@@ -3304,7 +3350,8 @@ public partial class InspectorViewModel : ObservableObject
             _journal,
             new CurveSpecTarget(cue.Id, which, spec, Project, CurveLibrary.EmptyShape(which)),
             $"Q{CuePresentation.Number(cue.Number)} · {label}",
-            CurveDuration(which, cue));
+            CurveDuration(which, cue),
+            crossfade: which == "crossfade");
     }
 
     private static TimeSpan? CurveDuration(string which, CueNode cue)

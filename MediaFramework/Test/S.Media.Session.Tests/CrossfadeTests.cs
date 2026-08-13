@@ -83,6 +83,55 @@ public sealed class CrossfadeTests
     }
 
     /// <summary>
+    /// Inside the window each clip reports its OWN playhead.
+    /// </summary>
+    /// <remarks>
+    /// The group's <c>ClipPosition</c> and <c>ClipDuration</c> are its ACTIVE voice's, which is right for
+    /// everything transport commands target and wrong for a host that draws one row per cue: reported
+    /// from HaCue2 as the outgoing item of a crossfaded playlist suddenly showing the INCOMING item's
+    /// position and length for the whole overlap, then ending correctly. <c>Voices</c> is what a per-cue
+    /// readout reads instead.
+    /// </remarks>
+    [Fact]
+    public async Task DuringTheWindow_EachVoiceReportsItsOwnPlayhead()
+    {
+        var releases = new ReleaseLog();
+        await using var session = BuildSession(releases);
+        await session.LoadDocumentAsync(Cues("c1", "c2"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+
+        // Let the outgoing clip get somewhere first, so "its own position" is distinguishable from the
+        // incoming clip's - which starts at zero.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (session.Snapshot()[0].ClipPosition < TimeSpan.FromMilliseconds(400))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the first clip never advanced");
+            await Task.Delay(25);
+        }
+
+        Assert.Equal(CueExecutionStatus.Fired,
+            await session.FireCueAsync("c2", TimeSpan.FromMilliseconds(4_000), FadeCurve.EqualPower));
+
+        var group = Assert.Single(session.Snapshot());
+        Assert.Equal(2, group.Voices.Count);
+
+        var outgoing = group.Voices.Single(voice => voice.ClipId == "c1");
+        var incoming = group.Voices.Single(voice => voice.ClipId == "c2");
+
+        Assert.True(incoming.IsActive, "the incoming clip is what transport commands target");
+        Assert.False(outgoing.IsActive, "the outgoing clip is a tail, not the transport's target");
+
+        // The tail is where IT is - four hundred milliseconds in and counting - not where the clip that
+        // displaced it is.
+        Assert.True(
+            outgoing.Position >= TimeSpan.FromMilliseconds(350),
+            $"the outgoing clip reported the incoming clip's position ({outgoing.Position})");
+        Assert.True(
+            incoming.Position < TimeSpan.FromMilliseconds(350),
+            $"the incoming clip did not start from its own beginning ({incoming.Position})");
+    }
+
+    /// <summary>
     /// A tail that has gone quiet SAYS so, on <c>ClipTailEnded</c>.
     /// </summary>
     /// <remarks>

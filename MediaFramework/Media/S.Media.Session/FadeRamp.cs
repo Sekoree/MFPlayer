@@ -77,22 +77,24 @@ public static class FadeCurves
     /// of any duration.</summary>
     public static float LevelDown(TimeSpan elapsed, TimeSpan duration, FadeShape shape)
     {
-        if (shape.Custom is not { } custom)
+        if (shape.Custom is null)
             return LevelDown(elapsed, duration, shape.Law);
         if (duration <= TimeSpan.Zero)
-            return custom.Evaluate(1d);
-        return custom.Evaluate(Math.Clamp(elapsed.TotalMilliseconds / duration.TotalMilliseconds, 0d, 1d));
+            return shape.Evaluate(1d);
+        return shape.Evaluate(elapsed.TotalMilliseconds / duration.TotalMilliseconds);
     }
 
     /// <summary>The up-ramp level shaped by <paramref name="shape"/>. A custom curve is used as drawn -
-    /// it is the author's shape, not a law to be inverted - so a rise reads the same curve a fall does.</summary>
+    /// it is the author's shape, not a law to be inverted - so a rise reads the same curve a fall does.
+    /// The one exception is <see cref="FadeShape.Mirrored"/>, which reads the drawing from its far end:
+    /// the other half of a crossfade, where one drawing has to serve both ramps.</summary>
     public static float LevelUp(TimeSpan elapsed, TimeSpan duration, FadeShape shape)
     {
-        if (shape.Custom is not { } custom)
+        if (shape.Custom is null)
             return LevelUp(elapsed, duration, shape.Law);
         if (duration <= TimeSpan.Zero || elapsed >= duration)
-            return custom.Evaluate(1d);
-        return custom.Evaluate(Math.Clamp(elapsed.TotalMilliseconds / duration.TotalMilliseconds, 0d, 1d));
+            return shape.Evaluate(1d);
+        return shape.Evaluate(elapsed.TotalMilliseconds / duration.TotalMilliseconds);
     }
 
     /// <summary>Shapes a normalized 0..1 progress value with a built-in curve. Every curve maps 0 → 0
