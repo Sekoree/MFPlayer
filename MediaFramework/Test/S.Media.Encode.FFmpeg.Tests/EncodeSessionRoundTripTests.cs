@@ -95,7 +95,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         session.VideoSink!.Submit(frame);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task VideoAndAudio_Mp4_RoundTrips()
     {
         var outPath = TempPath(".mp4");
@@ -139,7 +139,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         frame.Dispose();
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task Video_Scaled_To720Wide_ProducesScaledStream()
     {
         var outPath = TempPath(".mp4");
@@ -170,7 +170,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.Equal(72, dec.Video.Format.Height);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task MultiAudioTrack_Matroska_CarriesBothTracksWithMetadata()
     {
         var outPath = TempPath(".mkv");
@@ -227,7 +227,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         }
     }
 
-    [Theory]
+    [FFmpegNativeTheory]
     [InlineData(EncodeVideoCodec.ProRes422)]
     [InlineData(EncodeVideoCodec.ProRes4444)]
     public async Task ProRes_EncoderOpens_AndProducesFrames(EncodeVideoCodec codec)
@@ -263,7 +263,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.True(new FileInfo(outPath).Length > 256);
     }
 
-    [Theory]
+    [FFmpegNativeTheory]
     [InlineData(60, 30, 60, 28, 33)]   // faster input: ~half the frames are DROPPED onto the 30 fps grid
     [InlineData(15, 30, 30, 55, 62)]   // slower input: gaps are FILLED by re-encoding the held frame
     public async Task FixedFps_ReallyConvertsTheFrameRate(
@@ -307,7 +307,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.InRange(actualFps, targetFps - 2.0, targetFps + 2.0);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task AudioOnly_Flac_PreservesSignalRms()
     {
         const int sampleRate = 48_000;
@@ -349,7 +349,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.InRange(rms, expected * 0.6, expected * 1.4);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task AudioLeg_Resampled_To44k_RoundTrips()
     {
         var outPath = TempPath(".mka");
@@ -372,7 +372,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.Equal(44_100, dec.Audio.Format.SampleRate);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task InputFormatChange_MidRecording_KeepsTheLockedOutputFormat()
     {
         var outPath = TempPath(".mp4");
@@ -409,7 +409,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.Equal(96, dec.Video.Format.Height);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task CombinedAudioSink_SplitsConcatenatedChannelsOntoTracks()
     {
         var outPath = TempPath(".mka");
@@ -503,7 +503,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.Contains(errors, e => e.Contains("not both"));
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task FixedFps_KeepAliveAndRestartedMediaTimelines_ContinueWithoutBlackGap()
     {
         var outPath = TempPath(".mp4");
@@ -554,7 +554,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.Equal(0, metrics.VideoFramesDropped);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task FixedFps_VideoPacketsCarryDurationAndStreamCadence()
     {
         var options = new EncodeSessionOptions
@@ -591,7 +591,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.All(sink.VideoPacketDurations, duration => Assert.Equal(1_500, duration));
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void FixedFps_UsesFrameClockInsideCodec_NotTransportClock()
     {
         var options = new VideoEncodeOptions
@@ -614,7 +614,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.Equal(90_000, core.TimeBase.den);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void SourceFollowingFps_UsesInputFrameClockInsideCodec()
     {
         var options = new VideoEncodeOptions
@@ -636,7 +636,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.Equal(90_000, core.TimeBase.den);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void ConstantBitrateLowLatency_ProgramsVbvAndDisablesBFrames()
     {
         var options = new VideoEncodeOptions
@@ -666,7 +666,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.Equal(0, core.MaximumBFrames);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public unsafe void AudioCore_InputGapAdvancesPacketTimeline_InsteadOfCompressingDroppedTime()
     {
         if (!FfmpegEncodeMaps.AudioEncoderAvailable(EncodeAudioCodec.Flac))
@@ -688,7 +688,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.Contains(packetPts, pts => pts >= 48_000);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void Validate_RejectsUnsupportedEncoderSampleRate_AndInvalidScalarRanges()
     {
         if (FfmpegEncodeMaps.AudioEncoderAvailable(EncodeAudioCodec.Opus))
@@ -732,7 +732,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         Assert.Contains(errors, error => error.Contains("sample rate"));
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task MetricsPolling_IsSafeAcrossFinishAndDispose()
     {
         var outPath = TempPath(".mka");
@@ -761,7 +761,7 @@ public sealed class EncodeSessionRoundTripTests : IDisposable
         await poll;
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void CreateWithSinks_OwnsAndRollsBackSinksWhenValidationFails()
     {
         var sink = new RecordingPacketSink();

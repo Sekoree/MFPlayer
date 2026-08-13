@@ -88,19 +88,24 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libass9 libass-dev fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri libportaudio2 libportmidi0
 
-      # FFmpeg.AutoGen 8.1.0 loads the VERSIONED soname (libavformat.so.62 = FFmpeg 8.x). Ubuntu's apt ffmpeg
+      # FFmpeg.AutoGen 9.0.0 loads the VERSIONED soname (libavformat.so.63 = FFmpeg 9.x). Ubuntu's apt ffmpeg
       # is 6.1 (libavformat.so.60), so the managed decoders can't dlopen it and every avformat_* call throws
-      # NotSupportedException. The artifact job already bundles BtbN's FFmpeg 8.1 shared build; stage the same
-      # avcodec-62 here so the FFmpeg-backed smokes run against a matching runtime. apt ffmpeg (6.1) stays only
+      # NotSupportedException. The artifact job already bundles BtbN's FFmpeg 9.0 shared build; stage the same
+      # avcodec-63 here so the FFmpeg-backed smokes run against a matching runtime. apt ffmpeg (6.1) stays only
       # for the `ffmpeg` CLI that generates the test tone below; the versioned soname means the two never clash,
       # and appending (not prepending) keeps the app's other system natives (libass/portaudio/…) taking priority.
-      - name: Stage FFmpeg 8.1 (avcodec-62) for the FFmpeg smokes
+      #
+      # The major MUST track FFmpeg.AutoGen in Directory.Packages.props — that pin is the source of truth, and
+      # this step is what a bump silently leaves behind: staging avcodec-62 against avcodec-63 bindings does not
+      # fail here, it fails thirty-eight tests later as "FFmpeg native libraries are not loadable". The `test -e`
+      # below is the tripwire: it fails this step, by name, the moment the two drift apart again.
+      - name: Stage FFmpeg 9.0 (avcodec-63) for the FFmpeg smokes
         if: runner.os == 'Linux'
         run: |
           curl -fsSL --retry 3 --retry-delay 5 \
-            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz | tar xJ
-          FFDIR="$PWD/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1/lib"
-          test -e "$FFDIR/libavformat.so.62"
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-linux64-gpl-shared-9.0.tar.xz | tar xJ
+          FFDIR="$PWD/ffmpeg-n9.0-latest-linux64-gpl-shared-9.0/lib"
+          test -e "$FFDIR/libavformat.so.63"
           echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$FFDIR" >> "$GITHUB_ENV"
 
       # MMD physics runs on real Bullet 3.25 via the mmd_bullet C shim (vendored in External/bullet3).
@@ -220,7 +225,7 @@ jobs:
 
       # The unified text-subtitle path: FFmpeg decodes the .ass to ASS events, libass renders them, and the
       # smoke asserts visible pixels. Now gating — the earlier missing-library failures (2026-07-02) were the
-      # FFmpeg 6.1-vs-8.1 soname mismatch, fixed by the "Stage FFmpeg 8.1" step above (avcodec-62 on
+      # FFmpeg 6.1-vs-9.0 soname mismatch, fixed by the "Stage FFmpeg 9.0" step above (avcodec-63 on
       # LD_LIBRARY_PATH); libass + fonts-dejavu-core provide the renderer and a substitute font.
       # The fixture is the small committed TestAssets/*.ass — NOT the untracked Reference/TestSubs corpus, which
       # is git-excluded and so absent on the runner (that path gave avformat_open_input ENOENT).
@@ -380,7 +385,7 @@ jobs:
   # Kept OUT of the gate job so slow/iterating native builds never block tests. NuGet already
   # provides SDL3, SkiaSharp, and (win-x64) FFmpeg via FFmpeg.GPL — those land in the publish for free.
   # Native ↔ binding versions are matched to the P/Invoke layer: portmidi 2.0.7, portaudio 19.7.0,
-  # miniaudio 0.11.25, libass 0.17.5, NDI v6, FFmpeg 8.1/avcodec-62 (= FFmpeg.AutoGen 8.1.0).
+  # miniaudio 0.11.25, libass 0.17.5, NDI v6, FFmpeg 9.0/avcodec-63 (= FFmpeg.AutoGen 9.0.0).
   # ─────────────────────────────────────────────────────────────────────────────────────────────
   artifacts:
     name: artifact-${{ matrix.label }}
@@ -410,7 +415,7 @@ jobs:
       # ─── Linux natives: apt (portaudio/portmidi/libass), compiled miniaudio, DistroAV NDI, BtbN FFmpeg ───
       # apt libs go into the artifact so it's portable; their ubiquitous deps (freetype/fontconfig/alsa)
       # are assumed present on the target. FFmpeg is bundled as a fallback with $ORIGIN rpath so its
-      # sibling libav* resolve from the app dir; a system FFmpeg (avcodec-62) is still preferred at load.
+      # sibling libav* resolve from the app dir; a system FFmpeg (avcodec-63) is still preferred at load.
       - name: Stage Linux natives
         if: runner.os == 'Linux'
         shell: bash
@@ -473,20 +478,22 @@ jobs:
           p="$(find /usr /usr/local -name 'libndi.so.6' 2>/dev/null | head -1)"
           if [ -n "$p" ]; then cp -vL "$p" natives-stage/; else echo "WARN: libndi.so.6 not found"; fi
 
-          # FFmpeg 8.1 shared (avcodec-62), bundled as the fallback for hosts without a matching system FFmpeg.
+          # FFmpeg 9.0 shared (avcodec-63), bundled as the fallback for hosts without a matching system FFmpeg.
+          # Must stay in step with FFmpeg.AutoGen in Directory.Packages.props: bundling the wrong ABI major here
+          # produces an artifact that builds, publishes and then opens no media at all on the target machine.
           # BUILD-02 (partial): the `latest` release tag is a rolling ref — NOT immutable. Pin to a dated BtbN
           # `autobuild-*` release URL (and verify its SHA-256) for reproducibility. The exact shipped .so hashes
           # are captured in the artifact SBOM regardless, so a build is at least auditable after the fact.
-          curl -fsSL $RETRY -o ffmpeg.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-linux64-gpl-shared-8.1.tar.xz
+          curl -fsSL $RETRY -o ffmpeg.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-linux64-gpl-shared-9.0.tar.xz
           tar xJf ffmpeg.tar.xz
-          # BtbN ships a symlink chain per library: libavcodec.so -> libavcodec.so.62 -> libavcodec.so.62.6.100
-          # (the real ~30 MB binary). The old `cp -L lib*.so.*` dereferenced BOTH the .so.62 symlink AND the
-          # .so.62.6.100 real file, writing the same binary TWICE — ≈70 MB of pure duplication across the 8
+          # BtbN ships a symlink chain per library: libavcodec.so -> libavcodec.so.63 -> libavcodec.so.63.1.100
+          # (the real ~30 MB binary). The old `cp -L lib*.so.*` dereferenced BOTH the .so.63 symlink AND the
+          # .so.63.1.100 real file, writing the same binary TWICE — ≈70 MB of pure duplication across the 8
           # FFmpeg libs, the bulk of the artifact bloat. Copy ONCE per library instead: `find -type f` selects
-          # only the real files (skipping the symlinks), and each is staged under its SONAME (libavformat.so.62 —
-          # the exact name FFmpeg.AutoGen 8.1 dlopen()s). Inter-library DT_NEEDED entries also reference the
+          # only the real files (skipping the symlinks), and each is staged under its SONAME (libavformat.so.63 —
+          # the exact name FFmpeg.AutoGen 9.0 dlopen()s). Inter-library DT_NEEDED entries also reference the
           # SONAME, so the dropped fully-versioned twin was never loaded by anything.
-          ffsrc="ffmpeg-n8.1-latest-linux64-gpl-shared-8.1/lib"
+          ffsrc="ffmpeg-n9.0-latest-linux64-gpl-shared-9.0/lib"
           find "$ffsrc" -maxdepth 1 -type f -name 'lib*.so.*' | while read -r real; do
             soname="$(patchelf --print-soname "$real" 2>/dev/null || true)"
             [ -n "$soname" ] || soname="$(basename "$real")"
@@ -702,7 +709,7 @@ jobs:
             printf '%s\n' \
               "System natives loaded if present (a missing one just disables that feature):" \
               "  libSDL3.so                            SDL3 present backend        (distro pkg: sdl3 / libsdl3)" \
-              "  libavcodec.so.62 + the other libav*   FFmpeg 8.x, avcodec-62 ABI  (distro FFmpeg must be 8.x)" \
+              "  libavcodec.so.63 + the other libav*   FFmpeg 9.x, avcodec-63 ABI  (distro FFmpeg must be 9.x)" \
               "  libportaudio.so.2                     PortAudio host              (distro pkg: libportaudio2)" \
               "  libportmidi.so.2                      PortMidi, 2.x ABI           (many distros ship only legacy 0.x)" \
               "  libminiaudio.so                       miniaudio                   (single-header — rarely packaged)" \

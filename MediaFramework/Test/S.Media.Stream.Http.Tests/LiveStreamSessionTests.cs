@@ -110,7 +110,7 @@ public sealed class LiveStreamSessionTests
         return (text[..idx], raw[(idx + 4)..]);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task TsStream_ServesSyncBytePacketsToTcpClient()
     {
         var options = VideoOnlyOptions(new LocalServerOptions(Port: 0, EnableTs: true, EnableHls: false));
@@ -136,7 +136,7 @@ public sealed class LiveStreamSessionTests
         await session.StopAsync();
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task Hls_PlaylistAppearsAndListsSegments()
     {
         var options = VideoOnlyOptions(new LocalServerOptions(Port: 0, EnableTs: false, EnableHls: true));
@@ -168,7 +168,7 @@ public sealed class LiveStreamSessionTests
         await session.StopAsync();
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task StatusPage_ReportsRoutes()
     {
         var options = VideoOnlyOptions(new LocalServerOptions(Port: 0));
@@ -187,7 +187,7 @@ public sealed class LiveStreamSessionTests
         await session.StopAsync();
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task UnknownRoute_Returns404_AndTraversalIsRejected()
     {
         var options = VideoOnlyOptions(new LocalServerOptions(Port: 0));
@@ -245,7 +245,7 @@ public sealed class LiveStreamSessionTests
         Assert.Contains(localErrors, e => e.Contains("port"));
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task AudioOnlyStream_GoesLiveFromKeepAliveSilence_WithoutMedia()
     {
         // Audio-only stream, NOTHING pumped: the keep-alive must still drive silence so a client
@@ -276,7 +276,7 @@ public sealed class LiveStreamSessionTests
         await session.StopAsync();
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task AcquiredButIdleRoutes_KeepSendingBlackAndSilence()
     {
         // This is the HaPlay go-live sequence: the output leases are acquired as soon as the line is
@@ -321,7 +321,7 @@ public sealed class LiveStreamSessionTests
         await session.StopAsync();
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task FillerYieldsToRealFrames_ThenResumesWhenAnAcquiredRouteFallsSilent()
     {
         var options = VideoOnlyOptions(new LocalServerOptions(Port: 0, EnableTs: true, EnableHls: false));
@@ -345,7 +345,7 @@ public sealed class LiveStreamSessionTests
         await session.StopAsync();
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task LiveCarrier_EncodesRepeatedMediaTimestampFramesAtWallClockRate()
     {
         // A stopped ShowSession leaves its composition pump alive so the now-empty canvas can carry
@@ -467,7 +467,7 @@ public sealed class LiveStreamSessionTests
         Assert.DoesNotContain(lockedErrors, e => e.Contains("frame rate"));
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task LocalServer_SharesOneFixedPortAcrossNamedMounts()
     {
         // Sharing only applies to an EXPLICIT fixed port (ephemeral port-0 servers are never pooled).
@@ -522,7 +522,7 @@ public sealed class LiveStreamSessionTests
         }
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task LocalServer_RejectsDuplicateMountNameOnSamePort()
     {
         const int fixedPort = 28644;
@@ -659,7 +659,7 @@ public sealed class LiveStreamSessionTests
         buffer.Unregister(registration!);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task Http_UsesCanonicalMount_AndImplementsHeadAndMethodSemantics()
     {
         var options = VideoOnlyOptions(new LocalServerOptions(

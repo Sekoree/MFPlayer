@@ -60,7 +60,19 @@ public sealed class LatestOnlyPublisherTests
                 var path = Directory.EnumerateFiles(directory, "hacue2-*.log").SingleOrDefault();
                 if (path is not null && new FileInfo(path).Length > 0)
                 {
-                    text = await File.ReadAllTextAsync(path);
+                    // FileShare.ReadWrite, not File.ReadAllTextAsync. The provider is still holding this file
+                    // open for writing — FileAccess.Write / FileShare.Read, deliberately, so that a reader may
+                    // come in — but ReadAllTextAsync declares only FileShare.Read, and on Windows a share mode
+                    // must also permit the access the EXISTING handle holds. FileShare.Read does not permit
+                    // Write, so the open was refused: "the process cannot access the file".
+                    //
+                    // Linux has no mandatory locking, so the plain read passed there and this failed only on
+                    // the win-x64 leg — while the one thing the test exists to prove is that the log can be
+                    // read BEFORE shutdown, i.e. exactly while it is still being written.
+                    await using var live = new FileStream(
+                        path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    using var reader = new StreamReader(live);
+                    text = await reader.ReadToEndAsync();
                     break;
                 }
 

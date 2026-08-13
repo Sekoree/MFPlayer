@@ -82,7 +82,7 @@ public sealed class FileOutputDefinitionTests
         Assert.Equal("ger", leg.Language);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void DialogCommit_ProducesDefinition_AndFlagsBadFolder()
     {
         if (!EncodersUsable("Mpeg4"))
@@ -113,7 +113,7 @@ public sealed class FileOutputDefinitionTests
         Assert.NotNull(vm.ValidationMessage);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void LegacyFileOutput_RemainsContentOnly_AndDialogCanSelectEitherPolicy()
     {
         // RecordingMode did not exist in older project JSON. Preserve its gap-collapsing behavior
@@ -146,7 +146,7 @@ public sealed class FileOutputDefinitionTests
         Assert.Equal(Resources.Strings.FileOutputContinuousFormatRequired, vm.ValidationMessage);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task ContinuousFileRecording_WritesBlackAndSilenceWhileIdle()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"haplay-continuous-record-{Guid.NewGuid():N}");
@@ -204,7 +204,7 @@ public sealed class FileOutputDefinitionTests
         }
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public async Task ContentOnlyFileRecording_DoesNotInventIdleFrames()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"haplay-content-record-{Guid.NewGuid():N}");
@@ -304,7 +304,7 @@ public sealed class FileOutputDefinitionTests
         Assert.Equal(120, Assert.Single(options.PushTargets).SrtLatencyMilliseconds);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void LiveStreamDialog_LowLatencyPreset_CommitsInspectableAdvancedSettings()
     {
         if (!EncodersUsable("H264"))
@@ -335,7 +335,7 @@ public sealed class FileOutputDefinitionTests
         Assert.Equal(180, Assert.Single(definition.PushTargets).SrtLatencyMilliseconds);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void LiveStreamRuntime_RetainsStartupFailureForHealthPolling()
     {
         var definition = new LiveStreamOutputDefinition(
@@ -426,7 +426,7 @@ public sealed class FileOutputDefinitionTests
         Assert.Empty(plain.Compositions);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void DialogCommit_RejectsProResInMp4()
     {
         var vm = new AddFileOutputDialogViewModel

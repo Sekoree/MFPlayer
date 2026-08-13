@@ -25,4 +25,19 @@
         <ProjectReference Include="..\HaPlay\HaPlay.csproj" />
     </ItemGroup>
 
+  <!-- FFmpeg 9.x natives (avcodec-63/avformat-63/…) for the Windows leg. Linux takes FFmpeg from the system
+       or the CI-staged build; Windows has no package manager to fall back on, so without this every test in
+       this project skips on win-x64 (see FFmpegNativeFactAttribute) — which is what CI was doing.
+       Pinned via Directory.Packages.props, so it cannot drift from the FFmpeg.AutoGen soname the way the
+       hand-rolled CI download did. Test projects build RID-less and the package places its DLLs only through
+       runtimes/<rid>/native RID resolution, hence the explicit copy — the same shape the desktop heads use
+       for SDL3's no-RID case. -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <PackageReference Include="FFmpeg.GPL" GeneratePathProperty="true" />
+    <None Include="$(PkgFFmpeg_GPL)\runtimes\win-x64\native\*.dll" Visible="false">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+
 </Project>
