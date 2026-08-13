@@ -1081,6 +1081,13 @@ public sealed partial class ShowSession
         /// player goes away, so the bus can never write to a dead player.</summary>
         public required Action<TransportVoice> VoiceRetired { get; init; }
 
+        /// <summary>Announces that a CROSSFADE TAIL has gone quiet - its ramp reached silence, a replacement
+        /// hard-released it at the cap, or the group tore down while it was still fading. Invoked after the
+        /// release, because it says the clip is over rather than that it is going. The session decides who
+        /// hears it (<see cref="ShowSession.ClipTailEnded"/>); the group only knows the voice was a tail,
+        /// which is precisely the case no other end signal covers.</summary>
+        public required Action<TransportVoice> TailRetired { get; init; }
+
         /// <summary>
         /// How many tails one group keeps. A SCOPING policy, not an architectural limit: the list holds N
         /// and every path already iterates it.
@@ -1207,11 +1214,21 @@ public sealed partial class ShowSession
         {
             if (voice.State == VoiceState.Retired)
                 return;
+
+            // Read before the release retires it. A tail is the one kind of voice whose end nothing else
+            // reports: it left the transport at the handoff, so it took its end monitor with it and can
+            // never reach a natural end. Anything else here either ended naturally (already reported) or
+            // was stopped by the operator (who knows).
+            var wasTail = voice.State == VoiceState.Releasing;
+
             _voices.Remove(voice);
             if (ReferenceEquals(ActiveVoice, voice))
                 ActiveVoice = null;
             VoiceRetired(voice); // off the level/stop bus before the player goes away
             await voice.ReleaseAsync().ConfigureAwait(false);
+
+            if (wasTail)
+                TailRetired(voice);
         }
 
         /// <summary>Takes the group off its active voice - the per-active group state (end monitor, host

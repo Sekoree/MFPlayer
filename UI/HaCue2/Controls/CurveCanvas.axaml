@@ -24,6 +24,19 @@
       <c:TangentGraph Tangents="{Binding Tangents, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}"
                       Stroke="{DynamicResource GelAmber}" />
 
+      <!-- The cursor, drawn OVER the curve and under the points: it is a reading position, so it has to
+           be visible where the curve is thickest, and it must never be the thing under the pointer when
+           somebody grabs a keyframe. Steel rather than a gel colour - it is not a value, it is where you
+           are looking from. -->
+      <Panel IsHitTestVisible="False"
+             IsVisible="{Binding HasCursor, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}">
+        <c:FractionPanel>
+          <Rectangle Width="1" Fill="{DynamicResource BoothInk2}"
+                     c:Fraction.Left="{Binding CursorFraction, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}"
+                     c:Fraction.Top="0" c:Fraction.Height="1" />
+        </c:FractionPanel>
+      </Panel>
+
       <ItemsControl ItemsSource="{Binding Points, RelativeSource={RelativeSource AncestorType=c:CurveCanvas}}">
         <ItemsControl.ItemsPanel>
           <ItemsPanelTemplate><c:FractionPanel /></ItemsPanelTemplate>
@@ -36,16 +49,30 @@
         </ItemsControl.ItemContainerTheme>
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="vm:CurvePoint">
-            <!-- The selected point is amber so it matches the numeric fields beside the canvas;
-                 every other point stays congo like the curve it belongs to. A held point is a square,
-                 because "flat until the next point" is a different KIND of thing, not a shade of one. -->
-            <Panel Margin="-4">
-              <Ellipse Width="8" Height="8" IsVisible="{Binding !IsHold}"
-                       Fill="{DynamicResource GelCongo}"
-                       Classes.warn="{Binding IsSelected}" />
-              <Rectangle Width="8" Height="8" IsVisible="{Binding IsHold}"
-                         Fill="{DynamicResource GelCongo}"
-                         Classes.warn="{Binding IsSelected}" />
+            <!-- The selected point is amber so it matches the numeric fields beside the canvas; every
+                 other point stays congo like the curve it belongs to. A held point is a square, because
+                 "flat until the next point" is a different KIND of thing, not a shade of one.
+
+                 The colour is bound, not a class. It WAS `Classes.warn`, and no style anywhere targets a
+                 warn Ellipse or Rectangle (`.warn` is TextBlock, Border.chip and Ellipse.led) - so the
+                 class landed on nothing and every point drew congo. There was no way to tell which key
+                 the fields on the right were editing.
+
+                 The ring is here because colour alone was not enough anyway: these are 8-pixel dots over
+                 a waveform, and on a dense curve amber-vs-congo at that size is a guess. A halo reads at
+                 a glance and survives both. The panel is a fixed 16 square so the dot stays centred on
+                 its fraction whether or not the ring is showing. -->
+            <Panel Width="16" Height="16" Margin="-8">
+              <Ellipse Width="15" Height="15" IsVisible="{Binding IsSelected}"
+                       Stroke="{DynamicResource GelAmber}" StrokeThickness="1.5" />
+              <Ellipse Width="8" Height="8" IsVisible="{Binding IsPlainDot}"
+                       Fill="{DynamicResource GelCongo}" />
+              <Ellipse Width="8" Height="8" IsVisible="{Binding IsSelectedDot}"
+                       Fill="{DynamicResource GelAmber}" />
+              <Rectangle Width="8" Height="8" IsVisible="{Binding IsPlainHold}"
+                         Fill="{DynamicResource GelCongo}" />
+              <Rectangle Width="8" Height="8" IsVisible="{Binding IsSelectedHold}"
+                         Fill="{DynamicResource GelAmber}" />
             </Panel>
           </DataTemplate>
         </ItemsControl.ItemTemplate>

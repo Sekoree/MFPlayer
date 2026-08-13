@@ -408,6 +408,7 @@
                 <Border Classes="actrow"
                         Classes.grp="{Binding IsGroup}"
                         Classes.near="{Binding IsNearEnd}">
+                  <StackPanel>
                   <!-- Elapsed · remaining · length, which is the set HaPlay's Now Playing shows and the
                        set somebody driving a show actually reads: where it is, how long they have, and
                        what the whole thing runs for. -->
@@ -448,6 +449,34 @@
                             AutomationProperties.Name="Stop active cue"
                             ToolTip.Tip="Stop this cue." />
                   </Grid>
+
+                  <!-- The ramps running inside this cue, only while one is. A twenty-second fade-down on
+                       a bed is the operator's next twenty seconds, and until now the panel said nothing
+                       about it - the only way to see where a ramp had got to was to open the automation
+                       editor over a running show. Columns line up under the cue's own clocks. -->
+                  <ItemsControl ItemsSource="{Binding Lanes}" IsVisible="{Binding HasLanes}"
+                                Margin="49,1,10,2">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:ActiveLaneRow">
+                        <Grid ColumnDefinitions="*,66,66,52,150,100" ColumnSpacing="7" Margin="0,1">
+                          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6"
+                                      VerticalAlignment="Center">
+                            <TextBlock Classes="mono dim3 micro" Text="LANE" />
+                            <TextBlock Classes="mono small ellipsis" Text="{Binding Name}" />
+                          </StackPanel>
+                          <TextBlock Grid.Column="2" Classes="clock dim3" Text="{Binding Remaining}"
+                                     ToolTip.Tip="until this ramp lands" />
+                          <c:SeekBar Grid.Column="4" Maximum="1" Value="{Binding Progress}"
+                                     IsSeekable="False" IsHitTestVisible="False"
+                                     VerticalAlignment="Center"
+                                     AutomationProperties.Name="Automation lane progress" />
+                          <TextBlock Grid.Column="5" Classes="mono dim3 small ellipsis"
+                                     VerticalAlignment="Center" Text="{Binding Detail}" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  </StackPanel>
                 </Border>
               </DataTemplate>
             </ListBox.DataTemplates>

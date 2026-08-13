@@ -648,11 +648,49 @@ public partial class AudioViewModel : ObservableObject
         _appliedRate is { } rate
         && (rate != _project.AudioPatch.MixSampleRate
             || _appliedMaster != _project.AudioPatch.ClockMasterLineId
-            || _appliedOrder != BusOrder());
+            || _appliedOrder != BusOrder()
+            || _appliedLines != OpenableLines());
 
     private int? _appliedRate;
     private Guid? _appliedMaster;
     private string? _appliedOrder;
+    private string? _appliedLines;
+
+    /// <summary>
+    /// The lines the bay WOULD open right now, as a signature.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This mirrors the predicate in <c>ProjectPatchBay.Open</c> exactly, because the question it answers
+    /// is "would opening the bay again produce a different set of devices". A line opens only when it
+    /// addresses a device (record and stream lines are encode sessions, armed later) AND at least one
+    /// patch cell routes to it - an unpatched line is not opened, so patching one that had no cells adds
+    /// a device just as surely as creating the line does.
+    /// </para>
+    /// <para>
+    /// Without this the button stayed disabled through the entire first setup of a NEW project: the bay
+    /// opens with the engine, before there are any lines to open, and adding the first output afterwards
+    /// changed neither the rate, the clock master nor the bus - so nothing said the device was not open
+    /// and the show simply played silence. Reopening the saved file worked, because then the lines were
+    /// there before the bay was built, which is what made it look like a loading bug.
+    /// </para>
+    /// <para>
+    /// Name is deliberately excluded, for the reason <see cref="BusOrder"/> gives: a rename changes
+    /// nothing the bay opened. Everything the open path reads - kind, device hint, width, rate - is here.
+    /// </para>
+    /// </remarks>
+    private string OpenableLines()
+    {
+        var patch = _project.AudioPatch;
+        return string.Join(
+            "|",
+            _project.AudioLines
+                .Where(line => line.Kind is not (AudioLineKind.FileRecord or AudioLineKind.Stream))
+                .Where(line => patch.Cells.Any(cell => cell.LineId == line.Id))
+                .OrderBy(line => line.Id)
+                .Select(line =>
+                    $"{line.Id}:{line.Kind}:{line.DeviceHint}:{line.Channels}:{line.SampleRate?.ToString() ?? "-"}"));
+    }
 
     /// <summary>
     /// The bus as an ordered list of ids.
@@ -675,6 +713,7 @@ public partial class AudioViewModel : ObservableObject
         _appliedRate = _project.AudioPatch.MixSampleRate;
         _appliedMaster = _project.AudioPatch.ClockMasterLineId;
         _appliedOrder = BusOrder();
+        _appliedLines = OpenableLines();
         OnPropertyChanged(nameof(NeedsAudioRestart));
     }
 
@@ -804,6 +843,11 @@ public partial class AudioViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedOutputLines));
         OnPropertyChanged(nameof(SelectedOutputCarries));
         OnPropertyChanged(nameof(CanAuthor));
+
+        // Adding a line, removing one, or patching the first cell to it all change which devices the bay
+        // would open, and all arrive here. Raising it anywhere narrower missed the case that matters most
+        // - the first output of a NEW project, added while the bay is already open and empty.
+        OnPropertyChanged(nameof(NeedsAudioRestart));
         Audition.Refresh();
     }
 

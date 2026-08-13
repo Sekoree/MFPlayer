@@ -82,6 +82,90 @@ public sealed class CrossfadeTests
         Assert.False(releases.IsReleased("dev-c2"));
     }
 
+    /// <summary>
+    /// A tail that has gone quiet SAYS so, on <c>ClipTailEnded</c>.
+    /// </summary>
+    /// <remarks>
+    /// Nothing reported it. The displaced clip leaves the transport at the handoff and takes its end monitor
+    /// with it, so it can never reach <c>ClipNaturallyEnded</c> - which is right, it did not end naturally -
+    /// and no other signal covered it. A host tracking what is sounding therefore kept the outgoing cue
+    /// forever: reported from HaCue2 as the first item of a crossfaded playlist still sitting in the Active
+    /// panel with its clock counting up, long after the second item had taken the room.
+    /// </remarks>
+    [Fact]
+    public async Task CrossfadeTail_ReportsThatItStopped_WhenItsRampEnds()
+    {
+        var releases = new ReleaseLog();
+        await using var session = BuildSession(releases);
+        var ended = new ConcurrentQueue<string>();
+        var natural = new ConcurrentQueue<string>();
+        session.ClipTailEnded += id => ended.Enqueue(id);
+        session.ClipNaturallyEnded += id => natural.Enqueue(id);
+
+        await session.LoadDocumentAsync(Cues("c1", "c2"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+        Assert.Equal(CueExecutionStatus.Fired,
+            await session.FireCueAsync("c2", TimeSpan.FromMilliseconds(400), FadeCurve.EqualPower));
+
+        // Still fading: it is audible, so it must NOT be reported as stopped yet.
+        Assert.Empty(ended);
+
+        await releases.WaitForReleaseAsync("dev-c1", TimeSpan.FromSeconds(20));
+        await WaitUntilAsync(() => ended.Count > 0, TimeSpan.FromSeconds(5), "the tail's end report");
+
+        Assert.Equal("c1", Assert.Single(ended));
+
+        // And on the tail event only. Natural end advances follow chains and playlist runs; the fire that
+        // displaced this clip has already advanced them, and a second edge would fire the successor twice.
+        Assert.Empty(natural);
+        Assert.False(releases.IsReleased("dev-c2"), "the incoming clip was taken down with the tail");
+    }
+
+    /// <summary>
+    /// The same cue on both sides of the handoff reports NOTHING - it never stopped.
+    /// </summary>
+    /// <remarks>
+    /// A loop-with-crossfade wrap re-fires the same binding, so the finishing pass retires as a tail while
+    /// the next pass of that cue is live. Taking the tail's end at face value would have a host drop a cue
+    /// that is still playing - a bed that vanished from the Active panel at its first seamless wrap while
+    /// still filling the room.
+    /// </remarks>
+    [Fact]
+    public async Task ATailWhoseCueIsSoundingAgain_ReportsNothing()
+    {
+        var log = new CountingLeaseLog();
+        await using var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(chunks: 1_000_000),
+            new RecordingAudioBackend(),
+            audioOutputFactory: log.BuildLease);
+        var ended = new ConcurrentQueue<string>();
+        session.ClipTailEnded += id => ended.Enqueue(id);
+
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c1", 1, "BED")],
+            Clips:
+            [
+                new ShowClipBinding("c1", "fake://bed")
+                {
+                    AudioRoutes = [new ShowClipAudioRoute(DeviceId: "dev-bed")],
+                    Loop = true,
+                    EndOffset = TimeSpan.FromMilliseconds(8_500),
+                    LoopCrossfade = TimeSpan.FromMilliseconds(600),
+                },
+            ],
+            Compositions: [], Routes: []));
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c1"));
+
+        // Wait past the first wrap's tail release - the moment the naive version would have reported it.
+        await WaitUntilAsync(
+            () => log.Released("dev-bed") >= 1, TimeSpan.FromSeconds(25), "the finishing pass's release");
+
+        Assert.Empty(ended);
+        Assert.True(Assert.Single(session.Snapshot()).IsActive);
+    }
+
     [Fact]
     public async Task FireWithNullCrossfade_IsTheButtSplice_OldClipReleasedBeforeTheFireReturns()
     {

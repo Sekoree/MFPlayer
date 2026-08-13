@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
@@ -92,6 +93,24 @@ public partial class AutomationEditorWindow : Window
     {
         if (sender is TextBox box)
             Editor?.CommitPointValue(box.Text ?? "");
+    }
+
+    private void OnPointTimeKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.Enter or Key.Return && sender is TextBox box)
+        {
+            Editor?.CommitPointTime(box.Text ?? "");
+            e.Handled = true;
+        }
+    }
+
+    private void OnPointValueKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.Enter or Key.Return && sender is TextBox box)
+        {
+            Editor?.CommitPointValue(box.Text ?? "");
+            e.Handled = true;
+        }
     }
     private void OnEditSegmentCurve(object? sender, RoutedEventArgs e)
     {

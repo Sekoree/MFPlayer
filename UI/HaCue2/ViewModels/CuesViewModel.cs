@@ -1939,6 +1939,11 @@ public partial class CuesViewModel : ObservableObject
             row.Remaining = $"−{CuePresentation.PreciseClock(remaining)}";
             row.Progress = Math.Clamp(elapsed / length, 0, 1);
         }
+
+        // The ramps inside the cue run off the SAME extrapolated playhead, so a fade's countdown moves
+        // exactly as smoothly as the cue's own and the two can never disagree about where it is.
+        foreach (var lane in row.Lanes)
+            lane.Tick(elapsed);
     }
 
     /// <summary>Shows sounding cues without group headers when the operator prefers a flat run list.</summary>

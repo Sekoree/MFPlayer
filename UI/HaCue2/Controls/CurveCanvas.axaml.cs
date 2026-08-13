@@ -95,6 +95,17 @@ public partial class CurveCanvas : UserControl
     public static readonly StyledProperty<IReadOnlyList<float>?> WaveformPeaksProperty =
         AvaloniaProperty.Register<CurveCanvas, IReadOnlyList<float>?>(nameof(WaveformPeaks));
 
+    /// <summary>
+    /// Where the cursor is, as a fraction of the visible span, or NaN for no cursor.
+    /// </summary>
+    /// <remarks>
+    /// The editor had a cursor - the slider set it, keys were added at it, SEEK sent the show to it - and
+    /// nowhere on the plot showed where it was. Reading a ramp against a position you cannot see means
+    /// running the cue to find out what you drew.
+    /// </remarks>
+    public static readonly StyledProperty<double> CursorFractionProperty =
+        AvaloniaProperty.Register<CurveCanvas, double>(nameof(CursorFraction), double.NaN);
+
     public CurveCanvas()
     {
         InitializeComponent();
@@ -138,6 +149,34 @@ public partial class CurveCanvas : UserControl
     {
         get => GetValue(WaveformPeaksProperty);
         set => SetValue(WaveformPeaksProperty, value);
+    }
+
+    public double CursorFraction
+    {
+        get => GetValue(CursorFractionProperty);
+        set => SetValue(CursorFractionProperty, value);
+    }
+
+    /// <summary>Whether the cursor is inside the visible span, so the line is worth drawing. A direct
+    /// property rather than a computed one, because the template binds its visibility and a plain getter
+    /// would never tell it the cursor had moved off screen.</summary>
+    public static readonly DirectProperty<CurveCanvas, bool> HasCursorProperty =
+        AvaloniaProperty.RegisterDirect<CurveCanvas, bool>(nameof(HasCursor), canvas => canvas.HasCursor);
+
+    private bool _hasCursor;
+
+    public bool HasCursor
+    {
+        get => _hasCursor;
+        private set => SetAndRaise(HasCursorProperty, ref _hasCursor, value);
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+
+        if (change.Property == CursorFractionProperty)
+            HasCursor = double.IsFinite(CursorFraction) && CursorFraction is >= 0 and <= 1;
     }
 
     /// <summary>

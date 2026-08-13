@@ -3,6 +3,7 @@ using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
+using HaCue2.Presentation;
 using S.Media.Session;
 
 namespace HaCue2.ViewModels;
@@ -175,6 +176,58 @@ public sealed record CueRow
     public Thickness NumberIndent => new(6 + (Depth * 9), 0, 0, 0);
 }
 
+/// <summary>
+/// One automation lane that is MOVING right now, under the cue it belongs to in the Active panel.
+/// </summary>
+/// <remarks>
+/// The panel said what was playing and where the playhead was, and nothing at all about the ramps
+/// running inside it. A twenty-second fade-down authored on a bed is the operator's next twenty seconds,
+/// and the only way to find out how far through it was was to open the automation editor.
+/// </remarks>
+public sealed partial class ActiveLaneRow : ObservableObject
+{
+    /// <summary>The property, as the editor names it - "Volume", "Pan", an effect parameter.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>Where the ramp is going, in the property's own unit: "−6 → −18 dB".</summary>
+    public required string Detail { get; init; }
+
+    /// <summary>The segment's bounds in CUE time. The identity of the lane row, and what the countdown
+    /// is computed from - the poll refreshes the SET of lanes, the row's own clock refreshes the numbers,
+    /// so a ramp counts down as smoothly as the cue it is inside rather than in quarter-second steps.</summary>
+    public required long FromMs { get; init; }
+
+    public required long ToMs { get; init; }
+
+    /// <summary>How long this ramp still has, counted down like the cue's own clock.</summary>
+    [ObservableProperty]
+    private string _remaining = "";
+
+    [ObservableProperty]
+    private double _progress;
+
+    /// <summary>Whether this is the same segment of the same lane, so it can be ticked rather than
+    /// replaced. A ramp that reaches its next keyframe becomes a different row, which is correct - it is
+    /// a different ramp.</summary>
+    public bool SameLane(ActiveLaneRow fresh) =>
+        Name == fresh.Name && FromMs == fresh.FromMs && ToMs == fresh.ToMs;
+
+    /// <summary>Re-reads the countdown from the cue's own extrapolated playhead.</summary>
+    public void Tick(TimeSpan elapsed)
+    {
+        var window = ToMs - FromMs;
+        if (window <= 0)
+            return;
+
+        var atMs = elapsed.TotalMilliseconds;
+        var left = ToMs - atMs;
+        Remaining = left > 0
+            ? $"−{CuePresentation.PreciseClock(TimeSpan.FromMilliseconds(left))}"
+            : "−00:00.000";
+        Progress = Math.Clamp((atMs - FromMs) / window, 0, 1);
+    }
+}
+
 /// <summary>One row of the Active panel - everything sounding, in or out of the current scope.</summary>
 /// <remarks>
 /// Fully observable, because the row object PERSISTS across engine polls: the panel reconciles rows
@@ -231,6 +284,17 @@ public sealed partial class ActiveCueRow : ObservableObject
     [ObservableProperty]
     private double _progress;
 
+    /// <summary>The automation lanes moving right now. Empty on a cue with none, which is most of them.</summary>
+    /// <remarks>
+    /// A collection reconciled in place, like a group's Upcoming list and for the same reason: the panel
+    /// rebuilds four times a second, and replacing the rows each time would restart every bar's animation
+    /// and rebuild containers under an operator watching a fade land.
+    /// </remarks>
+    public ObservableCollection<ActiveLaneRow> Lanes { get; } = [];
+
+    [ObservableProperty]
+    private bool _hasLanes;
+
     [ObservableProperty]
     private string _destination = "-";
 
@@ -263,9 +327,45 @@ public sealed partial class ActiveCueRow : ObservableObject
         PolledAtTicks = fresh.PolledAtTicks;
         Duration = fresh.Duration;
         Progress = fresh.Progress;
+        SyncLanes(fresh.Lanes);
         Destination = fresh.Destination;
         IsFading = fresh.IsFading;
         IsNearEnd = fresh.IsNearEnd;
+    }
+
+    /// <summary>Adopts the poll's lane SET, keeping any row that is still the same ramp.</summary>
+    private void SyncLanes(IReadOnlyList<ActiveLaneRow> fresh)
+    {
+        for (var index = 0; index < fresh.Count; index++)
+        {
+            if (index < Lanes.Count && Lanes[index].SameLane(fresh[index]))
+                continue;
+
+            if (index < Lanes.Count)
+                Lanes[index] = fresh[index];
+            else
+                Lanes.Add(fresh[index]);
+        }
+
+        while (Lanes.Count > fresh.Count)
+            Lanes.RemoveAt(Lanes.Count - 1);
+
+        // A kept row is the same RAMP, not the same reading. Ticked from the poll's own playhead so the
+        // panel is consistent the moment it lands, rather than a poll behind until the smooth clock
+        // catches it up.
+        foreach (var lane in Lanes)
+            lane.Tick(Position);
+
+        HasLanes = Lanes.Count > 0;
+    }
+
+    /// <summary>Seeds the lanes of a freshly built row, before it is either shown or merged into one.</summary>
+    public void SeedLanes(IReadOnlyList<ActiveLaneRow> lanes)
+    {
+        foreach (var lane in lanes)
+            Lanes.Add(lane);
+
+        HasLanes = Lanes.Count > 0;
     }
 }
 
@@ -839,7 +939,15 @@ public sealed record CurveOption(
 
 /// <summary>A draggable point on the custom-curve editor, in fractions of the canvas.</summary>
 /// <param name="IsHold">Flat until the next point. Drawn as a square rather than a circle.</param>
-public sealed record CurvePoint(double X, double Y, bool IsSelected = false, bool IsHold = false);
+public sealed record CurvePoint(double X, double Y, bool IsSelected = false, bool IsHold = false)
+{
+    // Shape AND state, combined here rather than in the template: a binding expression can negate but it
+    // cannot combine, so the alternative was four shapes each guessing from one flag.
+    public bool IsPlainDot => !IsHold && !IsSelected;
+    public bool IsPlainHold => IsHold && !IsSelected;
+    public bool IsSelectedDot => !IsHold && IsSelected;
+    public bool IsSelectedHold => IsHold && IsSelected;
+}
 
 /// <summary>One visible cubic Bézier tangent, in canvas fractions. Incoming identifies which side of
 /// the owning keyframe is edited.</summary>

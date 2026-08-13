@@ -85,6 +85,105 @@ public static class MediaScan
         Action<float[]>? onPartial = null) =>
         Task.Run(() => Waveform(path, buckets, cancellationToken, onPartial), cancellationToken);
 
+    /// <summary>
+    /// A normalized peak per bucket across ONE window of the file, read through exactly.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The whole-file scan cannot answer a zoomed-in question. Past <see cref="SampleBeyond"/> it samples,
+    /// capped at <see cref="MaxSampledBuckets"/> - on a two-hour recording that is one bar every seven
+    /// seconds, so an editor showing thirty seconds of it has four bars to draw with and draws blocks.
+    /// </para>
+    /// <para>
+    /// Reading a window through is cheap for exactly the reason the whole file is not: the cost was never
+    /// the seeking, it was the number of samples taken, and a window has few. Thirty seconds is thirty
+    /// seconds of decoding whether the file around it is four minutes or four hours.
+    /// </para>
+    /// <para>
+    /// Normalized within the window, like every other scan here. The caller knows what the coarse pass
+    /// said about the same stretch and is better placed to decide whether to keep that scale.
+    /// </para>
+    /// </remarks>
+    public static Task<float[]?> WaveformWindowAsync(
+        string path,
+        TimeSpan from,
+        TimeSpan length,
+        int buckets = MaxBuckets,
+        CancellationToken cancellationToken = default) =>
+        Task.Run(() => WaveformWindow(path, from, length, buckets, cancellationToken), cancellationToken);
+
+    private static float[]? WaveformWindow(
+        string path, TimeSpan from, TimeSpan length, int buckets, CancellationToken cancellationToken)
+    {
+        if (length <= TimeSpan.Zero)
+            return null;
+
+        AudioFileDecoder decoder;
+        try
+        {
+            decoder = AudioFileDecoder.Open(path);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (decoder.Duration <= TimeSpan.Zero || from >= decoder.Duration)
+                return null;
+
+            var channels = Math.Max(1, decoder.Format.Channels);
+            var remaining = decoder.Duration - from;
+            var span = length < remaining ? length : remaining;
+            var wanted = (long)(span.TotalSeconds * decoder.Format.SampleRate);
+            if (wanted <= 0)
+                return null;
+
+            var count = (int)Math.Clamp(Math.Min(buckets, wanted), 1, MaxBuckets);
+
+            if (from > TimeSpan.Zero)
+                decoder.Seek(from);
+
+            var peaks = new float[count];
+            var buffer = new float[ReadChunkSamples * channels];
+            var perBucket = (double)wanted / count;
+            long frameIndex = 0;
+
+            while (frameIndex < wanted && !decoder.IsExhausted)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var read = decoder.ReadInto(buffer);
+                if (read <= 0)
+                    break;
+
+                for (var frame = 0; frame < read / channels && frameIndex < wanted; frame++)
+                {
+                    Peak(peaks, Math.Min(count - 1, (int)(frameIndex / perBucket)), buffer, frame, channels);
+                    frameIndex++;
+                }
+            }
+
+            // Nothing was read - a seek that landed past the audio, a stream that ended early. A silent
+            // array would be drawn as a flat line, which claims the window IS silent.
+            return frameIndex > 0 ? Normalized(peaks) : null;
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // A container that will not seek there. The coarse waveform stays on screen.
+            return null;
+        }
+        finally
+        {
+            decoder.Dispose();
+        }
+    }
+
     private static float[]? Waveform(
         string path, int buckets, CancellationToken cancellationToken, Action<float[]>? onPartial)
     {

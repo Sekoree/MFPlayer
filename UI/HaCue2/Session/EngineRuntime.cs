@@ -229,6 +229,15 @@ public sealed class EngineRuntime : IAsyncDisposable
         // window actually appeared.
         _runtime.AbsentVideoOutputs = [.. _host.AbsentVideoOutputs];
 
+        // Which lines the bay REALLY holds, as opposed to which ones the document names. The terminal
+        // id is the line's Guid, so this is the bay answering for itself rather than us predicting it.
+        _runtime.OpenLines =
+        [
+            .. bay.Terminals
+                .Select(terminal => Guid.TryParse(terminal.TerminalId, out var id) ? id : (Guid?)null)
+                .OfType<Guid>(),
+        ];
+
         _runtime.BayRows = BayPresentation.Rows(_project, bay);
         _runtime.Meters = _meterPresenter.Present(
             BayPresentation.Meters(_project, bay), _settings, DateTimeOffset.UtcNow);
@@ -333,6 +342,10 @@ public sealed class EngineRuntime : IAsyncDisposable
         _host.Triggers.Observed -= OnObserved;
         _host.SoundingChanged -= OnSoundingChanged;
         _timer.Stop();
+
+        // Back to "nobody has measured". Leaving the last set behind would have the Audio screen
+        // reporting the devices of a session that is over as still open.
+        _runtime.OpenLines = null;
         await _host.DisposeAsync().ConfigureAwait(false);
     }
 }

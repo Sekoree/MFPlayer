@@ -11,6 +11,11 @@ using S.Media.Session;
 
 namespace HaCue2.ViewModels;
 
+/// <summary>Rescans one window of a media file into normalized peaks. <see cref="MediaScan"/> in the app;
+/// a seam so the editor's zoom-detail logic can be tested without decoding anything.</summary>
+public delegate Task<float[]?> WaveformWindowScan(
+    string path, TimeSpan from, TimeSpan length, int buckets, CancellationToken cancellationToken);
+
 /// <summary>A scrollable absolute-time editor for one concrete animatable property.</summary>
 public sealed partial class AutomationEditorViewModel : ObservableObject
 {
@@ -25,6 +30,8 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
     private readonly long? _waveformCacheBytes;
     private readonly TimeSpan? _waveformSourceDuration;
     private CancellationTokenSource? _waveformScan;
+    private CancellationTokenSource? _detailScan;
+    private readonly WaveformWindowScan _windowScan = MediaScan.WaveformWindowAsync;
     private IReadOnlyList<float>? _cuePeaks;
     private readonly HashSet<Guid> _selection = [];
     private List<AutomationKeyframe> _visibleKeys = [];
@@ -55,8 +62,10 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         string? waveformPath = null,
         TimeSpan? waveformSourceDuration = null,
         string cacheRoot = "",
-        long? waveformCacheBytes = null)
+        long? waveformCacheBytes = null,
+        WaveformWindowScan? windowScan = null)
     {
+        _windowScan = windowScan ?? MediaScan.WaveformWindowAsync;
         _journal = journal;
         _cue = cue;
         _track = track;
@@ -144,6 +153,7 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             return;
         }
         OnPropertyChanged(nameof(ViewStartLabel));
+        OnPropertyChanged(nameof(CursorFraction));
         RefreshWaveformViewport();
         Reload();
     }
@@ -157,8 +167,96 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             return;
         }
         ViewStartMs = Math.Clamp(ViewStartMs, 0, ViewMaxStartMs);
+        OnPropertyChanged(nameof(ZoomSpan));
+        OnPropertyChanged(nameof(CursorFraction));
         RefreshWaveformViewport();
         Reload();
+    }
+
+    // ── zoom ──────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// One entry of the zoom ladder. <see cref="ToString"/> is what the box shows.
+    /// </summary>
+    /// <remarks>
+    /// A record so equality is by value: the ComboBox re-selects by comparing what it holds against the
+    /// list, and a class would leave the box blank every time the ladder was rebuilt.
+    /// </remarks>
+    public sealed record ZoomChoice(string Label, double LengthMs)
+    {
+        public override string ToString() => Label;
+    }
+
+    /// <summary>
+    /// The spans offered in the zoom box, coarsest first, ending at the whole cue.
+    /// </summary>
+    /// <remarks>
+    /// Rebuilt from the duration rather than fixed, so a 30-second cue is not offered a two-hour view and
+    /// a two-hour one is not left with 30 seconds as its widest. Only spans SHORTER than the cue are
+    /// listed - a wider one would be the whole cue with padding, which is what the last entry already is.
+    /// </remarks>
+    public IReadOnlyList<ZoomChoice> ZoomOptions
+    {
+        get
+        {
+            double[] ladder =
+            [
+                60 * 60 * 1000, 30 * 60 * 1000, 10 * 60 * 1000, 5 * 60 * 1000, 2 * 60 * 1000,
+                60_000, 30_000, 10_000, 5_000, 2_000, 1_000,
+            ];
+
+            return
+            [
+                new ZoomChoice("whole cue", DurationMs),
+                .. ladder
+                    .Where(span => span < DurationMs)
+                    .Select(span => new ZoomChoice(SpanLabel(span), span)),
+            ];
+        }
+    }
+
+    /// <summary>
+    /// The ladder entry the view is showing, or null on a span nothing on the ladder names.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two-way and live in both directions, which is the point. The only zoom controls were −, + and FIT,
+    /// and nothing on the toolbar said what they had done - so the operator's reference for "how far in am
+    /// I" was a range readout in the footer, and the box beside the zoom keys was the unlabelled TIME SNAP
+    /// list, which naturally read as a zoom level that neither drove the zoom nor followed it.
+    /// </para>
+    /// <para>
+    /// Null rather than a nearest match when the span is off-ladder: an operator who dragged the view to
+    /// 47 seconds is better served by an empty box than by one confidently claiming 30 s. − and + move
+    /// ALONG the ladder (see <see cref="Zoom"/>), so the ordinary way of zooming always lands on a named
+    /// span and the box is only blank after something else set the span.
+    /// </para>
+    /// </remarks>
+    public ZoomChoice? ZoomSpan
+    {
+        get => ZoomOptions.FirstOrDefault(choice => Math.Abs(choice.LengthMs - ViewLengthMs) < 1);
+        set
+        {
+            if (value is null || Math.Abs(value.LengthMs - ViewLengthMs) < 1)
+                return;
+
+            // Around the cursor, exactly like the keys - zooming from a box rather than a button is not a
+            // reason to lose the place the operator is working on.
+            ZoomTo(value.LengthMs);
+        }
+    }
+
+    private static string SpanLabel(double lengthMs) => lengthMs >= 60_000
+        ? $"{lengthMs / 60_000:0.#} min"
+        : $"{lengthMs / 1_000:0.#} s";
+
+    /// <summary>Sets the visible span, keeping whatever the cursor sits on where it is.</summary>
+    private void ZoomTo(double lengthMs)
+    {
+        var anchor = Math.Clamp(CursorMs, ViewStartMs, ViewStartMs + ViewLengthMs);
+        var fraction = ViewLengthMs <= 0 ? 0.5 : (anchor - ViewStartMs) / ViewLengthMs;
+        ViewLengthMs = Math.Clamp(lengthMs, Math.Min(500, DurationMs), DurationMs);
+        ViewStartMs = Math.Clamp(anchor - (fraction * ViewLengthMs), 0, ViewMaxStartMs);
     }
 
     [ObservableProperty]
@@ -167,11 +265,52 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
 
     public string CursorLabel => ClipTimes.Format((int)Math.Clamp(CursorMs, 0, DurationMs));
 
+    /// <summary>Where the cursor sits inside the visible span, for the plot's playhead. NaN off screen.</summary>
+    public double CursorFraction => ViewLengthMs <= 0
+        ? double.NaN
+        : (CursorMs - ViewStartMs) / ViewLengthMs;
+
+    /// <summary>
+    /// What this lane is producing at the cursor, right now, with nothing playing.
+    /// </summary>
+    /// <remarks>
+    /// The offline live view. Authoring a ramp meant firing the cue to find out what had been drawn - and
+    /// on a two-hour bed that is not a thing anybody does twice. Sampled through the same evaluator the
+    /// drivers use, so the curve shapes and the hold flags are honoured rather than approximated: what
+    /// this says is what the show will do.
+    /// </remarks>
+    public string CursorValueLabel
+    {
+        get
+        {
+            if (_track is null || !IsResolved)
+                return "-";
+
+            var project = _journal?.Project;
+            if (project is null)
+                return "-";
+
+            var value = AutomationEvaluator.Sample(
+                _track, project, (long)Math.Clamp(CursorMs, 0, DurationMs), _descriptor.Value.Default);
+
+            return _descriptor.Value.Scale == AutomationScale.Percentage
+                ? $"{value * 100:0.#}%"
+                : value.ToString("0.###", CultureInfo.InvariantCulture)
+                  + (Unit.Length > 0 ? $" {Unit}" : "");
+        }
+    }
+
     partial void OnCursorMsChanged(double value)
     {
         var clamped = Math.Clamp(value, 0, DurationMs);
         if (Math.Abs(clamped - value) > 0.01)
+        {
             CursorMs = clamped;
+            return;
+        }
+
+        OnPropertyChanged(nameof(CursorFraction));
+        OnPropertyChanged(nameof(CursorValueLabel));
     }
 
     [ObservableProperty]
@@ -563,12 +702,32 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             "set automation key value");
     }
 
+    /// <summary>
+    /// − and +: the next span along the zoom ladder, in or out.
+    /// </summary>
+    /// <remarks>
+    /// It used to multiply the span by the factor, which was fine on its own but landed on values like
+    /// "3 min 45 s" that <see cref="ZoomSpan"/> cannot name - so the box beside the buttons would go blank
+    /// as soon as they were used. Stepping the ladder keeps the two agreeing, and the steps are the ones a
+    /// person would pick anyway. The factor is still the direction and roughly the distance: the ladder is
+    /// about half again each rung, so a caller asking to halve moves one rung in.
+    /// </remarks>
     public void Zoom(double factor)
     {
-        var anchor = Math.Clamp(CursorMs, ViewStartMs, ViewStartMs + ViewLengthMs);
-        var fraction = ViewLengthMs <= 0 ? 0.5 : (anchor - ViewStartMs) / ViewLengthMs;
-        ViewLengthMs = Math.Clamp(ViewLengthMs * factor, Math.Min(500, DurationMs), DurationMs);
-        ViewStartMs = Math.Clamp(anchor - (fraction * ViewLengthMs), 0, ViewMaxStartMs);
+        var ladder = ZoomOptions;
+        if (ladder.Count == 0)
+            return;
+
+        // Coarsest first, so zooming IN is forwards. An off-ladder span (a drag, a restored session) has
+        // no index of its own; start from the nearest rung so the first press still moves one step.
+        var current = 0;
+        for (var index = 1; index < ladder.Count; index++)
+            if (Math.Abs(ladder[index].LengthMs - ViewLengthMs)
+                < Math.Abs(ladder[current].LengthMs - ViewLengthMs))
+                current = index;
+
+        var step = factor < 1 ? 1 : -1;
+        ZoomTo(ladder[Math.Clamp(current + step, 0, ladder.Count - 1)].LengthMs);
     }
 
     public void Pan(double fraction) =>
@@ -590,6 +749,11 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         OnPropertyChanged(nameof(ViewMaxStartMs));
         OnPropertyChanged(nameof(Hint));
         OnPropertyChanged(nameof(ViewLabel));
+
+        // A longer ruler is a different ladder - "whole cue" now means something else, and spans that were
+        // wider than the cue become offerable.
+        OnPropertyChanged(nameof(ZoomOptions));
+        OnPropertyChanged(nameof(ZoomSpan));
     }
 
     public void JumpKey(int direction)
@@ -662,6 +826,10 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         _waveformScan?.Cancel();
         _waveformScan?.Dispose();
         _waveformScan = null;
+
+        _detailScan?.Cancel();
+        _detailScan?.Dispose();
+        _detailScan = null;
     }
 
     private void Select(CurveGesture gesture)
@@ -888,6 +1056,10 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             }),
         ];
         ReloadFields();
+        // The offline readout follows every edit, not just the cursor: dragging a key changes what the
+        // lane produces at the cursor, and a readout that only moved when the cursor did would be
+        // reporting the curve as it was before the drag.
+        OnPropertyChanged(nameof(CursorValueLabel));
         OnPropertyChanged(nameof(Segment));
         OnPropertyChanged(nameof(IsHold));
         OnPropertyChanged(nameof(IsEnabled));
@@ -918,8 +1090,37 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
         return peaks[from..to];
     }
 
+    /// <summary>
+    /// Below this many bars, the visible stretch is rescanned at its own resolution.
+    /// </summary>
+    /// <remarks>
+    /// The plot is roughly 700 px wide, so a few hundred bars is already about a bar per two pixels and
+    /// finer buys nothing. What it rules out is the case that made this necessary: a two-hour cue is
+    /// SAMPLED into a thousand buckets, so a thirty-second view slices four of them and draws blocks.
+    /// </remarks>
+    private const int DetailBelowBars = 400;
+
+    /// <summary>How many bars a rescan of the visible stretch asks for.</summary>
+    private const int DetailBars = 1_200;
+
+    /// <summary>
+    /// The widest stretch worth rescanning.
+    /// </summary>
+    /// <remarks>
+    /// A rescan decodes its window in full, so its cost is the window's length and nothing else - which is
+    /// what makes it affordable on a long file, and what bounds it here. Ten minutes decodes in a few
+    /// seconds in the background; past that the coarse pass has hundreds of bars for the view anyway, so
+    /// there is little to win and a long decode to lose.
+    /// </remarks>
+    private static readonly TimeSpan DetailWidest = TimeSpan.FromMinutes(10);
+
     private void RefreshWaveformViewport()
     {
+        // Any move invalidates a rescan in flight: it was asked about a stretch nobody is looking at now.
+        _detailScan?.Cancel();
+        _detailScan?.Dispose();
+        _detailScan = null;
+
         if (_cuePeaks is not { Count: > 0 } peaks || DurationMs <= 0)
         {
             WaveformPeaks = null;
@@ -931,7 +1132,70 @@ public sealed partial class AutomationEditorViewModel : ObservableObject
             (int)Math.Ceiling((ViewStartMs + ViewLengthMs) / DurationMs * peaks.Count),
             from + 1,
             peaks.Count);
-        WaveformPeaks = peaks.Skip(from).Take(to - from).ToArray();
+        var coarse = peaks.Skip(from).Take(to - from).ToArray();
+        WaveformPeaks = coarse;
+
+        if (coarse.Length < DetailBelowBars && ViewLengthMs <= DetailWidest.TotalMilliseconds)
+            BeginDetailScan(ViewStartMs, ViewLengthMs, coarse.Max());
+    }
+
+    /// <summary>
+    /// Rescans just the visible stretch, and swaps it in if the operator has not moved on.
+    /// </summary>
+    /// <param name="coarsePeak">
+    /// The tallest bar the whole-file pass had for this stretch. The rescan normalizes within its own
+    /// window, so without this a quiet passage would jump to full height the moment it was zoomed into -
+    /// the waveform has to keep meaning the same thing at every zoom level. Zero means the coarse pass
+    /// had nothing to say (a sampled scan can step straight over a sound), and then the window's own
+    /// scale is the better answer: it is showing audio the coarse pass never looked at.
+    /// </param>
+    private async void BeginDetailScan(double startMs, double lengthMs, float coarsePeak)
+    {
+        if (_waveformPath.Length == 0 || _waveformCue is null || lengthMs <= 0)
+            return;
+
+        var scan = new CancellationTokenSource();
+        _detailScan = scan;
+        var token = scan.Token;
+
+        try
+        {
+            // Settle first. The scrollbar and the zoom keys move the viewport in a stream of small steps,
+            // and starting a decode on each one would queue work for stretches nobody stopped at.
+            await Task.Delay(180, token).ConfigureAwait(true);
+
+            // Cue time is not source time: the peaks were trimmed to the cue, the file was not.
+            var detail = await _windowScan(
+                _waveformPath,
+                TimeSpan.FromMilliseconds(_waveformCue.TrimInMs + startMs),
+                TimeSpan.FromMilliseconds(lengthMs),
+                DetailBars,
+                token).ConfigureAwait(true);
+
+            if (token.IsCancellationRequested || detail is not { Length: > 0 })
+                return;
+
+            if (coarsePeak > 0)
+                for (var index = 0; index < detail.Length; index++)
+                    detail[index] *= coarsePeak;
+
+            WaveformPeaks = detail;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            // Detail is a nicety on top of a waveform that is itself context. The coarse bars stay.
+        }
+        finally
+        {
+            if (ReferenceEquals(_detailScan, scan))
+            {
+                _detailScan = null;
+                scan.Dispose();
+            }
+        }
     }
 
     private void ReloadFields()

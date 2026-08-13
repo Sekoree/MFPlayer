@@ -27,7 +27,11 @@
     </c:PanelBox.Footer>
 
     <DockPanel Margin="10,6,10,10">
-      <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto"
+      <!-- The two dropdowns are deliberately at opposite ends. They used to sit side by side, and the one
+           beside − and + was the TIME SNAP list showing bare numbers - so it read as the zoom level, while
+           neither zooming it nor following the zoom keys. Zoom now has its own box, next to the keys that
+           drive it; snap lives with the other authoring settings on the right. -->
+      <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto,Auto,Auto"
             ColumnSpacing="5" Margin="0,0,0,7">
         <Button Grid.Column="0" Classes="tight" Content="|◀ KEY" Click="OnPreviousKey" AutomationProperties.Name="Previous keyframe" />
         <Button Grid.Column="1" Classes="tight" Content="KEY ▶|" Click="OnNextKey" AutomationProperties.Name="Next keyframe" />
@@ -36,10 +40,10 @@
                 ToolTip.Tip="Add a keyframe at the cursor" />
         <Button Grid.Column="3" Classes="tight" Content="−" Click="OnZoomOut" AutomationProperties.Name="Zoom out" ToolTip.Tip="Zoom out" />
         <Button Grid.Column="4" Classes="tight" Content="+" Click="OnZoomIn" AutomationProperties.Name="Zoom in" ToolTip.Tip="Zoom in" />
-        <ComboBox Grid.Column="5" Width="78" ItemsSource="{Binding SnapTimeOptions}"
-                  AutomationProperties.Name="Time snap in milliseconds"
-                  SelectedItem="{Binding SnapTimeMs, Mode=TwoWay}"
-                  ToolTip.Tip="Time snap in milliseconds; Alt bypasses snap while dragging" />
+        <ComboBox Grid.Column="5" Width="96" ItemsSource="{Binding ZoomOptions}"
+                  AutomationProperties.Name="Visible span"
+                  SelectedItem="{Binding ZoomSpan, Mode=TwoWay}"
+                  ToolTip.Tip="How much of the cue is in view; − and + step the same list" />
         <Slider Grid.Column="6" AutomationProperties.Name="Playhead position"
                 Minimum="0" Maximum="{Binding DurationMs}"
                 Value="{Binding CursorMs, Mode=TwoWay}" />
@@ -48,6 +52,11 @@
         <Button Grid.Column="8" Classes="tight" Content="SEEK" Click="OnSeek" AutomationProperties.Name="Seek this cue to the cursor"
                 ToolTip.Tip="Seek this cue when it is currently sounding" />
         <Button Grid.Column="9" Classes="tight" Content="FIT" Click="OnFit" AutomationProperties.Name="Fit the whole cue in view" />
+        <TextBlock Grid.Column="10" Classes="mono dim3 micro" VerticalAlignment="Center" Text="SNAP" />
+        <ComboBox Grid.Column="11" Width="78" ItemsSource="{Binding SnapTimeOptions}"
+                  AutomationProperties.Name="Time snap in milliseconds"
+                  SelectedItem="{Binding SnapTimeMs, Mode=TwoWay}"
+                  ToolTip.Tip="Time snap in milliseconds; Alt bypasses snap while dragging" />
       </Grid>
 
       <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto" Margin="0,7,0,0">
@@ -92,6 +101,7 @@
                          RemoveWhenDraggedOffCanvas="False"
                          IsEnabled="{Binding CanEdit}"
                          WaveformPeaks="{Binding WaveformPeaks}"
+                         CursorFraction="{Binding CursorFraction}"
                          Points="{Binding Points}" Shape="{Binding Shape}" Tangents="{Binding Tangents}"
                          Gesture="OnGesture" GestureCompleted="OnGestureCompleted"
                          GestureCancelled="OnGestureCancelled"
@@ -100,13 +110,30 @@
         </Border>
 
         <StackPanel Grid.Column="1" Grid.RowSpan="2" Spacing="5">
+          <!-- The offline live view: what this lane produces at the cursor, with nothing playing. Reading
+               a ramp used to mean firing the cue to hear it, which on a two-hour bed is not something
+               anybody does twice. Sampled through the drivers' own evaluator, so it is what the show will
+               do rather than an approximation of it - and it follows key drags, not just the cursor. -->
+          <Border Classes="chip" Margin="10,2,10,4" HorizontalAlignment="Left">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Classes="mono dim3 micro" VerticalAlignment="Center" Text="AT CURSOR" />
+              <TextBlock Classes="mono" VerticalAlignment="Center"
+                         AutomationProperties.Name="Lane value at the cursor"
+                         Text="{Binding CursorValueLabel}" />
+            </StackPanel>
+          </Border>
+          <!-- Enter as well as LostFocus. On focus alone the key did not move until the operator clicked
+               somewhere else, which reads as a field that does nothing - and the obvious next thing to
+               click is the canvas, which selects a different key. -->
           <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Key time">
             <TextBox Text="{Binding PointTime}" IsEnabled="{Binding CanEditSelection}"
-                     LostFocus="OnPointTimeCommitted" />
+                     AutomationProperties.Name="Selected keyframe time"
+                     KeyDown="OnPointTimeKeyDown" LostFocus="OnPointTimeCommitted" />
           </HeaderedContentControl>
           <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Property value">
             <TextBox Text="{Binding PointValue}" IsEnabled="{Binding CanEditSelection}"
-                     LostFocus="OnPointValueCommitted" />
+                     AutomationProperties.Name="Selected keyframe value"
+                     KeyDown="OnPointValueKeyDown" LostFocus="OnPointValueCommitted" />
           </HeaderedContentControl>
           <TextBlock Classes="mono dim3 micro" Margin="10,0" Text="{Binding Unit, StringFormat='unit · {0}'}" />
           <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Segment after key">

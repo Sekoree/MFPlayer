@@ -95,6 +95,76 @@ public class AudioViewModelTests
             // silent rebuild - the operator is told and presses the button.
             Assert.True(shell.Audio.NeedsAudioRestart);
         });
+
+    [Fact]
+    public Task PatchingTheFirstOutputOfANewProjectAsksForARestart() =>
+        ShellFixture.WithShell(shell =>
+        {
+            // The reported bug, in the order the operator hit it: File > New Project starts an engine
+            // with no lines, so ProjectPatchBay.Open opens NOTHING. Adding the output and patching it
+            // afterwards only reconciles CELLS onto terminals that were never created, so every cue
+            // played to a device that had never been opened - silence, with a rig that looked correct
+            // on screen and worked as soon as the project was saved, reopened and started with the
+            // lines already there.
+            shell.Audio.NoteAudioStarted();
+            Assert.False(shell.Audio.NeedsAudioRestart);
+
+            var line = new AudioLineDefinition
+            {
+                Name = "main pa",
+                Kind = AudioLineKind.LocalAudio,
+                DeviceHint = "default",
+            };
+            shell.Project.AudioLines.Add(line);
+
+            // A line with no cells is not opened either, so the ask has to appear on the PATCH, not on
+            // the add - which is also the moment the operator believes they are done.
+            shell.Audio.Refresh();
+            Assert.False(shell.Audio.NeedsAudioRestart);
+
+            shell.Project.AudioPatch.Cells.Add(new PatchCell
+            {
+                LogicalChannelId = shell.Project.AudioPatch.LogicalChannels[0].Id,
+                LineId = line.Id,
+            });
+            shell.Audio.Refresh();
+
+            Assert.True(shell.Audio.NeedsAudioRestart);
+
+            // And the line itself has to stop claiming otherwise. This column read a green "open" for
+            // anything the machine merely HAS, which is what made the rig look correct while it was
+            // silent - the operator had no way to tell the device had never been opened.
+            shell.Runtime.OpenLines = [];
+            shell.Audio.Refresh();
+
+            var row = shell.Audio.Lines.Single(item => item.Id == line.Id);
+            Assert.Equal("not open · restart audio", row.State.Text);
+
+            // With the bay actually holding it, the same row goes back to plain "open".
+            shell.Runtime.OpenLines = [line.Id];
+            shell.Audio.Refresh();
+            Assert.Equal("open", shell.Audio.Lines.Single(item => item.Id == line.Id).State.Text);
+        });
+
+    [Fact]
+    public Task ALineWithNoSessionAndALineNothingIsPatchedToAreNotReportedAsShut() =>
+        ShellFixture.WithShell(shell =>
+        {
+            var line = new AudioLineDefinition { Name = "spare", DeviceHint = "default" };
+            shell.Project.AudioLines.Add(line);
+            shell.Audio.Refresh();
+
+            // No bay has measured anything, so nothing is expected to be open. Null and empty are
+            // different answers here on purpose.
+            Assert.Null(shell.Runtime.OpenLines);
+            Assert.Equal("open", shell.Audio.Lines.Single(item => item.Id == line.Id).State.Text);
+
+            // A running bay skips a line nothing is patched to, so it is shut for a reason that is not
+            // a fault and must not be reported as one.
+            shell.Runtime.OpenLines = [];
+            shell.Audio.Refresh();
+            Assert.Equal("open", shell.Audio.Lines.Single(item => item.Id == line.Id).State.Text);
+        });
 }
 
 /// <summary>The settings screen's two scopes, which behave deliberately differently.</summary>

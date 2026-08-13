@@ -25,8 +25,9 @@ namespace HaCue2.Session;
 /// <see cref="CompositionStats"/>, <see cref="ChaseReadout"/>, <see cref="Recorders"/>,
 /// <see cref="TriggerMonitor"/>, <see cref="LastSignal"/>, <see cref="LastSeen"/> and
 /// <see cref="LastSent"/>; <c>MediaFactsCache</c> fills <see cref="MediaDurations"/> and
-/// <see cref="Broken"/> from a probe; device enumeration fills <see cref="AbsentLines"/>, and opening
-/// the show's windows fills <see cref="AbsentVideoOutputs"/>.
+/// <see cref="Broken"/> from a probe; device enumeration fills <see cref="AbsentLines"/>, the bay's
+/// own terminals fill <see cref="OpenLines"/>, and opening the show's windows fills
+/// <see cref="AbsentVideoOutputs"/>.
 /// <para>
 /// <b>Nothing here is invented any more.</b> Keep this paragraph current if that changes - it is the
 /// one place a reader can tell which values on screen are facts. A member that has to be guessed at
@@ -64,6 +65,18 @@ public sealed class ShowRuntime
 
     /// <summary>Audio lines this machine does not have. A machine fact, never a document one.</summary>
     public HashSet<Guid> AbsentLines { get; set; } = [];
+
+    /// <summary>
+    /// The lines the RUNNING bay actually has a terminal for, or null when no bay is running.
+    /// </summary>
+    /// <remarks>
+    /// Null and empty mean different things, like <see cref="Levels"/>: null is "nobody has measured",
+    /// empty is "measured, and the bay opened nothing". The distinction is the whole point of this
+    /// member - the bay opens its devices ONCE at start, so a line added afterwards exists in the
+    /// document, is present on the machine, and is still not open. Without this it reported itself
+    /// green and "open" while every cue routed to it played to nothing.
+    /// </remarks>
+    public HashSet<Guid>? OpenLines { get; set; }
 
     /// <summary>Video outputs that are not showing anything on this machine.</summary>
     public HashSet<Guid> AbsentVideoOutputs { get; set; } = [];

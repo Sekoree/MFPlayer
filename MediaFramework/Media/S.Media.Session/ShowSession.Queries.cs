@@ -330,10 +330,34 @@ public sealed partial class ShowSession
                 StartReleaseRamp = (voice, duration, curve) =>
                     StartVoiceReleaseRamp(groupId, voice, duration, curve),
                 VoiceRetired = voice => _sounding.Unregister(voice.SoundingId),
+                TailRetired = ReportTailEnded,
             };
             PublishGroupViews();
         }
         return group;
+    }
+
+    /// <summary>
+    /// Tells subscribers a crossfade tail has gone quiet, unless the same cue is sounding again.
+    /// </summary>
+    /// <remarks>
+    /// The suppression is what makes this safe to raise from the one place every tail release passes
+    /// through. A loop-with-crossfade wrap re-fires the SAME binding, so at every loop boundary the finishing
+    /// pass retires while the next pass of the same cue is live - and a host that took "this cue stopped" at
+    /// face value would drop a cue that is still playing. Asking the groups rather than tracking it keeps the
+    /// answer true for a re-fire onto ANY group, not just the one the tail was on.
+    /// </remarks>
+    private void ReportTailEnded(TransportVoice tail)
+    {
+        if (ClipTailEnded is not { } subscribers)
+            return;
+
+        var cueId = tail.Clip.Spec.Id;
+        foreach (var group in _groups.Values)
+            if (group.ActiveVoice is { } live && string.Equals(live.Clip.Spec.Id, cueId, StringComparison.Ordinal))
+                return;
+
+        subscribers(cueId);
     }
 
     /// <summary>Retires every transport group - each group's own teardown releases its voices, and every

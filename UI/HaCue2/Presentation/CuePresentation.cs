@@ -147,7 +147,7 @@ public static class CuePresentation
                 ? total - state.Elapsed < TimeSpan.Zero ? TimeSpan.Zero : total - state.Elapsed
                 : (TimeSpan?)null;
 
-            rows.Add(new ActiveCueRow
+            var row = new ActiveCueRow
             {
                 CueId = cue.Id,
                 Number = Number(cue.Number),
@@ -178,11 +178,89 @@ public static class CuePresentation
                 // Ten seconds, not a fraction: what matters to the person driving is how long they
                 // have, and that is the same ten seconds on a 30-second sting and a 6-minute bed.
                 IsNearEnd = remaining is { } close && close > TimeSpan.Zero && close <= TimeSpan.FromSeconds(10),
-            });
+            };
+
+            row.SeedLanes(RunningLanes(cue, state.Elapsed));
+            rows.Add(row);
         }
 
         return rows;
     }
+
+    /// <summary>
+    /// The automation lanes this cue is MOVING through at <paramref name="elapsed"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Read from the document against the cue's own clock rather than from the engine. The engine reports
+    /// one automated value - the cue volume, for the inspector - and knows nothing about the rest, while
+    /// the keyframes say everything a countdown needs: which segment the playhead is in, what it is
+    /// travelling between, and when it arrives. Nothing to plumb through the transport, and it works for
+    /// every property the same way, effects included.
+    /// </para>
+    /// <para>
+    /// A lane is listed only while its value is CHANGING. A track sitting between two equal keys, holding,
+    /// or past its last key is doing nothing an operator has to time, and listing it would bury the ramp
+    /// that matters under the ones that do not.
+    /// </para>
+    /// </remarks>
+    private static IReadOnlyList<ActiveLaneRow> RunningLanes(CueNode cue, TimeSpan elapsed)
+    {
+        List<ActiveLaneRow>? lanes = null;
+        var atMs = elapsed.TotalMilliseconds;
+
+        foreach (var track in CueAutomation.Of(cue))
+        {
+            if (!track.Enabled || track.Keyframes.Count < 2)
+                continue;
+
+            var keys = track.Keyframes.OrderBy(key => key.TimeMs).ToList();
+            var index = -1;
+            for (var candidate = 0; candidate < keys.Count - 1; candidate++)
+                if (atMs >= keys[candidate].TimeMs && atMs < keys[candidate + 1].TimeMs)
+                {
+                    index = candidate;
+                    break;
+                }
+
+            if (index < 0)
+                continue;
+
+            var (from, to) = (keys[index], keys[index + 1]);
+            if (from.Hold || Math.Abs(to.Value - from.Value) < 1e-9)
+                continue;
+
+            var window = to.TimeMs - from.TimeMs;
+            if (window <= 0)
+                continue;
+
+            var descriptor = AutomationPropertyCatalog.Get(track.Target.PropertyId);
+            var spec = descriptor?.Value;
+
+            var lane = new ActiveLaneRow
+            {
+                Name = descriptor?.DisplayName ?? track.Target.PropertyId,
+                Detail = $"{LaneValue(from.Value, spec)} → {LaneValue(to.Value, spec)}",
+                FromMs = from.TimeMs,
+                ToMs = to.TimeMs,
+            };
+            lane.Tick(elapsed);
+
+            lanes ??= [];
+            lanes.Add(lane);
+        }
+
+        return lanes ?? [];
+    }
+
+    /// <summary>One end of a ramp, in the property's own unit - the same reading the editor shows.</summary>
+    private static string LaneValue(double value, AutomationValueSpec? spec) => spec?.Scale switch
+    {
+        AutomationScale.Percentage => $"{value * 100:0.#}%",
+        AutomationScale.Midi7Bit => value.ToString("0", CultureInfo.InvariantCulture),
+        _ => value.ToString("0.#", CultureInfo.InvariantCulture)
+             + (spec is { Unit.Length: > 0 } named ? $" {named.Unit}" : ""),
+    };
 
     /// <summary>
     /// The Active panel's rows, with a group's sounding children gathered under one header.

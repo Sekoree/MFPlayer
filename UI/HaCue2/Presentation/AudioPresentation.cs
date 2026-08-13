@@ -222,9 +222,7 @@ public static class AudioPresentation
                         $"{declared:N0} {(resampled ? "· resampled" : "native")}",
                         resampled ? Gel.Amber : Gel.Neutral)
                     : new Status("-"),
-                State = absent
-                    ? new Status("absent on this machine", Gel.Red)
-                    : new Status(isMaster ? "open · clock master" : "open", Gel.Green),
+                State = State(line, runtime, absent, isMaster, carries),
                 Carries = carries == 0
                     ? "-"
                     : $"{carries} logical out{(carries == 1 ? "" : "s")}",
@@ -233,6 +231,35 @@ public static class AudioPresentation
         }
 
         return rows;
+    }
+
+    /// <summary>
+    /// What the STATE column says about one line.
+    /// </summary>
+    /// <remarks>
+    /// This column used to be a two-way answer - absent, or open - which made "open" mean nothing more
+    /// than "present on this machine". The bay opens its devices ONCE, when the show starts, so a line
+    /// added to a running session is present, patched, and shut: exactly the state a new project is in
+    /// after its first output is added, and it read green while every cue played to silence.
+    /// </remarks>
+    private static Status State(
+        AudioLineDefinition line, ShowRuntime runtime, bool absent, bool isMaster, int carries)
+    {
+        if (absent)
+            return new Status("absent on this machine", Gel.Red);
+
+        // Only lines the bay would have opened can be judged against what it did open. It skips record
+        // and stream lines - those are encode sessions that open on ARM, and the Rec column speaks for
+        // them - and it skips a line nothing is patched to, which is not open because it has no work.
+        var openable = line.Kind is not (AudioLineKind.FileRecord or AudioLineKind.Stream)
+            && carries > 0;
+
+        // Null is "no session", not "not open" - with nothing running, nothing is expected to be open
+        // and saying so on every row would be noise rather than a warning.
+        if (openable && runtime.OpenLines is { } open && !open.Contains(line.Id))
+            return new Status("not open · restart audio", Gel.Amber);
+
+        return new Status(isMaster ? "open · clock master" : "open", Gel.Green);
     }
 
     private static string KindLabel(AudioLineKind kind) => kind switch

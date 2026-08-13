@@ -515,6 +515,13 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         // clears - which is the whole life of a cue as far as the cue list is concerned.
         session.ClipNaturallyEnded += id => host.OnClipNaturallyEnded(id);
         session.ClipApproachingEnd += id => host.OnClipApproachingEnd(id);
+
+        // A crossfade's outgoing cue never reaches a natural end - it left the transport when the next
+        // item took over - so this is the only thing that says it stopped. Forget, not the natural-end
+        // path: the run that displaced it has already moved on, and putting a tail through the executor
+        // would advance the playlist a second time. Without it the first item of every crossfaded
+        // playlist stayed in the Active panel for the rest of the show, its clock counting up.
+        session.ClipTailEnded += id => host.Forget(id);
         session.VoiceEnded += id => host.Forget(id);
 
         // A preview that runs to its end releases itself, so the host has to stop claiming it is

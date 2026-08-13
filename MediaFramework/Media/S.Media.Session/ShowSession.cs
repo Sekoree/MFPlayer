@@ -648,6 +648,30 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// dispatcher; marshal in the handler.</summary>
     public event Action<string>? ClipNaturallyEnded;
 
+    /// <summary>Raised (with the cue id) when a crossfade TAIL stops sounding - its release ramp reached
+    /// silence, or a later replacement hard-released it at the tail cap.</summary>
+    /// <remarks>
+    /// <para>
+    /// A displaced clip leaves the transport at the handoff, so its end monitor is dropped and it can never
+    /// reach <see cref="ClipNaturallyEnded"/> - correct, because it did not end naturally, the operator (or a
+    /// playlist) replaced it. But it DID stop, and nothing said so: a host tracking what is sounding kept the
+    /// outgoing cue in its list for the rest of the session, counting up. That is what a playlist crossfade
+    /// looked like from the front - the first item apparently still running after the second had taken over.
+    /// </para>
+    /// <para>
+    /// Deliberately NOT <see cref="ClipNaturallyEnded"/>: that event advances follow chains and playlist runs,
+    /// and a tail must not advance anything - the fire that displaced it already did. This one means "it went
+    /// quiet", nothing more.
+    /// </para>
+    /// <para>
+    /// Suppressed when the cue is sounding again on some group, which is the loop-with-crossfade case
+    /// (<see cref="ShowClipBinding.LoopCrossfade"/> re-fires the SAME binding) and a re-fired cue generally:
+    /// the tail and the live clip share an id, and reporting the tail's end would take the live one down with
+    /// it. Raised from the session dispatcher; marshal in the handler.
+    /// </para>
+    /// </remarks>
+    public event Action<string>? ClipTailEnded;
+
     /// <summary>Raised (with the cue id) when a monitored clip enters its binding's
     /// <see cref="ShowClipBinding.PreEndNotify"/> window before its natural out-point - the host's "fire the
     /// next item early" hook for dual-voice playlist crossfades (the pre-end companion of
