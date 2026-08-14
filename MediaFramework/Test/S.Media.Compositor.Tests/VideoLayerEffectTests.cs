@@ -104,6 +104,61 @@ public sealed class VideoLayerEffectTests
     }
 
     [Fact]
+    public void CapabilityPreflight_ReportsGpuOnlyEffectAsUnsupportedOnCpu()
+    {
+        // F-14: the CPU backend must be able to answer "will this effect actually render here"
+        // BEFORE compositing, so hosts can surface degraded output instead of discovering it.
+        var gpuOnly = new VideoLayerEffectDescriptor("test.gpu-only", "return vec4(0.0);", []);
+        var canvas = new VideoFormat(4, 4, PixelFormat.Bgra32, Fps);
+        using var compositor = new CpuVideoCompositor(canvas);
+
+        Assert.False(compositor.SupportsEffect(gpuOnly));
+        Assert.False(VideoCompositorEffectSupport.Supports(compositor, gpuOnly));
+
+        // The built-in chroma key ships a CPU kernel, so it must preflight as supported.
+        var chromaKey = ChromaKeyVideoEffect.Create(ChromaKeySettings.GreenScreen).Descriptor;
+        Assert.True(compositor.SupportsEffect(chromaKey));
+        Assert.True(VideoCompositorEffectSupport.Supports(compositor, chromaKey));
+    }
+
+    [Fact]
+    public void GpuOnlyEffect_SkipIsRecordedQueryably()
+    {
+        // F-14: the pass-through degradation is contractual but must never be silent - the skipped
+        // effect id has to be queryable for output-health surfaces after the composite.
+        var gpuOnly = new VideoLayerEffectDescriptor("test.gpu-only.recorded", "return vec4(0.0);", []);
+        var canvas = new VideoFormat(4, 4, PixelFormat.Bgra32, Fps);
+        using var compositor = new CpuVideoCompositor(canvas);
+        using var white = SolidBgra(4, 4, 255, 255, 255);
+
+        Assert.Empty(compositor.SkippedGpuOnlyEffectIds);
+
+        using var result = compositor.Composite(
+            [CompositorLayer.Default(white) with { Effects = [new VideoLayerEffect(gpuOnly, [])] }],
+            TimeSpan.Zero);
+
+        Assert.Contains("test.gpu-only.recorded", compositor.SkippedGpuOnlyEffectIds);
+    }
+
+    [Fact]
+    public void CompositorSource_CollectsUnsupportedEffectIdsFromSlots()
+    {
+        // F-14 preflight at the mixer seam: a slot carrying a GPU-only effect on the CPU backend is
+        // reported by id; a fully-supported chain reports nothing.
+        var gpuOnly = new VideoLayerEffectDescriptor("test.gpu-only.slot", "return vec4(0.0);", []);
+        var canvas = new VideoFormat(8, 8, PixelFormat.Bgra32, Fps);
+        using var compositor = new CpuVideoCompositor(canvas);
+        using var source = new VideoCompositorSource(canvas, compositor);
+        var slot = source.AddSlot();
+
+        slot.Effects = [ChromaKeyVideoEffect.Create(ChromaKeySettings.GreenScreen)];
+        Assert.Empty(source.CollectUnsupportedEffectIds());
+
+        slot.Effects = [new VideoLayerEffect(gpuOnly, [])];
+        Assert.Equal(["test.gpu-only.slot"], source.CollectUnsupportedEffectIds());
+    }
+
+    [Fact]
     public void SlotEffects_FlowIntoCompositedLayers()
     {
         var canvas = new VideoFormat(8, 8, PixelFormat.Bgra32, Fps);

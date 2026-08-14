@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- The shared bounded HTTP control host (2026-08-14 review, F-05).
+
+         HaCue2's remote API and HaPlay's REST API grew two independent HttpListener lifecycles with
+         the same hard-won mechanics: admission limits, per-request deadlines, server-life
+         cancellation, bounded shutdown drains, request-size guards and socket-error discipline.
+         Two copies of THAT is how one of them silently loses a fix the other gained (it already
+         happened once - HaCue2 shipped unbounded while HaPlay was bounded). This library owns the
+         transport lifecycle once; ROUTES, AUTH POLICY and ERROR SHAPES stay app-owned via the
+         options callbacks, because a GO route and a deck route have nothing to share.
+
+         App-support layer: may reference the framework's core (diagnostics/logging) and nothing
+         above it, and no app may be referenced from here. -->
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+        <RootNamespace>HaRemote</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Core\S.Media.Core.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+</Project>

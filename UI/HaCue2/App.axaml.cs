@@ -123,8 +123,20 @@ public partial class App : Application
 
                     if (Interlocked.Exchange(ref exited, 1) != 0)
                         return;
-                    MediaDiagnostics.LogInformation(
-                        "HACUE2_SMOKE: first frame rendered and startup settled - shutting down (exit 0)");
+                    // The artifact gate (F-06) greps these lines from STDOUT - the app's logging
+                    // pipeline is ring + file only (no console sink), so Console.WriteLine is the only
+                    // way a CI runner ever sees them; MediaDiagnostics keeps them in the file log too.
+                    // `enumerated=true` proves the audio backend NATIVE actually loaded and initialized
+                    // in the exact uploaded directory - the reason the best-effort build-test smoke
+                    // could never be promoted to gating.
+                    var enumerated =
+                        $"HACUE2_SMOKE: audio backend enumerated={(Machine.DevicesEnumerated ? "true" : "false")} " +
+                        $"outputs={Machine.Devices?.Outputs.Count ?? 0} hostApis={Machine.Devices?.HostApis.Count ?? 0}";
+                    const string settled = "HACUE2_SMOKE: first frame rendered and startup settled - shutting down (exit 0)";
+                    Console.WriteLine(enumerated);
+                    Console.WriteLine(settled);
+                    MediaDiagnostics.LogInformation(enumerated);
+                    MediaDiagnostics.LogInformation(settled);
                     // TryShutdown, NOT Shutdown: the forced path skips ShutdownRequested, and the smoke
                     // has to exercise the app's real teardown.
                     desktop.TryShutdown(0);
@@ -134,7 +146,11 @@ public partial class App : Application
         {
             if (Interlocked.Exchange(ref exited, 1) != 0)
                 return;
-            MediaDiagnostics.LogWarning("HACUE2_SMOKE: no frame rendered within 45s - hard exit 2");
+            // Console too: without a console sink this line would otherwise exist only in the file
+            // log, and a wedged CI launch would leave a bare exit 2 with no diagnosis in the job log.
+            const string wedged = "HACUE2_SMOKE: no frame rendered within 45s - hard exit 2";
+            Console.WriteLine(wedged);
+            MediaDiagnostics.LogWarning(wedged);
             Environment.Exit(2);
         });
     }

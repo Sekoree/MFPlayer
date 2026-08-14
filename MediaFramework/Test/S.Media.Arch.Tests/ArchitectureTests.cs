@@ -114,6 +114,8 @@ public sealed class ArchitectureTests
             "S.Control", "S.Control.Abstractions", "PMLib", "OSCLib",
             // Shared app-support libraries, as they land (HaCue2 extraction phase 2).
             "HaOutput", "HaSource", "HaControl.Input", "HaStrings",
+            // The shared bounded HTTP control host (2026-08-14 review, F-05).
+            "HaRemote",
         ],
         // HaCue2 is the cue player leaving HaPlay. It sees the project model and MACHINE FACTS
         // (HaCue2.Machine: audio-device enumeration and media probing, plus the decoder they need).
@@ -172,6 +174,9 @@ public sealed class ArchitectureTests
             // registered here because this is where the registry the session plays through is built -
             // every one of them was in the tree and reachable by nothing.
             "S.Media.Audio.PortAudio", "PALib", "S.Media.Source.YouTube", "S.Media.Source.Text",
+            // The shared bounded HTTP control host (2026-08-14 review, F-05): the remote API's
+            // transport lifecycle; routes/auth/error shapes stay in this project.
+            "HaRemote",
         ],
         // Machine facts: what this box has and what a file turned out to be. Separate from
         // HaCue2.Core because everything here needs real hardware or a real decoder, and Core has to
@@ -220,6 +225,10 @@ public sealed class ArchitectureTests
         ],
         ["HaViz.Android"] = ["HaViz.Core"],
         ["HaViz.Core"] = ["S.Media.Core", "S.Media.Compositor", "S.Media.Visualizer.ProjectM", "S.Media.NDI"],
+        // The shared bounded HTTP control host (F-05): app-support, so it may see the framework's
+        // core (diagnostics/logging) and NOTHING app-shaped - routes, auth policy and error bodies
+        // come in through its options callbacks. No app may be referenced from here.
+        ["HaRemote"] = ["S.Media.Core"],
     };
 
     /// <summary>Every <c>UI/</c> project except test assemblies, which are exempt (see

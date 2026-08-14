@@ -3,7 +3,7 @@
 # soname tail (e.g. libavcodec.so.62.6.100) still matches. '#' comments and blank lines are ignored.
 # Optional natives (NDI — licensing; ASIO — Windows-only) are intentionally NOT listed here.
 
-# Decode (FFmpeg 8.1, staged as the fallback):
+# Decode (pinned FFmpeg master snapshot, avcodec-63 — exact identity in ffmpeg.lock; staged as the fallback):
 libavcodec.so
 libavformat.so
 libavutil.so

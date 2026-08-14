@@ -567,13 +567,12 @@ public sealed class RemoteApiDispatcherTests
             // from that same UI thread. A synchronous handler drain waits on itself here (the old 2 s stall).
             request = http.PostAsync($"{server.BaseUrl}/api/v1/cues/stop", content: null);
             Thread.Sleep(100);
-            var acceptLoop = PrivateField<Task>(server, "_acceptLoop"); // Stop nulls it; capture first
             var started = Stopwatch.GetTimestamp();
-            server.Stop();
+            var drain = server.StopAndDrainAsync();   // Stop's exact synchronous cost + a drain handle
             var stopCost = Stopwatch.GetElapsedTime(started);
 
             // Measured BEFORE this: the drain below must not count towards the regression bound.
-            DrainListenerHandlers(server, acceptLoop);
+            DrainListenerHandlers(drain);
             return stopCost;
         }, CancellationToken.None);
 
@@ -631,55 +630,28 @@ public sealed class RemoteApiDispatcherTests
     /// that nothing else will touch the dispatcher. Pumping is required because a queued
     /// <c>Dispatcher.UIThread.InvokeAsync</c> only completes while the UI thread runs jobs.
     /// </summary>
-    /// <summary>Stops a listener and waits out its in-flight handlers, in the ONE order that is safe: capture
-    /// the accept loop (Stop nulls the field), stop, then drain. Every listener test must end this way before
-    /// its dispatch returns - see <see cref="DrainListenerHandlers"/> for what a surviving handler does to the
-    /// next test. Only <see cref="HttpServer_Stop_DoesNotBlockUiThreadWhenDispatchIsQueued"/> spells the three
-    /// steps out inline, because it has to time the Stop call by itself.</summary>
-    private static void StopAndDrainListener(RestApiServer server)
-    {
-        var acceptLoop = PrivateField<Task>(server, "_acceptLoop"); // Stop nulls it; capture first
-        server.Stop();
-        DrainListenerHandlers(server, acceptLoop);
-    }
+    /// <summary>Stops a listener and waits out its in-flight handlers. Every listener test must end this way
+    /// before its dispatch returns - see <see cref="DrainListenerHandlers"/> for what a surviving handler
+    /// does to the next test. Only <see cref="HttpServer_Stop_DoesNotBlockUiThreadWhenDispatchIsQueued"/>
+    /// spells the steps out inline, because it has to time the Stop call by itself.</summary>
+    private static void StopAndDrainListener(RestApiServer server) =>
+        DrainListenerHandlers(server.StopAndDrainAsync());
 
-    private static void DrainListenerHandlers(RestApiServer server, Task? acceptLoop)
+    private static void DrainListenerHandlers(Task drain)
     {
+        // The drain task (RestApiServer.StopAndDrainAsync) completes only after the shared host's
+        // accept loop exited AND every admitted handler actually finished - production's own
+        // invariant that nothing can touch the dispatcher afterwards. Pumping is required because a
+        // queued Dispatcher.UIThread.InvokeAsync only completes while the UI thread runs jobs.
         var limit = TimeSpan.FromSeconds(10);
         var elapsed = Stopwatch.StartNew();
-        while (acceptLoop is { IsCompleted: false } && elapsed.Elapsed < limit)
+        while (!drain.IsCompleted && elapsed.Elapsed < limit)
         {
             Dispatcher.UIThread.RunJobs();
             Thread.Sleep(5);
         }
 
-        while (InFlightHandlerCount(server) > 0 && elapsed.Elapsed < limit)
-        {
-            Dispatcher.UIThread.RunJobs();
-            Thread.Sleep(5);
-        }
-
-        Assert.True(acceptLoop is null or { IsCompleted: true }, "the REST accept loop did not exit after Stop");
-        Assert.Equal(0, InFlightHandlerCount(server));
-    }
-
-    private static int InFlightHandlerCount(RestApiServer server)
-    {
-        var gate = PrivateField<object>(server, "_inflightGate")!;
-        var inflight = PrivateField<HashSet<Task>>(server, "_inflight")!;
-        lock (gate)
-            return inflight.Count;
-    }
-
-    /// <summary>Reads a private <see cref="RestApiServer"/> field - the drain above needs the listener's own
-    /// bookkeeping and the type deliberately exposes no completion hook. Fails loudly if a field is renamed
-    /// rather than silently skipping the drain (that would bring the flake back).</summary>
-    private static T? PrivateField<T>(RestApiServer server, string name)
-        where T : class
-    {
-        var field = typeof(RestApiServer).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.True(field is not null, $"RestApiServer.{name} is gone - update this test's listener drain");
-        return (T?)field!.GetValue(server);
+        Assert.True(drain.IsCompleted, "the REST listener did not fully drain after Stop");
     }
 
     private static int GetFreePort()

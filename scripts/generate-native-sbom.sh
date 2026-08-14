@@ -11,12 +11,20 @@ rid="${1:?usage: generate-native-sbom.sh <rid> <publish-dir>}"
 pub="${2:?usage: generate-native-sbom.sh <rid> <publish-dir>}"
 out="$pub/native-provenance.txt"
 
+# F-02: the FFmpeg label is GENERATED from the native lock, never hardcoded — the shipped binaries are a
+# pinned master snapshot, and this file must say exactly which one. A missing/unreadable lock degrades to
+# an explicit "(unlocked)" marker rather than a plausible-but-wrong version claim.
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FFMPEG_SBOM_LABEL="(unlocked - .github/native-manifest/ffmpeg.lock not found)"
+# shellcheck source=/dev/null
+[ -f "$script_dir/../.github/native-manifest/ffmpeg.lock" ] && source "$script_dir/../.github/native-manifest/ffmpeg.lock"
+
 # filename-prefix : upstream project : pinned version : source URL : license
 # (prefix matches the start of the shipped filename; longest match wins, so libavcodec beats libav*)
 provenance() {
   case "$1" in
-    libavcodec*|libavformat*|libavutil*|libswresample*|libswscale*|avcodec*|avformat*|avutil*|swresample*|swscale*)
-      echo "FFmpeg|n8.1 (BtbN GPL build)|https://github.com/BtbN/FFmpeg-Builds|GPL-3.0-or-later" ;;
+    libavcodec*|libavformat*|libavutil*|libavfilter*|libavdevice*|libswresample*|libswscale*|libpostproc*|avcodec*|avformat*|avutil*|avfilter*|avdevice*|swresample*|swscale*|postproc*)
+      echo "FFmpeg|$FFMPEG_SBOM_LABEL|https://github.com/BtbN/FFmpeg-Builds|GPL-3.0-or-later" ;;
     libportaudio*|portaudio*)
       echo "PortAudio|v19.7.0|https://github.com/PortAudio/portaudio|MIT" ;;
     libportmidi*|portmidi*)

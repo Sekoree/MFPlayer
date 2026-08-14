@@ -8,7 +8,7 @@ Platform policy: **Linux is primary, Windows is supported, macOS is not currentl
 
 | Tier | Contents | Intended host |
 |---|---|---|
-| **full** (`HaPlay.Desktop-linux-x64-full`) | Every supported native the app can load: Skia/HarfBuzz, SDL3, FFmpeg 8.1, PortAudio, PortMidi, miniaudio, libass 0.17.5, projectM 4.1.6 (+ preset/texture packs under `External/projectm/`), Bullet shim. | Any Linux host; the validated release deliverable. |
+| **full** (`HaPlay.Desktop-linux-x64-full`) | Every supported native the app can load: Skia/HarfBuzz, SDL3, the pinned FFmpeg master snapshot (avcodec-63; exact identity in [`.github/native-manifest/ffmpeg.lock`](../.github/native-manifest/ffmpeg.lock)), PortAudio, PortMidi, miniaudio, libass 0.17.5, projectM 4.1.6 (+ preset/texture packs under `External/projectm/`), Bullet shim. | Any Linux host; the validated release deliverable. |
 | **core** | Only the render essentials distros can't supply (libSkiaSharp, libHarfBuzzSharp) + the Bullet shim. Everything else from the host. | Hosts with a maintained media stack. |
 | **minimal** | Only libmmd_bullet.so (no upstream package exists). | Fully host-provisioned installs; see the bundle's `DEPENDENCIES.txt`. |
 
@@ -24,7 +24,8 @@ artifacts — it must be installed on the host, and the feature degrades gracefu
 2. `scripts/check-native-manifest.sh` — every promised native file is present (REL-01).
 3. `scripts/load-probe-native-manifest.sh` — every promised native actually loads on the artifact.
 4. `scripts/check-native-versions.sh` — version claims are executable: libass reports >= 0.17.5,
-   miniaudio exactly 0.11.25, projectM exactly 4.1.6 from the staged tree.
+   miniaudio exactly 0.11.25, projectM exactly 4.1.6 from the staged tree, and the shipped
+   libavcodec reports the ABI major the FFmpeg lock pins (queried via `avcodec_version()`).
 5. Native SBOM (`native-provenance.txt`) written into the artifact: project, pinned version,
    source URL, license, SHA-256 of each shipped file.
 6. The exact upload directory launches under Xvfb, reaches backend enumeration

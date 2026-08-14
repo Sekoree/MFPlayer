@@ -23,12 +23,13 @@ namespace S.Media.Compositor;
 /// <para>
 /// Output buffer is rented from <see cref="ArrayPool{T}.Shared"/> and returned via the emitted
 /// <see cref="VideoFrame"/>'s <c>release</c> callback. <see cref="CompositorSamplingMode.Bilinear"/>
-/// is supported via the <see cref="SamplingMode"/> property (default
-/// <see cref="CompositorSamplingMode.Nearest"/> for back-compat); bicubic stays out of scope
-/// - the OpenGL compositor already has it.
+/// and <see cref="CompositorSamplingMode.Bicubic"/> are supported via the
+/// <see cref="SamplingMode"/> property (default <see cref="CompositorSamplingMode.Nearest"/> for
+/// back-compat); bicubic is markedly slower on CPU - treat it as an offline/low-rate option and
+/// prefer the OpenGL compositor for real-time bicubic.
 /// </para>
 /// </remarks>
-public sealed class CpuVideoCompositor : IVideoCompositor
+public sealed class CpuVideoCompositor : IVideoCompositor, IEffectCapabilityVideoCompositor
 {
     private static readonly PixelFormat[] AcceptedFormatsArr = [PixelFormat.Bgra32];
 
@@ -42,6 +43,40 @@ public sealed class CpuVideoCompositor : IVideoCompositor
     // DrawLayer) is single-threaded per compositor and the kernels never escape the call, so this
     // avoids a List + ToArray allocation per layer per frame on the effects path.
     private IVideoLayerCpuEffect[] _fxScratch = [];
+
+    // F-14: GPU-only effects this compositor has actually skipped. The skip is by contract, but it
+    // must never be SILENT - each id is warned exactly once (per compositor) the first time it is
+    // dropped from a composite, and the set stays queryable for output-health surfaces. Guarded by
+    // itself: writes come from the (single) composite thread, reads from any health/stats thread,
+    // and the write path only pays the lock when a GPU-only effect is actually present.
+    private readonly HashSet<string> _skippedGpuOnlyEffects = [];
+
+    /// <summary>Ids of GPU-only effects (<see cref="VideoLayerEffectDescriptor.CpuKernelFactory"/>
+    /// = null) this compositor has degraded to pass-through so far. Empty in a healthy show.</summary>
+    public IReadOnlyCollection<string> SkippedGpuOnlyEffectIds
+    {
+        get { lock (_skippedGpuOnlyEffects) return _skippedGpuOnlyEffects.ToArray(); }
+    }
+
+    /// <inheritdoc/>
+    public bool SupportsEffect(VideoLayerEffectDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        return descriptor.CpuKernelFactory is not null;
+    }
+
+    private void RecordSkippedGpuOnlyEffect(string effectId)
+    {
+        bool first;
+        lock (_skippedGpuOnlyEffects)
+            first = _skippedGpuOnlyEffects.Add(effectId);
+        if (first)
+            S.Media.Core.Diagnostics.MediaDiagnostics.LogWarning(
+                "CpuVideoCompositor: effect '{0}' has no CPU kernel and is degraded to PASS-THROUGH " +
+                "on this backend - the composed output does not match a GPU render. " +
+                "Preflight with IEffectCapabilityVideoCompositor to surface this before the show.",
+                effectId);
+    }
 
     public CpuVideoCompositor(VideoFormat output, CompositorSamplingMode samplingMode = CompositorSamplingMode.Nearest)
     {
@@ -84,7 +119,11 @@ public sealed class CpuVideoCompositor : IVideoCompositor
 
         var buffer = ArrayPool<byte>.Shared.Rent(_outputByteCount);
         // Clear to transparent black so empty regions stay see-through for downstream consumers.
-        Array.Clear(buffer, 0, _outputByteCount);
+        // F-07: skipped when the FIRST drawn layer provably overwrites every canvas pixel through
+        // the integer-translate row blit (the dominant full-frame video shape) - clearing 3.7 MB
+        // at 720p only to copy over all of it was pure memory-bandwidth waste.
+        if (!FirstDrawnLayerCoversCanvas(layersBackToFront))
+            Array.Clear(buffer, 0, _outputByteCount);
 
         var anyLayerDrawn = false;
         for (var i = 0; i < layersBackToFront.Count; i++)
@@ -147,7 +186,8 @@ public sealed class CpuVideoCompositor : IVideoCompositor
 
         // Layer-effect chain, CPU fallback: run each effect's scalar kernel per pixel. GPU-only
         // effects (no CPU kernel) are skipped by contract - this backend degrades to pass-through
-        // for them instead of failing the composite.
+        // for them instead of failing the composite - but NEVER silently (F-14): the first skip of
+        // each effect id logs a warning and the id stays queryable via SkippedGpuOnlyEffectIds.
         var fxCount = 0;
         if (layer.Effects is { Count: > 0 } fx)
         {
@@ -157,6 +197,8 @@ public sealed class CpuVideoCompositor : IVideoCompositor
             {
                 if (effect.CpuKernel is { } kernel)
                     _fxScratch[fxCount++] = kernel;
+                else
+                    RecordSkippedGpuOnlyEffect(effect.Descriptor.Id);
             }
         }
 
@@ -195,6 +237,17 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         if (fxKernels.IsEmpty && mode == CompositorSamplingMode.Nearest)
         {
             DrawLayerNearestFast(dst, layer, opacity, alphaMode, inv, srcSpan, srcStride, srcW, srcH,
+                cropX0, cropY0, cropX1, cropY1, minX, minY, maxX, maxY);
+            return;
+        }
+
+        // Fast path C (F-07) - bilinear without effects: same row-stepped inverse affine and
+        // crop-interval structure as fast path B, plus an INTERIOR column interval inside which the
+        // whole 4-tap kernel is provably in-bounds, so sampling skips the cull test and the four
+        // per-tap edge clamps. Same one-ulp caveat as fast path B: region-exact, not byte-exact.
+        if (fxKernels.IsEmpty && mode == CompositorSamplingMode.Bilinear)
+        {
+            DrawLayerBilinearFast(dst, layer, opacity, alphaMode, inv, srcSpan, srcStride, srcW, srcH,
                 cropX0, cropY0, cropX1, cropY1, minX, minY, maxX, maxY);
             return;
         }
@@ -299,6 +352,62 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// F-07 clear elimination: true when the first layer Composite will actually draw is guaranteed
+    /// to take the <see cref="BlitIntegerTranslate"/> path AND its blit rectangle covers the whole
+    /// canvas - every output pixel is then row-copied over, so the transparent-black clear is
+    /// redundant. Deliberately CONSERVATIVE: any condition this cannot cheaply prove (effects
+    /// present, non-Source blend, partial coverage, fractional transform) answers false and keeps
+    /// the clear. The blit-rect math below is a lockstep copy of <see cref="DrawLayer"/>'s AABB +
+    /// <see cref="BlitIntegerTranslate"/>'s crop/row bounds - change those together
+    /// (CoverageClearSkip tests pin the agreement).
+    /// </summary>
+    private bool FirstDrawnLayerCoversCanvas(IReadOnlyList<CompositorLayer> layers)
+    {
+        for (var i = 0; i < layers.Count; i++)
+        {
+            var layer = layers[i];
+            var opacity = Math.Clamp(layer.Opacity, 0f, 1f);
+            if (opacity <= 0f)
+                continue;   // Composite skips it too - the next layer is the first drawn.
+
+            if (opacity < 1f
+                || SamplingMode != CompositorSamplingMode.Nearest
+                || layer.BlendMode != BlendMode.Source
+                || layer.Effects is { Count: > 0 }
+                || layer.Frame.Format.PixelFormat != PixelFormat.Bgra32
+                || ResolveAlphaMode(layer.Frame.AlphaMode) != VideoAlphaMode.Premultiplied
+                || !IsIntegerTranslate(layer.Transform, out var tx, out var ty))
+                return false;
+
+            var srcW = layer.Frame.Format.Width;
+            var srcH = layer.Frame.Format.Height;
+            var crop = layer.SourceCrop.Clamped();
+            var cropX0 = crop.X0 * srcW;
+            var cropY0 = crop.Y0 * srcH;
+            var cropX1 = crop.X1 * srcW;
+            var cropY1 = crop.Y1 * srcH;
+
+            // DrawLayer's destination AABB for a pure translate, clipped to canvas.
+            var minX = Math.Max((int)MathF.Floor(cropX0 + tx), 0);
+            var minY = Math.Max((int)MathF.Floor(cropY0 + ty), 0);
+            var maxX = Math.Min((int)MathF.Ceiling(cropX1 + tx), _output.Width);
+            var maxY = Math.Min((int)MathF.Ceiling(cropY1 + ty), _output.Height);
+            if (minX >= maxX || minY >= maxY)
+                return false;
+
+            // BlitIntegerTranslate's final rect.
+            var dxStart = Math.Max(Math.Max(minX, (int)MathF.Ceiling(cropX0 + tx - 0.5f)), tx);
+            var dxEnd = Math.Min(Math.Min(maxX, (int)MathF.Ceiling(cropX1 + tx - 0.5f)), tx + srcW);
+            var dyStart = Math.Max(Math.Max(minY, (int)MathF.Ceiling(cropY0 + ty - 0.5f)), ty);
+            var dyEnd = Math.Min(Math.Min(maxY, (int)MathF.Ceiling(cropY1 + ty - 0.5f)), ty + srcH);
+
+            return dxStart <= 0 && dyStart <= 0 && dxEnd >= _output.Width && dyEnd >= _output.Height;
+        }
+
+        return false;   // Nothing draws - the canvas must be the transparent-black clear.
     }
 
     private static bool IsIntegerTranslate(LayerTransform2D t, out int tx, out int ty)
@@ -443,6 +552,172 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                 return sxf >= cropX0 && sxf < cropX1 && syf >= cropY0 && syf < cropY1;
             }
         }
+    }
+
+    /// <summary>
+    /// Fast path C (F-07): bilinear sampling without effects. Row-stepped inverse affine and
+    /// crop-interval logic mirror <see cref="DrawLayerNearestFast"/>; additionally, an interior
+    /// column interval is computed per row inside which the whole 2×2 bilinear footprint is
+    /// provably within the source, so those pixels use <see cref="SampleBilinearInterior"/> (no
+    /// cull test, no per-tap edge clamps). The interior bounds carry a one-source-pixel safety
+    /// margin because the loop accumulates sx/sy incrementally: endpoint verification plus
+    /// linearity bounds the drift well under a pixel, and border pixels just take the clamped
+    /// <see cref="SampleBilinear"/> instead.
+    /// </summary>
+    private void DrawLayerBilinearFast(
+        byte[] dst, CompositorLayer layer, float opacity, VideoAlphaMode alphaMode,
+        LayerTransform2D inv, ReadOnlySpan<byte> srcSpan, int srcStride, int srcW, int srcH,
+        float cropX0, float cropY0, float cropX1, float cropY1,
+        int minX, int minY, int maxX, int maxY)
+    {
+        var blend = layer.BlendMode;
+        var interiorLoX = 1.5f;          // sx >= 1.5 → fx >= 1  → x0 >= 1 (one-pixel margin)
+        var interiorHiX = srcW - 1.5f;   // sx < W-1.5 → fx < W-2 → x1 <= W-2
+        var interiorLoY = 1.5f;
+        var interiorHiY = srcH - 1.5f;
+
+        for (var dy = minY; dy < maxY; dy++)
+        {
+            var dyCenter = dy + 0.5f;
+            var rowOffset = dy * _outputStride;
+            var sxBase = inv.M11 * (minX + 0.5f) + inv.M12 * dyCenter + inv.Tx;
+            var syBase = inv.M21 * (minX + 0.5f) + inv.M22 * dyCenter + inv.Ty;
+
+            var start = minX;
+            var end = maxX;
+            if (!IntersectLinearRange(inv.M11, sxBase, cropX0, cropX1, minX, ref start, ref end)
+                || !IntersectLinearRange(inv.M21, syBase, cropY0, cropY1, minX, ref start, ref end))
+                continue;
+            start = Math.Max(minX, start - 1);
+            end = Math.Min(maxX, end + 1);
+            while (start < end && !InCrop(start)) start++;
+            while (end > start && !InCrop(end - 1)) end--;
+            if (start >= end)
+                continue;
+
+            // Interior interval; collapsing it to an empty range routes the row through the
+            // clamped sampler, which is always correct.
+            var inStart = start;
+            var inEnd = end;
+            if (IntersectLinearRange(inv.M11, sxBase, interiorLoX, interiorHiX, minX, ref inStart, ref inEnd)
+                && IntersectLinearRange(inv.M21, syBase, interiorLoY, interiorHiY, minX, ref inStart, ref inEnd))
+            {
+                inStart = Math.Max(inStart, start);
+                inEnd = Math.Min(inEnd, end);
+                while (inStart < inEnd && !InInterior(inStart)) inStart++;
+                while (inEnd > inStart && !InInterior(inEnd - 1)) inEnd--;
+            }
+            else
+            {
+                inStart = inEnd = start;
+            }
+
+            var sx = sxBase + inv.M11 * (start - minX);
+            var sy = syBase + inv.M21 * (start - minX);
+            for (var dx = start; dx < end; dx++, sx += inv.M11, sy += inv.M21)
+            {
+                byte b, g, r, a;
+                if (dx >= inStart && dx < inEnd)
+                    SampleBilinearInterior(srcSpan, srcStride, sx, sy, out b, out g, out r, out a);
+                else if (!SampleBilinear(srcSpan, srcStride, srcW, srcH, sx, sy, out b, out g, out r, out a))
+                    continue;
+
+                NormalizeForPremultipliedBlend(b, g, r, a, opacity, alphaMode,
+                    out var premulB, out var premulG, out var premulR, out var effA,
+                    out var multiplyB, out var multiplyG, out var multiplyR);
+                if (effA <= 0) continue;
+
+                var dstIdx = rowOffset + dx * 4;
+                switch (blend)
+                {
+                    case BlendMode.Source:
+                        dst[dstIdx + 0] = ToByte(premulB);
+                        dst[dstIdx + 1] = ToByte(premulG);
+                        dst[dstIdx + 2] = ToByte(premulR);
+                        dst[dstIdx + 3] = (byte)effA;
+                        break;
+                    case BlendMode.SourceOver:
+                    {
+                        var oneMinusA = 1f - (effA / 255f);
+                        var dB = dst[dstIdx + 0];
+                        var dG = dst[dstIdx + 1];
+                        var dR = dst[dstIdx + 2];
+                        var dA = dst[dstIdx + 3];
+                        dst[dstIdx + 0] = ToByte(premulB + dB * oneMinusA);
+                        dst[dstIdx + 1] = ToByte(premulG + dG * oneMinusA);
+                        dst[dstIdx + 2] = ToByte(premulR + dR * oneMinusA);
+                        dst[dstIdx + 3] = (byte)Math.Clamp((int)(effA + dA * oneMinusA + 0.5f), 0, 255);
+                        break;
+                    }
+                    case BlendMode.Multiply:
+                    {
+                        var dB = dst[dstIdx + 0];
+                        var dG = dst[dstIdx + 1];
+                        var dR = dst[dstIdx + 2];
+                        var mulB = (multiplyB * dB + 127) / 255;
+                        var mulG = (multiplyG * dG + 127) / 255;
+                        var mulR = (multiplyR * dR + 127) / 255;
+                        var w = effA / 255f;
+                        var oneMinusW = 1f - w;
+                        dst[dstIdx + 0] = (byte)Math.Clamp((int)(mulB * w + dB * oneMinusW + 0.5f), 0, 255);
+                        dst[dstIdx + 1] = (byte)Math.Clamp((int)(mulG * w + dG * oneMinusW + 0.5f), 0, 255);
+                        dst[dstIdx + 2] = (byte)Math.Clamp((int)(mulR * w + dR * oneMinusW + 0.5f), 0, 255);
+                        break;
+                    }
+                    default:
+                        throw new NotSupportedException($"BlendMode {blend} not supported.");
+                }
+            }
+
+            bool InCrop(int dx)
+            {
+                var dxCenter = dx + 0.5f;
+                var (sxf, syf) = inv.Apply(dxCenter, dyCenter);
+                return sxf >= cropX0 && sxf < cropX1 && syf >= cropY0 && syf < cropY1;
+            }
+
+            bool InInterior(int dx)
+            {
+                var dxCenter = dx + 0.5f;
+                var (sxf, syf) = inv.Apply(dxCenter, dyCenter);
+                return sxf >= interiorLoX && sxf < interiorHiX && syf >= interiorLoY && syf < interiorHiY;
+            }
+        }
+    }
+
+    /// <summary>Bilinear sample with the whole 2×2 footprint contractually in-bounds (the interior
+    /// interval of <see cref="DrawLayerBilinearFast"/>): no cull, no edge clamps, and plain int
+    /// truncation (coords are ≥ 1 there, where truncation equals floor). Same math as
+    /// <see cref="SampleBilinear"/> otherwise.</summary>
+    private static void SampleBilinearInterior(
+        ReadOnlySpan<byte> srcSpan, int srcStride,
+        float sxf, float syf,
+        out byte b, out byte g, out byte r, out byte a)
+    {
+        var fx = sxf - 0.5f;
+        var fy = syf - 0.5f;
+        var x0 = (int)fx;
+        var y0 = (int)fy;
+        var tx = fx - x0;
+        var ty = fy - y0;
+        var w00 = (1f - tx) * (1f - ty);
+        var w10 = tx * (1f - ty);
+        var w01 = (1f - tx) * ty;
+        var w11 = tx * ty;
+
+        var i00 = y0 * srcStride + x0 * 4;
+        var i10 = i00 + 4;
+        var i01 = i00 + srcStride;
+        var i11 = i01 + 4;
+
+        var bb = srcSpan[i00 + 0] * w00 + srcSpan[i10 + 0] * w10 + srcSpan[i01 + 0] * w01 + srcSpan[i11 + 0] * w11;
+        var gg = srcSpan[i00 + 1] * w00 + srcSpan[i10 + 1] * w10 + srcSpan[i01 + 1] * w01 + srcSpan[i11 + 1] * w11;
+        var rr = srcSpan[i00 + 2] * w00 + srcSpan[i10 + 2] * w10 + srcSpan[i01 + 2] * w01 + srcSpan[i11 + 2] * w11;
+        var aa = srcSpan[i00 + 3] * w00 + srcSpan[i10 + 3] * w10 + srcSpan[i01 + 3] * w01 + srcSpan[i11 + 3] * w11;
+        b = (byte)Math.Clamp((int)(bb + 0.5f), 0, 255);
+        g = (byte)Math.Clamp((int)(gg + 0.5f), 0, 255);
+        r = (byte)Math.Clamp((int)(rr + 0.5f), 0, 255);
+        a = (byte)Math.Clamp((int)(aa + 0.5f), 0, 255);
     }
 
     /// <summary>Intersects <c>[start, end)</c> with the dx range where <c>a * (dx - minX) + b</c>

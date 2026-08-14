@@ -492,7 +492,11 @@ public sealed class ClipCompositionRuntime : IDisposable
             _canvasRate.Denominator,
             _slaveClock?.SkippedVideoTicks ?? 0,
             sourceSamplesSkipped,
-            sourceSamplesRepeated);
+            sourceSamplesRepeated,
+            // F-14 capability truth: effects the selected backend does not render (pass-through on
+            // CPU fallback). Health surfaces show these next to CompositorBackend so a degraded
+            // render is attributable to the exact effect rather than silently "looking different".
+            _mixer.CollectUnsupportedEffectIds());
     }
 
     /// <summary>One throughput row per attached output. Reads the same lock-free output snapshot the pump
@@ -3611,7 +3615,8 @@ public readonly record struct ClipCompositionRuntimeStats(
     int CanvasFrameRateDen = 1,
     long MissedCompositionDeadlines = 0,
     long SourceSamplesSkipped = 0,
-    long SourceSamplesRepeated = 0)
+    long SourceSamplesRepeated = 0,
+    IReadOnlyList<string>? UnsupportedEffects = null)
 {
     /// <summary>
     /// The composition's target frame rate, derived from <see cref="CanvasPeriod"/>.
@@ -3628,6 +3633,12 @@ public readonly record struct ClipCompositionRuntimeStats(
 
     /// <summary>Per-output rows, empty when the runtime was not asked for them.</summary>
     public IReadOnlyList<ClipCompositionOutputStats> OutputStats => Outputs ?? [];
+
+    /// <summary>F-14: ids of active layer effects the selected <see cref="CompositorBackend"/> does
+    /// NOT render (degraded to pass-through - only the CPU fallback can currently report these).
+    /// Empty in a healthy show; anything here belongs in the operator-facing output health next to
+    /// the backend name.</summary>
+    public IReadOnlyList<string> UnsupportedEffectIds => UnsupportedEffects ?? [];
 }
 
 /// <summary>One video output's own throughput, which the composition-wide totals cannot express.</summary>

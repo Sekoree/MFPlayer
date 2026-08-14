@@ -88,30 +88,28 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libass9 libass-dev fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri libportaudio2 libportmidi0
 
-      # FFmpeg.AutoGen 9.0.0 loads the VERSIONED soname (libavformat.so.63 = FFmpeg 9.x). Ubuntu's apt ffmpeg
-      # is 6.1 (libavformat.so.60), so the managed decoders can't dlopen it and every avformat_* call throws
-      # NotSupportedException. The artifact job already bundles BtbN's FFmpeg master shared build; stage the same
-      # avcodec-63 here so the FFmpeg-backed smokes run against a matching runtime. apt ffmpeg (6.1) stays only
-      # for the `ffmpeg` CLI that generates the test tone below; the versioned soname means the two never clash,
-      # and appending (not prepending) keeps the app's other system natives (libass/portaudio/…) taking priority.
+      # FFmpeg.AutoGen 9.0.0 loads the VERSIONED soname (libavformat.so.63 = FFmpeg master ABI). Ubuntu's apt
+      # ffmpeg is 6.1 (libavformat.so.60), so the managed decoders can't dlopen it and every avformat_* call
+      # throws NotSupportedException. Stage the PINNED master snapshot here so the FFmpeg-backed smokes run
+      # against a matching runtime. apt ffmpeg (6.1) stays only for the `ffmpeg` CLI that generates the test
+      # tone below; the versioned soname means the two never clash, and appending (not prepending) keeps the
+      # app's other system natives (libass/portaudio/…) taking priority.
       #
-      # MASTER, not a release branch. BtbN's `latest` release carries exactly three linux64-gpl-shared assets —
-      # master, n7.1 and n8.1 — and avcodec-63 is only in master (the same thing Directory.Packages.props says
-      # of the FFmpeg.GPL nightlies: "~20260619+ ship avcodec-63"). There is no n9.0 asset to pin to; asking for
-      # one 404s the download and fails this job outright.
-      #
-      # The major MUST track FFmpeg.AutoGen in Directory.Packages.props — that pin is the source of truth, and
-      # this step is what a bump silently leaves behind: staging avcodec-62 against avcodec-63 bindings does not
-      # fail here, it fails thirty-eight tests later as "FFmpeg native libraries are not loadable". The `test -e`
-      # below is the tripwire, and master WILL drift: when it bumps to avcodec-64 for FFmpeg 10 this step fails
-      # by name, which is the intended way to find out rather than a wall of red tests.
-      - name: Stage FFmpeg master (avcodec-63) for the FFmpeg smokes
+      # F-02: identity, URL and SHA-256 come from .github/native-manifest/ffmpeg.lock — a DATED immutable
+      # BtbN autobuild release, never the mutable `latest` tag. The lock is the single source of truth shared
+      # with the artifacts job, fetch-ffmpeg.sh, the SBOM and the version gate; the soname check against
+      # FFMPEG_ABI_AVCODEC is the tripwire that fires when FFmpeg.AutoGen moves majors without the lock.
+      - name: Stage pinned FFmpeg snapshot for the FFmpeg smokes
         if: runner.os == 'Linux'
         run: |
-          curl -fsSL --retry 3 --retry-delay 5 \
-            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl-shared.tar.xz | tar xJ
-          FFDIR="$PWD/ffmpeg-master-latest-linux64-gpl-shared/lib"
-          test -e "$FFDIR/libavformat.so.63"
+          set -euo pipefail
+          source .github/native-manifest/ffmpeg.lock
+          curl -fsSL --retry 3 --retry-delay 5 -o ffmpeg-pinned.tar.xz \
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_RELEASE_TAG/$FFMPEG_LINUX_X64_ASSET"
+          echo "$FFMPEG_LINUX_X64_SHA256  ffmpeg-pinned.tar.xz" | sha256sum -c -
+          mkdir -p ffmpeg-pinned && tar xJf ffmpeg-pinned.tar.xz -C ffmpeg-pinned
+          FFDIR="$(find "$PWD/ffmpeg-pinned" -maxdepth 2 -type d -name lib | head -1)"
+          test -e "$FFDIR/libavcodec.so.$FFMPEG_ABI_AVCODEC"   # ABI tripwire (lock vs binding drift)
           echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$FFDIR" >> "$GITHUB_ENV"
 
       # MMD physics runs on real Bullet 3.25 via the mmd_bullet C shim (vendored in External/bullet3).
@@ -391,7 +389,8 @@ jobs:
   # Kept OUT of the gate job so slow/iterating native builds never block tests. NuGet already
   # provides SDL3, SkiaSharp, and (win-x64) FFmpeg via FFmpeg.GPL — those land in the publish for free.
   # Native ↔ binding versions are matched to the P/Invoke layer: portmidi 2.0.7, portaudio 19.7.0,
-  # miniaudio 0.11.25, libass 0.17.5, NDI v6, FFmpeg 9.0/avcodec-63 (= FFmpeg.AutoGen 9.0.0).
+  # miniaudio 0.11.25, libass 0.17.5, NDI v6, FFmpeg master snapshot/avcodec-63 (= FFmpeg.AutoGen 9.0.0;
+  # exact identity in .github/native-manifest/ffmpeg.lock).
   # ─────────────────────────────────────────────────────────────────────────────────────────────
   artifacts:
     name: artifact-${{ matrix.label }}
@@ -484,16 +483,17 @@ jobs:
           p="$(find /usr /usr/local -name 'libndi.so.6' 2>/dev/null | head -1)"
           if [ -n "$p" ]; then cp -vL "$p" natives-stage/; else echo "WARN: libndi.so.6 not found"; fi
 
-          # FFmpeg master (avcodec-63), bundled as the fallback for hosts without a matching system FFmpeg. Master,
-          # not a release branch: BtbN publishes only master / n7.1 / n8.1 here, and avcodec-63 exists solely in
-          # master. It drifts to avcodec-64 for FFmpeg 10, so re-check this whenever FFmpeg.AutoGen moves.
-          # Must stay in step with FFmpeg.AutoGen in Directory.Packages.props: bundling the wrong ABI major here
-          # produces an artifact that builds, publishes and then opens no media at all on the target machine.
-          # BUILD-02 (partial): the `latest` release tag is a rolling ref — NOT immutable. Pin to a dated BtbN
-          # `autobuild-*` release URL (and verify its SHA-256) for reproducibility. The exact shipped .so hashes
-          # are captured in the artifact SBOM regardless, so a build is at least auditable after the fact.
-          curl -fsSL $RETRY -o ffmpeg.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl-shared.tar.xz
-          tar xJf ffmpeg.tar.xz
+          # FFmpeg master snapshot (avcodec-63), bundled as the fallback for hosts without a matching system
+          # FFmpeg. Master, not a release branch: avcodec-63 exists solely in master (FFmpeg.AutoGen 9.0.0
+          # binds it), and it drifts to avcodec-64 for FFmpeg 10 — so the shipped bytes MUST be exactly
+          # attributable. F-02 (closes the old BUILD-02 partial): identity, dated-release URL and SHA-256 come
+          # from .github/native-manifest/ffmpeg.lock — the same lock the build-test stage, fetch-ffmpeg.sh,
+          # the SBOM label and the version gate consume. Never download a `latest` rolling ref here.
+          source .github/native-manifest/ffmpeg.lock
+          curl -fsSL $RETRY -o ffmpeg.tar.xz \
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_RELEASE_TAG/$FFMPEG_LINUX_X64_ASSET"
+          echo "$FFMPEG_LINUX_X64_SHA256  ffmpeg.tar.xz" | sha256sum -c -
+          mkdir -p ffmpeg-extract && tar xJf ffmpeg.tar.xz -C ffmpeg-extract
           # BtbN ships a symlink chain per library: libavcodec.so -> libavcodec.so.63 -> libavcodec.so.63.<minor>
           # (the real ~30 MB binary). The old `cp -L lib*.so.*` dereferenced BOTH the .so.63 symlink AND the
           # fully-versioned real file, writing the same binary TWICE — ≈70 MB of pure duplication across the 8
@@ -501,7 +501,7 @@ jobs:
           # only the real files (skipping the symlinks), and each is staged under its SONAME (libavformat.so.63 —
           # the exact name FFmpeg.AutoGen 9.0 dlopen()s). Inter-library DT_NEEDED entries also reference the
           # SONAME, so the dropped fully-versioned twin was never loaded by anything.
-          ffsrc="ffmpeg-master-latest-linux64-gpl-shared/lib"
+          ffsrc="$(find ffmpeg-extract -maxdepth 2 -type d -name lib | head -1)"
           find "$ffsrc" -maxdepth 1 -type f -name 'lib*.so.*' | while read -r real; do
             soname="$(patchelf --print-soname "$real" 2>/dev/null || true)"
             [ -n "$soname" ] || soname="$(basename "$real")"
@@ -859,8 +859,8 @@ jobs:
 
       # ─── HaCue2.Desktop ──────────────────────────────────────────────────────────────────────────
       # The cue player, published from the SAME native stage the HaPlay bundle was built from: one job,
-      # one set of built-from-source natives (libass 0.17.5, PortMidi 2.0.7, miniaudio 0.11.25, FFmpeg
-      # 8.1, NDI, projectM 4.1.6, the Bullet shim), two apps. A separate job would spend ten minutes
+      # one set of built-from-source natives (libass 0.17.5, PortMidi 2.0.7, miniaudio 0.11.25, the
+      # pinned FFmpeg snapshot, NDI, projectM 4.1.6, the Bullet shim), two apps. A separate job would spend ten minutes
       # rebuilding every one of them to produce byte-identical files.
       #
       # -p:PublishAot=true on the command line rather than in the csproj (HaPlay.Desktop sets the
@@ -916,6 +916,46 @@ jobs:
       - name: Verify HaCue2 native runtime versions (REL-01)
         shell: bash
         run: bash scripts/check-native-versions.sh ${{ matrix.rid }} hacue2-publish
+
+      # F-06 (2026-08-14 review): launch the EXACT post-staging directory that is uploaded below —
+      # the same gate HaPlay has had. The build-test job's HaCue2 smoke is best-effort by design
+      # (it publishes without the staged natives); THIS one runs against the complete bundle, so it
+      # gates. HACUE2_START=main opens the shell (engine start + first frame), the smoke self-exits
+      # through normal teardown, and the greps require both the backend-enumeration breadcrumb
+      # (proves the bundled audio native loaded) and the first-frame breadcrumb. A wedged launch is
+      # the watchdog's exit 2, not a hung runner.
+      - name: Launch uploaded HaCue2 app + enumerate backends (F-06)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          HACUE2_SMOKE: '1'
+          HACUE2_START: main
+          LIBGL_ALWAYS_SOFTWARE: 1
+          LD_LIBRARY_PATH: ${{ github.workspace }}/hacue2-publish
+          HACUE2_SETTINGS_PATH: ${{ runner.temp }}/hacue2-artifact-settings.json
+          HACUE2_DATA_ROOT: ${{ runner.temp }}/hacue2-artifact-data
+        run: |
+          set -o pipefail
+          out="$(timeout 90s xvfb-run -a ./hacue2-publish/HaCue2Desktop 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q "HACUE2_SMOKE: audio backend enumerated=true" || { echo "backend enumeration was not reached in the uploaded bundle"; exit 1; }
+          echo "$out" | grep -q "HACUE2_SMOKE: first frame rendered" || { echo "first-frame smoke was not reached"; exit 1; }
+
+      - name: Launch uploaded HaCue2 app + enumerate backends (F-06, Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        shell: pwsh
+        env:
+          HACUE2_SMOKE: '1'
+          HACUE2_START: main
+          HACUE2_SETTINGS_PATH: ${{ runner.temp }}/hacue2-artifact-settings.json
+          HACUE2_DATA_ROOT: ${{ runner.temp }}/hacue2-artifact-data
+        run: |
+          $output = & .\hacue2-publish\HaCue2Desktop.exe 2>&1 | Out-String
+          Write-Host $output
+          if ($LASTEXITCODE -ne 0) { throw "HaCue2Desktop exited $LASTEXITCODE" }
+          if ($output -notmatch 'HACUE2_SMOKE: audio backend enumerated=true') { throw 'backend enumeration was not reached in the uploaded bundle' }
+          if ($output -notmatch 'HACUE2_SMOKE: first frame rendered') { throw 'first-frame smoke was not reached' }
 
       - name: Upload HaCue2.Desktop artifact
         uses: actions/upload-artifact@v7

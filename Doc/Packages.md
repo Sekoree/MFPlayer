@@ -1,7 +1,18 @@
 # NuGet package surface
 
-The framework publishes purpose-led **entry packages** plus independently installable leaf
+The framework is organized as purpose-led **entry packages** plus independently installable leaf
 packages. Start with an entry package; reach for leaves only when you need one directly.
+
+## Availability — read this first
+
+**These packages are not published to nuget.org** (or any public feed). Consuming them currently
+means working from this repository: project references inside the solution, or `dotnet pack` into
+a local feed. A public restore is additionally blocked by design: the package graph pins
+`FFmpeg.AutoGen 9.0.0`, a repo-built binding (upstream has no FFmpeg-master release) served from
+the local `./packages` source declared in `nuget.config` — a consumer without this checkout has no
+source for it. Public publishing is deliberately out of scope for now; if that changes, the
+FFmpeg.AutoGen fork must first move to an owned package ID or be internalized (2026-08-14 review,
+F-01).
 
 ## Entry / meta packages (start here)
 
@@ -29,7 +40,7 @@ packages. Start with an entry package; reach for leaves only when you need one d
 
 `PALib`, `MALib`, `PMLib`, `NDILib`, `LibAssLib`, `ProjectMLib`, `S.Media.FFmpeg.Common`,
 `S.Control.Abstractions`, `S.Media.Decode.FFmpeg`, `S.Media.Encode.FFmpeg`,
-`S.Media.Present.SDL3`, `S.Media.Present.SDL3.Compositor`. They are published because the
+`S.Media.Present.SDL3`, `S.Media.Present.SDL3.Compositor`. They exist as packages because the
 packages above depend on them and some public APIs expose their contracts; their READMEs point
 back to the recommended entry package.
 

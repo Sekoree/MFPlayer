@@ -88,6 +88,47 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     public IReadOnlyList<PixelFormat> NativePixelFormats => _native;
     public bool IsExhausted => _disposed;
 
+    /// <summary>
+    /// F-14 preflight: ids of currently-registered layer/surface effects the backing compositor does
+    /// NOT render (see <see cref="IEffectCapabilityVideoCompositor"/>) - on the CPU fallback these
+    /// degrade to pass-through. Empty when every active effect has an implementation on this backend.
+    /// Cheap (walks the slot lists once); intended for output-health snapshots, not per-frame calls.
+    /// </summary>
+    public IReadOnlyList<string> CollectUnsupportedEffectIds()
+    {
+        // Fast path: compositors without the capability interface support everything.
+        if (_compositor is not IEffectCapabilityVideoCompositor caps)
+            return [];
+
+        List<string>? ids = null;
+        lock (_slotsGate)
+        {
+            foreach (var slot in _slots)
+                Accumulate(slot.Effects, caps, ref ids);
+            foreach (var surface in _surfaceSlots)
+                Accumulate(surface.Effects, caps, ref ids);
+        }
+
+        return ids is null ? [] : ids;
+
+        static void Accumulate(
+            IReadOnlyList<VideoLayerEffect>? effects,
+            IEffectCapabilityVideoCompositor caps,
+            ref List<string>? ids)
+        {
+            if (effects is not { Count: > 0 })
+                return;
+            foreach (var effect in effects)
+            {
+                if (caps.SupportsEffect(effect.Descriptor))
+                    continue;
+                ids ??= [];
+                if (!ids.Contains(effect.Descriptor.Id))
+                    ids.Add(effect.Descriptor.Id);
+            }
+        }
+    }
+
     /// <summary>Cumulative number of composite frames emitted from <see cref="TryReadNextFrame"/>.</summary>
     public long CompositesEmitted => Volatile.Read(ref _compositesEmitted);
 

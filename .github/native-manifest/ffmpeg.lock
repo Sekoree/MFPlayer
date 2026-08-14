@@ -1,0 +1,35 @@
+# F-02 (2026-08-14 review): ONE exact, immutable identity for the shipped FFmpeg binaries.
+#
+# The repo intentionally ships an FFmpeg *master snapshot* (FFmpeg.AutoGen 9.0.0 binds ABI avcodec-63,
+# which no stable FFmpeg release carries yet). A snapshot is legitimate ONLY with exact provenance, so
+# this lock names the dated BtbN autobuild release + asset + SHA-256 that every consumer must use:
+#   - .github/workflows/build.yml (both the build-test FFmpeg stage and the artifacts bundle stage)
+#   - scripts/fetch-ffmpeg.sh (local dev staging into External/ffmpeg/<rid>)
+#   - scripts/generate-native-sbom.sh (the SBOM label for shipped libav* files)
+#   - scripts/check-native-versions.sh (the expected avcodec ABI major, queried from the real binary)
+#
+# The win-x64 FFmpeg natives come from the FFmpeg.GPL NuGet pin in Directory.Packages.props instead
+# (immutable via nuget.org). KEEP THE TWO IN STEP: FFMPEG_SNAPSHOT_DATE below and the FFmpeg.GPL
+# version (20260811.1.0) are the SAME 2026-08-11 nightly. When one moves, move both, and re-check the
+# sonames against FFmpeg.AutoGen (master will bump to avcodec-64 for FFmpeg 10).
+#
+# Shell-sourceable KEY="VALUE" lines only — build.yml and the scripts `source` this file.
+
+# Upstream identity (FFmpeg git master snapshot built by BtbN/FFmpeg-Builds, GPL shared variant).
+FFMPEG_SNAPSHOT="N-126060-g03dc244a69"
+FFMPEG_SNAPSHOT_DATE="2026-08-11"
+FFMPEG_ABI_AVCODEC="63"
+
+# The COMPLETE soname set this snapshot ships (verified from the extracted archive on 2026-08-14).
+# fetch-ffmpeg.sh verifies every one after staging: a partial set would mix a bundled avcodec with a
+# system avutil, which is undefined behaviour rather than a clean failure. (No libpostproc: it was
+# removed from FFmpeg master.)
+FFMPEG_SONAMES="libavcodec.so.63 libavformat.so.63 libavdevice.so.63 libavutil.so.61 libavfilter.so.12 libswscale.so.10 libswresample.so.7"
+FFMPEG_SBOM_LABEL="master snapshot N-126060-g03dc244a69 (2026-08-11, BtbN GPL build, ABI avcodec-63)"
+
+# Immutable download location: a DATED autobuild release tag, never `latest`.
+FFMPEG_RELEASE_TAG="autobuild-2026-08-11-13-11"
+FFMPEG_LINUX_X64_ASSET="ffmpeg-N-126060-g03dc244a69-linux64-gpl-shared.tar.xz"
+FFMPEG_LINUX_X64_SHA256="dd92a48cc32576ec0788fd466ddfd1f3754643bc7da6478e9130721e0e638458"
+FFMPEG_LINUX_ARM64_ASSET="ffmpeg-N-126060-g03dc244a69-linuxarm64-gpl-shared.tar.xz"
+FFMPEG_LINUX_ARM64_SHA256="c7979303bd45277a929a49c5c6f3b71f20a90e1addcee56be8c8f39268a746a2"

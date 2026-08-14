@@ -2,7 +2,9 @@
 
 Minimum path from a media file to playback with the current (v2) framework. Reference the
 `S.Media` meta-package (or `S.Media.Full` for everything); it pulls in the core, FFmpeg decode and
-both audio backends. FFmpeg 8.x (avcodec-62) shared libraries must be loadable at runtime — see
+both audio backends. The packages are consumed **from this repository** (they are not published to
+nuget.org — see [Packages.md](Packages.md)). FFmpeg shared libraries with the avcodec-63 ABI must
+be loadable at runtime; `scripts/fetch-ffmpeg.sh` stages the exact pinned build — see
 [Native-Dependencies.md](Native-Dependencies.md).
 
 ## 1. Build a registry

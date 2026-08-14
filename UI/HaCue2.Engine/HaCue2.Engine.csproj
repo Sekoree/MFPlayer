@@ -29,6 +29,9 @@
     <ItemGroup>
         <ProjectReference Include="..\HaCue2.Core\HaCue2.Core.csproj" />
         <ProjectReference Include="..\HaCue2.Machine\HaCue2.Machine.csproj" />
+        <!-- The shared bounded HTTP control host (F-05): the remote API's transport lifecycle.
+             Routes, token policy and error shapes stay in this project. -->
+        <ProjectReference Include="..\HaRemote\HaRemote.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Session\S.Media.Session.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Routing\S.Media.Routing.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Decode.FFmpeg\S.Media.Decode.FFmpeg.csproj" />
