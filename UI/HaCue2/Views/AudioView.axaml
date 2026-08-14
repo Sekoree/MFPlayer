@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:HaCue2.Resources"
              xmlns:c="using:HaCue2.Controls"
              xmlns:sys="using:System"
              xmlns:v="using:HaCue2.Views"
@@ -39,25 +40,25 @@
       <!-- ══ 06 · LOGICAL OUTPUTS ═══════════════════════════════════════════════════════════ -->
       <Grid IsVisible="{Binding IsOutputsPane}" ColumnDefinitions="*,348" Margin="7" ColumnSpacing="7">
 
-        <c:PanelBox Grid.Column="0" Header="Logical outputs" Hint="the only destinations cues can see">
+        <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.AudLogicalOutputs}" Hint="the only destinations cues can see">
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6"
                     IsEnabled="{Binding CanAuthor}">
-                <Button Grid.Column="0" Classes="tight" Content="+ ADD" Click="OnDialog" Tag="output" />
-                <Button Grid.Column="1" Classes="tight" Content="+ ADD STEREO PAIR" Click="OnDialog" Tag="pair" />
-                <Button Grid.Column="2" Classes="tight" Content="+ NEW GROUP…" Click="OnDialog" Tag="group" />
-                <Button Grid.Column="3" Classes="tight" Content="RENAME" Click="OnDialog" Tag="rename" />
-                <Button Grid.Column="4" Classes="tight" Content="REORDER" Click="OnDialog" Tag="reorder" />
+                <Button Grid.Column="0" Classes="tight" Content="{x:Static res:Strings.AudAdd}" Click="OnDialog" Tag="output" />
+                <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.AudAddStereoPair}" Click="OnDialog" Tag="pair" />
+                <Button Grid.Column="2" Classes="tight" Content="{x:Static res:Strings.AudNewGroup}" Click="OnDialog" Tag="group" />
+                <Button Grid.Column="3" Classes="tight" Content="{x:Static res:Strings.AudRename}" Click="OnDialog" Tag="rename" />
+                <Button Grid.Column="4" Classes="tight" Content="{x:Static res:Strings.AudReorder}" Click="OnDialog" Tag="reorder" />
                 <!-- Register item 11: no refuse-while-fed gate. Deleting strips the sends from every
                      cue as ONE undoable edit, which is the only version of this that an operator can
                      safely reverse. The footer said so for months with no button behind it - the
                      cascade existed in ProjectEdits and nothing in the app called it. -->
-                <Button Grid.Column="5" Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="output:remove"
+                <Button Grid.Column="5" Classes="tight" Content="{x:Static res:Strings.AudRemove}" Click="OnDialog" Tag="output:remove"
                         IsEnabled="{Binding HasSelectedOutput}" />
                 <TextBlock Grid.Column="6" Classes="mono dim3 small" HorizontalAlignment="Right"
                            VerticalAlignment="Center"
-                           Text="delete cleans up its cue sends automatically - one undoable edit" />
+                           Text="{x:Static res:Strings.AudDeleteCleansUpItsCue}" />
               </Grid>
             </Border>
           </c:PanelBox.Footer>
@@ -66,11 +67,11 @@
             <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                     BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
               <Grid ColumnDefinitions="120,90,70,*,90" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="NAME" />
-                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="GROUP" />
-                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="FED BY" />
-                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="PATCHED TO" />
-                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="METER" />
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudName}" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudGroup}" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudFedBy}" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudPatchedTo}" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudMeter}" />
               </Grid>
             </Border>
 
@@ -79,16 +80,16 @@
                      KeyDown="OnOutputsKeyDown" PointerPressed="OnRowRightPressed">
               <ListBox.ContextMenu>
                 <ContextMenu>
-                  <MenuItem Header="Rename…" Click="OnDialog" Tag="rename" />
-                  <MenuItem Header="Move in bus order…" Click="OnDialog" Tag="reorder" />
-                  <MenuItem Header="Patch to device channels…" Click="OnDialog" Tag="patch"
+                  <MenuItem Header="{x:Static res:Strings.AudRename2}" Click="OnDialog" Tag="rename" />
+                  <MenuItem Header="{x:Static res:Strings.AudMoveInBusOrder}" Click="OnDialog" Tag="reorder" />
+                  <MenuItem Header="{x:Static res:Strings.AudPatchToDeviceChannels}" Click="OnDialog" Tag="patch"
                             IsEnabled="{Binding CanPatchToDevice}" />
                   <Separator />
-                  <MenuItem Header="Group with the selection…" Click="OnDialog" Tag="group" />
-                  <MenuItem Header="Ungroup…" Click="OnDialog" Tag="group:remove"
+                  <MenuItem Header="{x:Static res:Strings.AudGroupWithTheSelection}" Click="OnDialog" Tag="group" />
+                  <MenuItem Header="{x:Static res:Strings.AudUngroup}" Click="OnDialog" Tag="group:remove"
                             IsEnabled="{Binding HasGroupToRemove}" />
                   <Separator />
-                  <MenuItem Header="Remove…" Click="OnDialog" Tag="output:remove" />
+                  <MenuItem Header="{x:Static res:Strings.AudRemove2}" Click="OnDialog" Tag="output:remove" />
                 </ContextMenu>
               </ListBox.ContextMenu>
               <ListBox.ItemTemplate>
@@ -121,9 +122,9 @@
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <DockPanel LastChildFill="True">
-                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge good"><TextBlock Text="PORTABLE" /></Border>
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge good"><TextBlock Text="{x:Static res:Strings.AudPortable}" /></Border>
                 <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
-                           Text="this is the venue-swap seam: the show keeps “Lobby”, each venue patches it" />
+                           Text="{x:Static res:Strings.AudThisIsTheVenueSwap}" />
               </DockPanel>
             </Border>
           </c:PanelBox.Footer>
@@ -132,19 +133,19 @@
             <StackPanel Margin="0,6,0,8" IsEnabled="{Binding CanAuthor}">
               <!-- A real rename. This was bound to a get-only property, so it took typing and threw
                    it away - the only working rename was the footer button. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudName2}">
                 <TextBox Text="{Binding OutputName}" IsEnabled="{Binding HasSelectedOutput}" />
               </HeaderedContentControl>
               <!-- With the permanent strip gone, this flag picks what appears in the Output info
                    drawer's compact row and in the status-bar health token. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Meter in summary">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudMeterInSummary}">
                 <ListBox Theme="{StaticResource Segment}" SelectedIndex="{Binding MeterInSummaryIndex}">
                   <ListBoxItem>yes</ListBoxItem>
                   <ListBoxItem>no</ListBoxItem>
                 </ListBox>
               </HeaderedContentControl>
 
-              <ContentControl Theme="{StaticResource Subhead}" Content="Fed by" />
+              <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.AudFedBy2}" />
               <ItemsControl ItemsSource="{Binding Senders}" Margin="10,2">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="sys:String">
@@ -154,14 +155,14 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
 
-              <ContentControl Theme="{StaticResource Subhead}" Content="Patched to" />
+              <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.AudPatchedTo2}" />
               <!-- Through the view-model, never a literal: this used to hardcode "Lobby" whichever
                    output was selected, which misdirected exactly the no-sound diagnosis it exists for. -->
               <TextBlock Margin="10,4,10,8" FontSize="{DynamicResource FontSizeSmall}" TextWrapping="Wrap"
                          Classes="err" IsVisible="{Binding IsSelectedOutputUnpatched}"
                          Text="{Binding UnpatchedWarning}" />
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="primary block" Content="PATCH → PICK DEVICE CHANNELS…" Click="OnDialog"
+                <Button Classes="primary block" Content="{x:Static res:Strings.AudPatchPickDeviceChannels}" Click="OnDialog"
                         Tag="patch" IsEnabled="{Binding CanPatchToDevice}" />
               </ContentControl>
               <!-- A new project has logical outputs and no LINES on purpose, which used to make this
@@ -178,19 +179,19 @@
       <!-- ══ 07 · PATCH ═════════════════════════════════════════════════════════════════════ -->
       <Grid IsVisible="{Binding IsPatchPane}" ColumnDefinitions="*,260" Margin="7" ColumnSpacing="7">
 
-        <c:PanelBox Grid.Column="0" Header="Patch" Hint="cell = gain dB · empty = not routed · live">
+        <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.AudPatch}" Hint="cell = gain dB · empty = not routed · live">
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="7">
-                <Border Grid.Column="0" Classes="badge"><TextBlock Text="PRESETS" /></Border>
+                <Border Grid.Column="0" Classes="badge"><TextBlock Text="{x:Static res:Strings.AudPresets}" /></Border>
                 <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis"
-                           Text="stereo identity · fan out to all · mono sum · clear row · copy line patch" />
-                <Border Grid.Column="2" Classes="badge bad"><TextBlock Text="UNRESOLVED" /></Border>
+                           Text="{x:Static res:Strings.AudStereoIdentityFanOutTo}" />
+                <Border Grid.Column="2" Classes="badge bad"><TextBlock Text="{x:Static res:Strings.AudUnresolved}" /></Border>
                 <!-- An absent line keeps its cells and routes silent. Dropping the patch would lose
                      show data the moment someone unplugs a box. -->
                 <TextBlock Grid.Column="3" Classes="mono dim2 small" VerticalAlignment="Center"
-                           Text="Wedge absent - cells kept, routed silent" />
+                           Text="{x:Static res:Strings.AudWedgeAbsentCellsKeptRouted}" />
               </Grid>
             </Border>
           </c:PanelBox.Footer>
@@ -201,33 +202,33 @@
             <!-- Register item 13: click toggles at unity, drag adjusts gain, right-click mutes. -->
             <c:MatrixView Columns="{Binding PatchColumns}" Rows="{Binding PatchRows}"
                           AutomationProperties.Name="Audio patch matrix"
-                          AutomationProperties.HelpText="Click routes at unity, drag adjusts gain, and right click mutes."
+                          AutomationProperties.HelpText="{x:Static res:Strings.AudClickRoutesAtUnityDrag}"
                           IsEnabled="{Binding CanAuthor}"
                           RowHeaderWidth="118"
                           Gesture="OnPatchGesture"
                           PointerReleased="OnPatchGestureEnded"
-                          ToolTip.Tip="Click routes at unity · drag adjusts gain · right-click mutes. A grouped column carries its partners by the same delta." />
+                          ToolTip.Tip="{x:Static res:Strings.AudClickRoutesAtUnityDrag2}" />
           </ScrollViewer>
         </c:PanelBox>
 
         <Grid Grid.Column="1" RowDefinitions="*,Auto" RowSpacing="7">
 
-          <c:PanelBox Grid.Row="0" Header="Snapshots" Hint="partial recalls">
+          <c:PanelBox Grid.Row="0" Header="{x:Static res:Strings.AudSnapshots}" Hint="partial recalls">
             <c:PanelBox.Footer>
               <StackPanel>
                 <Border Classes="chain">
                   <StackPanel Orientation="Horizontal" Spacing="6" IsEnabled="{Binding CanAuthor}">
-                    <Button Classes="tight" Content="SAVE…" Click="OnDialog" Tag="snapshot" />
-                    <Button Classes="tight" Content="RECALL" Click="OnRecall"
+                    <Button Classes="tight" Content="{x:Static res:Strings.AudSave}" Click="OnDialog" Tag="snapshot" />
+                    <Button Classes="tight" Content="{x:Static res:Strings.AudRecall}" Click="OnRecall"
                             IsEnabled="{Binding HasSnapshot}" />
-                    <Button Classes="tight" Content="UPDATE" Click="OnUpdateSnapshot"
+                    <Button Classes="tight" Content="{x:Static res:Strings.AudUpdate}" Click="OnUpdateSnapshot"
                             IsEnabled="{Binding HasSnapshot}" />
-                    <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="snapshot:remove"
+                    <Button Classes="tight" Content="{x:Static res:Strings.AudRemove}" Click="OnDialog" Tag="snapshot:remove"
                             IsEnabled="{Binding HasSnapshot}" />
                   </StackPanel>
                 </Border>
                 <TextBlock Margin="10,6,10,2" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
-                           Text="A snapshot stores only the cells it was saved with - recalling “Interval” touches Lobby and nothing else. Used by patch cues in the list." />
+                           Text="{x:Static res:Strings.AudASnapshotStoresOnlyThe}" />
                 <!-- Recall is not undoable (it is an operator action on the patch, not a document
                      edit), so what it did has to be said out loud. -->
                 <TextBlock Margin="10,0,10,9" FontSize="10.5" Classes="mono dim2"
@@ -240,10 +241,10 @@
                      KeyDown="OnSnapshotsKeyDown" PointerPressed="OnRowRightPressed">
               <ListBox.ContextMenu>
                 <ContextMenu>
-                  <MenuItem Header="Recall" Click="OnRecall" />
-                  <MenuItem Header="Update from the live patch" Click="OnUpdateSnapshot" />
+                  <MenuItem Header="{x:Static res:Strings.AudRecall2}" Click="OnRecall" />
+                  <MenuItem Header="{x:Static res:Strings.AudUpdateFromTheLivePatch}" Click="OnUpdateSnapshot" />
                   <Separator />
-                  <MenuItem Header="Remove…" Click="OnDialog" Tag="snapshot:remove" />
+                  <MenuItem Header="{x:Static res:Strings.AudRemove2}" Click="OnDialog" Tag="snapshot:remove" />
                 </ContextMenu>
               </ListBox.ContextMenu>
               <ListBox.ItemTemplate>
@@ -254,12 +255,12 @@
             </ListBox>
           </c:PanelBox>
 
-          <c:PanelBox Grid.Row="1" Header="Selected line">
+          <c:PanelBox Grid.Row="1" Header="{x:Static res:Strings.AudSelectedLine}">
             <StackPanel Margin="0,6,0,8">
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Line">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudLine}">
                 <TextBox Classes="ro" Text="{Binding SelectedOutputLines}" />
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Carries">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudCarries}">
                 <TextBox Classes="ro" Text="{Binding SelectedOutputCarries}" />
               </HeaderedContentControl>
               <!-- Always allowed: it rewrites the MONITOR line's own patch row, so it never reaches
@@ -279,16 +280,16 @@
       <!-- ══ 08 · DEVICES ═══════════════════════════════════════════════════════════════════ -->
       <Grid IsVisible="{Binding IsDevicesPane}" ColumnDefinitions="*,330" Margin="7" ColumnSpacing="7">
 
-        <c:PanelBox Grid.Column="0" Header="Audio lines" Hint="machine-side · adding/removing is an edit">
+        <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.AudAudioLines}" Hint="machine-side · adding/removing is an edit">
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="6"
                     IsEnabled="{Binding CanAuthor}">
-                <Button Grid.Column="0" Classes="tight" Content="+ LOCAL AUDIO…" Click="OnDialog" Tag="line:device" />
-                <Button Grid.Column="1" Classes="tight" Content="+ NDI AUDIO…" Click="OnDialog" Tag="line:ndi" />
-                <Button Grid.Column="2" Classes="tight" Content="+ RECORD…" Click="OnDialog" Tag="line:record" />
-                <Button Grid.Column="3" Classes="tight" Content="+ STREAM…" Click="OnDialog" Tag="line:stream" />
-                <Button Grid.Column="5" Classes="tight" Content="RELINK ABSENT…" Click="OnDialog" Tag="relink" />
+                <Button Grid.Column="0" Classes="tight" Content="{x:Static res:Strings.AudLocalAudio}" Click="OnDialog" Tag="line:device" />
+                <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.AudNdiAudio}" Click="OnDialog" Tag="line:ndi" />
+                <Button Grid.Column="2" Classes="tight" Content="{x:Static res:Strings.AudRecord}" Click="OnDialog" Tag="line:record" />
+                <Button Grid.Column="3" Classes="tight" Content="{x:Static res:Strings.AudStream}" Click="OnDialog" Tag="line:stream" />
+                <Button Grid.Column="5" Classes="tight" Content="{x:Static res:Strings.AudRelinkAbsent}" Click="OnDialog" Tag="relink" />
               </Grid>
             </Border>
           </c:PanelBox.Footer>
@@ -297,12 +298,12 @@
             <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                     BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
               <Grid ColumnDefinitions="90,*,40,110,150,110" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="LINE" />
-                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
-                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="CH" />
-                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="RATE" />
-                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
-                <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" Text="CARRIES" />
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudLine2}" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudKind}" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudCh}" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.DiagColRate}" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.DiagColState}" />
+                <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudCarries2}" />
               </Grid>
             </Border>
 
@@ -314,10 +315,10 @@
                      KeyDown="OnLinesKeyDown" PointerPressed="OnRowRightPressed">
               <ListBox.ContextMenu>
                 <ContextMenu>
-                  <MenuItem Header="Rename…" Click="OnDialog" Tag="line:rename" />
-                  <MenuItem Header="Relink absent lines…" Click="OnDialog" Tag="relink" />
+                  <MenuItem Header="{x:Static res:Strings.AudRename2}" Click="OnDialog" Tag="line:rename" />
+                  <MenuItem Header="{x:Static res:Strings.AudRelinkAbsentLines}" Click="OnDialog" Tag="relink" />
                   <Separator />
-                  <MenuItem Header="Remove…" Click="OnDialog" Tag="line:remove" />
+                  <MenuItem Header="{x:Static res:Strings.AudRemove2}" Click="OnDialog" Tag="line:remove" />
                 </ContextMenu>
               </ListBox.ContextMenu>
               <ListBox.ItemTemplate>
@@ -342,21 +343,21 @@
 
         <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
 
-          <c:PanelBox Grid.Row="0" Header="Project mix">
+          <c:PanelBox Grid.Row="0" Header="{x:Static res:Strings.AudProjectMix}">
             <StackPanel Margin="0,6,0,8" IsEnabled="{Binding CanAuthor}">
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Mix rate">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudMixRate}">
                 <ComboBox ItemsSource="{Binding MixRates}" SelectedIndex="{Binding MixRateIndex}" />
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Clock master">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudClockMaster}">
                 <ComboBox ItemsSource="{Binding ClockMasters}" SelectedIndex="{Binding ClockMasterIndex}" />
               </HeaderedContentControl>
               <TextBlock Margin="10,4,10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
-                         Text="The clock master must run natively at the mix rate - it is never resampled, so the show clock never drifts against it. Lines that cannot be one are not offered." />
+                         Text="{x:Static res:Strings.AudTheClockMasterMustRun}" />
               <!-- Register item 14: never a silent rebuild. The button only lights up when the running
                    bay actually differs from the document, so it says something rather than sitting
                    there inviting a restart nobody needs. -->
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="APPLY &amp; RESTART AUDIO"
+                <Button Classes="block" Content="{x:Static res:Strings.AudApplyRestartAudio}"
                         IsEnabled="{Binding NeedsAudioRestart}" Click="OnRestartAudio" />
               </ContentControl>
             </StackPanel>
@@ -367,11 +368,11 @@
               <!-- Hidden rather than disabled for an interface line: a directory and a filename
                    pattern are not dimmed-out properties of a sound card, they are meaningless for one. -->
               <StackPanel IsVisible="{Binding Record.IsRecording}">
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Directory"
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudDirectory}"
                                         IsVisible="{Binding Record.IsFile}">
-                  <TextBox Text="{Binding Record.Directory}" PlaceholderText="the machine's recordings folder" />
+                  <TextBox Text="{Binding Record.Directory}" PlaceholderText="{x:Static res:Strings.AudTheMachineSRecordingsFolder}" />
                 </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Pattern"
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudPattern}"
                                         IsVisible="{Binding Record.IsFile}">
                   <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
                     <TextBox Grid.Column="0" Text="{Binding Record.Pattern}" />
@@ -407,9 +408,9 @@
                     </Button>
                   </Grid>
                 </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="URL"
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudUrl}"
                                         IsVisible="{Binding Record.IsStream}">
-                  <TextBox Text="{Binding Record.Url}" PlaceholderText="rtmp://host/app/key" />
+                  <TextBox Text="{Binding Record.Url}" PlaceholderText="{x:Static res:Strings.AudRtmpHostAppKey}" />
                 </HeaderedContentControl>
                 <!-- Rendered by the same expander that names the file, so the preview cannot promise a
                      name the recorder would not write. -->
@@ -420,18 +421,18 @@
                   <TextBlock Classes="mono small" Foreground="{DynamicResource GelRed}"
                              TextWrapping="Wrap" Text="{Binding Record.Problem}" />
                 </ContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Mode"
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudMode}"
                                         IsVisible="{Binding Record.IsFile}">
                   <ListBox Theme="{StaticResource Segment}" SelectedIndex="{Binding Record.ModeIndex}">
                     <ListBoxItem>continuous</ListBoxItem>
                     <ListBoxItem>content only</ListBoxItem>
                   </ListBox>
                 </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Format">
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudFormat}">
                   <TextBox Classes="ro" Text="{Binding Record.FormatSummary}" />
                 </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Arm">
-                  <CheckBox IsChecked="{Binding Record.ArmWithShow}" Content="arm when the show opens" />
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudArm}">
+                  <CheckBox IsChecked="{Binding Record.ArmWithShow}" Content="{x:Static res:Strings.AudArmWhenTheShowOpens}" />
                 </HeaderedContentControl>
                 <ContentControl Theme="{StaticResource FieldWide}">
                   <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7">
@@ -445,7 +446,7 @@
 
               <TextBlock IsVisible="{Binding !Record.IsRecording}" Classes="mono dim3 small" TextWrapping="Wrap"
                          Margin="0,4,0,0"
-                         Text="Recording settings appear here for a Record or Stream line." />
+                         Text="{x:Static res:Strings.AudRecordingSettingsAppearHereFor}" />
             </StackPanel>
           </c:PanelBox>
         </Grid>

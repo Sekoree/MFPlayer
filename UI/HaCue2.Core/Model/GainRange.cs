@@ -33,4 +33,28 @@ public static class GainRange
     /// <summary>True when the gain is inside the range the editors offer.</summary>
     public static bool IsUsual(double gainDb) =>
         IsStorable(gainDb) && gainDb >= SilenceFloorDb && gainDb <= MaximumDb;
+
+    // ── the ONE statement of the dB↔linear convention (2026-08-14 second review) ─────────────────
+    // The silence-floor rule ("at or below the floor the factor is EXACTLY 0, never a very quiet
+    // signal") was restated inline at least six times across ShowHost/ShowCompiler/DuckMath/
+    // ProjectPatchBay - each a chance to drift. It lives here, next to the floor it interprets.
+
+    /// <summary>dB → linear gain factor, double precision (curve math). Floor → exactly 0.</summary>
+    public static double LinearFactor(double gainDb) =>
+        gainDb <= SilenceFloorDb ? 0 : Math.Pow(10, gainDb / 20);
+
+    /// <summary>dB → the float gain the engine multiplies by. Floor → exactly 0; no ceiling (a
+    /// validated document value above <see cref="MaximumDb"/> is a warning, not a refusal).</summary>
+    public static float Linear(double gainDb) => (float)LinearFactor(gainDb);
+
+    /// <summary>Like <see cref="Linear"/> but hard-capped at <see cref="MaximumDb"/> - for the
+    /// paths where a wild document value must not overdrive a live envelope.</summary>
+    public static float LinearClamped(double gainDb) =>
+        gainDb <= SilenceFloorDb ? 0f : (float)Math.Pow(10, Math.Clamp(gainDb, SilenceFloorDb, MaximumDb) / 20);
+
+    /// <summary>Linear gain → dB for reporting a runtime value back in authoring units: at or
+    /// below zero it is the silence floor, and the result is clamped to the editors' range.</summary>
+    public static double Db(float linear) => linear <= 0f
+        ? SilenceFloorDb
+        : Math.Clamp(20 * Math.Log10(linear), SilenceFloorDb, MaximumDb);
 }

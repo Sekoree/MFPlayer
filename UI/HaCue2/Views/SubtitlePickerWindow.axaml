@@ -1,11 +1,12 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaCue2.Resources"
         xmlns:c="using:HaCue2.Controls"
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.SubtitlePickerWindow"
         x:DataType="vm:SubtitlePickerViewModel"
         x:CompileBindings="True"
-        Title="Subtitles"
+        Title="{x:Static res:Strings.InspSubtitles}"
         Width="520" Height="360"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource BoothBg}"
@@ -20,16 +21,16 @@
 
       <Border DockPanel.Dock="Bottom" Classes="chain">
         <DockPanel LastChildFill="False">
-          <Button DockPanel.Dock="Left" Classes="tight" Content="+ SIDECAR FILE…" Click="OnAddSidecar" />
-          <Button DockPanel.Dock="Right" Classes="primary" Content="DONE" Click="OnDone" />
+          <Button DockPanel.Dock="Left" Classes="tight" Content="{x:Static res:Strings.SubPickSidecarFile}" Click="OnAddSidecar" />
+          <Button DockPanel.Dock="Right" Classes="primary" Content="{x:Static res:Strings.AutoEdDone}" Click="OnDone" />
           <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
-                  Content="CANCEL" Click="OnCancel" />
+                  Content="{x:Static res:Strings.PromptCancel}" Click="OnCancel" />
         </DockPanel>
       </Border>
 
       <TextBlock DockPanel.Dock="Top" Classes="mono dim3 micro" Margin="10,6"
                  IsVisible="{Binding !HasChoices}" TextWrapping="Wrap"
-                 Text="Nothing embedded in this file. A sidecar (.srt / .ass) can still be added." />
+                 Text="{x:Static res:Strings.SubPickNothingEmbeddedInThisFile}" />
 
       <ScrollViewer>
         <ItemsControl ItemsSource="{Binding Choices}" Margin="10,4">
@@ -39,7 +40,7 @@
                 <StackPanel Orientation="Horizontal" Spacing="7">
                   <TextBlock Classes="mono small" Text="{Binding Label}" />
                   <Border Classes="badge" IsVisible="{Binding IsSidecar}">
-                    <TextBlock Text="SIDECAR" />
+                    <TextBlock Text="{x:Static res:Strings.SubPickSidecar}" />
                   </Border>
                 </StackPanel>
               </CheckBox>

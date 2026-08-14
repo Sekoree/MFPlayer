@@ -1,11 +1,12 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaCue2.Resources"
         xmlns:c="using:HaCue2.Controls"
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.ClipEditorWindow"
         x:DataType="vm:ClipEditorViewModel"
         x:CompileBindings="True"
-        Title="Clip"
+        Title="{x:Static res:Strings.ClipEdClip}"
         Width="940" Height="520"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource BoothBg}"
@@ -24,7 +25,7 @@
                thing, and a modal for it is a modal nobody reads. -->
           <TextBlock Grid.Column="2" Classes="mono small warn" HorizontalAlignment="Right"
                      VerticalAlignment="Center" Text="{Binding Problem}" />
-          <Button Grid.Column="3" Classes="primary tight" Content="DONE" Click="OnDone" />
+          <Button Grid.Column="3" Classes="primary tight" Content="{x:Static res:Strings.AutoEdDone}" Click="OnDone" />
         </Grid>
       </Border>
     </c:PanelBox.Footer>
@@ -32,18 +33,18 @@
     <DockPanel Margin="10,6,10,10">
 
       <Grid DockPanel.Dock="Top" ColumnDefinitions="*,*,Auto,Auto" ColumnSpacing="7" Margin="0,0,0,8">
-        <HeaderedContentControl Grid.Column="0" Theme="{StaticResource FieldTight}" Header="Trim in">
+        <HeaderedContentControl Grid.Column="0" Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.ClipEdTrimIn}">
           <TextBox Text="{Binding TrimInText}" LostFocus="OnTrimInCommitted" />
         </HeaderedContentControl>
-        <HeaderedContentControl Grid.Column="1" Theme="{StaticResource FieldTight}" Header="Trim out">
+        <HeaderedContentControl Grid.Column="1" Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.ClipEdTrimOut}">
           <TextBox Text="{Binding TrimOutText}" LostFocus="OnTrimOutCommitted" />
         </HeaderedContentControl>
         <!-- The file's own length, which the inspector never showed and which every from-the-end
              calculation was being done against. -->
-        <HeaderedContentControl Grid.Column="2" Theme="{StaticResource FieldTight}" Header="File">
+        <HeaderedContentControl Grid.Column="2" Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.ClipEdFile}">
           <TextBox Classes="ro" IsReadOnly="True" Text="{Binding LengthLabel}" MinWidth="90" />
         </HeaderedContentControl>
-        <HeaderedContentControl Grid.Column="3" Theme="{StaticResource FieldTight}" Header="Preview at">
+        <HeaderedContentControl Grid.Column="3" Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.ClipEdPreviewAt}">
           <TextBox Classes="ro" IsReadOnly="True" Text="{Binding PlayheadLabel}" MinWidth="90" />
         </HeaderedContentControl>
       </Grid>
@@ -56,7 +57,7 @@
         <Panel>
           <TextBlock Classes="mono dim3 small" HorizontalAlignment="Center" VerticalAlignment="Center"
                      IsVisible="{Binding !HasFrame}"
-                     Text="click the waveform to scrub · no picture at this point" />
+                     Text="{x:Static res:Strings.ClipEdClickTheWaveformToScrub}" />
           <Image Source="{Binding Preview}" Stretch="Uniform" Margin="6"
                  IsVisible="{Binding HasFrame}" />
         </Panel>

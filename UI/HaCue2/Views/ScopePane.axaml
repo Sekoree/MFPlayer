@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:HaCue2.Resources"
              xmlns:vm="using:HaCue2.ViewModels"
              x:Class="HaCue2.Views.ScopePane"
              x:DataType="vm:CuesViewModel"
@@ -14,16 +15,16 @@
 
     <Border DockPanel.Dock="Bottom" Classes="chain">
       <DockPanel LastChildFill="True">
-                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="SCOPE" /></Border>
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="{x:Static res:Strings.ScopeScope}" /></Border>
                 <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
-                   Text="view only · not saved in the project · GO still fires the show's next cue" />
+                   Text="{x:Static res:Strings.ScopeViewOnlyNotSavedIn}" />
               </DockPanel>
     </Border>
 
     <ScrollViewer>
       <StackPanel Margin="0,4,0,0">
 
-        <TextBlock Classes="caps" Margin="12,9,12,4" Text="CUE LISTS" />
+        <TextBlock Classes="caps" Margin="12,9,12,4" Text="{x:Static res:Strings.ScopeCueLists}" />
         <ListBox Theme="{StaticResource NavList}"
                  ItemsSource="{Binding CueLists}"
                  SelectedItem="{Binding SelectedScope}"

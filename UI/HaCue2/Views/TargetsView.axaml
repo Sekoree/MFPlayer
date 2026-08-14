@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:HaCue2.Resources"
              xmlns:c="using:HaCue2.Controls"
              xmlns:vm="using:HaCue2.ViewModels"
              x:Class="HaCue2.Views.TargetsView"
@@ -46,15 +47,15 @@
       <!-- ══ ACTION ENDPOINTS ═══════════════════════════════════════════════════════════════ -->
       <Grid IsVisible="{Binding IsEndpointsPane}" ColumnDefinitions="*,*" Margin="7" ColumnSpacing="7">
 
-        <c:PanelBox Grid.Column="0" Header="Action endpoints" Hint="outbound · cues send here">
+        <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.TgtActionEndpoints}" Hint="outbound · cues send here">
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <StackPanel Orientation="Horizontal" Spacing="6" IsEnabled="{Binding CanAuthor}">
-                <Button Classes="tight" Content="+ OSC OUT…" Click="OnDialog" Tag="end:osc" />
-                <Button Classes="tight" Content="+ MIDI OUT…" Click="OnDialog" Tag="end:midi" />
-                <Button Classes="tight" Content="EDIT…" Click="OnDialog" Tag="end:edit"
+                <Button Classes="tight" Content="{x:Static res:Strings.TgtOscOut}" Click="OnDialog" Tag="end:osc" />
+                <Button Classes="tight" Content="{x:Static res:Strings.TgtMidiOut}" Click="OnDialog" Tag="end:midi" />
+                <Button Classes="tight" Content="{x:Static res:Strings.InspEdit}" Click="OnDialog" Tag="end:edit"
                         IsEnabled="{Binding HasEndpointSelected}" />
-                <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="end:remove"
+                <Button Classes="tight" Content="{x:Static res:Strings.AudRemove}" Click="OnDialog" Tag="end:remove"
                         IsEnabled="{Binding HasEndpointSelected}" />
               </StackPanel>
             </Border>
@@ -64,11 +65,11 @@
             <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                     BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
               <Grid ColumnDefinitions="100,*,70,150,90" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="ENDPOINT" />
-                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
-                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="USED BY" />
-                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="LAST SENT" />
-                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtEndpoint}" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudKind}" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtUsedBy}" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtLastSent}" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.DiagColState}" />
               </Grid>
             </Border>
             <ListBox Theme="{StaticResource TableRows}"
@@ -78,10 +79,10 @@
                      KeyDown="OnEndpointsKeyDown" PointerPressed="OnRowRightPressed">
               <ListBox.ContextMenu>
                 <ContextMenu>
-                  <MenuItem Header="Edit…" Click="OnDialog" Tag="end:edit" />
-                  <MenuItem Header="Send test" Click="OnSendTest" />
+                  <MenuItem Header="{x:Static res:Strings.TgtEdit}" Click="OnDialog" Tag="end:edit" />
+                  <MenuItem Header="{x:Static res:Strings.TgtSendTest}" Click="OnSendTest" />
                   <Separator />
-                  <MenuItem Header="Remove…" Click="OnDialog" Tag="end:remove" />
+                  <MenuItem Header="{x:Static res:Strings.AudRemove2}" Click="OnDialog" Tag="end:remove" />
                 </ContextMenu>
               </ListBox.ContextMenu>
             </ListBox>
@@ -91,24 +92,24 @@
         <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
           <c:PanelBox Grid.Row="0" Header="{Binding SelectedEndpointName}" Hint="selected endpoint">
             <StackPanel Margin="0,6,0,8" IsEnabled="{Binding HasEndpointSelected}">
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Host" IsEnabled="{Binding CanAuthor}">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TgtHost}" IsEnabled="{Binding CanAuthor}">
                 <TextBox Text="{Binding EndpointHost}" PlaceholderText="10.0.1.20" />
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Port" IsEnabled="{Binding CanAuthor}">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.SetPort}" IsEnabled="{Binding CanAuthor}">
                 <TextBox Text="{Binding EndpointPort}" PlaceholderText="8000" />
               </HeaderedContentControl>
               <!-- Register item 24: the test payload is stored PER endpoint. A generic ping proves the
                    socket is open; it does not prove the desk understood you. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Test message" IsEnabled="{Binding CanAuthor}">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TgtTestMessage}" IsEnabled="{Binding CanAuthor}">
                 <TextBox Text="{Binding TestMessage}" />
               </HeaderedContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
-                <Button Classes="block" Content="SEND TEST" Click="OnSendTest" />
+                <Button Classes="block" Content="{x:Static res:Strings.TgtSendTest2}" Click="OnSendTest" />
               </ContentControl>
             </StackPanel>
           </c:PanelBox>
 
-          <c:PanelBox Grid.Row="1" Header="Monitor" Hint="{Binding MonitorHint}">
+          <c:PanelBox Grid.Row="1" Header="{x:Static res:Strings.TgtMonitor}" Hint="{Binding MonitorHint}">
             <ListBox Theme="{StaticResource ReadonlyRows}" Margin="10,8"
                      ItemsSource="{Binding Monitor}"
                      ItemTemplate="{StaticResource MonitorLineTemplate}" />
@@ -121,19 +122,19 @@
 
         <Grid Grid.Column="0" RowDefinitions="Auto,*" RowSpacing="7">
 
-          <c:PanelBox Grid.Row="0" Header="Trigger inputs" Hint="inbound · fire cues">
+          <c:PanelBox Grid.Row="0" Header="{x:Static res:Strings.TgtTriggerInputs}" Hint="inbound · fire cues">
             <c:PanelBox.Footer>
               <Border Classes="chain">
                 <WrapPanel Orientation="Horizontal" IsEnabled="{Binding CanAuthor}">
-                  <Button Classes="tight" Content="+ MIDI IN…" Click="OnDialog" Tag="in:midi" />
-                  <Button Classes="tight" Content="+ OSC LISTENER…" Click="OnDialog" Tag="in:osc" />
-                  <Button Classes="tight" Content="+ KEYBOARD…" Click="OnDialog" Tag="in:key" />
+                  <Button Classes="tight" Content="{x:Static res:Strings.TgtMidiIn}" Click="OnDialog" Tag="in:midi" />
+                  <Button Classes="tight" Content="{x:Static res:Strings.TgtOscListener}" Click="OnDialog" Tag="in:osc" />
+                  <Button Classes="tight" Content="{x:Static res:Strings.TgtKeyboard}" Click="OnDialog" Tag="in:key" />
                   <!-- The other two ways a cue fires with nobody at the desk. Same master gate. -->
-                  <Button Classes="tight" Content="+ SCHEDULE…" Click="OnDialog" Tag="in:clock" />
-                  <Button Classes="tight" Content="+ TIMECODE…" Click="OnDialog" Tag="in:mtc" />
-                  <Button Classes="tight" Content="EDIT…" Click="OnDialog" Tag="in:edit"
+                  <Button Classes="tight" Content="{x:Static res:Strings.TgtSchedule}" Click="OnDialog" Tag="in:clock" />
+                  <Button Classes="tight" Content="{x:Static res:Strings.TgtTimecode}" Click="OnDialog" Tag="in:mtc" />
+                  <Button Classes="tight" Content="{x:Static res:Strings.InspEdit}" Click="OnDialog" Tag="in:edit"
                           IsEnabled="{Binding HasSourceSelected}" />
-                  <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="in:remove"
+                  <Button Classes="tight" Content="{x:Static res:Strings.AudRemove}" Click="OnDialog" Tag="in:remove"
                           IsEnabled="{Binding HasSourceSelected}" />
                 </WrapPanel>
               </Border>
@@ -143,11 +144,11 @@
               <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                       BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
                 <Grid ColumnDefinitions="100,*,70,150,90" ColumnSpacing="8">
-                  <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="DEVICE / SOURCE" />
-                  <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
-                  <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="BINDINGS" />
-                  <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="LAST SEEN" />
-                  <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
+                  <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtDeviceSource}" />
+                  <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudKind}" />
+                  <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtBindings}" />
+                  <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtLastSeen}" />
+                  <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.DiagColState}" />
                 </Grid>
               </Border>
               <ListBox Theme="{StaticResource TableRows}"
@@ -157,9 +158,9 @@
                        KeyDown="OnSourcesKeyDown" PointerPressed="OnRowRightPressed">
                 <ListBox.ContextMenu>
                   <ContextMenu>
-                    <MenuItem Header="Edit…" Click="OnDialog" Tag="in:edit" />
+                    <MenuItem Header="{x:Static res:Strings.TgtEdit}" Click="OnDialog" Tag="in:edit" />
                     <Separator />
-                    <MenuItem Header="Remove…" Click="OnDialog" Tag="in:remove" />
+                    <MenuItem Header="{x:Static res:Strings.AudRemove2}" Click="OnDialog" Tag="in:remove" />
                   </ContextMenu>
                 </ListBox.ContextMenu>
               </ListBox>
@@ -169,7 +170,7 @@
           <c:PanelBox Grid.Row="1" Header="{Binding BindingsHeader}" Hint="selected device">
             <c:PanelBox.Footer>
               <Border Classes="chain">
-                <Button Classes="tight" Content="REMOVE BINDING" Click="OnRemoveBinding"
+                <Button Classes="tight" Content="{x:Static res:Strings.TgtRemoveBinding}" Click="OnRemoveBinding"
                         IsEnabled="{Binding CanRemoveBinding}" />
               </Border>
             </c:PanelBox.Footer>
@@ -177,9 +178,9 @@
               <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                       BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
                 <Grid ColumnDefinitions="110,*,180" ColumnSpacing="8">
-                  <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="INPUT" />
-                  <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="FIRES" />
-                  <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="FILTER" />
+                  <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtInput}" />
+                  <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtFires}" />
+                  <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtFilter}" />
                 </Grid>
               </Border>
               <c:EmptyState IsVisible="{Binding !HasBindings}"
@@ -191,7 +192,7 @@
                        KeyDown="OnBindingsKeyDown" PointerPressed="OnRowRightPressed">
                 <ListBox.ContextMenu>
                   <ContextMenu>
-                    <MenuItem Header="Remove binding" Click="OnRemoveBinding" />
+                    <MenuItem Header="{x:Static res:Strings.TgtRemoveBinding2}" Click="OnRemoveBinding" />
                   </ContextMenu>
                 </ListBox.ContextMenu>
                 <ListBox.ItemTemplate>
@@ -210,14 +211,14 @@
 
         <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
 
-          <c:PanelBox Grid.Row="0" Header="Learn" Hint="{Binding LearnTarget}">
+          <c:PanelBox Grid.Row="0" Header="{x:Static res:Strings.TgtLearn}" Hint="{Binding LearnTarget}">
             <c:PanelBox.Footer>
               <Border Classes="chain">
                 <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="6">
-                  <Button Grid.Column="0" Classes="primary tight" Content="BIND" Click="OnBind"
+                  <Button Grid.Column="0" Classes="primary tight" Content="{x:Static res:Strings.TgtBind}" Click="OnBind"
                           IsEnabled="{Binding CanBind}" />
                   <!-- Nothing to learn from a wall clock: half past ten does not arrive on a wire. -->
-                  <Button Grid.Column="1" Classes="tight" Content="LEARN" Click="OnLearn"
+                  <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.TgtLearn2}" Click="OnLearn"
                           IsEnabled="{Binding CanLearn}" />
                   <!-- Conflicts are shown BEFORE the bind, not after: rebinding a note that already
                        fires something is how a show loses a cue silently. -->
@@ -228,35 +229,35 @@
             </c:PanelBox.Footer>
 
             <StackPanel Margin="0,6,0,8">
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Listening">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TgtListening}">
                 <TextBox Classes="ro" Classes.warn="{Binding IsLearning}" Text="{Binding LearnState}" />
               </HeaderedContentControl>
               <!-- Read-only for a wire, typable for a clock: the same field, because it holds the
                    same thing - the pattern the binding will carry. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Caught">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TgtCaught}">
                 <TextBox Classes.ro="{Binding !IsTyped}" IsReadOnly="{Binding !IsTyped}"
                          Text="{Binding LearnCaught}" />
               </HeaderedContentControl>
               <!-- The target is chosen BEFORE the bind, so one gesture produces a working binding
                    rather than one that has to be edited afterwards. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Fires">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TgtFires2}">
                 <ComboBox ItemsSource="{Binding LearnTargets}"
                           SelectedIndex="{Binding LearnTargetIndex}" />
               </HeaderedContentControl>
               <!-- Only the repeat filter: a velocity threshold has no model field behind it, and a
                    box that looked like one would be the thing this sweep is removing. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="No repeat">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TgtNoRepeat}">
                 <TextBox Text="{Binding LearnNoRepeat}" />
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="While typing"
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TgtWhileTyping}"
                                       IsVisible="{Binding IsKeyboardSource}">
-                <CheckBox Content="Keep this binding global while editing text"
+                <CheckBox Content="{x:Static res:Strings.TgtKeepThisBindingGlobalWhile}"
                           IsChecked="{Binding LearnAllowWhileTyping}" />
               </HeaderedContentControl>
             </StackPanel>
           </c:PanelBox>
 
-          <c:PanelBox Grid.Row="1" Header="Monitor" Hint="{Binding MonitorHint}">
+          <c:PanelBox Grid.Row="1" Header="{x:Static res:Strings.TgtMonitor}" Hint="{Binding MonitorHint}">
             <ListBox Theme="{StaticResource ReadonlyRows}" Margin="10,8"
                      ItemsSource="{Binding Monitor}"
                      ItemTemplate="{StaticResource MonitorLineTemplate}" />
@@ -267,45 +268,45 @@
       <!-- ══ REMOTE API ═════════════════════════════════════════════════════════════════════ -->
       <Grid IsVisible="{Binding IsRemotePane}" ColumnDefinitions="280,*" Margin="7" ColumnSpacing="7">
 
-        <c:PanelBox Grid.Column="0" Header="Server" VerticalAlignment="Top">
+        <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.TgtServer}" VerticalAlignment="Top">
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <StackPanel Orientation="Horizontal" Spacing="7">
-                <Border Classes="badge"><TextBlock Text="OVERRIDE" /></Border>
+                <Border Classes="badge"><TextBlock Text="{x:Static res:Strings.TgtOverride}" /></Border>
                 <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                           Text="project override - app default is off" />
+                           Text="{x:Static res:Strings.TgtProjectOverrideAppDefaultIs}" />
               </StackPanel>
             </Border>
           </c:PanelBox.Footer>
 
           <StackPanel Margin="0,6,0,8">
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="State">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TgtState}">
               <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding ServerStates}"
                        SelectedItem="{Binding ServerState}" />
             </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Port">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.SetPort}">
               <TextBox Classes="short" Text="{Binding Port}" />
             </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="LAN">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TgtLan}">
               <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding LanModes}"
                        SelectedItem="{Binding LanMode}" />
             </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Token">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.SetToken}">
               <TextBox Classes="ro" Text="{Binding RemoteTokenMask}" />
             </HeaderedContentControl>
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Last call">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TgtLastCall}">
               <TextBox Classes="ro" Text="{Binding LastCall}" />
             </HeaderedContentControl>
           </StackPanel>
         </c:PanelBox>
 
-        <c:PanelBox Grid.Column="1" Header="Endpoints" Hint="{Binding ServedAt}">
+        <c:PanelBox Grid.Column="1" Header="{x:Static res:Strings.TgtEndpoints}" Hint="{Binding ServedAt}">
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <StackPanel Orientation="Horizontal" Spacing="7">
-                <Border Classes="badge"><TextBlock Text="DOCS" /></Border>
+                <Border Classes="badge"><TextBlock Text="{x:Static res:Strings.TgtDocs}" /></Border>
                 <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                           Text="GET / serves this table as JSON + examples with the token pre-filled" />
+                           Text="{x:Static res:Strings.TgtGetServesThisTableAs}" />
               </StackPanel>
             </Border>
           </c:PanelBox.Footer>
@@ -314,10 +315,10 @@
             <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                     BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
               <Grid ColumnDefinitions="60,260,*,70" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="METHOD" />
-                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="PATH" />
-                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="DOES" />
-                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="CALLS" />
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtMethod}" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtPath}" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtDoes}" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.TgtCalls}" />
               </Grid>
             </Border>
             <ListBox Theme="{StaticResource TableRows}" ItemsSource="{Binding Routes}">

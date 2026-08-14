@@ -1,11 +1,12 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaCue2.Resources"
         xmlns:c="using:HaCue2.Controls"
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.OutputInfoWindow"
         x:DataType="vm:OutputInfoViewModel"
         x:CompileBindings="True"
-        Title="HaCue2 - Output info"
+        Title="{x:Static res:Strings.OutInfoHacue2OutputInfo}"
         Width="1020" Height="140"
         SizeToContent="Height"
         WindowStartupLocation="CenterOwner"
@@ -22,7 +23,7 @@
     <Border Grid.Column="0" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,1,0"
             Padding="11,8">
       <StackPanel Orientation="Horizontal" Spacing="10">
-        <TextBlock Classes="caps" VerticalAlignment="Center" Text="PROGRAM" />
+        <TextBlock Classes="caps" VerticalAlignment="Center" Text="{x:Static res:Strings.ShellProgramCaption}" />
         <ItemsControl ItemsSource="{Binding Meters}">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate>
@@ -45,7 +46,7 @@
     <Border Grid.Column="1" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,1,0"
             Padding="11,8">
       <StackPanel Orientation="Horizontal" Spacing="10">
-        <TextBlock Classes="caps" VerticalAlignment="Center" Text="LINES" />
+        <TextBlock Classes="caps" VerticalAlignment="Center" Text="{x:Static res:Strings.OutInfoLines}" />
         <ItemsControl ItemsSource="{Binding Lines}">
           <ItemsControl.ItemsPanel>
             <ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="6" /></ItemsPanelTemplate>
@@ -81,7 +82,7 @@
 
     <Border Grid.Column="2" Padding="11,8">
       <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-        <TextBlock Classes="caps" VerticalAlignment="Center" Text="BAY" />
+        <TextBlock Classes="caps" VerticalAlignment="Center" Text="{x:Static res:Strings.OutInfoBay}" />
         <StackPanel Spacing="1" VerticalAlignment="Center">
           <TextBlock Classes="mono dim2 small" Text="{Binding BaySummary}" />
           <TextBlock Classes="mono dim3 small" Text="{Binding BayClock}" />

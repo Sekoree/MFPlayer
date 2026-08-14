@@ -1,11 +1,12 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaCue2.Resources"
         xmlns:c="using:HaCue2.Controls"
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.AutomationEditorWindow"
         x:DataType="vm:AutomationEditorViewModel"
         x:CompileBindings="True"
-        Title="Automation"
+        Title="{x:Static res:Strings.AutoEdAutomation}"
         Width="1040" Height="590" MinWidth="720" MinHeight="420"
         CanResize="True" WindowStartupLocation="CenterOwner"
         Background="{DynamicResource BoothBg}" Foreground="{DynamicResource BoothInk}"
@@ -15,13 +16,13 @@
     <c:PanelBox.Footer>
       <Border Classes="chain">
         <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
-          <CheckBox Grid.Column="0" Content="enabled" IsChecked="{Binding IsEnabled, Mode=TwoWay}"
+          <CheckBox Grid.Column="0" Content="{x:Static res:Strings.AutoEdEnabled}" IsChecked="{Binding IsEnabled, Mode=TwoWay}"
                     IsEnabled="{Binding CanEdit}" />
           <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
                      Text="{Binding ViewLabel}" />
           <TextBlock Grid.Column="2" Classes="mono warn small" HorizontalAlignment="Right"
                      VerticalAlignment="Center" Text="{Binding Problem}" />
-          <Button Grid.Column="3" Classes="primary tight" Content="DONE" Click="OnDone" />
+          <Button Grid.Column="3" Classes="primary tight" Content="{x:Static res:Strings.AutoEdDone}" Click="OnDone" />
         </Grid>
       </Border>
     </c:PanelBox.Footer>
@@ -33,30 +34,30 @@
            drive it; snap lives with the other authoring settings on the right. -->
       <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto,Auto,Auto,Auto"
             ColumnSpacing="5" Margin="0,0,0,7">
-        <Button Grid.Column="0" Classes="tight" Content="|◀ KEY" Click="OnPreviousKey" AutomationProperties.Name="Previous keyframe" />
-        <Button Grid.Column="1" Classes="tight" Content="KEY ▶|" Click="OnNextKey" AutomationProperties.Name="Next keyframe" />
-        <Button Grid.Column="2" Classes="tight primary" Content="＋ KEY" Click="OnAddKey" AutomationProperties.Name="Add keyframe at cursor"
+        <Button Grid.Column="0" Classes="tight" Content="{x:Static res:Strings.AutoEdKey}" Click="OnPreviousKey" AutomationProperties.Name="Previous keyframe" />
+        <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.AutoEdKey2}" Click="OnNextKey" AutomationProperties.Name="Next keyframe" />
+        <Button Grid.Column="2" Classes="tight primary" Content="{x:Static res:Strings.AutoEdKey3}" Click="OnAddKey" AutomationProperties.Name="Add keyframe at cursor"
                 IsEnabled="{Binding CanEdit}"
-                ToolTip.Tip="Add a keyframe at the cursor" />
-        <Button Grid.Column="3" Classes="tight" Content="−" Click="OnZoomOut" AutomationProperties.Name="Zoom out" ToolTip.Tip="Zoom out" />
-        <Button Grid.Column="4" Classes="tight" Content="+" Click="OnZoomIn" AutomationProperties.Name="Zoom in" ToolTip.Tip="Zoom in" />
+                ToolTip.Tip="{x:Static res:Strings.AutoEdAddAKeyframeAtThe}" />
+        <Button Grid.Column="3" Classes="tight" Content="−" Click="OnZoomOut" AutomationProperties.Name="Zoom out" ToolTip.Tip="{x:Static res:Strings.AutoEdZoomOut}" />
+        <Button Grid.Column="4" Classes="tight" Content="+" Click="OnZoomIn" AutomationProperties.Name="Zoom in" ToolTip.Tip="{x:Static res:Strings.AutoEdZoomIn}" />
         <ComboBox Grid.Column="5" Width="96" ItemsSource="{Binding ZoomOptions}"
                   AutomationProperties.Name="Visible span"
                   SelectedItem="{Binding ZoomSpan, Mode=TwoWay}"
-                  ToolTip.Tip="How much of the cue is in view; − and + step the same list" />
+                  ToolTip.Tip="{x:Static res:Strings.AutoEdHowMuchOfTheCue}" />
         <Slider Grid.Column="6" AutomationProperties.Name="Playhead position"
                 Minimum="0" Maximum="{Binding DurationMs}"
                 Value="{Binding CursorMs, Mode=TwoWay}" />
         <TextBlock Grid.Column="7" Classes="mono small" VerticalAlignment="Center"
                    MinWidth="82" Text="{Binding CursorLabel}" />
-        <Button Grid.Column="8" Classes="tight" Content="SEEK" Click="OnSeek" AutomationProperties.Name="Seek this cue to the cursor"
-                ToolTip.Tip="Seek this cue when it is currently sounding" />
-        <Button Grid.Column="9" Classes="tight" Content="FIT" Click="OnFit" AutomationProperties.Name="Fit the whole cue in view" />
-        <TextBlock Grid.Column="10" Classes="mono dim3 micro" VerticalAlignment="Center" Text="SNAP" />
+        <Button Grid.Column="8" Classes="tight" Content="{x:Static res:Strings.AutoEdSeek}" Click="OnSeek" AutomationProperties.Name="Seek this cue to the cursor"
+                ToolTip.Tip="{x:Static res:Strings.AutoEdSeekThisCueWhenIt}" />
+        <Button Grid.Column="9" Classes="tight" Content="{x:Static res:Strings.TlZoomFit}" Click="OnFit" AutomationProperties.Name="Fit the whole cue in view" />
+        <TextBlock Grid.Column="10" Classes="mono dim3 micro" VerticalAlignment="Center" Text="{x:Static res:Strings.AutoEdSnap}" />
         <ComboBox Grid.Column="11" Width="78" ItemsSource="{Binding SnapTimeOptions}"
                   AutomationProperties.Name="Time snap in milliseconds"
                   SelectedItem="{Binding SnapTimeMs, Mode=TwoWay}"
-                  ToolTip.Tip="Time snap in milliseconds; Alt bypasses snap while dragging" />
+                  ToolTip.Tip="{x:Static res:Strings.AutoEdTimeSnapInMillisecondsAlt}" />
       </Grid>
 
       <Grid DockPanel.Dock="Bottom" RowDefinitions="Auto,Auto" Margin="0,7,0,0">
@@ -65,12 +66,12 @@
                    ViewportSize="{Binding ViewLengthMs}"
                    Value="{Binding ViewStartMs, Mode=TwoWay}" />
         <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="5" Margin="0,4,0,0">
-          <Button Grid.Column="0" Classes="tight" Content="◀ PAGE" Click="OnPanLeft" AutomationProperties.Name="Page left" />
+          <Button Grid.Column="0" Classes="tight" Content="{x:Static res:Strings.AutoEdPage}" Click="OnPanLeft" AutomationProperties.Name="Page left" />
           <TextBlock Grid.Column="1" Classes="mono dim3 micro" HorizontalAlignment="Center"
-                     Text="scroll through the cue; zoom keeps the cursor in place" />
-          <Button Grid.Column="2" Classes="tight" Content="PAGE ▶" Click="OnPanRight" AutomationProperties.Name="Page right" />
-          <Button Grid.Column="3" Classes="tight" Content="+30 MIN" Click="OnExtend" AutomationProperties.Name="Extend the authoring ruler by 30 minutes"
-                  IsVisible="{Binding CanExtend}" ToolTip.Tip="Extend an open-ended cue's authoring ruler" />
+                     Text="{x:Static res:Strings.AutoEdScrollThroughTheCueZoom}" />
+          <Button Grid.Column="2" Classes="tight" Content="{x:Static res:Strings.AutoEdPage2}" Click="OnPanRight" AutomationProperties.Name="Page right" />
+          <Button Grid.Column="3" Classes="tight" Content="{x:Static res:Strings.AutoEdN30Min}" Click="OnExtend" AutomationProperties.Name="Extend the authoring ruler by 30 minutes"
+                  IsVisible="{Binding CanExtend}" ToolTip.Tip="{x:Static res:Strings.AutoEdExtendAnOpenEndedCue}" />
         </Grid>
       </Grid>
 
@@ -95,7 +96,7 @@
         <Border Grid.Column="0" Grid.Row="1" Background="{DynamicResource BoothPit}"
                 BorderBrush="{DynamicResource BoothRule}" BorderThickness="1" Padding="5">
           <c:CurveCanvas AutomationProperties.Name="Absolute-time automation editor"
-                         AutomationProperties.HelpText="Click and drag empty space to add a key. Drag keys to edit. Alt bypasses snap, Shift constrains an axis, and Escape cancels a drag."
+                         AutomationProperties.HelpText="{x:Static res:Strings.AutoEdClickAndDragEmptySpace}"
                          AddOnEmptyPointerPress="True"
                          LogicalNudges="True"
                          RemoveWhenDraggedOffCanvas="False"
@@ -116,7 +117,7 @@
                do rather than an approximation of it - and it follows key drags, not just the cursor. -->
           <Border Classes="chip" Margin="10,2,10,4" HorizontalAlignment="Left">
             <StackPanel Orientation="Horizontal" Spacing="6">
-              <TextBlock Classes="mono dim3 micro" VerticalAlignment="Center" Text="AT CURSOR" />
+              <TextBlock Classes="mono dim3 micro" VerticalAlignment="Center" Text="{x:Static res:Strings.AutoEdAtCursor}" />
               <TextBlock Classes="mono" VerticalAlignment="Center"
                          AutomationProperties.Name="Lane value at the cursor"
                          Text="{Binding CursorValueLabel}" />
@@ -125,42 +126,42 @@
           <!-- Enter as well as LostFocus. On focus alone the key did not move until the operator clicked
                somewhere else, which reads as a field that does nothing - and the obvious next thing to
                click is the canvas, which selects a different key. -->
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Key time">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.AutoEdKeyTime}">
             <TextBox Text="{Binding PointTime}" IsEnabled="{Binding CanEditSelection}"
                      AutomationProperties.Name="Selected keyframe time"
                      KeyDown="OnPointTimeKeyDown" LostFocus="OnPointTimeCommitted" />
           </HeaderedContentControl>
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Property value">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.AutoEdPropertyValue}">
             <TextBox Text="{Binding PointValue}" IsEnabled="{Binding CanEditSelection}"
                      AutomationProperties.Name="Selected keyframe value"
                      KeyDown="OnPointValueKeyDown" LostFocus="OnPointValueCommitted" />
           </HeaderedContentControl>
           <TextBlock Classes="mono dim3 micro" Margin="10,0" Text="{Binding Unit, StringFormat='unit · {0}'}" />
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Segment after key">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.AutoEdSegmentAfterKey}">
             <ComboBox ItemsSource="{Binding Segments}" SelectedItem="{Binding Segment, Mode=TwoWay}"
                       IsEnabled="{Binding CanEditSelection}" />
           </HeaderedContentControl>
-          <Button Classes="block" Content="EDIT CURVE SHAPE…" Click="OnEditSegmentCurve"
+          <Button Classes="block" Content="{x:Static res:Strings.AutoEdEditCurveShape}" Click="OnEditSegmentCurve"
                   IsEnabled="{Binding CanEditSelection}"
-                  ToolTip.Tip="Edit only the normalized easing between this key and the next" />
-          <CheckBox Margin="10,4" Content="hold until next key"
+                  ToolTip.Tip="{x:Static res:Strings.AutoEdEditOnlyTheNormalizedEasing}" />
+          <CheckBox Margin="10,4" Content="{x:Static res:Strings.AutoEdHoldUntilNextKey}"
                     IsChecked="{Binding IsHold, Mode=TwoWay}" IsEnabled="{Binding CanEditSelection}" />
           <Grid ColumnDefinitions="*,*" ColumnSpacing="5">
-            <Button Grid.Column="0" Classes="block" Content="COPY" Click="OnCopyPointsClicked" AutomationProperties.Name="Copy selected keyframes" />
-            <Button Grid.Column="1" Classes="block" Content="PASTE" Click="OnPastePointsClicked" AutomationProperties.Name="Paste keyframes at cursor"
+            <Button Grid.Column="0" Classes="block" Content="{x:Static res:Strings.TlCopy}" Click="OnCopyPointsClicked" AutomationProperties.Name="Copy selected keyframes" />
+            <Button Grid.Column="1" Classes="block" Content="{x:Static res:Strings.TlPaste}" Click="OnPastePointsClicked" AutomationProperties.Name="Paste keyframes at cursor"
                     IsEnabled="{Binding CanEdit}" />
           </Grid>
           <!-- Only shown when there is something past the out-point. Absolute time never rescales keys
                when a cue is shortened, so this is the explicit route to the ones the ruler cannot reach. -->
           <TextBlock Classes="mono warn micro" Margin="10,6,10,0" TextWrapping="Wrap"
                      IsVisible="{Binding HasOutOfRangeKeys}" Text="{Binding OutOfRangeLabel}" />
-          <Button Classes="block" Content="DELETE KEYS PAST THE END" Click="OnDeleteOutOfRange"
+          <Button Classes="block" Content="{x:Static res:Strings.AutoEdDeleteKeysPastTheEnd}" Click="OnDeleteOutOfRange"
                   AutomationProperties.Name="Delete keyframes past the end of the cue"
                   IsVisible="{Binding HasOutOfRangeKeys}" IsEnabled="{Binding CanEdit}" />
-          <Button Classes="block" Content="DELETE SELECTED KEY(S)" Click="OnDelete" AutomationProperties.Name="Delete selected keyframes"
+          <Button Classes="block" Content="{x:Static res:Strings.AutoEdDeleteSelectedKeyS}" Click="OnDelete" AutomationProperties.Name="Delete selected keyframes"
                   IsEnabled="{Binding CanEditSelection}" />
           <TextBlock Classes="mono dim3 small" Margin="10,8" TextWrapping="Wrap"
-                     Text="Values before the first key and after the last key hold. A disabled track falls back to the cue's authored property." />
+                     Text="{x:Static res:Strings.AutoEdValuesBeforeTheFirstKey}" />
           <TextBlock Classes="mono dim3 micro" Margin="10,0" Text="{Binding WaveformStatus}" />
         </StackPanel>
       </Grid>

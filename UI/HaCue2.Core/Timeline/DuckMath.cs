@@ -280,6 +280,5 @@ public static class DuckMath
         return [.. spliced.OrderBy(point => point.X)];
     }
 
-    private static double Factor(double decibels) =>
-        decibels <= GainRange.SilenceFloorDb ? 0 : Math.Pow(10, decibels / 20);
+    private static double Factor(double decibels) => GainRange.LinearFactor(decibels);
 }

@@ -189,7 +189,7 @@
           <Border Grid.Column="1" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,1,0"
                   Padding="11,6">
             <StackPanel Orientation="Horizontal" Spacing="8">
-              <TextBlock Classes="caps" Text="LINES" VerticalAlignment="Center">
+              <TextBlock Classes="caps" Text="{x:Static res:Strings.OutInfoLines}" VerticalAlignment="Center">
                 <TextBlock.RenderTransform>
                   <RotateTransform Angle="-90" />
                 </TextBlock.RenderTransform>
@@ -230,7 +230,7 @@
           <!-- Bay -->
           <Border Grid.Column="2" Padding="11,6">
             <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto" ColumnSpacing="8">
-              <TextBlock Grid.Column="0" Classes="caps" Text="BAY" VerticalAlignment="Center">
+              <TextBlock Grid.Column="0" Classes="caps" Text="{x:Static res:Strings.OutInfoBay}" VerticalAlignment="Center">
                 <TextBlock.RenderTransform>
                   <RotateTransform Angle="-90" />
                 </TextBlock.RenderTransform>
@@ -239,9 +239,9 @@
                 <TextBlock Classes="mono dim2 small" Text="{Binding BaySummary}" />
                 <TextBlock Classes="mono dim3 small" Text="{Binding BayClock}" />
               </StackPanel>
-              <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="POP OUT ↗"
+              <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.PlacePopOut}"
                       Click="OnPopOutDrawer" />
-              <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="HIDE ▾"
+              <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.ShellHide}"
                       Click="OnHideDrawer" />
             </Grid>
           </Border>

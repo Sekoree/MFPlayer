@@ -1,11 +1,12 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaCue2.Resources"
         xmlns:c="using:HaCue2.Controls"
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.CurveEditorWindow"
         x:DataType="vm:CurveEditorViewModel"
         x:CompileBindings="True"
-        Title="Fade curve"
+        Title="{x:Static res:Strings.CurveEdFadeCurve}"
         Width="820" Height="570"
         MinWidth="620" MinHeight="360"
         CanResize="True"
@@ -41,13 +42,13 @@
       <Border DockPanel.Dock="Bottom" Classes="chain" Margin="10,0,10,8"
               IsVisible="{Binding IsCrossfade}">
         <StackPanel Orientation="Horizontal" Spacing="7">
-          <Border Classes="badge"><TextBlock Text="CROSSFADE" /></Border>
+          <Border Classes="badge"><TextBlock Text="{x:Static res:Strings.CurveEdCrossfade}" /></Border>
           <Rectangle Width="18" Height="2" VerticalAlignment="Center"
                      Fill="{DynamicResource GelCongo}" />
-          <TextBlock Classes="mono dim2 small" VerticalAlignment="Center" Text="going out" />
+          <TextBlock Classes="mono dim2 small" VerticalAlignment="Center" Text="{x:Static res:Strings.CurveEdGoingOut}" />
           <Rectangle Width="18" Height="2" VerticalAlignment="Center" Opacity="0.55"
                      Fill="{DynamicResource GelAmber}" />
-          <TextBlock Classes="mono dim2 small" VerticalAlignment="Center" Text="coming in" />
+          <TextBlock Classes="mono dim2 small" VerticalAlignment="Center" Text="{x:Static res:Strings.CurveEdComingIn}" />
           <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
                      Text="{Binding CompanionNote}" />
         </StackPanel>
@@ -57,7 +58,7 @@
 
         <c:CurveCanvas Grid.Column="0"
                        AutomationProperties.Name="Curve point editor"
-                       AutomationProperties.HelpText="Drag points to shape the curve. Exact keyboard-editable values are beside the canvas."
+                       AutomationProperties.HelpText="{x:Static res:Strings.CurveEdDragPointsToShapeThe}"
                        Points="{Binding Points}"
                        Shape="{Binding Shape}"
                        CompanionShape="{Binding Companion}"
@@ -72,40 +73,40 @@
         <StackPanel Grid.Column="1" Spacing="4">
           <!-- The same three verbs the timeline lane offers. Buttons as well as the canvas shortcuts,
                because the shortcuts only fire while the canvas itself holds focus. -->
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Selection">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.CurveEdSelection}">
             <WrapPanel Orientation="Horizontal">
-              <Button Classes="tight" Content="ALL" Click="OnSelectAllPointsClicked"
-                      ToolTip.Tip="Select every point (Ctrl+A on the canvas)" />
-              <Button Classes="tight" Content="COPY" Click="OnCopyPointsClicked"
-                      ToolTip.Tip="Copy the selected points (Ctrl+C on the canvas)" />
-              <Button Classes="tight" Content="PASTE" Click="OnPastePointsClicked"
-                      ToolTip.Tip="Paste at the selected point, replacing that span (Ctrl+V)" />
+              <Button Classes="tight" Content="{x:Static res:Strings.TlSelectAll}" Click="OnSelectAllPointsClicked"
+                      ToolTip.Tip="{x:Static res:Strings.CurveEdSelectEveryPointCtrlA}" />
+              <Button Classes="tight" Content="{x:Static res:Strings.TlCopy}" Click="OnCopyPointsClicked"
+                      ToolTip.Tip="{x:Static res:Strings.CurveEdCopyTheSelectedPointsCtrl}" />
+              <Button Classes="tight" Content="{x:Static res:Strings.TlPaste}" Click="OnPastePointsClicked"
+                      ToolTip.Tip="{x:Static res:Strings.CurveEdPasteAtTheSelectedPoint}" />
             </WrapPanel>
           </HeaderedContentControl>
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Time">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.CurveEdTime}">
             <TextBox Text="{Binding PointTime}" IsEnabled="{Binding HasSelection}"
-                     ToolTip.Tip="Clock time when the duration is known; otherwise enter a percentage." />
+                     ToolTip.Tip="{x:Static res:Strings.CurveEdClockTimeWhenTheDuration}" />
           </HeaderedContentControl>
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Value">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.CurveEdValue}">
             <TextBox Text="{Binding PointValue}" IsEnabled="{Binding HasSelection}"
-                     ToolTip.Tip="Enter dB in dB scale, or a normalized 0–1 value in linear scale." />
+                     ToolTip.Tip="{x:Static res:Strings.CurveEdEnterDbInDbScale}" />
           </HeaderedContentControl>
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Scale">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.CurveEdScale}">
             <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Scales}"
                      SelectedItem="{Binding Scale, Mode=TwoWay}" />
           </HeaderedContentControl>
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Segment"
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.CurveEdSegment}"
                                   IsEnabled="{Binding HasSelection}">
             <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Segments}"
                      SelectedItem="{Binding Segment, Mode=TwoWay}" />
           </HeaderedContentControl>
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Save as">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.CurveEdSaveAs}">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="5">
               <TextBox Grid.Column="0" Text="{Binding PresetName}" />
-              <Button Grid.Column="1" Classes="tight" Content="SAVE" Click="OnSavePreset" />
+              <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.CurveEdSave}" Click="OnSavePreset" />
             </Grid>
           </HeaderedContentControl>
-          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Preset library">
+          <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.CurveEdPresetLibrary}">
             <StackPanel Spacing="4">
               <ComboBox ItemsSource="{Binding Presets}"
                         SelectedIndex="{Binding SelectedPresetIndex, Mode=TwoWay}">
@@ -120,12 +121,12 @@
               </ComboBox>
               <TextBox Text="{Binding ManagedPresetName}" IsEnabled="{Binding HasManagedPreset}" />
               <WrapPanel Orientation="Horizontal">
-                <Button Classes="tight" Content="RENAME" IsEnabled="{Binding HasManagedPreset}"
+                <Button Classes="tight" Content="{x:Static res:Strings.AudRename}" IsEnabled="{Binding HasManagedPreset}"
                         Click="OnRenamePreset" />
-                <Button Classes="tight" Content="DELETE" IsEnabled="{Binding HasManagedPreset}"
+                <Button Classes="tight" Content="{x:Static res:Strings.CurveEdDelete}" IsEnabled="{Binding HasManagedPreset}"
                         Click="OnDeletePreset"
-                        ToolTip.Tip="Referenced curves are preserved inline; the whole deletion is undoable." />
-                <Button Classes="tight" Content="IMPORT…" Click="OnImportPresets" />
+                        ToolTip.Tip="{x:Static res:Strings.CurveEdReferencedCurvesArePreservedInline}" />
+                <Button Classes="tight" Content="{x:Static res:Strings.CurveEdImport}" Click="OnImportPresets" />
               </WrapPanel>
             </StackPanel>
           </HeaderedContentControl>
@@ -134,7 +135,7 @@
           <TextBlock Margin="10,4" Classes="mono dim3 micro" TextWrapping="Wrap"
                      Text="{Binding EditHint}" />
           <ContentControl Theme="{StaticResource FieldWide}">
-            <Button Classes="primary block" Content="DONE" Click="OnDone" />
+            <Button Classes="primary block" Content="{x:Static res:Strings.AutoEdDone}" Click="OnDone" />
           </ContentControl>
         </StackPanel>
       </Grid>

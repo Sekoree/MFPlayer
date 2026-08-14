@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaCue2.Resources"
         xmlns:c="using:HaCue2.Controls"
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.PromptWindow"
@@ -29,7 +30,7 @@
                   IsVisible="{Binding HasAlternative}"
                   Content="{Binding Alternative}" Click="OnAlternative" />
           <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
-                  Content="CANCEL" Click="OnCancel" />
+                  Content="{x:Static res:Strings.PromptCancel}" Click="OnCancel" />
         </DockPanel>
       </Border>
 
@@ -51,7 +52,7 @@
                   <Grid IsVisible="{Binding IsSuggestion}" ColumnDefinitions="*,Auto" ColumnSpacing="4">
                     <TextBox Grid.Column="0" Text="{Binding Value}" />
                     <Button Grid.Column="1" Classes="icon" Content="▾"
-                            ToolTip.Tip="Common values. Anything can still be typed.">
+                            ToolTip.Tip="{x:Static res:Strings.PromptCommonValuesAnythingCanStill}">
                       <Button.Flyout>
                         <Flyout>
                           <ItemsControl ItemsSource="{Binding Options}">
@@ -74,7 +75,7 @@
                        and one that does not exist yet cannot be picked at all. -->
                   <Grid IsVisible="{Binding IsPath}" ColumnDefinitions="*,Auto" ColumnSpacing="6">
                     <TextBox Grid.Column="0" Text="{Binding Value}" />
-                    <Button Grid.Column="1" Classes="tight" Content="BROWSE…" Click="OnBrowse"
+                    <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.PromptBrowse}" Click="OnBrowse"
                             Tag="{Binding}" />
                   </Grid>
                 </Panel>

@@ -1,11 +1,12 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaCue2.Resources"
         xmlns:c="using:HaCue2.Controls"
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.ProjectStatusWindow"
         x:DataType="vm:ProjectStatusViewModel"
         x:CompileBindings="True"
-        Title="HaCue2 - Project status"
+        Title="{x:Static res:Strings.StatusHacue2ProjectStatus}"
         Width="1060" Height="560"
         MinWidth="900" MinHeight="460"
         WindowStartupLocation="CenterOwner"
@@ -26,13 +27,13 @@
     <Border Classes="titlebar" DockPanel.Dock="Top">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
         <TextBlock Grid.Column="0" Classes="mono" FontWeight="SemiBold" FontSize="11"
-                   LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" />
+                   LetterSpacing="0.45" Text="{x:Static res:Strings.DiagBrand}" VerticalAlignment="Center" />
         <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" Margin="14,0,0,0"
                    Text="{Binding Title}" VerticalAlignment="Center" />
-        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="RE-RUN ALL" Click="OnRerun" />
+        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.StatusReRunAll}" Click="OnRerun" />
         <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="{Binding CopyLabel}"
                 Click="OnCopyReport" />
-        <Button Grid.Column="5" Theme="{StaticResource ChipButton}" Content="CLOSE ⎋" Click="OnClose" />
+        <Button Grid.Column="5" Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.TlClose}" Click="OnClose" />
       </Grid>
     </Border>
 
@@ -48,15 +49,15 @@
 
     <Grid ColumnDefinitions="*,300" Margin="7" ColumnSpacing="7">
 
-      <c:PanelBox Grid.Column="0" Header="Checks" Hint="{Binding Summary}">
+      <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.StatusChecks}" Hint="{Binding Summary}">
         <DockPanel>
           <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                   BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
             <Grid ColumnDefinitions="180,110,*,80" ColumnSpacing="8">
-              <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="CHECK" />
-              <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="RESULT" />
-              <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="DETAIL" />
-              <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="FIX" />
+              <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.StatusCheck}" />
+              <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.StatusResult}" />
+              <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.StatusDetail}" />
+              <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.StatusFix}" />
             </Grid>
           </Border>
 
@@ -87,40 +88,40 @@
 
       <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*" RowSpacing="7">
 
-        <c:PanelBox Grid.Row="0" Header="Relink" Hint="for the missing file">
+        <c:PanelBox Grid.Row="0" Header="{x:Static res:Strings.StatusRelink}" Hint="for the missing file">
           <StackPanel Margin="0,6,0,8">
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Missing">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.StatusMissing}">
               <TextBox Classes="ro" Text="{Binding MissingFile}" />
             </HeaderedContentControl>
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="block" Content="SEARCH BY FILENAME UNDER MEDIA ROOT…" Click="OnRelinkRoot" />
+              <Button Classes="block" Content="{x:Static res:Strings.StatusSearchByFilenameUnderMedia}" Click="OnRelinkRoot" />
             </ContentControl>
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="block" Content="PICK FILE MANUALLY…" Click="OnRelinkOne" />
+              <Button Classes="block" Content="{x:Static res:Strings.StatusPickFileManually}" Click="OnRelinkOne" />
             </ContentControl>
             <TextBlock Margin="10,4,10,0" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
-                       Text="Matches by name + duration; a duration mismatch relinks with a warning badge on the cue." />
+                       Text="{x:Static res:Strings.StatusMatchesByNameDurationA}" />
           </StackPanel>
         </c:PanelBox>
 
-        <c:PanelBox Grid.Row="1" Header="Consolidate">
+        <c:PanelBox Grid.Row="1" Header="{x:Static res:Strings.StatusConsolidate}">
           <StackPanel Margin="0,6,0,8">
-            <HeaderedContentControl Theme="{StaticResource Field}" Header="Into">
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.StatusInto}">
               <TextBox Text="{Binding ConsolidateInto}" />
             </HeaderedContentControl>
             <CheckBox Margin="10,3" IsChecked="{Binding CopyMedia}"
-                      Content="Copy media, rewrite to relative paths" />
+                      Content="{x:Static res:Strings.StatusCopyMediaRewriteToRelative}" />
             <CheckBox Margin="10,3" IsChecked="{Binding IncludeReport}"
-                      Content="Include project + this report" />
-            <CheckBox Margin="10,3" IsChecked="{Binding ZipWhenDone}" Content="Zip when done" />
+                      Content="{x:Static res:Strings.StatusIncludeProjectThisReport}" />
+            <CheckBox Margin="10,3" IsChecked="{Binding ZipWhenDone}" Content="{x:Static res:Strings.StatusZipWhenDone}" />
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="primary block" Content="CONSOLIDATE" Click="OnConsolidate"
+              <Button Classes="primary block" Content="{x:Static res:Strings.StatusConsolidate2}" Click="OnConsolidate"
                       IsEnabled="{Binding CanEdit}" />
             </ContentControl>
             <!-- Consolidate must report what it could NOT copy rather than quietly producing a
                  project that half-works at the venue. -->
             <TextBlock Margin="10,4,10,0" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
-                       Text="Anything that cannot be copied is reported, not skipped silently." />
+                       Text="{x:Static res:Strings.StatusAnythingThatCannotBeCopied}" />
             <TextBlock Margin="10,4,10,0" FontSize="10.5" Classes="mono dim2" TextWrapping="Wrap"
                        Text="{Binding ConsolidateNote}" />
           </StackPanel>

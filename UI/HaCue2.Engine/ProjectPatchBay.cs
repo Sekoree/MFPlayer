@@ -512,9 +512,7 @@ public sealed class ProjectPatchBay : IDisposable
             if (row < 0 || cell.LineChannel < 0 || cell.LineChannel >= lineChannels)
                 continue;
 
-            matrix[row, cell.LineChannel] = cell.Muted
-                ? 0f
-                : (float)(cell.GainDb <= GainRange.SilenceFloorDb ? 0 : Math.Pow(10, cell.GainDb / 20));
+            matrix[row, cell.LineChannel] = cell.Muted ? 0f : GainRange.Linear(cell.GainDb);
         }
 
         return matrix;

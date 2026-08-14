@@ -32,21 +32,23 @@ public sealed partial class ShowHost
                                   ?? Guid.Empty;
     }
 
-    private sealed class AutomationRun(
-        AutomationCueNode cue,
-        AutomationRunClock clock,
-        CancellationTokenSource cancellation,
-        IReadOnlyDictionary<Guid, IReadOnlyList<CapturedAutomationTarget>> capturedTargets)
+    /// <summary>
+    /// The shared half of an automation run (2026-08-14 second review's simplification list: the two
+    /// concrete runs were line-for-line duplicates of all of this): the run clock, cancellation, the
+    /// apply gate, the start/complete signals, and the READER-LEASE discipline below.
+    /// </summary>
+    /// <remarks>
+    /// The lease exists because a seek looks the run up under the runs gate, releases it, and only
+    /// THEN touches Cancellation / ApplyGate. The drive loop's finally disposed both right after
+    /// removing the run from that same dictionary, so a run completing inside that window made the
+    /// seek throw ObjectDisposedException straight out to the operator. Disposal waits for readers
+    /// that already hold a lease; after <see cref="Finish"/> no new lease is granted, so a late seek
+    /// reports "no such run" instead of faulting.
+    /// </remarks>
+    private abstract class AutomationRunBase(AutomationRunClock clock, CancellationTokenSource cancellation)
     {
-        private readonly HashSet<(Guid TrackId, Guid InstanceId)> _claimedTargets = [];
-
-        public AutomationCueNode Cue { get; } = cue;
-        public Guid OwnerId { get; } = Guid.NewGuid();
         public AutomationRunClock Clock { get; } = clock;
         public CancellationTokenSource Cancellation { get; } = cancellation;
-        /// <summary>The sounding cue IDs each track resolved when this run fired. In particular, a
-        /// group controller does not begin affecting a descendant which starts later.</summary>
-        public IReadOnlyDictionary<Guid, IReadOnlyList<CapturedAutomationTarget>> CapturedTargets { get; } = capturedTargets;
         public SemaphoreSlim ApplyGate { get; } = new(1, 1);
         public TaskCompletionSource<bool> Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -58,29 +60,6 @@ public sealed partial class ShowHost
             try { Cancellation.Cancel(); }
             catch (ObjectDisposedException) { }
         }
-
-        public bool Claim(Guid trackId, CapturedAutomationTarget target) =>
-            _claimedTargets.Add((trackId, target.InstanceId));
-
-        /// <summary>One internal track resolved ONCE at fire time: its target cue, its prepared curve and
-        /// the instances it captured. The drive loop runs 40 times a second, and re-resolving this per
-        /// tick meant a full document flatten plus linear scan per track (<c>FindCue</c>) and a re-sort of
-        /// every keyframe (<c>AutomationEvaluator.Sample</c>). None of it can change while the run is in
-        /// flight - an authored edit recompiles and restarts the show document.</summary>
-        public readonly record struct PlannedTrack(
-            AutomationTrack Track,
-            CueNode Target,
-            AutomationCurve? Curve,
-            IReadOnlyList<CapturedAutomationTarget> Captured);
-
-        public IReadOnlyList<PlannedTrack> Plan { get; set; } = [];
-
-        // --- reader leases -------------------------------------------------------------------------
-        //
-        // A seek looks the run up under the runs gate, releases it, and only THEN touches Cancellation /
-        // ApplyGate. The drive loop's finally disposed both right after removing the run from that same
-        // dictionary, so a run completing inside that window made the seek throw ObjectDisposedException
-        // straight out to the operator. Disposal now waits for readers that already hold a lease.
 
         private readonly object _leaseGate = new();
         private int _leases;
@@ -111,8 +90,7 @@ public sealed partial class ShowHost
             DisposeResources();
         }
 
-        /// <summary>Marks the run finished and disposes its resources once no reader still holds a lease.
-        /// After this no new lease is granted, so a late seek reports "no such run" instead of faulting.</summary>
+        /// <summary>Marks the run finished and disposes its resources once no reader still holds a lease.</summary>
         public void Finish()
         {
             lock (_leaseGate)
@@ -139,6 +117,38 @@ public sealed partial class ShowHost
         }
     }
 
+    private sealed class AutomationRun(
+        AutomationCueNode cue,
+        AutomationRunClock clock,
+        CancellationTokenSource cancellation,
+        IReadOnlyDictionary<Guid, IReadOnlyList<CapturedAutomationTarget>> capturedTargets)
+        : AutomationRunBase(clock, cancellation)
+    {
+        private readonly HashSet<(Guid TrackId, Guid InstanceId)> _claimedTargets = [];
+
+        public AutomationCueNode Cue { get; } = cue;
+        public Guid OwnerId { get; } = Guid.NewGuid();
+        /// <summary>The sounding cue IDs each track resolved when this run fired. In particular, a
+        /// group controller does not begin affecting a descendant which starts later.</summary>
+        public IReadOnlyDictionary<Guid, IReadOnlyList<CapturedAutomationTarget>> CapturedTargets { get; } = capturedTargets;
+
+        public bool Claim(Guid trackId, CapturedAutomationTarget target) =>
+            _claimedTargets.Add((trackId, target.InstanceId));
+
+        /// <summary>One internal track resolved ONCE at fire time: its target cue, its prepared curve and
+        /// the instances it captured. The drive loop runs 40 times a second, and re-resolving this per
+        /// tick meant a full document flatten plus linear scan per track (<c>FindCue</c>) and a re-sort of
+        /// every keyframe (<c>AutomationEvaluator.Sample</c>). None of it can change while the run is in
+        /// flight - an authored edit recompiles and restarts the show document.</summary>
+        public readonly record struct PlannedTrack(
+            AutomationTrack Track,
+            CueNode Target,
+            AutomationCurve? Curve,
+            IReadOnlyList<CapturedAutomationTarget> Captured);
+
+        public IReadOnlyList<PlannedTrack> Plan { get; set; } = [];
+    }
+
     /// <summary>A visualizer has no session transport, so its cue-owned lanes retain this show-clock
     /// coordinate for as long as the renderer remains on air. It deliberately survives its last key:
     /// the operator can seek backwards while the visualizer is still active.</summary>
@@ -146,78 +156,12 @@ public sealed partial class ShowHost
         VisualizerCueNode cue,
         AutomationRunClock clock,
         CancellationTokenSource cancellation)
+        : AutomationRunBase(clock, cancellation)
     {
         public VisualizerCueNode Cue { get; } = cue;
-        public AutomationRunClock Clock { get; } = clock;
-        public CancellationTokenSource Cancellation { get; } = cancellation;
-        public SemaphoreSlim ApplyGate { get; } = new(1, 1);
-        public TaskCompletionSource<bool> Started { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource Complete { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public void Cancel()
-        {
-            try { Cancellation.Cancel(); }
-            catch (ObjectDisposedException) { }
-        }
 
         /// <summary>Internal tracks with their curves prepared once - see AutomationRun.Plan.</summary>
         public IReadOnlyList<(AutomationTrack Track, AutomationCurve? Curve)> Plan { get; set; } = [];
-
-        // Same reader-lease discipline as AutomationRun, for the same reason: a seek resolves the run
-        // outside the runs gate and must not have its CTS/gate disposed underneath it.
-        private readonly object _leaseGate = new();
-        private int _leases;
-        private bool _finished;
-        private bool _disposed;
-
-        public bool TryLease()
-        {
-            lock (_leaseGate)
-            {
-                if (_finished)
-                    return false;
-                _leases++;
-                return true;
-            }
-        }
-
-        public void ReleaseLease()
-        {
-            lock (_leaseGate)
-            {
-                if (--_leases > 0 || !_finished)
-                    return;
-            }
-
-            DisposeResources();
-        }
-
-        public void Finish()
-        {
-            lock (_leaseGate)
-            {
-                _finished = true;
-                if (_leases > 0)
-                    return;
-            }
-
-            DisposeResources();
-        }
-
-        private void DisposeResources()
-        {
-            lock (_leaseGate)
-            {
-                if (_disposed)
-                    return;
-                _disposed = true;
-            }
-
-            Cancellation.Dispose();
-            ApplyGate.Dispose();
-        }
     }
     /// <summary>
     /// What firing a cue means, for every kind - extracted so it can be tested without devices.
@@ -1044,14 +988,10 @@ public sealed partial class ShowHost
         }
     }
 
-    private static float Linear(double decibels) => decibels <= GainRange.SilenceFloorDb
-        ? 0f
-        : (float)Math.Pow(10, Math.Clamp(decibels, GainRange.SilenceFloorDb, 12) / 20);
+    private static float Linear(double decibels) => GainRange.LinearClamped(decibels);
 
     /// <summary>The inverse of <see cref="Linear"/>, for reporting a runtime gain back in authoring units.</summary>
-    internal static double LinearToDb(float linear) => linear <= 0f
-        ? GainRange.SilenceFloorDb
-        : Math.Clamp(20 * Math.Log10(linear), GainRange.SilenceFloorDb, 12);
+    internal static double LinearToDb(float linear) => GainRange.Db(linear);
 
     /// <summary>A wait that reports whether it completed, so a cancelled show stops its chains.</summary>
     async Task<bool> ICueExecutionHost.DelayAsync(TimeSpan duration)
@@ -1328,9 +1268,7 @@ public sealed partial class ShowHost
             .ConfigureAwait(false);
         await _session.ApplyActiveVolumeAsync(
                 cueId.ToString(),
-                levelDb <= GainRange.SilenceFloorDb
-                    ? 0f
-                    : (float)Math.Pow(10, Math.Clamp(levelDb, GainRange.SilenceFloorDb, 12) / 20))
+                GainRange.LinearClamped(levelDb))
             .ConfigureAwait(false);
     }
 
@@ -1341,9 +1279,7 @@ public sealed partial class ShowHost
         FadeShape curve,
         bool stopWhenSilent)
     {
-        var linear = levelDb <= GainRange.SilenceFloorDb
-            ? 0f
-            : (float)Math.Pow(10, levelDb / 20);
+        var linear = GainRange.Linear(levelDb);
         await _session.FadeClipAsync(
                 cueId.ToString(), linear, duration, curve, stopWhenSilent, alsoFadeVideo: true)
             .ConfigureAwait(false);

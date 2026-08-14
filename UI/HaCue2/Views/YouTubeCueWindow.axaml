@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaCue2.Resources"
         xmlns:c="using:HaCue2.Controls"
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.YouTubeCueWindow"
@@ -23,20 +24,20 @@
 
       <Border DockPanel.Dock="Bottom" Classes="chain">
         <DockPanel LastChildFill="False">
-          <Button DockPanel.Dock="Right" Classes="primary" Content="ADD &amp; DOWNLOAD IN BACKGROUND"
+          <Button DockPanel.Dock="Right" Classes="primary" Content="{x:Static res:Strings.YtAddDownloadInBackground}"
                   IsEnabled="{Binding CanPrepare}" Command="{Binding PrepareCommand}" />
           <Button DockPanel.Dock="Right" Classes="tight" Margin="0,0,6,0"
-                  Content="CANCEL" Click="OnCancel" />
+                  Content="{x:Static res:Strings.PromptCancel}" Click="OnCancel" />
         </DockPanel>
       </Border>
 
       <StackPanel Margin="0,6,0,8">
 
-        <HeaderedContentControl Theme="{StaticResource Field}" Header="Link">
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.YtLink}">
           <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
             <TextBox Grid.Column="0" Text="{Binding Url}"
-                     PlaceholderText="https://www.youtube.com/watch?v=…" />
-            <Button Grid.Column="1" Classes="tight" Content="FETCH"
+                     PlaceholderText="{x:Static res:Strings.YtHttpsWwwYoutubeComWatch}" />
+            <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.YtFetch}"
                     IsEnabled="{Binding IsIdle}" Command="{Binding ResolveCommand}" />
           </Grid>
         </HeaderedContentControl>
@@ -52,31 +53,31 @@
             </Border>
           </ContentControl>
 
-          <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudName2}">
             <TextBox Text="{Binding Name}" />
           </HeaderedContentControl>
 
-          <HeaderedContentControl Theme="{StaticResource Field}" Header="Video">
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.YtVideo}">
             <ComboBox HorizontalAlignment="Stretch" IsEnabled="{Binding !AudioOnly}"
                       ItemsSource="{Binding VideoStreams}" SelectedIndex="{Binding VideoIndex}" />
           </HeaderedContentControl>
 
-          <HeaderedContentControl Theme="{StaticResource Field}" Header="Audio">
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.YtAudio}">
             <ComboBox HorizontalAlignment="Stretch"
                       ItemsSource="{Binding AudioStreams}" SelectedIndex="{Binding AudioIndex}" />
           </HeaderedContentControl>
 
-          <HeaderedContentControl Theme="{StaticResource Field}" Header="Subtitles">
+          <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspSubtitles}">
             <ComboBox HorizontalAlignment="Stretch"
                       ItemsSource="{Binding SubtitleTracks}" SelectedIndex="{Binding SubtitleIndex}" />
           </HeaderedContentControl>
 
           <CheckBox Margin="10,6,10,0" IsChecked="{Binding AudioOnly}"
-                    Content="Sound only - do not download the picture" />
+                    Content="{x:Static res:Strings.YtSoundOnlyDoNotDownload}" />
           <!-- The thumbnail rides along as an attached picture, exactly like MP3 cover art, so an
                audio-only cue still has something to put on a screen. -->
           <CheckBox Margin="10,2,10,0" IsChecked="{Binding IncludeThumbnail}"
-                    Content="Include the thumbnail as a still picture" />
+                    Content="{x:Static res:Strings.YtIncludeTheThumbnailAsA}" />
 
           <TextBlock Classes="mono dim3 micro" Margin="12,7,10,0" TextWrapping="Wrap"
                      Text="{Binding CacheNote}" />

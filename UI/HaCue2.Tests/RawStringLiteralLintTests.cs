@@ -18,11 +18,12 @@ namespace HaCue2.Tests;
 public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
 {
     // Tracked debt of hardcoded user-facing literals across ALL Views (recursive). RATCHET ONLY
-    // DOWNWARD - never raise this to accommodate a new literal. Baselined 2026-08-14 after the
-    // ShellWindow migration; the big remaining screens are InspectorPane (160), VideoView (118),
-    // SettingsWindow (100), AudioView (75) and TargetsView (63).
-    // 832 -> 767 the same day: DiagnosticsWindow (27) and TimelineSheet (37) migrated.
-    private const int Baseline = 767;
+    // DOWNWARD - never raise this to accommodate a new literal. History: baselined at 832 on
+    // 2026-08-14 after the ShellWindow exemplar; 832 -> 767 (DiagnosticsWindow + TimelineSheet);
+    // 767 -> 0 the same day when the remaining 20 views were migrated wholesale (repeated values
+    // share one key, so terminology like GO/LOCK/DROPPED is defined once). The debt is PAID - every
+    // new user-visible literal now fails immediately rather than joining a backlog.
+    private const int Baseline = 0;
 
     // The attribute name is matched WHOLE (any prefix, ending in one of the tokens) so compound
     // names like PlaceholderText and attached forms like ToolTip.Tip are covered - the exact

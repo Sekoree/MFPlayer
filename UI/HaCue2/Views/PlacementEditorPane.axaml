@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:HaCue2.Resources"
              xmlns:c="using:HaCue2.Controls"
              xmlns:vm="using:HaCue2.ViewModels"
              x:Class="HaCue2.Views.PlacementEditorPane"
@@ -10,24 +11,24 @@
   <!-- One placement's complete editor. InspectorPane places this inside each placement expander;
        all instances bind to the inspector's selected placement, and only the open one is realised. -->
   <StackPanel Margin="0,4,0,2">
-    <HeaderedContentControl Theme="{StaticResource Field}" Header="Composition">
+    <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceComposition}">
       <ComboBox ItemsSource="{Binding PlacementCompositions}"
                 SelectedIndex="{Binding PlacementCompositionIndex}" />
     </HeaderedContentControl>
-    <HeaderedContentControl Theme="{StaticResource Field}" Header="Layer">
+    <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceLayer}">
       <TextBox Classes="short" Text="{Binding LayerValue}" LostFocus="OnFieldCommitted" />
     </HeaderedContentControl>
-    <HeaderedContentControl Theme="{StaticResource Field}" Header="Fit">
+    <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceFit}">
       <ComboBox ItemsSource="{Binding FitModes}" SelectedIndex="{Binding FitIndex}" />
     </HeaderedContentControl>
-    <HeaderedContentControl Theme="{StaticResource Field}" Header="Opacity">
+    <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TlLaneOpacity}">
       <NumericUpDown Minimum="0" Maximum="1" Increment="0.05" FormatString="0.##"
                      Value="{Binding PlacementOpacity}" />
     </HeaderedContentControl>
 
     <!-- The destination rectangle as NUMBERS. A drag cannot hit exactly half, and half is what a
          split screen is made of. -->
-    <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Dest x / y">
+    <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceDestXY}">
       <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
         <NumericUpDown Grid.Column="0" Minimum="-1" Maximum="2" Increment="0.01"
                        FormatString="0.###" Value="{Binding PlacementX}" />
@@ -35,7 +36,7 @@
                        FormatString="0.###" Value="{Binding PlacementY}" />
       </Grid>
     </HeaderedContentControl>
-    <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Dest w / h">
+    <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceDestWH}">
       <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
         <NumericUpDown Grid.Column="0" Minimum="0.001" Maximum="2" Increment="0.01"
                        FormatString="0.###" Value="{Binding PlacementWidth}" />
@@ -43,36 +44,36 @@
                        FormatString="0.###" Value="{Binding PlacementHeight}" />
       </Grid>
     </HeaderedContentControl>
-    <HeaderedContentControl Theme="{StaticResource Field}" Header="Rotation">
+    <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TlLaneRotation}">
       <NumericUpDown Minimum="-360" Maximum="360" Increment="1" FormatString="0.##"
                      Value="{Binding PlacementRotation}"
-                     ToolTip.Tip="Clockwise, about the rectangle's centre. A rotated layer overflows its rectangle rather than being trimmed to it." />
+                     ToolTip.Tip="{x:Static res:Strings.PlaceClockwiseAboutTheRectangleS}" />
     </HeaderedContentControl>
 
     <ContentControl Theme="{StaticResource FieldWide}">
       <WrapPanel ItemSpacing="4" LineSpacing="4">
-        <Button Classes="tight" Content="FULL" Click="OnLayout" Tag="full" AutomationProperties.Name="Place full frame" />
-        <Button Classes="tight" Content="◧" Click="OnLayout" Tag="left" ToolTip.Tip="Left half" AutomationProperties.Name="Place in left half" />
-        <Button Classes="tight" Content="◨" Click="OnLayout" Tag="right" ToolTip.Tip="Right half" AutomationProperties.Name="Place in right half" />
-        <Button Classes="tight" Content="⬒" Click="OnLayout" Tag="top" ToolTip.Tip="Top half" AutomationProperties.Name="Place in top half" />
-        <Button Classes="tight" Content="⬓" Click="OnLayout" Tag="bottom" ToolTip.Tip="Bottom half" AutomationProperties.Name="Place in bottom half" />
-        <Button Classes="tight" Content="◰" Click="OnLayout" Tag="tl" ToolTip.Tip="Top left" AutomationProperties.Name="Place in top left" />
-        <Button Classes="tight" Content="◳" Click="OnLayout" Tag="tr" ToolTip.Tip="Top right" AutomationProperties.Name="Place in top right" />
-        <Button Classes="tight" Content="◱" Click="OnLayout" Tag="bl" ToolTip.Tip="Bottom left" AutomationProperties.Name="Place in bottom left" />
-        <Button Classes="tight" Content="◲" Click="OnLayout" Tag="br" ToolTip.Tip="Bottom right" AutomationProperties.Name="Place in bottom right" />
+        <Button Classes="tight" Content="{x:Static res:Strings.PlaceFull}" Click="OnLayout" Tag="full" AutomationProperties.Name="Place full frame" />
+        <Button Classes="tight" Content="◧" Click="OnLayout" Tag="left" ToolTip.Tip="{x:Static res:Strings.PlaceLeftHalf}" AutomationProperties.Name="Place in left half" />
+        <Button Classes="tight" Content="◨" Click="OnLayout" Tag="right" ToolTip.Tip="{x:Static res:Strings.PlaceRightHalf}" AutomationProperties.Name="Place in right half" />
+        <Button Classes="tight" Content="⬒" Click="OnLayout" Tag="top" ToolTip.Tip="{x:Static res:Strings.PlaceTopHalf}" AutomationProperties.Name="Place in top half" />
+        <Button Classes="tight" Content="⬓" Click="OnLayout" Tag="bottom" ToolTip.Tip="{x:Static res:Strings.PlaceBottomHalf}" AutomationProperties.Name="Place in bottom half" />
+        <Button Classes="tight" Content="◰" Click="OnLayout" Tag="tl" ToolTip.Tip="{x:Static res:Strings.PlaceTopLeft}" AutomationProperties.Name="Place in top left" />
+        <Button Classes="tight" Content="◳" Click="OnLayout" Tag="tr" ToolTip.Tip="{x:Static res:Strings.PlaceTopRight}" AutomationProperties.Name="Place in top right" />
+        <Button Classes="tight" Content="◱" Click="OnLayout" Tag="bl" ToolTip.Tip="{x:Static res:Strings.PlaceBottomLeft}" AutomationProperties.Name="Place in bottom left" />
+        <Button Classes="tight" Content="◲" Click="OnLayout" Tag="br" ToolTip.Tip="{x:Static res:Strings.PlaceBottomRight}" AutomationProperties.Name="Place in bottom right" />
       </WrapPanel>
     </ContentControl>
 
-    <HeaderedContentControl Theme="{StaticResource Field}" Header="Resize">
+    <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceResize}">
       <WrapPanel ItemSpacing="12" LineSpacing="4">
-        <CheckBox Content="preserve aspect" IsChecked="{Binding PreservePlacementAspect}" />
-        <CheckBox Content="snap + guides" IsChecked="{Binding SnapPlacement}" />
+        <CheckBox Content="{x:Static res:Strings.PlacePreserveAspect}" IsChecked="{Binding PreservePlacementAspect}" />
+        <CheckBox Content="{x:Static res:Strings.PlaceSnapGuides}" IsChecked="{Binding SnapPlacement}" />
       </WrapPanel>
     </HeaderedContentControl>
 
     <!-- Source crop is which part of the picture to use, not where to put it. -->
-    <ContentControl Theme="{StaticResource Subhead}" Content="Source crop" />
-    <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Left / top">
+    <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.PlaceSourceCrop}" />
+    <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceLeftTop}">
       <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
         <NumericUpDown Grid.Column="0" Minimum="0" Maximum="0.49" Increment="0.01"
                        FormatString="0.###" Value="{Binding CropLeft}" />
@@ -80,7 +81,7 @@
                        FormatString="0.###" Value="{Binding CropTop}" />
       </Grid>
     </HeaderedContentControl>
-    <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Right / bottom">
+    <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceRightBottom}">
       <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
         <NumericUpDown Grid.Column="0" Minimum="0" Maximum="0.49" Increment="0.01"
                        FormatString="0.###" Value="{Binding CropRight}" />
@@ -90,15 +91,15 @@
     </HeaderedContentControl>
     <ContentControl Theme="{StaticResource FieldWide}">
       <WrapPanel ItemSpacing="4" LineSpacing="4">
-        <Button Classes="tight" Content="NO CROP" Click="OnCrop" Tag="none" />
-        <Button Classes="tight" Content="CENTRE ½ WIDE" Click="OnCrop" Tag="wide" />
-        <Button Classes="tight" Content="CENTRE ½ TALL" Click="OnCrop" Tag="tall" />
-        <Button Classes="tight" Content="CENTRE BOX" Click="OnCrop" Tag="centre" />
+        <Button Classes="tight" Content="{x:Static res:Strings.PlaceNoCrop}" Click="OnCrop" Tag="none" />
+        <Button Classes="tight" Content="{x:Static res:Strings.PlaceCentreWide}" Click="OnCrop" Tag="wide" />
+        <Button Classes="tight" Content="{x:Static res:Strings.PlaceCentreTall}" Click="OnCrop" Tag="tall" />
+        <Button Classes="tight" Content="{x:Static res:Strings.PlaceCentreBox}" Click="OnCrop" Tag="centre" />
       </WrapPanel>
     </ContentControl>
 
     <!-- Ordered rack: identity and order live here; focused built-in editors follow below. -->
-    <ContentControl Theme="{StaticResource Subhead}" Content="Effect rack" />
+    <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.PlaceEffectRack}" />
     <ItemsControl ItemsSource="{Binding EffectRackRows}">
       <ItemsControl.ItemTemplate>
         <DataTemplate x:DataType="vm:LayerEffectRackRow">
@@ -109,7 +110,7 @@
               <TextBlock Text="{Binding Name}" />
               <TextBlock Classes="small dim3" Text="{Binding Enabled, StringFormat='enabled: {0}'}" />
             </StackPanel>
-            <Button Grid.Column="2" Classes="tight" Content="ON/OFF" Tag="{Binding Id}"
+            <Button Grid.Column="2" Classes="tight" Content="{x:Static res:Strings.PlaceOnOff}" Tag="{Binding Id}"
                     Click="OnToggleEffect" />
             <Button Grid.Column="3" Classes="tight" Content="↑" AutomationProperties.Name="Move effect earlier" Tag="{Binding Id}"
                     IsEnabled="{Binding CanMoveUp}" Click="OnMoveEffectUp" />
@@ -121,25 +122,25 @@
         </DataTemplate>
       </ItemsControl.ItemTemplate>
     </ItemsControl>
-    <Button Classes="block" Content="ADD EFFECT ▾">
+    <Button Classes="block" Content="{x:Static res:Strings.PlaceAddEffect}">
       <Button.Flyout>
         <MenuFlyout>
-          <MenuItem Header="Chroma key" Tag="chroma-key.v1" Click="OnAddEffect" />
-          <MenuItem Header="Brightness / contrast" Tag="brightness-contrast.v1" Click="OnAddEffect" />
+          <MenuItem Header="{x:Static res:Strings.TlLaneChromaKey}" Tag="chroma-key.v1" Click="OnAddEffect" />
+          <MenuItem Header="{x:Static res:Strings.PlaceBrightnessContrast}" Tag="brightness-contrast.v1" Click="OnAddEffect" />
         </MenuFlyout>
       </Button.Flyout>
     </Button>
 
     <!-- OFF IS NOT DELETE: effect settings survive their toggles. -->
-    <ContentControl Theme="{StaticResource Subhead}" Content="Chroma key" />
-    <HeaderedContentControl Theme="{StaticResource Field}" Header="Key">
-      <CheckBox IsChecked="{Binding ChromaKeyOn}" Content="key this layer" />
+    <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.TlLaneChromaKey}" />
+    <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceKey}">
+      <CheckBox IsChecked="{Binding ChromaKeyOn}" Content="{x:Static res:Strings.PlaceKeyThisLayer}" />
     </HeaderedContentControl>
     <StackPanel IsVisible="{Binding HasChromaKey}">
-      <HeaderedContentControl Theme="{StaticResource Field}" Header="Colour">
-        <TextBox Text="{Binding ChromaColour}" PlaceholderText="#00FF00" />
+      <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspColour}">
+        <TextBox Text="{Binding ChromaColour}" PlaceholderText="{x:Static res:Strings.PlaceN00ff00}" />
       </HeaderedContentControl>
-      <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Similar / soft">
+      <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceSimilarSoft}">
         <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
           <NumericUpDown Grid.Column="0" Minimum="0" Maximum="1" Increment="0.02"
                          FormatString="0.##" Value="{Binding ChromaSimilarity}" />
@@ -147,30 +148,30 @@
                          FormatString="0.##" Value="{Binding ChromaSmoothness}" />
         </Grid>
       </HeaderedContentControl>
-      <HeaderedContentControl Theme="{StaticResource Field}" Header="Spill">
+      <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceSpill}">
         <NumericUpDown Minimum="0" Maximum="1" Increment="0.02" FormatString="0.##"
                        Value="{Binding ChromaSpill}"
-                       ToolTip.Tip="How much of the key colour is pulled out of what remains - the green fringe." />
+                       ToolTip.Tip="{x:Static res:Strings.PlaceHowMuchOfTheKey}" />
       </HeaderedContentControl>
-      <Button Classes="block" Content="AUTOMATE CHROMA ▾">
+      <Button Classes="block" Content="{x:Static res:Strings.PlaceAutomateChroma}">
         <Button.Flyout>
           <MenuFlyout>
-            <MenuItem Header="Similarity" Click="OnAddAutomation" Tag="video.effect.chroma-key.similarity"
+            <MenuItem Header="{x:Static res:Strings.TlLaneSimilarity}" Click="OnAddAutomation" Tag="video.effect.chroma-key.similarity"
                       IsEnabled="{Binding CanAddChromaSimilarityLane}" />
-            <MenuItem Header="Smoothness" Click="OnAddAutomation" Tag="video.effect.chroma-key.smoothness"
+            <MenuItem Header="{x:Static res:Strings.TlLaneSmoothness}" Click="OnAddAutomation" Tag="video.effect.chroma-key.smoothness"
                       IsEnabled="{Binding CanAddChromaSmoothnessLane}" />
-            <MenuItem Header="Spill reduction" Click="OnAddAutomation" Tag="video.effect.chroma-key.spill-reduction"
+            <MenuItem Header="{x:Static res:Strings.TlLaneSpillReduction}" Click="OnAddAutomation" Tag="video.effect.chroma-key.spill-reduction"
                       IsEnabled="{Binding CanAddChromaSpillLane}" />
           </MenuFlyout>
         </Button.Flyout>
       </Button>
     </StackPanel>
 
-    <ContentControl Theme="{StaticResource Subhead}" Content="Colour" />
-    <HeaderedContentControl Theme="{StaticResource Field}" Header="Adjust">
-      <CheckBox IsChecked="{Binding ColorAdjustOn}" Content="brightness and contrast" />
+    <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.InspColour}" />
+    <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceAdjust}">
+      <CheckBox IsChecked="{Binding ColorAdjustOn}" Content="{x:Static res:Strings.PlaceBrightnessAndContrast}" />
     </HeaderedContentControl>
-    <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Bright / contrast"
+    <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceBrightContrast}"
                             IsVisible="{Binding ColorAdjustOn}">
       <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
         <NumericUpDown Grid.Column="0" Minimum="-1" Maximum="1" Increment="0.05"
@@ -179,12 +180,12 @@
                        FormatString="0.##" Value="{Binding LayerContrast}" />
       </Grid>
     </HeaderedContentControl>
-    <Button Classes="block" Content="AUTOMATE COLOUR ▾" IsVisible="{Binding HasColorAdjust}">
+    <Button Classes="block" Content="{x:Static res:Strings.PlaceAutomateColour}" IsVisible="{Binding HasColorAdjust}">
       <Button.Flyout>
         <MenuFlyout>
-          <MenuItem Header="Brightness" Click="OnAddAutomation" Tag="video.effect.color-adjust.brightness"
+          <MenuItem Header="{x:Static res:Strings.TlLaneBrightness}" Click="OnAddAutomation" Tag="video.effect.color-adjust.brightness"
                     IsEnabled="{Binding CanAddColorBrightnessLane}" />
-          <MenuItem Header="Contrast" Click="OnAddAutomation" Tag="video.effect.color-adjust.contrast"
+          <MenuItem Header="{x:Static res:Strings.TlLaneContrast}" Click="OnAddAutomation" Tag="video.effect.color-adjust.contrast"
                     IsEnabled="{Binding CanAddColorContrastLane}" />
         </MenuFlyout>
       </Button.Flyout>
@@ -194,7 +195,7 @@
     <c:AspectBox Margin="10,6" VerticalAlignment="Top" Ratio="{Binding PlacementAspect}">
       <c:PlacementCanvas Boxes="{Binding Placements}"
                          AutomationProperties.Name="Video placement canvas"
-                         AutomationProperties.HelpText="Drag or resize this placement. Exact numeric fields are above."
+                         AutomationProperties.HelpText="{x:Static res:Strings.PlaceDragOrResizeThisPlacement}"
                          GuidesX="{Binding PlacementGuidesX}"
                          GuidesY="{Binding PlacementGuidesY}"
                          PreserveAspect="{Binding PreservePlacementAspect}"
@@ -206,14 +207,14 @@
 
     <Border Classes="chain">
       <DockPanel LastChildFill="True">
-        <Button DockPanel.Dock="Right" Classes="tight" Content="REMOVE" Click="OnRemovePlacement" />
-        <Button DockPanel.Dock="Right" Margin="0,0,5,0" Classes="tight" Content="POP OUT ↗"
-                Click="OnPopOut" ToolTip.Tip="Open a large placement canvas for precise mouse editing." />
+        <Button DockPanel.Dock="Right" Classes="tight" Content="{x:Static res:Strings.CuesRemove}" Click="OnRemovePlacement" />
+        <Button DockPanel.Dock="Right" Margin="0,0,5,0" Classes="tight" Content="{x:Static res:Strings.PlacePopOut}"
+                Click="OnPopOut" ToolTip.Tip="{x:Static res:Strings.PlaceOpenALargePlacementCanvas}" />
         <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge">
-          <TextBlock Text="PLACEMENT" />
+          <TextBlock Text="{x:Static res:Strings.PlacePlacement}" />
         </Border>
         <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                   Text="drag here for rough · pop out for precision" />
+                   Text="{x:Static res:Strings.PlaceDragHereForRoughPop}" />
       </DockPanel>
     </Border>
   </StackPanel>

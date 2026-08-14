@@ -1,11 +1,12 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaCue2.Resources"
         xmlns:c="using:HaCue2.Controls"
         xmlns:vm="using:HaCue2.ViewModels"
         x:Class="HaCue2.Views.LauncherWindow"
         x:DataType="vm:LauncherViewModel"
         x:CompileBindings="True"
-        Title="HaCue2"
+        Title="{x:Static res:Strings.DiagBrand}"
         Width="900" Height="560"
         MinWidth="820" MinHeight="480"
         WindowStartupLocation="CenterScreen"
@@ -23,24 +24,24 @@
     <Border Classes="titlebar" DockPanel.Dock="Top">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto">
         <TextBlock Grid.Column="0" Classes="mono" FontWeight="SemiBold" FontSize="11"
-                   LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" />
+                   LetterSpacing="0.45" Text="{x:Static res:Strings.DiagBrand}" VerticalAlignment="Center" />
         <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" Margin="14,0,0,0"
-                   Text="no project open" VerticalAlignment="Center" />
-        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="SETTINGS"
+                   Text="{x:Static res:Strings.LaunchNoProjectOpen}" VerticalAlignment="Center" />
+        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.ShellSettings}"
                 Click="OnSettings" />
       </Grid>
     </Border>
 
     <Border Classes="statusbar" DockPanel.Dock="Bottom">
       <Grid ColumnDefinitions="Auto,*,Auto">
-        <TextBlock Grid.Column="0" Classes="mono dim3 small" Text="HaCue2 0.1 · framework 2026.07" />
-        <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="projects open in editing mode" />
+        <TextBlock Grid.Column="0" Classes="mono dim3 small" Text="{x:Static res:Strings.LaunchHacue201Framework2026}" />
+        <TextBlock Grid.Column="2" Classes="mono dim3 small" Text="{x:Static res:Strings.LaunchProjectsOpenInEditingMode}" />
       </Grid>
     </Border>
 
     <Grid ColumnDefinitions="*,250" Margin="7" ColumnSpacing="7">
 
-      <c:PanelBox Grid.Column="0" Header="Recent projects" Hint="⏎ opens · editing mode">
+      <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.LaunchRecentProjects}" Hint="⏎ opens · editing mode">
         <DockPanel>
 
           <!-- Inline recovery. Amber, not red: an autosave newer than the file is a question, not a
@@ -52,11 +53,11 @@
                   Padding="10,8"
                   IsVisible="{Binding HasRecovery}">
             <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
-              <Border Grid.Column="0" Classes="badge clock"><TextBlock Text="RECOVERY" /></Border>
+              <Border Grid.Column="0" Classes="badge clock"><TextBlock Text="{x:Static res:Strings.LaunchRecovery}" /></Border>
               <TextBlock Grid.Column="1" Classes="dim2 small" VerticalAlignment="Center"
                          TextWrapping="Wrap" Text="{Binding RecoveryNotice}" />
-              <Button Grid.Column="2" Classes="tight" Content="RECOVER" Click="OnRecover" />
-              <Button Grid.Column="3" Classes="tight" Content="DISCARD" Click="OnDiscardRecovery" />
+              <Button Grid.Column="2" Classes="tight" Content="{x:Static res:Strings.LaunchRecover}" Click="OnRecover" />
+              <Button Grid.Column="3" Classes="tight" Content="{x:Static res:Strings.LaunchDiscard}" Click="OnDiscardRecovery" />
             </Grid>
           </Border>
 
@@ -96,20 +97,20 @@
 
       <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="7">
 
-        <c:PanelBox Grid.Row="0" Header="Start">
+        <c:PanelBox Grid.Row="0" Header="{x:Static res:Strings.LaunchStart}">
           <StackPanel Margin="0,8,0,8">
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="primary block" Content="NEW PROJECT…" Click="OnNewProject" />
+              <Button Classes="primary block" Content="{x:Static res:Strings.LaunchNewProject}" Click="OnNewProject" />
             </ContentControl>
             <ContentControl Theme="{StaticResource FieldWide}">
-              <Button Classes="block" Content="OPEN…" Click="OnOpenExisting" />
+              <Button Classes="block" Content="{x:Static res:Strings.LaunchOpen}" Click="OnOpenExisting" />
             </ContentControl>
             <TextBlock Margin="10,5,10,0" FontSize="10.5" TextWrapping="Wrap"
                        Classes="dim3" Text="{Binding SeedNote}" />
           </StackPanel>
         </c:PanelBox>
 
-        <c:PanelBox Grid.Row="1" Header="This machine">
+        <c:PanelBox Grid.Row="1" Header="{x:Static res:Strings.LaunchThisMachine}">
           <ItemsControl ItemsSource="{Binding MachineChecks}" Margin="10,8">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:LogLine">

@@ -985,6 +985,5 @@ public static class ShowCompiler
     private static IReadOnlyList<OutputPatchRoute> Routes(HaCueProject project) => [];
 
     /// <summary>Decibels to the linear gain the engine multiplies by; the silence floor maps to zero.</summary>
-    private static float Linear(double decibels) =>
-        decibels <= GainRange.SilenceFloorDb ? 0f : (float)Math.Pow(10, decibels / 20);
+    private static float Linear(double decibels) => GainRange.Linear(decibels);
 }

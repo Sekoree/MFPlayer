@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:HaCue2.Resources"
              xmlns:c="using:HaCue2.Controls"
              xmlns:v="using:HaCue2.Views"
              xmlns:vm="using:HaCue2.ViewModels"
@@ -17,19 +18,19 @@
          never gates GO. -->
     <Border Classes="transport" DockPanel.Dock="Top">
       <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="7">
-        <Button Grid.Column="0" Classes="go" Content="GO" Click="OnGo"
+        <Button Grid.Column="0" Classes="go" Content="{x:Static res:Strings.CuesGo}" Click="OnGo"
                 AutomationProperties.Name="Go current cue list" />
         <Button Grid.Column="1" Content="{Binding PauseLabel}" Click="OnPause"
                 AutomationProperties.Name="Pause or resume all active cues" />
         <!-- Bare STOP takes down the selected active cue; stop-all is the split menu, because a
              single button that sometimes stops one cue and sometimes stops the show is a button
              nobody can press with confidence during a performance. -->
-        <Button Grid.Column="2" Content="STOP ▾" Click="OnStop"
+        <Button Grid.Column="2" Content="{x:Static res:Strings.CuesStop}" Click="OnStop"
                 AutomationProperties.Name="Stop selected active cue"
-                ToolTip.Tip="Stops the selected active cue. Right-click, or the arrow, for stop-all.">
+                ToolTip.Tip="{x:Static res:Strings.CuesStopsTheSelectedActiveCue}">
           <Button.ContextFlyout>
             <MenuFlyout>
-              <MenuItem Header="Stop all" Click="OnStopAll" />
+              <MenuItem Header="{x:Static res:Strings.CuesStopAll}" Click="OnStopAll" />
             </MenuFlyout>
           </Button.ContextFlyout>
         </Button>
@@ -40,25 +41,25 @@
              never called and PANIC did nothing at all. See CuesView's constructor. -->
         <Button Grid.Column="3" Classes="panic" Name="PanicButton" Content="{Binding PanicLabel}"
                 AutomationProperties.Name="Panic; hold to stop everything"
-                ToolTip.Tip="Hold to stop everything." />
-        <Button Grid.Column="4" Classes="icon" Content="↑ STBY" Click="OnStandbyUp"
+                ToolTip.Tip="{x:Static res:Strings.CuesHoldToStopEverything}" />
+        <Button Grid.Column="4" Classes="icon" Content="{x:Static res:Strings.CuesStby}" Click="OnStandbyUp"
                 AutomationProperties.Name="Move standby up" />
-        <Button Grid.Column="5" Classes="icon" Content="↓ STBY" Click="OnStandbyDown"
+        <Button Grid.Column="5" Classes="icon" Content="{x:Static res:Strings.CuesStby2}" Click="OnStandbyDown"
                 AutomationProperties.Name="Move standby down" />
         <!-- Multi-list transport is v1 (register item 5): the transport acts on the selected list and
              every list keeps its own standby. -->
         <Button Grid.Column="6" Content="{Binding ListSelector}" Click="OnSelectList"
                 AutomationProperties.Name="Choose current cue list"
-                ToolTip.Tip="Choose which cue list GO and standby control." />
+                ToolTip.Tip="{x:Static res:Strings.CuesChooseWhichCueListGo}" />
 
         <ToggleButton Grid.Column="8" Theme="{StaticResource ChipToggle}"
                       AutomationProperties.Name="External input master enable"
                       IsChecked="{Binding $parent[v:ShellWindow].((vm:ShellViewModel)DataContext).IsExternalInputEnabled}"
-                      ToolTip.Tip="MIDI/OSC/hotkey triggers, wall-clock schedules and MTC chase. Off when a project opens; never gates GO.">
+                      ToolTip.Tip="{x:Static res:Strings.CuesMidiOscHotkeyTriggersWall}">
           <StackPanel Orientation="Horizontal" Spacing="5">
             <Ellipse Classes="led"
                      Classes.ok="{Binding $parent[v:ShellWindow].((vm:ShellViewModel)DataContext).IsExternalInputEnabled}" />
-            <TextBlock Text="EXTERNAL INPUT" />
+            <TextBlock Text="{x:Static res:Strings.CuesExternalInput}" />
           </StackPanel>
         </ToggleButton>
 
@@ -83,36 +84,36 @@
       <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="7">
         <!-- Media first and separate: picking files IS how a show gets built, and burying it in a
              menu behind six cue kinds nobody adds by hand would be the wrong shape. -->
-        <Button Grid.Column="0" Content="+ MEDIA…" Click="OnAddMedia"
+        <Button Grid.Column="0" Content="{x:Static res:Strings.CuesMedia}" Click="OnAddMedia"
                 IsEnabled="{Binding CanEditDocument}" />
-        <Button Grid.Column="1" Content="+ ADD ▾" IsEnabled="{Binding CanEditDocument}">
+        <Button Grid.Column="1" Content="{x:Static res:Strings.CuesAdd}" IsEnabled="{Binding CanEditDocument}">
           <Button.Flyout>
             <MenuFlyout>
-              <MenuItem Header="Group" Click="OnAddCue" Tag="Group" />
-              <MenuItem Header="Action" Click="OnAddCue" Tag="Action" />
-              <MenuItem Header="Automation" Click="OnAddCue" Tag="Automation" />
-              <MenuItem Header="Fade" Click="OnAddCue" Tag="Fade" />
-              <MenuItem Header="Jump" Click="OnAddCue" Tag="Jump" />
-              <MenuItem Header="Patch" Click="OnAddCue" Tag="Patch" />
-              <MenuItem Header="Visualizer" Click="OnAddCue" Tag="Visualizer" />
-              <MenuItem Header="Text" Click="OnAddCue" Tag="Text" />
+              <MenuItem Header="{x:Static res:Strings.CuesGroup}" Click="OnAddCue" Tag="Group" />
+              <MenuItem Header="{x:Static res:Strings.CuesAction}" Click="OnAddCue" Tag="Action" />
+              <MenuItem Header="{x:Static res:Strings.AutoEdAutomation}" Click="OnAddCue" Tag="Automation" />
+              <MenuItem Header="{x:Static res:Strings.CuesFade}" Click="OnAddCue" Tag="Fade" />
+              <MenuItem Header="{x:Static res:Strings.CuesJump}" Click="OnAddCue" Tag="Jump" />
+              <MenuItem Header="{x:Static res:Strings.AudPatch}" Click="OnAddCue" Tag="Patch" />
+              <MenuItem Header="{x:Static res:Strings.CuesVisualizer}" Click="OnAddCue" Tag="Visualizer" />
+              <MenuItem Header="{x:Static res:Strings.CuesText}" Click="OnAddCue" Tag="Text" />
               <Separator />
               <!-- Sources rather than files. Each is an ordinary media cue whose path is a URI the
                    registry knows how to open, so everything below it - level, sends, placements,
                    fades - means exactly what it means for a file on disk. -->
-              <MenuItem Header="NDI input…" Click="OnAddNdi" />
-              <MenuItem Header="Local input…" Click="OnAddCapture" />
-              <MenuItem Header="YouTube…" Click="OnAddYouTube" />
+              <MenuItem Header="{x:Static res:Strings.CuesNdiInput}" Click="OnAddNdi" />
+              <MenuItem Header="{x:Static res:Strings.CuesLocalInput}" Click="OnAddCapture" />
+              <MenuItem Header="{x:Static res:Strings.CuesYoutube}" Click="OnAddYouTube" />
               <Separator />
-              <MenuItem Header="Comment" Click="OnAddCue" Tag="Comment" />
+              <MenuItem Header="{x:Static res:Strings.CuesComment}" Click="OnAddCue" Tag="Comment" />
             </MenuFlyout>
           </Button.Flyout>
         </Button>
-        <Button Grid.Column="2" Content="DUPLICATE" Click="OnDuplicate"
+        <Button Grid.Column="2" Content="{x:Static res:Strings.CuesDuplicate}" Click="OnDuplicate"
                 IsEnabled="{Binding CanModifySelection}" />
-        <Button Grid.Column="3" Content="REMOVE" Click="OnRemove"
+        <Button Grid.Column="3" Content="{x:Static res:Strings.CuesRemove}" Click="OnRemove"
                 IsEnabled="{Binding CanModifySelection}" />
-        <Button Grid.Column="4" Classes="icon" Content="RENUMBER…" Click="OnRenumber"
+        <Button Grid.Column="4" Classes="icon" Content="{x:Static res:Strings.CuesRenumber}" Click="OnRenumber"
                 IsEnabled="{Binding CanEditDocument}" />
         <!-- An import that failed produced no cue and, until now, no word about why. Red, beside the
              button that started it, and trimmed rather than allowed to push the row wider. -->
@@ -131,7 +132,7 @@
         <!-- A two-second network scan with nothing on screen reads as a click that missed. -->
         <TextBlock Grid.Column="6" Classes="mono small" VerticalAlignment="Center"
                    IsVisible="{Binding IsScanningSources}"
-                   Text="looking for NDI senders on the network…" />
+                   Text="{x:Static res:Strings.CuesLookingForNdiSendersOn}" />
       </Grid>
     </Border>
 
@@ -197,22 +198,22 @@
               <ContextMenu>
                 <!-- Not edits, so they stay live under Lock - but they need a selected cue, and with
                      none they used to sit enabled and do nothing. -->
-                <MenuItem Header="Fire this cue now" Click="OnFireSelected"
+                <MenuItem Header="{x:Static res:Strings.CuesFireThisCueNow}" Click="OnFireSelected"
                           IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).HasSelection}" />
-                <MenuItem Header="Preview on audition outputs" InputGesture="Ctrl+P" Click="OnPreview"
+                <MenuItem Header="{x:Static res:Strings.CuesPreviewOnAuditionOutputs}" InputGesture="Ctrl+P" Click="OnPreview"
                           IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).HasSelection}" />
-                <MenuItem Header="Move standby here" Click="OnStandbyHere"
+                <MenuItem Header="{x:Static res:Strings.CuesMoveStandbyHere}" Click="OnStandbyHere"
                           IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).HasSelection}" />
                 <Separator />
-                <MenuItem Header="Edit source…" Click="OnEditSource"
+                <MenuItem Header="{x:Static res:Strings.CuesEditSource}" Click="OnEditSource"
                           IsVisible="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanEditSource}"
                           IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanEditDocument}" />
-                <MenuItem Header="Open timeline" Click="OnOpenTimeline"
+                <MenuItem Header="{x:Static res:Strings.CuesOpenTimeline}" Click="OnOpenTimeline"
                           IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanOpenTimeline}" />
                 <MenuItem Header="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).ToggleEnabledLabel}"
                           Click="OnToggleEnabled"
                           IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanModifySelection}" />
-                <MenuItem Header="Renumber from here…" Click="OnRenumber"
+                <MenuItem Header="{x:Static res:Strings.CuesRenumberFromHere}" Click="OnRenumber"
                           IsEnabled="{Binding $parent[v:CuesView].((vm:CuesViewModel)DataContext).CanEditDocument}" />
               </ContextMenu>
             </TreeDataGrid.ContextMenu>
@@ -308,7 +309,7 @@
              Nothing about the current scope can hide a sounding cue: groups aggregate their sounding
              children and cues from another list carry that list's name. -->
         <c:PanelBox Grid.Row="2" MinHeight="120"
-                    Header="Active" Subhead="{Binding ActiveCues.Count}"
+                    Header="{x:Static res:Strings.CuesActive}" Subhead="{Binding ActiveCues.Count}"
                     Hint="{Binding ActivePanelHint}">
           <!-- Editing mode makes the bars live, like the rest of the cue editor. Locked/performance
                mode keeps an explicit latch: a drag is instantly audible and has no undo. -->
@@ -363,7 +364,7 @@
                                     Theme="{StaticResource TreeDataGridExpandCollapseChevron}"
                                     IsChecked="{Binding IsExpanded}"
                                     AutomationProperties.Name="Expand active group"
-                                    ToolTip.Tip="Show the cues inside this group" />
+                                    ToolTip.Tip="{x:Static res:Strings.CuesShowTheCuesInsideThis}" />
                       <TextBlock Grid.Column="2" Classes="qnum" Text="{Binding Number}" />
                       <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6"
                                   VerticalAlignment="Center">
@@ -372,9 +373,9 @@
                                    Text="{Binding Mode}" />
                       </StackPanel>
                       <TextBlock Grid.Column="4" Classes="mono dim3 small" VerticalAlignment="Center"
-                                 Text="{Binding Position}" ToolTip.Tip="where the group is in its chain" />
+                                 Text="{Binding Position}" ToolTip.Tip="{x:Static res:Strings.CuesWhereTheGroupIsIn}" />
                       <TextBlock Grid.Column="5" Classes="clock" Text="{Binding Clock}"
-                                 ToolTip.Tip="the WHOLE group's remaining and total" />
+                                 ToolTip.Tip="{x:Static res:Strings.CuesTheWholeGroupSRemaining}" />
                       <!-- Seekable for a together-group: one drag lands every stem and every video on
                            the same absolute time. A playlist header stays a plain progress readout -
                            its children play in sequence, so its bar has no one place to seek to. -->
@@ -387,11 +388,11 @@
                                  Tag="{Binding GroupId}"
                                  Classes.fading="{Binding IsFading}"
                                  Classes.near="{Binding IsNearEnd}"
-                                 ToolTip.Tip="Drag to seek the whole group." />
+                                 ToolTip.Tip="{x:Static res:Strings.CuesDragToSeekTheWhole}" />
                       <Button Grid.Column="7" Classes="icon" Content="×" Click="OnStopGroup"
                               Tag="{Binding GroupId}"
                               AutomationProperties.Name="Stop active group"
-                              ToolTip.Tip="Stop everything in this group. Press again during the fade to cut." />
+                              ToolTip.Tip="{x:Static res:Strings.CuesStopEverythingInThisGroup}" />
                     </Grid>
 
                     <StackPanel Margin="24,2,0,0" IsVisible="{Binding IsExpanded}">
@@ -438,9 +439,9 @@
                     </StackPanel>
                     <TextBlock Grid.Column="3" Classes="clock" Text="{Binding Clock}" />
                     <TextBlock Grid.Column="4" Classes="clock" Text="{Binding Remaining}"
-                               ToolTip.Tip="remaining" />
+                               ToolTip.Tip="{x:Static res:Strings.CuesRemaining}" />
                     <TextBlock Grid.Column="5" Classes="clock dim3" Text="{Binding Length}"
-                               ToolTip.Tip="whole clip" />
+                               ToolTip.Tip="{x:Static res:Strings.CuesWholeClip}" />
                     <!-- Draggable. The bar follows the finger during a gesture and the show follows on
                          release - a seek per pointer-move would re-buffer the clip on every pixel. -->
                     <c:SeekBar Grid.Column="6" Maximum="1" Value="{Binding Progress}"
@@ -452,14 +453,14 @@
                                Tag="{Binding CueId}"
                                Classes.fading="{Binding IsFading}"
                                Classes.near="{Binding IsNearEnd}"
-                               ToolTip.Tip="Drag to seek this cue." />
+                               ToolTip.Tip="{x:Static res:Strings.CuesDragToSeekThisCue}" />
                     <TextBlock Grid.Column="7" Classes="dest" Text="{Binding Destination}" />
                     <!-- A real button. It was a TextBlock, so the one obvious way to stop a single
                          sounding cue did nothing at all. -->
                     <Button Grid.Column="8" Classes="icon" Content="×" Click="OnStopActive"
                             Tag="{Binding CueId}"
                             AutomationProperties.Name="Stop active cue"
-                            ToolTip.Tip="Stop this cue." />
+                            ToolTip.Tip="{x:Static res:Strings.CuesStopThisCue}" />
                   </Grid>
 
                   <!-- The ramps running inside this cue, only while one is. A twenty-second fade-down on
@@ -473,11 +474,11 @@
                         <Grid ColumnDefinitions="*,66,66,52,150,100" ColumnSpacing="7" Margin="0,1">
                           <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6"
                                       VerticalAlignment="Center">
-                            <TextBlock Classes="mono dim3 micro" Text="LANE" />
+                            <TextBlock Classes="mono dim3 micro" Text="{x:Static res:Strings.CuesLane}" />
                             <TextBlock Classes="mono small ellipsis" Text="{Binding Name}" />
                           </StackPanel>
                           <TextBlock Grid.Column="2" Classes="clock dim3" Text="{Binding Remaining}"
-                                     ToolTip.Tip="until this ramp lands" />
+                                     ToolTip.Tip="{x:Static res:Strings.CuesUntilThisRampLands}" />
                           <c:SeekBar Grid.Column="4" Maximum="1" Value="{Binding Progress}"
                                      IsSeekable="False" IsHitTestVisible="False"
                                      VerticalAlignment="Center"

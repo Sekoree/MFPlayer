@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:HaCue2.Resources"
              xmlns:c="using:HaCue2.Controls"
              xmlns:sys="using:System"
              xmlns:v="using:HaCue2.Views"
@@ -56,16 +57,16 @@
            asks nothing about compositions: an output is created, then a composition is sent to it. -->
       <Grid IsVisible="{Binding IsOutputsPane}" ColumnDefinitions="*,360" Margin="7" ColumnSpacing="7">
 
-        <c:PanelBox Grid.Column="0" Header="Video outputs" Hint="what this machine can put a picture on">
+        <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.VidVideoOutputs}" Hint="what this machine can put a picture on">
           <c:PanelBox.Footer>
             <Border Classes="chain">
               <StackPanel Orientation="Horizontal" Spacing="6" IsEnabled="{Binding CanAuthor}">
-                <Button Classes="tight" Content="+ LOCAL…" Click="OnDialog" Tag="out:local" />
-                <Button Classes="tight" Content="+ NDI…" Click="OnDialog" Tag="out:ndi" />
-                <Button Classes="tight" Content="+ RECORD…" Click="OnDialog" Tag="out:record" />
-                <Button Classes="tight" Content="+ STREAM…" Click="OnDialog" Tag="out:stream" />
-                <Button Classes="tight" Content="RENAME…" Click="OnDialog" Tag="out:rename" />
-                <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="out:remove" />
+                <Button Classes="tight" Content="{x:Static res:Strings.VidLocal}" Click="OnDialog" Tag="out:local" />
+                <Button Classes="tight" Content="{x:Static res:Strings.VidNdi}" Click="OnDialog" Tag="out:ndi" />
+                <Button Classes="tight" Content="{x:Static res:Strings.AudRecord}" Click="OnDialog" Tag="out:record" />
+                <Button Classes="tight" Content="{x:Static res:Strings.AudStream}" Click="OnDialog" Tag="out:stream" />
+                <Button Classes="tight" Content="{x:Static res:Strings.VidRename}" Click="OnDialog" Tag="out:rename" />
+                <Button Classes="tight" Content="{x:Static res:Strings.AudRemove}" Click="OnDialog" Tag="out:remove" />
               </StackPanel>
             </Border>
           </c:PanelBox.Footer>
@@ -73,11 +74,11 @@
             <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                     BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
               <Grid ColumnDefinitions="140,*,120,90,140" ColumnSpacing="8">
-                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="OUTPUT" />
-                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="KIND" />
-                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="SHOWS" />
-                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="MAP" />
-                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.VidOutput}" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.AudKind}" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.VidShows}" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.VidMap}" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.DiagColState}" />
               </Grid>
             </Border>
             <c:EmptyState IsVisible="{Binding HasNoOutputs}"
@@ -89,10 +90,10 @@
                      PointerPressed="OnRowRightPressed">
               <ListBox.ContextMenu>
                 <ContextMenu>
-                  <MenuItem Header="Rename…" Click="OnDialog" Tag="out:rename" />
-                  <MenuItem Header="Edit mapping" Click="OnEditMapping" />
+                  <MenuItem Header="{x:Static res:Strings.AudRename2}" Click="OnDialog" Tag="out:rename" />
+                  <MenuItem Header="{x:Static res:Strings.VidEditMapping}" Click="OnEditMapping" />
                   <Separator />
-                  <MenuItem Header="Remove…" Click="OnDialog" Tag="out:remove" />
+                  <MenuItem Header="{x:Static res:Strings.AudRemove2}" Click="OnDialog" Tag="out:remove" />
                 </ContextMenu>
               </ListBox.ContextMenu>
               <ListBox.ItemTemplate>
@@ -118,14 +119,14 @@
               <!-- Read-only, and it names the pane that CHANGES it. Assignment belongs to the
                    composition, which is the end of the pair an operator is thinking about when they
                    decide where a canvas goes. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Shows">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidShows2}">
                 <TextBox Classes="ro" Text="{Binding OutputComposition}" />
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Screen"
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidScreen}"
                                       IsVisible="{Binding IsOutputLocal}">
                 <ComboBox ItemsSource="{Binding Screens}" SelectedIndex="{Binding OutputScreenIndex}" />
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Mode"
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudMode}"
                                       IsVisible="{Binding IsOutputLocal}">
                 <ListBox Theme="{StaticResource Segment}" SelectedIndex="{Binding OutputFullscreenIndex}">
                   <ListBoxItem>fullscreen</ListBoxItem>
@@ -134,14 +135,14 @@
               </HeaderedContentControl>
               <!-- Only while windowed: a fullscreen output takes the screen's size, so the field
                    would be a control that does nothing. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Window size"
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidWindowSize}"
                                       IsVisible="{Binding IsOutputWindowed}">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
                   <TextBox Grid.Column="0" Text="{Binding OutputWindowSize}"
                            PlaceholderText="960×540"
-                           ToolTip.Tip="The window's size on screen. Empty takes the composition's size." />
+                           ToolTip.Tip="{x:Static res:Strings.VidTheWindowSSizeOn}" />
                   <Button Grid.Column="1" Classes="icon" Content="▾"
-                          ToolTip.Tip="Common sizes. Anything can still be typed.">
+                          ToolTip.Tip="{x:Static res:Strings.VidCommonSizesAnythingCanStill}">
                     <Button.Flyout>
                       <Flyout>
                         <ItemsControl ItemsSource="{Binding Resolutions}">
@@ -157,26 +158,26 @@
                   </Button>
                 </Grid>
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Window locks"
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidWindowLocks}"
                                       IsVisible="{Binding IsOutputWindowed}">
                 <WrapPanel ItemSpacing="12" LineSpacing="4">
-                  <CheckBox Content="aspect ratio" IsChecked="{Binding OutputWindowAspectLocked}"
-                            ToolTip.Tip="Keep the configured width-to-height ratio while resizing the real output window." />
-                  <CheckBox Content="resolution" IsChecked="{Binding OutputWindowResolutionLocked}"
-                            ToolTip.Tip="Prevent the real output window from being resized." />
+                  <CheckBox Content="{x:Static res:Strings.VidAspectRatio}" IsChecked="{Binding OutputWindowAspectLocked}"
+                            ToolTip.Tip="{x:Static res:Strings.VidKeepTheConfiguredWidthTo}" />
+                  <CheckBox Content="{x:Static res:Strings.VidResolution}" IsChecked="{Binding OutputWindowResolutionLocked}"
+                            ToolTip.Tip="{x:Static res:Strings.VidPreventTheRealOutputWindow}" />
                 </WrapPanel>
               </HeaderedContentControl>
               <!-- The number a video wall is built from: mapping destinations are measured in it. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Output raster">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidOutputRaster}">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
                   <!-- A watermark the field can actually SHOW: the old full sentence clipped mid-word at
                        inspector width, and a truncated hint reads as a broken control. The sentence
                        lives in the tooltip instead. -->
                   <TextBox Grid.Column="0" Text="{Binding OutputRaster}"
                            PlaceholderText="1920×1080"
-                           ToolTip.Tip="The raster mapping destinations are measured in. Empty follows the composition's size." />
+                           ToolTip.Tip="{x:Static res:Strings.VidTheRasterMappingDestinationsAre}" />
                   <Button Grid.Column="1" Classes="icon" Content="▾"
-                          ToolTip.Tip="Common sizes. Anything can still be typed.">
+                          ToolTip.Tip="{x:Static res:Strings.VidCommonSizesAnythingCanStill}">
                     <Button.Flyout>
                       <Flyout>
                         <ItemsControl ItemsSource="{Binding Resolutions}">
@@ -194,18 +195,18 @@
               </HeaderedContentControl>
               <!-- Idle images exist at both levels; the composition's wins when it has one
                    (register item 23), and black is what both fall back to. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fallback">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidIdleFallback}">
                 <TextBox Text="{Binding OutputIdleFallback}"
-                         PlaceholderText="black"
-                         ToolTip.Tip="Shown when the composition has no idle image of its own. Empty means black." />
+                         PlaceholderText="{x:Static res:Strings.VidBlack}"
+                         ToolTip.Tip="{x:Static res:Strings.VidShownWhenTheCompositionHas}" />
               </HeaderedContentControl>
               <!-- A slate is rarely the canvas's own shape. Without a choice it was stretched, which
                    is the one option that always looks wrong on a logo. -->
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fit">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidIdleFit}">
                 <ComboBox ItemsSource="{Binding IdleFits}"
                           SelectedIndex="{Binding OutputIdleFitIndex}" />
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Mapping">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidMapping}">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
                   <!-- A toggle, never a delete: switching to clean keeps the authored sections. -->
                   <ListBox Grid.Column="0" Theme="{StaticResource Segment}"
@@ -213,18 +214,18 @@
                     <ListBoxItem>on</ListBoxItem>
                     <ListBoxItem>clean</ListBoxItem>
                   </ListBox>
-                  <Button Grid.Column="1" Classes="tight" Content="EDIT ›" Click="OnEditMapping" />
+                  <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.VidEdit}" Click="OnEditMapping" />
                 </Grid>
               </HeaderedContentControl>
-              <HeaderedContentControl Theme="{StaticResource Field}" Header="Required">
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidRequired}">
                 <CheckBox IsChecked="{Binding OutputRequired}"
-                          Content="the show cannot run without this output" />
+                          Content="{x:Static res:Strings.VidTheShowCannotRunWithout}" />
               </HeaderedContentControl>
               <ContentControl Theme="{StaticResource FieldWide}">
                 <TextBlock Classes="mono dim3 small" TextWrapping="Wrap" Text="{Binding MappingNote}" />
               </ContentControl>
               <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding IsOutputLocal}">
-                <Button Classes="block" Content="IDENTIFY - FLASH OUTPUT NAME ON SCREEN"
+                <Button Classes="block" Content="{x:Static res:Strings.VidIdentifyFlashOutputNameOn}"
                         Click="OnIdentify" />
               </ContentControl>
               <!-- Held rather than shown in a dialog: IDENTIFY refuses for ordinary reasons, and a
@@ -238,12 +239,12 @@
               <!-- Register item 30. The same editor the Audio view uses: a record output and a
                    record line hold the same block and answer the same questions. -->
               <StackPanel IsVisible="{Binding Record.IsRecording}">
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Directory"
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudDirectory}"
                                         IsVisible="{Binding Record.IsFile}">
                   <TextBox Text="{Binding Record.Directory}"
-                           PlaceholderText="the machine's recordings folder" />
+                           PlaceholderText="{x:Static res:Strings.AudTheMachineSRecordingsFolder}" />
                 </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Pattern"
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudPattern}"
                                         IsVisible="{Binding Record.IsFile}">
                   <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
                     <TextBox Grid.Column="0" Text="{Binding Record.Pattern}" />
@@ -277,9 +278,9 @@
                     </Button>
                   </Grid>
                 </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="URL"
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudUrl}"
                                         IsVisible="{Binding Record.IsStream}">
-                  <TextBox Text="{Binding Record.Url}" PlaceholderText="rtmp://host/app/key" />
+                  <TextBox Text="{Binding Record.Url}" PlaceholderText="{x:Static res:Strings.AudRtmpHostAppKey}" />
                 </HeaderedContentControl>
                 <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding Record.IsFile}">
                   <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding Record.Preview}" />
@@ -288,18 +289,18 @@
                   <TextBlock Classes="mono small" Foreground="{DynamicResource GelRed}"
                              TextWrapping="Wrap" Text="{Binding Record.Problem}" />
                 </ContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Mode"
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudMode}"
                                         IsVisible="{Binding Record.IsFile}">
                   <ListBox Theme="{StaticResource Segment}" SelectedIndex="{Binding Record.ModeIndex}">
                     <ListBoxItem>continuous</ListBoxItem>
                     <ListBoxItem>content only</ListBoxItem>
                   </ListBox>
                 </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Format">
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudFormat}">
                   <TextBox Classes="ro" Text="{Binding Record.FormatSummary}" />
                 </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Arm">
-                  <CheckBox IsChecked="{Binding Record.ArmWithShow}" Content="arm when the show opens" />
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudArm}">
+                  <CheckBox IsChecked="{Binding Record.ArmWithShow}" Content="{x:Static res:Strings.AudArmWhenTheShowOpens}" />
                 </HeaderedContentControl>
                 <ContentControl Theme="{StaticResource FieldWide}">
                   <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7">
@@ -331,11 +332,11 @@
           <!-- ADD / REMOVE at the foot, exactly where the outputs pane puts them. -->
           <Border DockPanel.Dock="Bottom" Classes="chain">
             <StackPanel Orientation="Horizontal" Spacing="6" IsEnabled="{Binding CanAuthor}">
-              <Button Classes="tight" Content="+ ADD…" Click="OnDialog" Tag="composition" />
-              <Button Classes="tight" Content="REMOVE…" Click="OnDialog" Tag="composition:remove"
+              <Button Classes="tight" Content="{x:Static res:Strings.VidAdd}" Click="OnDialog" Tag="composition" />
+              <Button Classes="tight" Content="{x:Static res:Strings.AudRemove}" Click="OnDialog" Tag="composition:remove"
                       IsEnabled="{Binding HasComposition}" />
               <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                         Text="remove takes the composition the last-touched pane belongs to" />
+                         Text="{x:Static res:Strings.VidRemoveTakesTheCompositionThe}" />
             </StackPanel>
           </Border>
 
@@ -404,25 +405,25 @@
                         </c:AspectBox>
 
                         <WrapPanel Margin="10,0" ItemSpacing="12" LineSpacing="4">
-                          <CheckBox Content="preserve aspect" IsChecked="{Binding PreserveAspect}" />
-                          <CheckBox Content="snap + guides" IsChecked="{Binding SnapEnabled}" />
-                          <Button Classes="tight" Content="SIZE BY RASTER" Click="OnResolutionLayout"
-                                  ToolTip.Tip="Lay out every screen at its output resolution, left to right." />
+                          <CheckBox Content="{x:Static res:Strings.PlacePreserveAspect}" IsChecked="{Binding PreserveAspect}" />
+                          <CheckBox Content="{x:Static res:Strings.PlaceSnapGuides}" IsChecked="{Binding SnapEnabled}" />
+                          <Button Classes="tight" Content="{x:Static res:Strings.VidSizeByRaster}" Click="OnResolutionLayout"
+                                  ToolTip.Tip="{x:Static res:Strings.VidLayOutEveryScreenAt}" />
                         </WrapPanel>
 
                         <TextBlock Margin="10,0" Classes="mono dim3 micro" TextWrapping="Wrap"
-                                   Text="Steel outline = physical output pixels; coloured box = composition region it samples. Drag inside to move; edges resize. Shift reverses aspect lock; Alt suspends guides." />
+                                   Text="{x:Static res:Strings.VidSteelOutlinePhysicalOutputPixels}" />
                         <TextBlock Margin="10,0" Classes="mono dim2 micro" TextWrapping="Wrap"
                                    Text="{Binding OutputRasterSummary}" />
 
-                        <HeaderedContentControl Theme="{StaticResource Field}" Header="Name">
+                        <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudName2}">
                           <TextBox Text="{Binding EditName}" />
                         </HeaderedContentControl>
-                        <HeaderedContentControl Theme="{StaticResource Field}" Header="Size / rate">
+                        <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidSizeRate}">
                           <Grid ColumnDefinitions="*,Auto,*" ColumnSpacing="4">
                             <TextBox Grid.Column="0" Text="{Binding Size}" />
                             <Button Grid.Column="1" Classes="icon" Content="▾"
-                                    ToolTip.Tip="Common sizes, this machine's screens first. Anything can still be typed.">
+                                    ToolTip.Tip="{x:Static res:Strings.VidCommonSizesThisMachineS}">
                               <Button.Flyout>
                                 <Flyout>
                                   <ItemsControl ItemsSource="{Binding Resolutions}">
@@ -439,22 +440,22 @@
                             <TextBox Grid.Column="2" Text="{Binding Rate}" />
                           </Grid>
                         </HeaderedContentControl>
-                        <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle image">
+                        <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidIdleImage}">
                           <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                            <TextBox Grid.Column="0" Text="{Binding IdleImage}" PlaceholderText="black" />
-                            <Button Grid.Column="1" Classes="tight" Content="BROWSE…" Click="OnBrowseIdleImage" />
+                            <TextBox Grid.Column="0" Text="{Binding IdleImage}" PlaceholderText="{x:Static res:Strings.VidBlack}" />
+                            <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.PromptBrowse}" Click="OnBrowseIdleImage" />
                           </Grid>
                         </HeaderedContentControl>
-                        <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fit">
+                        <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidIdleFit}">
                           <ComboBox ItemsSource="{Binding IdleFits}" SelectedIndex="{Binding IdleFitIndex}" />
                         </HeaderedContentControl>
 
                         <Border Classes="chain">
                           <StackPanel Orientation="Horizontal" Spacing="6">
-                            <Border Classes="badge"><TextBlock Text="FEEDS" /></Border>
+                            <Border Classes="badge"><TextBlock Text="{x:Static res:Strings.VidFeeds}" /></Border>
                             <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
                                        IsVisible="{Binding HasNoFeeds}"
-                                       Text="no output shows this canvas - assign one on the right" />
+                                       Text="{x:Static res:Strings.VidNoOutputShowsThisCanvas}" />
                             <ItemsControl ItemsSource="{Binding Feeds}">
                               <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -499,7 +500,7 @@
                             Detail="{Binding LayoutSummary}" />
 
               <StackPanel Margin="0,6,0,8" IsVisible="{Binding HasScreenSelected}">
-                <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Slice x / y">
+                <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.VidSliceXY}">
                   <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
                     <NumericUpDown Grid.Column="0" Minimum="0" Maximum="1" Increment="0.01"
                                    FormatString="0.###" Value="{Binding SliceX}" />
@@ -507,7 +508,7 @@
                                    FormatString="0.###" Value="{Binding SliceY}" />
                   </Grid>
                 </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="Slice w / h">
+                <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.VidSliceWH}">
                   <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
                     <NumericUpDown Grid.Column="0" Minimum="0.01" Maximum="1" Increment="0.01"
                                    FormatString="0.###" Value="{Binding SliceWidth}" />
@@ -515,13 +516,13 @@
                                    FormatString="0.###" Value="{Binding SliceHeight}" />
                   </Grid>
                 </HeaderedContentControl>
-                <HeaderedContentControl Theme="{StaticResource Field}" Header="Output raster">
+                <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.VidOutputRaster}">
                   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
                     <TextBox Grid.Column="0" Text="{Binding OutputRaster}"
                              PlaceholderText="1920×1080"
-                             ToolTip.Tip="The raster mapping destinations are measured in. Empty follows the composition's size." />
+                             ToolTip.Tip="{x:Static res:Strings.VidTheRasterMappingDestinationsAre}" />
                     <Button Grid.Column="1" Classes="icon" Content="▾"
-                            ToolTip.Tip="Common sizes. Anything can still be typed.">
+                            ToolTip.Tip="{x:Static res:Strings.VidCommonSizesAnythingCanStill}">
                       <Button.Flyout>
                         <Flyout>
                           <ItemsControl ItemsSource="{Binding Resolutions}">
@@ -539,8 +540,8 @@
                 </HeaderedContentControl>
                 <ContentControl Theme="{StaticResource FieldWide}">
                   <Border Classes="chain">
-                    <Button Classes="tight" Content="WARP THIS SCREEN ›" Click="OnEditMapping"
-                            ToolTip.Tip="Mesh, blend and per-section geometry for this output." />
+                    <Button Classes="tight" Content="{x:Static res:Strings.VidWarpThisScreen}" Click="OnEditMapping"
+                            ToolTip.Tip="{x:Static res:Strings.VidMeshBlendAndPerSection}" />
                   </Border>
                 </ContentControl>
               </StackPanel>
@@ -553,7 +554,7 @@
                first question the old flow put in front of anybody. -->
           <!-- Named rather than "this composition": the panes are all open at once, so a rail that
                said "this" left the operator to work out which one it meant. -->
-          <c:PanelBox Grid.Row="1" Header="Feeds" Hint="{Binding FeedsHint}">
+          <c:PanelBox Grid.Row="1" Header="{x:Static res:Strings.VidFeeds2}" Hint="{Binding FeedsHint}">
             <c:PanelBox.Footer>
               <StackPanel>
                 <Border Classes="chain">
@@ -561,8 +562,8 @@
                     <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
                               ItemsSource="{Binding AssignableOutputs}"
                               SelectedIndex="{Binding AssignableIndex}"
-                              PlaceholderText="an output to send this canvas to" />
-                    <Button Grid.Column="1" Classes="tight" Content="+ ASSIGN" Click="OnAssign"
+                              PlaceholderText="{x:Static res:Strings.VidAnOutputToSendThis}" />
+                    <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.VidAssign}" Click="OnAssign"
                             IsEnabled="{Binding CanAssignOutput}" />
                   </Grid>
                 </Border>
@@ -583,7 +584,7 @@
                                  Text="{Binding State}" />
                       <Button Grid.Column="2" Classes="icon" Content="×" Click="OnUnassign"
                               Tag="{Binding OutputId}"
-                              ToolTip.Tip="Stop sending this composition to that output. The output stays." />
+                              ToolTip.Tip="{x:Static res:Strings.VidStopSendingThisCompositionTo}" />
                     </Grid>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
@@ -606,7 +607,7 @@
 
         <Border DockPanel.Dock="Top" Classes="chain" Margin="0,0,0,7">
           <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="7">
-            <Border Grid.Column="0" Classes="badge"><TextBlock Text="MAPPING" /></Border>
+            <Border Grid.Column="0" Classes="badge"><TextBlock Text="{x:Static res:Strings.VidMapping2}" /></Border>
             <TextBlock Grid.Column="1" Classes="mono small" VerticalAlignment="Center"
                        Text="{Binding MappingScopeNote}" />
             <!-- A real latch, so unlike the inspector key this stays a ToggleButton - but an explicit
@@ -615,11 +616,11 @@
                  IsCalibrationOn is COMPUTED from the calibrating set. Bound two-way it tried to write a
                  get-only property on every single click and failed as a silent binding error. The click
                  handler is the only writer, and the engine is allowed to refuse it. -->
-            <ToggleButton Grid.Column="2" Theme="{StaticResource ChipToggle}" Content="CALIBRATION GRID"
+            <ToggleButton Grid.Column="2" Theme="{StaticResource ChipToggle}" Content="{x:Static res:Strings.VidCalibrationGrid}"
                           IsChecked="{Binding IsCalibrationOn, Mode=OneWay}" Click="OnCalibration"
                           AutomationProperties.Name="Toggle persistent output calibration grid"
-                          ToolTip.Tip="Shows orientation corners, a ten-by-ten warp grid and section boundaries on this output until the mapping editor closes." />
-            <Button Grid.Column="3" Classes="tight" Content="✕ CLOSE" Click="OnCloseMapping"
+                          ToolTip.Tip="{x:Static res:Strings.VidShowsOrientationCornersATen}" />
+            <Button Grid.Column="3" Classes="tight" Content="{x:Static res:Strings.VidClose}" Click="OnCloseMapping"
                     AutomationProperties.Name="Close mapping editor" />
           </Grid>
         </Border>
@@ -629,20 +630,20 @@
         <Border DockPanel.Dock="Top" Classes="chain" Margin="0,0,0,7" IsEnabled="{Binding HasOutput}">
           <WrapPanel Orientation="Horizontal" ItemSpacing="7" LineSpacing="6">
             <StackPanel Orientation="Horizontal" Spacing="4">
-              <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" Text="Split into" />
+              <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" Text="{x:Static res:Strings.VidSplitInto}" />
               <NumericUpDown Width="92" Minimum="1" Maximum="64" Increment="1" FormatString="0"
                              Value="{Binding SplitColumns}" />
-              <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" Text="cols ×" />
+              <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" Text="{x:Static res:Strings.VidCols}" />
               <NumericUpDown Width="92" Minimum="1" Maximum="64" Increment="1" FormatString="0"
                              Value="{Binding SplitRows}" />
-              <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" Text="rows" />
-              <Button Classes="tight" Content="SPLIT" Click="OnDialog" Tag="section:split"
-                      ToolTip.Tip="Replaces every section with an even grid, one per panel - then nudge each into place. This is how you hit exactly half." />
+              <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" Text="{x:Static res:Strings.VidRows}" />
+              <Button Classes="tight" Content="{x:Static res:Strings.VidSplit}" Click="OnDialog" Tag="section:split"
+                      ToolTip.Tip="{x:Static res:Strings.VidReplacesEverySectionWithAn}" />
             </StackPanel>
-            <Button Classes="tight" Content="RESET" Click="OnDialog" Tag="section:reset"
-                    ToolTip.Tip="Back to one section showing the whole canvas across the whole output" />
-            <CheckBox Content="preserve aspect" IsChecked="{Binding PreserveMappingAspect}" />
-            <CheckBox Content="snap + guides" IsChecked="{Binding SnapMapping}" />
+            <Button Classes="tight" Content="{x:Static res:Strings.VidReset}" Click="OnDialog" Tag="section:reset"
+                    ToolTip.Tip="{x:Static res:Strings.VidBackToOneSectionShowing}" />
+            <CheckBox Content="{x:Static res:Strings.PlacePreserveAspect}" IsChecked="{Binding PreserveMappingAspect}" />
+            <CheckBox Content="{x:Static res:Strings.PlaceSnapGuides}" IsChecked="{Binding SnapMapping}" />
             <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
                        Text="{Binding RasterNote}" />
           </WrapPanel>
@@ -650,19 +651,19 @@
 
         <Grid ColumnDefinitions="252,*,*" ColumnSpacing="7">
 
-          <c:PanelBox Grid.Column="0" Header="Sections" Hint="list order is draw order">
+          <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.VidSections}" Hint="list order is draw order">
             <c:PanelBox.Footer>
               <Border Classes="chain">
                 <WrapPanel Orientation="Horizontal" ItemSpacing="4" LineSpacing="4">
                   <Button Classes="tight" Content="+" Click="OnDialog" Tag="section"
-                          ToolTip.Tip="Add a section covering the whole frame" />
-                  <Button Classes="tight" Content="COPY" Click="OnDialog" Tag="section:copy" />
+                          ToolTip.Tip="{x:Static res:Strings.VidAddASectionCoveringThe}" />
+                  <Button Classes="tight" Content="{x:Static res:Strings.TlCopy}" Click="OnDialog" Tag="section:copy" />
                   <Button Classes="tight" Content="–" Click="OnDialog" Tag="section:delete"
-                          ToolTip.Tip="Remove the selected section" />
+                          ToolTip.Tip="{x:Static res:Strings.VidRemoveTheSelectedSection}" />
                   <Button Classes="tight" Content="↑" Click="OnDialog" Tag="section:up"
-                          ToolTip.Tip="Draw earlier - further back" />
+                          ToolTip.Tip="{x:Static res:Strings.VidDrawEarlierFurtherBack}" />
                   <Button Classes="tight" Content="↓" Click="OnDialog" Tag="section:down"
-                          ToolTip.Tip="Draw later - further front" />
+                          ToolTip.Tip="{x:Static res:Strings.VidDrawLaterFurtherFront}" />
                 </WrapPanel>
               </Border>
             </c:PanelBox.Footer>
@@ -675,7 +676,7 @@
                          one panel of a blend off to check the one beside it is an ordinary get-in
                          move, and deleting it would lose its geometry. -->
                     <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" VerticalAlignment="Center"
-                              ToolTip.Tip="Draw this section" />
+                              ToolTip.Tip="{x:Static res:Strings.VidDrawThisSection}" />
                     <TextBlock Grid.Column="1" Classes="mono dim3 micro" VerticalAlignment="Center"
                                Text="{Binding Position}" />
                     <TextBox Grid.Column="2" Classes="bare" Text="{Binding Name}" />
@@ -687,7 +688,7 @@
             </ListBox>
           </c:PanelBox>
 
-          <c:PanelBox Grid.Column="1" Header="Source crop · what it samples"
+          <c:PanelBox Grid.Column="1" Header="{x:Static res:Strings.VidSourceCropWhatItSamples}"
                       Hint="dragging here slides sampled content · use OUTPUT TILE to move it on screen">
             <DockPanel>
               <!-- The numeric half of register item 22. Source is in FRACTIONS because it has to
@@ -697,40 +698,40 @@
                 <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto,Auto"
                       ColumnSpacing="5" RowSpacing="4" Margin="2">
                   <TextBlock Grid.Row="0" Grid.Column="0" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Src X" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidSrcX}" />
                   <NumericUpDown Grid.Row="0" Grid.Column="1" Minimum="-2" Maximum="3" Increment="0.01"
                                  FormatString="0.###" Value="{Binding SourceX}" />
                   <TextBlock Grid.Row="0" Grid.Column="2" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Src Y" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidSrcY}" />
                   <NumericUpDown Grid.Row="0" Grid.Column="3" Minimum="-2" Maximum="3" Increment="0.01"
                                  FormatString="0.###" Value="{Binding SourceY}" />
 
                   <TextBlock Grid.Row="1" Grid.Column="0" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Src W" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidSrcW}" />
                   <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="0.001" Maximum="5" Increment="0.01"
                                  FormatString="0.###" Value="{Binding SourceWidth}" />
                   <TextBlock Grid.Row="1" Grid.Column="2" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Src H" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidSrcH}" />
                   <NumericUpDown Grid.Row="1" Grid.Column="3" Minimum="0.001" Maximum="5" Increment="0.01"
                                  FormatString="0.###" Value="{Binding SourceHeight}" />
 
                   <TextBlock Grid.Row="2" Grid.Column="0" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Rot °" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidRot}" />
                   <NumericUpDown Grid.Row="2" Grid.Column="1" Minimum="-360" Maximum="360" Increment="0.5"
                                  FormatString="0.##" Value="{Binding RotationDegrees}" />
                   <TextBlock Grid.Row="2" Grid.Column="2" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Opacity" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.TlLaneOpacity}" />
                   <NumericUpDown Grid.Row="2" Grid.Column="3" Minimum="0" Maximum="1" Increment="0.05"
                                  FormatString="0.##" Value="{Binding Opacity}" />
 
                   <TextBlock Grid.Row="3" Grid.Column="0" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Bright" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidBright}" />
                   <NumericUpDown Grid.Row="3" Grid.Column="1" Minimum="0" Maximum="2" Increment="0.05"
                                  FormatString="0.##" Value="{Binding Brightness}"
-                                 ToolTip.Tip="Panel brightness matching - 1.00 is the projector's own" />
+                                 ToolTip.Tip="{x:Static res:Strings.VidPanelBrightnessMatching100}" />
                   <TextBlock Grid.Row="3" Grid.Column="2" Grid.ColumnSpan="2" Classes="mono dim3 micro"
                              VerticalAlignment="Center" TextWrapping="Wrap"
-                             Text="drag on the canvas · type for exact values" />
+                             Text="{x:Static res:Strings.VidDragOnTheCanvasType}" />
                 </Grid>
               </Border>
               <c:AspectBox Margin="10,8" VerticalAlignment="Top" Ratio="{Binding MappingSourceAspect}">
@@ -753,43 +754,43 @@
                 <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto"
                       ColumnSpacing="5" RowSpacing="4" Margin="2">
                   <TextBlock Grid.Row="0" Grid.Column="0" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Dest X" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidDestX}" />
                   <NumericUpDown Grid.Row="0" Grid.Column="1" Increment="1" FormatString="0.#"
                                  Value="{Binding DestX}" />
                   <TextBlock Grid.Row="0" Grid.Column="2" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Dest Y" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidDestY}" />
                   <NumericUpDown Grid.Row="0" Grid.Column="3" Increment="1" FormatString="0.#"
                                  Value="{Binding DestY}" />
 
                   <TextBlock Grid.Row="1" Grid.Column="0" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Dest W" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidDestW}" />
                   <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="1" Increment="1" FormatString="0.#"
                                  Value="{Binding DestWidth}" />
                   <TextBlock Grid.Row="1" Grid.Column="2" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Dest H" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidDestH}" />
                   <NumericUpDown Grid.Row="1" Grid.Column="3" Minimum="1" Increment="1" FormatString="0.#"
                                  Value="{Binding DestHeight}" />
 
                   <!-- Mesh cols and rows independently, rather than the old off · 3×3 · 5×5 picker:
                        panels are not square, and a blend across a flat cyc wants 5×2. -->
-                  <CheckBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Content="Mesh warp"
+                  <CheckBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Content="{x:Static res:Strings.VidMeshWarp}"
                             IsChecked="{Binding MeshEnabled}"
-                            ToolTip.Tip="Bend this section through a control-point grid for a non-flat surface. GL output path only." />
+                            ToolTip.Tip="{x:Static res:Strings.VidBendThisSectionThroughA}" />
                   <TextBlock Grid.Row="2" Grid.Column="2" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Cols" IsVisible="{Binding MeshEnabled}" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidCols2}" IsVisible="{Binding MeshEnabled}" />
                   <NumericUpDown Grid.Row="2" Grid.Column="3" Minimum="2" Maximum="16" Increment="1"
                                  FormatString="0" Value="{Binding MeshColumns}"
                                  IsVisible="{Binding MeshEnabled}" />
 
                   <TextBlock Grid.Row="3" Grid.Column="0" Classes="mono dim3 small"
-                             VerticalAlignment="Center" Text="Rows" IsVisible="{Binding MeshEnabled}" />
+                             VerticalAlignment="Center" Text="{x:Static res:Strings.VidRows2}" IsVisible="{Binding MeshEnabled}" />
                   <NumericUpDown Grid.Row="3" Grid.Column="1" Minimum="2" Maximum="16" Increment="1"
                                  FormatString="0" Value="{Binding MeshRows}"
                                  IsVisible="{Binding MeshEnabled}" />
                   <Button Grid.Row="3" Grid.Column="2" Grid.ColumnSpan="2" Classes="tight"
-                          Content="RESET MESH" Click="OnDialog" Tag="mesh:reset"
+                          Content="{x:Static res:Strings.VidResetMesh}" Click="OnDialog" Tag="mesh:reset"
                           IsVisible="{Binding MeshEnabled}"
-                          ToolTip.Tip="Back to the flat identity grid, keeping its size" />
+                          ToolTip.Tip="{x:Static res:Strings.VidBackToTheFlatIdentity}" />
 
                   <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="4" Spacing="4"
                               IsVisible="{Binding HasWarp}">
@@ -801,15 +802,15 @@
                                       PointSelected="OnWarpPointSelected"
                                       GestureCompleted="OnWarpGestureCompleted"
                                       AutomationProperties.Name="Warp mesh editor"
-                                      AutomationProperties.HelpText="Drag a control point. Arrow keys nudge; Shift plus arrow nudges coarsely." />
+                                      AutomationProperties.HelpText="{x:Static res:Strings.VidDragAControlPointArrow}" />
                     <Grid ColumnDefinitions="Auto,*,Auto,*" ColumnSpacing="5">
                       <TextBlock Grid.Column="0" Classes="mono dim3 small" VerticalAlignment="Center"
-                                 Text="Point" />
+                                 Text="{x:Static res:Strings.VidPoint}" />
                       <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
                                 ItemsSource="{Binding WarpPoints}"
                                 SelectedIndex="{Binding SelectedWarpPoint}" />
                       <TextBlock Grid.Column="2" Classes="mono dim3 small" VerticalAlignment="Center"
-                                 Text="dx / dy" />
+                                 Text="{x:Static res:Strings.VidDxDy}" />
                       <Grid Grid.Column="3" ColumnDefinitions="*,*" ColumnSpacing="4">
                         <NumericUpDown Grid.Column="0" Minimum="-1" Maximum="1" Increment="0.005"
                                        FormatString="0.###" Value="{Binding WarpOffsetX}" />

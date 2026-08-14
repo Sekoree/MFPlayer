@@ -65,9 +65,7 @@ public sealed partial class ShowHost
         var levelDb = _project.Audition.LevelDb;
         if (_project.Audition.DuckWhenProgramSounds && SoundingIds().Count > 0)
             levelDb -= 12;
-        var gain = levelDb <= GainRange.SilenceFloorDb
-            ? 0f
-            : (float)Math.Pow(10, levelDb / 20);
+        var gain = GainRange.Linear(levelDb);
 
         try
         {

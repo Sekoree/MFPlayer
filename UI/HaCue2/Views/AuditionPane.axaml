@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:res="using:HaCue2.Resources"
              xmlns:c="using:HaCue2.Controls"
              xmlns:vm="using:HaCue2.ViewModels"
              x:Class="HaCue2.Views.AuditionPane"
@@ -12,49 +13,49 @@
 
   <Grid ColumnDefinitions="*,*" Margin="7" ColumnSpacing="7">
 
-    <c:PanelBox Grid.Column="0" Header="Audition audio" VerticalAlignment="Top">
+    <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.AudnAuditionAudio}" VerticalAlignment="Top">
       <StackPanel Margin="0,6,0,8">
         <!-- Lines, not raw devices (D8): the rig is an output like any other, so it takes that
              line's own channel count and travels with the show. -->
-        <HeaderedContentControl Theme="{StaticResource Field}" Header="Line">
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudLine}">
           <ComboBox ItemsSource="{Binding Devices}" SelectedIndex="{Binding DeviceIndex}" />
         </HeaderedContentControl>
-        <HeaderedContentControl Theme="{StaticResource Field}" Header="Width">
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TlLaneWidth}">
           <TextBox Classes="ro" Text="{Binding Width}" />
         </HeaderedContentControl>
-        <HeaderedContentControl Theme="{StaticResource Field}" Header="Level">
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudnLevel}">
           <TextBox Classes="short" Text="{Binding Level}" LostFocus="OnFieldCommitted" />
         </HeaderedContentControl>
         <CheckBox Margin="10,4" IsChecked="{Binding DuckWhenProgramSounds}"
-                  Content="Duck audition when program is sounding" />
+                  Content="{x:Static res:Strings.AudnDuckAuditionWhenProgramIs}" />
         <TextBlock Margin="10,4,10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
-                   Text="Audition enters the bay as a monitor input - it never touches the patch or the program bus." />
+                   Text="{x:Static res:Strings.AudnAuditionEntersTheBayAs}" />
       </StackPanel>
     </c:PanelBox>
 
-    <c:PanelBox Grid.Column="1" Header="Audition video" VerticalAlignment="Top">
+    <c:PanelBox Grid.Column="1" Header="{x:Static res:Strings.AudnAuditionVideo}" VerticalAlignment="Top">
       <c:PanelBox.Footer>
         <Border Classes="chain">
           <DockPanel LastChildFill="True">
-                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="CUE MENU" /></Border>
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge"><TextBlock Text="{x:Static res:Strings.AudnCueMenu}" /></Border>
                 <TextBlock Classes="mono dim3 small" VerticalAlignment="Center" TextWrapping="Wrap"
-                       Text="right-click any cue → “Preview on audition outputs”" />
+                       Text="{x:Static res:Strings.AudnRightClickAnyCuePreview}" />
               </DockPanel>
         </Border>
       </c:PanelBox.Footer>
 
       <StackPanel Margin="0,6,0,8">
-        <HeaderedContentControl Theme="{StaticResource Field}" Header="Surface">
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudnSurface}">
           <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding Surfaces}"
                    SelectedIndex="{Binding SurfaceIndex}" />
         </HeaderedContentControl>
-        <HeaderedContentControl Theme="{StaticResource Field}" Header="Size">
+        <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudnSize}">
           <TextBox Classes="ro" Text="{Binding Size}" />
         </HeaderedContentControl>
         <!-- The audition canvas is COMPOSED, not a raw decode: it accepts the extra GL thread so a
              preview shows placement, fit and mapping exactly as they will appear on the wall. -->
         <TextBlock Margin="10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
-                   Text="The preview renders through its own composition, so placement, fit and mapping look the way they will on the output." />
+                   Text="{x:Static res:Strings.AudnThePreviewRendersThroughIts}" />
       </StackPanel>
     </c:PanelBox>
   </Grid>

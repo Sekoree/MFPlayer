@@ -173,8 +173,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
                 _masterTrimDb = db;
                 // The session takes a linear scale; the operator's parameter is decibels, and the
                 // conversion belongs here rather than in the registry, which is unit-agnostic.
-                _ = _session.SetMasterTrimAsync(
-                    db <= GainRange.SilenceFloorDb ? 0f : (float)Math.Pow(10, db / 20));
+                _ = _session.SetMasterTrimAsync(GainRange.Linear(db));
             },
             () => _project,
             db =>
@@ -971,9 +970,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     public Task<bool> ApplyActiveVolumeAsync(Guid cueId, double levelDb) =>
         _session.ApplyActiveVolumeAsync(
             cueId.ToString(),
-            levelDb <= GainRange.SilenceFloorDb
-                ? 0f
-                : (float)Math.Pow(10, Math.Clamp(levelDb, GainRange.SilenceFloorDb, 12) / 20));
+            GainRange.LinearClamped(levelDb));
 
     /// <summary>
     /// Pushes the project's patch cells onto the live bay without reloading the document.

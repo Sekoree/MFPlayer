@@ -268,4 +268,1918 @@
   <data name="TlDeleteTooltip" xml:space="preserve">
     <value>Delete selected keyframes</value>
   </data>
+  <data name="AudLogicalOutputs" xml:space="preserve">
+    <value>Logical outputs</value>
+  </data>
+  <data name="AudAdd" xml:space="preserve">
+    <value>+ ADD</value>
+  </data>
+  <data name="AudAddStereoPair" xml:space="preserve">
+    <value>+ ADD STEREO PAIR</value>
+  </data>
+  <data name="AudNewGroup" xml:space="preserve">
+    <value>+ NEW GROUP…</value>
+  </data>
+  <data name="AudRename" xml:space="preserve">
+    <value>RENAME</value>
+  </data>
+  <data name="AudReorder" xml:space="preserve">
+    <value>REORDER</value>
+  </data>
+  <data name="AudRemove" xml:space="preserve">
+    <value>REMOVE…</value>
+  </data>
+  <data name="AudDeleteCleansUpItsCue" xml:space="preserve">
+    <value>delete cleans up its cue sends automatically - one undoable edit</value>
+  </data>
+  <data name="AudName" xml:space="preserve">
+    <value>NAME</value>
+  </data>
+  <data name="AudGroup" xml:space="preserve">
+    <value>GROUP</value>
+  </data>
+  <data name="AudFedBy" xml:space="preserve">
+    <value>FED BY</value>
+  </data>
+  <data name="AudPatchedTo" xml:space="preserve">
+    <value>PATCHED TO</value>
+  </data>
+  <data name="AudMeter" xml:space="preserve">
+    <value>METER</value>
+  </data>
+  <data name="AudRename2" xml:space="preserve">
+    <value>Rename…</value>
+  </data>
+  <data name="AudMoveInBusOrder" xml:space="preserve">
+    <value>Move in bus order…</value>
+  </data>
+  <data name="AudPatchToDeviceChannels" xml:space="preserve">
+    <value>Patch to device channels…</value>
+  </data>
+  <data name="AudGroupWithTheSelection" xml:space="preserve">
+    <value>Group with the selection…</value>
+  </data>
+  <data name="AudUngroup" xml:space="preserve">
+    <value>Ungroup…</value>
+  </data>
+  <data name="AudRemove2" xml:space="preserve">
+    <value>Remove…</value>
+  </data>
+  <data name="AudPortable" xml:space="preserve">
+    <value>PORTABLE</value>
+  </data>
+  <data name="AudThisIsTheVenueSwap" xml:space="preserve">
+    <value>this is the venue-swap seam: the show keeps “Lobby”, each venue patches it</value>
+  </data>
+  <data name="AudName2" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="AudMeterInSummary" xml:space="preserve">
+    <value>Meter in summary</value>
+  </data>
+  <data name="AudFedBy2" xml:space="preserve">
+    <value>Fed by</value>
+  </data>
+  <data name="AudPatchedTo2" xml:space="preserve">
+    <value>Patched to</value>
+  </data>
+  <data name="AudPatchPickDeviceChannels" xml:space="preserve">
+    <value>PATCH → PICK DEVICE CHANNELS…</value>
+  </data>
+  <data name="AudPatch" xml:space="preserve">
+    <value>Patch</value>
+  </data>
+  <data name="AudPresets" xml:space="preserve">
+    <value>PRESETS</value>
+  </data>
+  <data name="AudStereoIdentityFanOutTo" xml:space="preserve">
+    <value>stereo identity · fan out to all · mono sum · clear row · copy line patch</value>
+  </data>
+  <data name="AudUnresolved" xml:space="preserve">
+    <value>UNRESOLVED</value>
+  </data>
+  <data name="AudWedgeAbsentCellsKeptRouted" xml:space="preserve">
+    <value>Wedge absent - cells kept, routed silent</value>
+  </data>
+  <data name="AudClickRoutesAtUnityDrag" xml:space="preserve">
+    <value>Click routes at unity, drag adjusts gain, and right click mutes.</value>
+  </data>
+  <data name="AudClickRoutesAtUnityDrag2" xml:space="preserve">
+    <value>Click routes at unity · drag adjusts gain · right-click mutes. A grouped column carries its partners by the same delta.</value>
+  </data>
+  <data name="AudSnapshots" xml:space="preserve">
+    <value>Snapshots</value>
+  </data>
+  <data name="AudSave" xml:space="preserve">
+    <value>SAVE…</value>
+  </data>
+  <data name="AudRecall" xml:space="preserve">
+    <value>RECALL</value>
+  </data>
+  <data name="AudUpdate" xml:space="preserve">
+    <value>UPDATE</value>
+  </data>
+  <data name="AudASnapshotStoresOnlyThe" xml:space="preserve">
+    <value>A snapshot stores only the cells it was saved with - recalling “Interval” touches Lobby and nothing else. Used by patch cues in the list.</value>
+  </data>
+  <data name="AudRecall2" xml:space="preserve">
+    <value>Recall</value>
+  </data>
+  <data name="AudUpdateFromTheLivePatch" xml:space="preserve">
+    <value>Update from the live patch</value>
+  </data>
+  <data name="AudSelectedLine" xml:space="preserve">
+    <value>Selected line</value>
+  </data>
+  <data name="AudLine" xml:space="preserve">
+    <value>Line</value>
+  </data>
+  <data name="AudCarries" xml:space="preserve">
+    <value>Carries</value>
+  </data>
+  <data name="AudAudioLines" xml:space="preserve">
+    <value>Audio lines</value>
+  </data>
+  <data name="AudLocalAudio" xml:space="preserve">
+    <value>+ LOCAL AUDIO…</value>
+  </data>
+  <data name="AudNdiAudio" xml:space="preserve">
+    <value>+ NDI AUDIO…</value>
+  </data>
+  <data name="AudRecord" xml:space="preserve">
+    <value>+ RECORD…</value>
+  </data>
+  <data name="AudStream" xml:space="preserve">
+    <value>+ STREAM…</value>
+  </data>
+  <data name="AudRelinkAbsent" xml:space="preserve">
+    <value>RELINK ABSENT…</value>
+  </data>
+  <data name="AudLine2" xml:space="preserve">
+    <value>LINE</value>
+  </data>
+  <data name="AudKind" xml:space="preserve">
+    <value>KIND</value>
+  </data>
+  <data name="AudCh" xml:space="preserve">
+    <value>CH</value>
+  </data>
+  <data name="AudCarries2" xml:space="preserve">
+    <value>CARRIES</value>
+  </data>
+  <data name="AudRelinkAbsentLines" xml:space="preserve">
+    <value>Relink absent lines…</value>
+  </data>
+  <data name="AudProjectMix" xml:space="preserve">
+    <value>Project mix</value>
+  </data>
+  <data name="AudMixRate" xml:space="preserve">
+    <value>Mix rate</value>
+  </data>
+  <data name="AudClockMaster" xml:space="preserve">
+    <value>Clock master</value>
+  </data>
+  <data name="AudTheClockMasterMustRun" xml:space="preserve">
+    <value>The clock master must run natively at the mix rate - it is never resampled, so the show clock never drifts against it. Lines that cannot be one are not offered.</value>
+  </data>
+  <data name="AudApplyRestartAudio" xml:space="preserve">
+    <value>APPLY &amp; RESTART AUDIO</value>
+  </data>
+  <data name="AudDirectory" xml:space="preserve">
+    <value>Directory</value>
+  </data>
+  <data name="AudTheMachineSRecordingsFolder" xml:space="preserve">
+    <value>the machine's recordings folder</value>
+  </data>
+  <data name="AudPattern" xml:space="preserve">
+    <value>Pattern</value>
+  </data>
+  <data name="AudUrl" xml:space="preserve">
+    <value>URL</value>
+  </data>
+  <data name="AudRtmpHostAppKey" xml:space="preserve">
+    <value>rtmp://host/app/key</value>
+  </data>
+  <data name="AudMode" xml:space="preserve">
+    <value>Mode</value>
+  </data>
+  <data name="AudFormat" xml:space="preserve">
+    <value>Format</value>
+  </data>
+  <data name="AudArm" xml:space="preserve">
+    <value>Arm</value>
+  </data>
+  <data name="AudArmWhenTheShowOpens" xml:space="preserve">
+    <value>arm when the show opens</value>
+  </data>
+  <data name="AudRecordingSettingsAppearHereFor" xml:space="preserve">
+    <value>Recording settings appear here for a Record or Stream line.</value>
+  </data>
+  <data name="AudnAuditionAudio" xml:space="preserve">
+    <value>Audition audio</value>
+  </data>
+  <data name="AudnLevel" xml:space="preserve">
+    <value>Level</value>
+  </data>
+  <data name="AudnDuckAuditionWhenProgramIs" xml:space="preserve">
+    <value>Duck audition when program is sounding</value>
+  </data>
+  <data name="AudnAuditionEntersTheBayAs" xml:space="preserve">
+    <value>Audition enters the bay as a monitor input - it never touches the patch or the program bus.</value>
+  </data>
+  <data name="AudnAuditionVideo" xml:space="preserve">
+    <value>Audition video</value>
+  </data>
+  <data name="AudnCueMenu" xml:space="preserve">
+    <value>CUE MENU</value>
+  </data>
+  <data name="AudnRightClickAnyCuePreview" xml:space="preserve">
+    <value>right-click any cue → “Preview on audition outputs”</value>
+  </data>
+  <data name="AudnSurface" xml:space="preserve">
+    <value>Surface</value>
+  </data>
+  <data name="AudnSize" xml:space="preserve">
+    <value>Size</value>
+  </data>
+  <data name="AudnThePreviewRendersThroughIts" xml:space="preserve">
+    <value>The preview renders through its own composition, so placement, fit and mapping look the way they will on the output.</value>
+  </data>
+  <data name="AutoEdAutomation" xml:space="preserve">
+    <value>Automation</value>
+  </data>
+  <data name="AutoEdEnabled" xml:space="preserve">
+    <value>enabled</value>
+  </data>
+  <data name="AutoEdDone" xml:space="preserve">
+    <value>DONE</value>
+  </data>
+  <data name="AutoEdKey" xml:space="preserve">
+    <value>|◀ KEY</value>
+  </data>
+  <data name="AutoEdKey2" xml:space="preserve">
+    <value>KEY ▶|</value>
+  </data>
+  <data name="AutoEdKey3" xml:space="preserve">
+    <value>＋ KEY</value>
+  </data>
+  <data name="AutoEdAddAKeyframeAtThe" xml:space="preserve">
+    <value>Add a keyframe at the cursor</value>
+  </data>
+  <data name="AutoEdZoomOut" xml:space="preserve">
+    <value>Zoom out</value>
+  </data>
+  <data name="AutoEdZoomIn" xml:space="preserve">
+    <value>Zoom in</value>
+  </data>
+  <data name="AutoEdHowMuchOfTheCue" xml:space="preserve">
+    <value>How much of the cue is in view; − and + step the same list</value>
+  </data>
+  <data name="AutoEdSeek" xml:space="preserve">
+    <value>SEEK</value>
+  </data>
+  <data name="AutoEdSeekThisCueWhenIt" xml:space="preserve">
+    <value>Seek this cue when it is currently sounding</value>
+  </data>
+  <data name="AutoEdSnap" xml:space="preserve">
+    <value>SNAP</value>
+  </data>
+  <data name="AutoEdTimeSnapInMillisecondsAlt" xml:space="preserve">
+    <value>Time snap in milliseconds; Alt bypasses snap while dragging</value>
+  </data>
+  <data name="AutoEdPage" xml:space="preserve">
+    <value>◀ PAGE</value>
+  </data>
+  <data name="AutoEdScrollThroughTheCueZoom" xml:space="preserve">
+    <value>scroll through the cue; zoom keeps the cursor in place</value>
+  </data>
+  <data name="AutoEdPage2" xml:space="preserve">
+    <value>PAGE ▶</value>
+  </data>
+  <data name="AutoEdN30Min" xml:space="preserve">
+    <value>+30 MIN</value>
+  </data>
+  <data name="AutoEdExtendAnOpenEndedCue" xml:space="preserve">
+    <value>Extend an open-ended cue's authoring ruler</value>
+  </data>
+  <data name="AutoEdClickAndDragEmptySpace" xml:space="preserve">
+    <value>Click and drag empty space to add a key. Drag keys to edit. Alt bypasses snap, Shift constrains an axis, and Escape cancels a drag.</value>
+  </data>
+  <data name="AutoEdAtCursor" xml:space="preserve">
+    <value>AT CURSOR</value>
+  </data>
+  <data name="AutoEdKeyTime" xml:space="preserve">
+    <value>Key time</value>
+  </data>
+  <data name="AutoEdPropertyValue" xml:space="preserve">
+    <value>Property value</value>
+  </data>
+  <data name="AutoEdSegmentAfterKey" xml:space="preserve">
+    <value>Segment after key</value>
+  </data>
+  <data name="AutoEdEditCurveShape" xml:space="preserve">
+    <value>EDIT CURVE SHAPE…</value>
+  </data>
+  <data name="AutoEdEditOnlyTheNormalizedEasing" xml:space="preserve">
+    <value>Edit only the normalized easing between this key and the next</value>
+  </data>
+  <data name="AutoEdHoldUntilNextKey" xml:space="preserve">
+    <value>hold until next key</value>
+  </data>
+  <data name="AutoEdDeleteKeysPastTheEnd" xml:space="preserve">
+    <value>DELETE KEYS PAST THE END</value>
+  </data>
+  <data name="AutoEdDeleteSelectedKeyS" xml:space="preserve">
+    <value>DELETE SELECTED KEY(S)</value>
+  </data>
+  <data name="AutoEdValuesBeforeTheFirstKey" xml:space="preserve">
+    <value>Values before the first key and after the last key hold. A disabled track falls back to the cue's authored property.</value>
+  </data>
+  <data name="ClipEdClip" xml:space="preserve">
+    <value>Clip</value>
+  </data>
+  <data name="ClipEdTrimIn" xml:space="preserve">
+    <value>Trim in</value>
+  </data>
+  <data name="ClipEdTrimOut" xml:space="preserve">
+    <value>Trim out</value>
+  </data>
+  <data name="ClipEdFile" xml:space="preserve">
+    <value>File</value>
+  </data>
+  <data name="ClipEdPreviewAt" xml:space="preserve">
+    <value>Preview at</value>
+  </data>
+  <data name="ClipEdClickTheWaveformToScrub" xml:space="preserve">
+    <value>click the waveform to scrub · no picture at this point</value>
+  </data>
+  <data name="CuesGo" xml:space="preserve">
+    <value>GO</value>
+  </data>
+  <data name="CuesStop" xml:space="preserve">
+    <value>STOP ▾</value>
+  </data>
+  <data name="CuesStopsTheSelectedActiveCue" xml:space="preserve">
+    <value>Stops the selected active cue. Right-click, or the arrow, for stop-all.</value>
+  </data>
+  <data name="CuesStopAll" xml:space="preserve">
+    <value>Stop all</value>
+  </data>
+  <data name="CuesHoldToStopEverything" xml:space="preserve">
+    <value>Hold to stop everything.</value>
+  </data>
+  <data name="CuesStby" xml:space="preserve">
+    <value>↑ STBY</value>
+  </data>
+  <data name="CuesStby2" xml:space="preserve">
+    <value>↓ STBY</value>
+  </data>
+  <data name="CuesChooseWhichCueListGo" xml:space="preserve">
+    <value>Choose which cue list GO and standby control.</value>
+  </data>
+  <data name="CuesMidiOscHotkeyTriggersWall" xml:space="preserve">
+    <value>MIDI/OSC/hotkey triggers, wall-clock schedules and MTC chase. Off when a project opens; never gates GO.</value>
+  </data>
+  <data name="CuesExternalInput" xml:space="preserve">
+    <value>EXTERNAL INPUT</value>
+  </data>
+  <data name="CuesMedia" xml:space="preserve">
+    <value>+ MEDIA…</value>
+  </data>
+  <data name="CuesAdd" xml:space="preserve">
+    <value>+ ADD ▾</value>
+  </data>
+  <data name="CuesGroup" xml:space="preserve">
+    <value>Group</value>
+  </data>
+  <data name="CuesAction" xml:space="preserve">
+    <value>Action</value>
+  </data>
+  <data name="CuesFade" xml:space="preserve">
+    <value>Fade</value>
+  </data>
+  <data name="CuesJump" xml:space="preserve">
+    <value>Jump</value>
+  </data>
+  <data name="CuesVisualizer" xml:space="preserve">
+    <value>Visualizer</value>
+  </data>
+  <data name="CuesText" xml:space="preserve">
+    <value>Text</value>
+  </data>
+  <data name="CuesNdiInput" xml:space="preserve">
+    <value>NDI input…</value>
+  </data>
+  <data name="CuesLocalInput" xml:space="preserve">
+    <value>Local input…</value>
+  </data>
+  <data name="CuesYoutube" xml:space="preserve">
+    <value>YouTube…</value>
+  </data>
+  <data name="CuesComment" xml:space="preserve">
+    <value>Comment</value>
+  </data>
+  <data name="CuesDuplicate" xml:space="preserve">
+    <value>DUPLICATE</value>
+  </data>
+  <data name="CuesRemove" xml:space="preserve">
+    <value>REMOVE</value>
+  </data>
+  <data name="CuesRenumber" xml:space="preserve">
+    <value>RENUMBER…</value>
+  </data>
+  <data name="CuesLookingForNdiSendersOn" xml:space="preserve">
+    <value>looking for NDI senders on the network…</value>
+  </data>
+  <data name="CuesFireThisCueNow" xml:space="preserve">
+    <value>Fire this cue now</value>
+  </data>
+  <data name="CuesPreviewOnAuditionOutputs" xml:space="preserve">
+    <value>Preview on audition outputs</value>
+  </data>
+  <data name="CuesMoveStandbyHere" xml:space="preserve">
+    <value>Move standby here</value>
+  </data>
+  <data name="CuesEditSource" xml:space="preserve">
+    <value>Edit source…</value>
+  </data>
+  <data name="CuesOpenTimeline" xml:space="preserve">
+    <value>Open timeline</value>
+  </data>
+  <data name="CuesRenumberFromHere" xml:space="preserve">
+    <value>Renumber from here…</value>
+  </data>
+  <data name="CuesActive" xml:space="preserve">
+    <value>Active</value>
+  </data>
+  <data name="CuesShowTheCuesInsideThis" xml:space="preserve">
+    <value>Show the cues inside this group</value>
+  </data>
+  <data name="CuesWhereTheGroupIsIn" xml:space="preserve">
+    <value>where the group is in its chain</value>
+  </data>
+  <data name="CuesTheWholeGroupSRemaining" xml:space="preserve">
+    <value>the WHOLE group's remaining and total</value>
+  </data>
+  <data name="CuesDragToSeekTheWhole" xml:space="preserve">
+    <value>Drag to seek the whole group.</value>
+  </data>
+  <data name="CuesStopEverythingInThisGroup" xml:space="preserve">
+    <value>Stop everything in this group. Press again during the fade to cut.</value>
+  </data>
+  <data name="CuesRemaining" xml:space="preserve">
+    <value>remaining</value>
+  </data>
+  <data name="CuesWholeClip" xml:space="preserve">
+    <value>whole clip</value>
+  </data>
+  <data name="CuesDragToSeekThisCue" xml:space="preserve">
+    <value>Drag to seek this cue.</value>
+  </data>
+  <data name="CuesStopThisCue" xml:space="preserve">
+    <value>Stop this cue.</value>
+  </data>
+  <data name="CuesLane" xml:space="preserve">
+    <value>LANE</value>
+  </data>
+  <data name="CuesUntilThisRampLands" xml:space="preserve">
+    <value>until this ramp lands</value>
+  </data>
+  <data name="CurveEdFadeCurve" xml:space="preserve">
+    <value>Fade curve</value>
+  </data>
+  <data name="CurveEdCrossfade" xml:space="preserve">
+    <value>CROSSFADE</value>
+  </data>
+  <data name="CurveEdGoingOut" xml:space="preserve">
+    <value>going out</value>
+  </data>
+  <data name="CurveEdComingIn" xml:space="preserve">
+    <value>coming in</value>
+  </data>
+  <data name="CurveEdDragPointsToShapeThe" xml:space="preserve">
+    <value>Drag points to shape the curve. Exact keyboard-editable values are beside the canvas.</value>
+  </data>
+  <data name="CurveEdSelection" xml:space="preserve">
+    <value>Selection</value>
+  </data>
+  <data name="CurveEdSelectEveryPointCtrlA" xml:space="preserve">
+    <value>Select every point (Ctrl+A on the canvas)</value>
+  </data>
+  <data name="CurveEdCopyTheSelectedPointsCtrl" xml:space="preserve">
+    <value>Copy the selected points (Ctrl+C on the canvas)</value>
+  </data>
+  <data name="CurveEdPasteAtTheSelectedPoint" xml:space="preserve">
+    <value>Paste at the selected point, replacing that span (Ctrl+V)</value>
+  </data>
+  <data name="CurveEdTime" xml:space="preserve">
+    <value>Time</value>
+  </data>
+  <data name="CurveEdClockTimeWhenTheDuration" xml:space="preserve">
+    <value>Clock time when the duration is known; otherwise enter a percentage.</value>
+  </data>
+  <data name="CurveEdValue" xml:space="preserve">
+    <value>Value</value>
+  </data>
+  <data name="CurveEdEnterDbInDbScale" xml:space="preserve">
+    <value>Enter dB in dB scale, or a normalized 0–1 value in linear scale.</value>
+  </data>
+  <data name="CurveEdScale" xml:space="preserve">
+    <value>Scale</value>
+  </data>
+  <data name="CurveEdSegment" xml:space="preserve">
+    <value>Segment</value>
+  </data>
+  <data name="CurveEdSaveAs" xml:space="preserve">
+    <value>Save as</value>
+  </data>
+  <data name="CurveEdSave" xml:space="preserve">
+    <value>SAVE</value>
+  </data>
+  <data name="CurveEdPresetLibrary" xml:space="preserve">
+    <value>Preset library</value>
+  </data>
+  <data name="CurveEdDelete" xml:space="preserve">
+    <value>DELETE</value>
+  </data>
+  <data name="CurveEdReferencedCurvesArePreservedInline" xml:space="preserve">
+    <value>Referenced curves are preserved inline; the whole deletion is undoable.</value>
+  </data>
+  <data name="CurveEdImport" xml:space="preserve">
+    <value>IMPORT…</value>
+  </data>
+  <data name="InspSelectACueToEdit" xml:space="preserve">
+    <value>select a cue to edit</value>
+  </data>
+  <data name="InspMulti" xml:space="preserve">
+    <value>MULTI</value>
+  </data>
+  <data name="InspNumber" xml:space="preserve">
+    <value>Number</value>
+  </data>
+  <data name="InspLabel" xml:space="preserve">
+    <value>Label</value>
+  </data>
+  <data name="InspTrigger" xml:space="preserve">
+    <value>Trigger</value>
+  </data>
+  <data name="InspPrePostWait" xml:space="preserve">
+    <value>Pre / post wait</value>
+  </data>
+  <data name="InspColour" xml:space="preserve">
+    <value>Colour</value>
+  </data>
+  <data name="InspABandAtTheLeft" xml:space="preserve">
+    <value>A band at the left of this cue's row. The fastest thing to find in a long list.</value>
+  </data>
+  <data name="InspAtMediaEnd" xml:space="preserve">
+    <value>At media end</value>
+  </data>
+  <data name="InspAnExplicitTargetOverridesOrdinary" xml:space="preserve">
+    <value>An explicit target overrides ordinary Follow. Playlist and armed-list ownership still wins.</value>
+  </data>
+  <data name="InspSource" xml:space="preserve">
+    <value>SOURCE</value>
+  </data>
+  <data name="InspEnabledGoAndAutoFollow" xml:space="preserve">
+    <value>Enabled - GO and auto-follow include this cue</value>
+  </data>
+  <data name="InspTrimInOut" xml:space="preserve">
+    <value>Trim in / out</value>
+  </data>
+  <data name="InspIn" xml:space="preserve">
+    <value>in</value>
+  </data>
+  <data name="InspEnd" xml:space="preserve">
+    <value>end</value>
+  </data>
+  <data name="InspEdit" xml:space="preserve">
+    <value>EDIT…</value>
+  </data>
+  <data name="InspLoopUntilStopped" xml:space="preserve">
+    <value>Loop until stopped</value>
+  </data>
+  <data name="InspAtEnd" xml:space="preserve">
+    <value>At end</value>
+  </data>
+  <data name="InspLoopOverlap" xml:space="preserve">
+    <value>Loop overlap</value>
+  </data>
+  <data name="InspMillisecondsOfOverlapWhenThe" xml:space="preserve">
+    <value>Milliseconds of overlap when the loop wraps. A seamless loop is made of this; zero is a hard cut.</value>
+  </data>
+  <data name="InspPreRollOpenThisCue" xml:space="preserve">
+    <value>Pre-roll - open this cue's media before it fires</value>
+  </data>
+  <data name="InspOnByDefaultTurnIt" xml:space="preserve">
+    <value>On by default. Turn it off for a clip that costs more to hold open than it saves, or whose open starts something early.</value>
+  </data>
+  <data name="InspTrack" xml:space="preserve">
+    <value>Track</value>
+  </data>
+  <data name="InspTrackMoved" xml:space="preserve">
+    <value>TRACK MOVED</value>
+  </data>
+  <data name="InspCueInserts" xml:space="preserve">
+    <value>Cue inserts</value>
+  </data>
+  <data name="InspGain" xml:space="preserve">
+    <value>Gain</value>
+  </data>
+  <data name="InspGainInsert" xml:space="preserve">
+    <value>gain insert</value>
+  </data>
+  <data name="InspInsertGain" xml:space="preserve">
+    <value>Insert gain</value>
+  </data>
+  <data name="InspAutomateInsertGain" xml:space="preserve">
+    <value>AUTOMATE INSERT GAIN</value>
+  </data>
+  <data name="InspSendToSelectiveVisualizerFeeds" xml:space="preserve">
+    <value>Send to selective visualizer feeds</value>
+  </data>
+  <data name="InspFadeIn" xml:space="preserve">
+    <value>Fade in</value>
+  </data>
+  <data name="InspCustomCurveEditorDragPoints" xml:space="preserve">
+    <value>Custom curve editor - drag points, smooth/hold segments, dB ⇄ linear</value>
+  </data>
+  <data name="InspFadeOut" xml:space="preserve">
+    <value>Fade out</value>
+  </data>
+  <data name="InspSendsLogicalOutputs" xml:space="preserve">
+    <value>Sends → logical outputs</value>
+  </data>
+  <data name="InspClickRoutesAtUnityDrag" xml:space="preserve">
+    <value>Click routes at unity · drag adjusts gain · right-click mutes.</value>
+  </data>
+  <data name="InspStereoMain" xml:space="preserve">
+    <value>STEREO → MAIN</value>
+  </data>
+  <data name="InspSource1And2To" xml:space="preserve">
+    <value>Source 1 and 2 to the first stereo pair, at unity</value>
+  </data>
+  <data name="InspMonoFromL" xml:space="preserve">
+    <value>MONO FROM L</value>
+  </data>
+  <data name="InspSource1ToBothSides" xml:space="preserve">
+    <value>Source 1 to both sides - a mono stem in the middle, not hard left</value>
+  </data>
+  <data name="InspSwap" xml:space="preserve">
+    <value>SWAP</value>
+  </data>
+  <data name="InspExchangeTheTwoSourceChannels" xml:space="preserve">
+    <value>Exchange the two source channels' sends</value>
+  </data>
+  <data name="InspClear" xml:space="preserve">
+    <value>CLEAR</value>
+  </data>
+  <data name="InspRemoveEverySendOnThis" xml:space="preserve">
+    <value>Remove every send on this cue</value>
+  </data>
+  <data name="InspThisChannelReachesNothingNo" xml:space="preserve">
+    <value>this channel reaches nothing - no send, or nothing patched under it</value>
+  </data>
+  <data name="InspMuted" xml:space="preserve">
+    <value>MUTED</value>
+  </data>
+  <data name="InspNotPlaced" xml:space="preserve">
+    <value>NOT PLACED</value>
+  </data>
+  <data name="InspThisCueIsOnNo" xml:space="preserve">
+    <value>this cue is on no composition - add it to one to give it a canvas</value>
+  </data>
+  <data name="InspPlaceOn" xml:space="preserve">
+    <value>Place on</value>
+  </data>
+  <data name="InspPlace" xml:space="preserve">
+    <value>PLACE</value>
+  </data>
+  <data name="InspStillImage" xml:space="preserve">
+    <value>STILL IMAGE</value>
+  </data>
+  <data name="InspVideoTrack" xml:space="preserve">
+    <value>Video track</value>
+  </data>
+  <data name="InspSubtitles" xml:space="preserve">
+    <value>Subtitles</value>
+  </data>
+  <data name="InspChoose" xml:space="preserve">
+    <value>CHOOSE…</value>
+  </data>
+  <data name="InspAnotherPlacement" xml:space="preserve">
+    <value>Another placement</value>
+  </data>
+  <data name="InspAdd" xml:space="preserve">
+    <value>ADD</value>
+  </data>
+  <data name="InspShowThisCueOnAnother" xml:space="preserve">
+    <value>Show this cue on another composition - one decode, several canvases.</value>
+  </data>
+  <data name="InspDurationS" xml:space="preserve">
+    <value>Duration (s)</value>
+  </data>
+  <data name="InspAtCompletion" xml:space="preserve">
+    <value>At completion</value>
+  </data>
+  <data name="InspRestoreAuthoredValues" xml:space="preserve">
+    <value>restore authored values</value>
+  </data>
+  <data name="InspTargetCue" xml:space="preserve">
+    <value>Target cue</value>
+  </data>
+  <data name="InspTargetPlacement" xml:space="preserve">
+    <value>Target placement</value>
+  </data>
+  <data name="InspNoAutomationTracksOnThis" xml:space="preserve">
+    <value>no automation tracks on this cue</value>
+  </data>
+  <data name="InspOpenTheScrollableAbsoluteTime" xml:space="preserve">
+    <value>Open the scrollable absolute-time automation editor</value>
+  </data>
+  <data name="InspChooseEndpointAndAddress" xml:space="preserve">
+    <value>Choose endpoint and address</value>
+  </data>
+  <data name="InspRemoveThisAutomationTrack" xml:space="preserve">
+    <value>Remove this automation track</value>
+  </data>
+  <data name="InspAddAutomation" xml:space="preserve">
+    <value>+ ADD AUTOMATION ▾</value>
+  </data>
+  <data name="InspTracksTargetConcreteCueProperties" xml:space="preserve">
+    <value>Tracks target concrete cue properties and use absolute cue time. Open one to zoom, scroll and seek through long media.</value>
+  </data>
+  <data name="InspNotesStayWritableUnderLock" xml:space="preserve">
+    <value>Notes stay writable under Lock.</value>
+  </data>
+  <data name="InspPreviewOnAuditionOutputs" xml:space="preserve">
+    <value>PREVIEW ON AUDITION OUTPUTS</value>
+  </data>
+  <data name="InspPlaysIntoTheAuditionRig" xml:space="preserve">
+    <value>Plays into the audition rig - the monitor path. It never touches the patch or the program bus, and never appears in the Active list.</value>
+  </data>
+  <data name="InspFireMode" xml:space="preserve">
+    <value>Fire mode</value>
+  </data>
+  <data name="InspChildren" xml:space="preserve">
+    <value>Children</value>
+  </data>
+  <data name="InspOpenTimeline" xml:space="preserve">
+    <value>OPEN TIMELINE ›</value>
+  </data>
+  <data name="InspShuffle" xml:space="preserve">
+    <value>Shuffle</value>
+  </data>
+  <data name="InspReshuffleEachPass" xml:space="preserve">
+    <value>Reshuffle each pass</value>
+  </data>
+  <data name="InspNeverRepeatAcrossAPass" xml:space="preserve">
+    <value>Never repeat across a pass boundary</value>
+  </data>
+  <data name="InspWithoutThisAShuffledBed" xml:space="preserve">
+    <value>Without this a shuffled bed can play the same item twice in a row when a pass wraps - which reads as a fault rather than as chance.</value>
+  </data>
+  <data name="InspPlayCount" xml:space="preserve">
+    <value>Play count</value>
+  </data>
+  <data name="InspHowManyTimesThroughThe" xml:space="preserve">
+    <value>How many times through the list. 0 is forever. What happens AFTER the last pass is the At end setting below.</value>
+  </data>
+  <data name="InspItemsPerPass" xml:space="preserve">
+    <value>Items per pass</value>
+  </data>
+  <data name="InspLeaveBlankToPlayEvery" xml:space="preserve">
+    <value>Leave blank to play every enabled child; set a number to use only that many from each ordered or shuffled pass.</value>
+  </data>
+  <data name="InspCrossfadeBetweenItems" xml:space="preserve">
+    <value>Crossfade between items</value>
+  </data>
+  <data name="InspDefault" xml:space="preserve">
+    <value>Default</value>
+  </data>
+  <data name="InspCurve" xml:space="preserve">
+    <value>Curve</value>
+  </data>
+  <data name="InspEditExactPointsAndShaped" xml:space="preserve">
+    <value>Edit exact points and shaped segments</value>
+  </data>
+  <data name="InspItemGoingOut" xml:space="preserve">
+    <value>item going out</value>
+  </data>
+  <data name="InspItemComingIn" xml:space="preserve">
+    <value>item coming in</value>
+  </data>
+  <data name="InspPerItemFadeInOverrides" xml:space="preserve">
+    <value>per-item fade-in overrides are set on each child's Audio tab</value>
+  </data>
+  <data name="InspAlsoChange" xml:space="preserve">
+    <value>Also change</value>
+  </data>
+  <data name="InspNoInlineLevelChanges" xml:space="preserve">
+    <value>no inline level changes</value>
+  </data>
+  <data name="InspAddLevelChange" xml:space="preserve">
+    <value>+ add level change…</value>
+  </data>
+  <data name="InspPersistent" xml:space="preserve">
+    <value>PERSISTENT</value>
+  </data>
+  <data name="InspAppliesToThePatchAnd" xml:space="preserve">
+    <value>applies to the patch and stays - stopping this cue undoes nothing</value>
+  </data>
+  <data name="InspToLevel" xml:space="preserve">
+    <value>To level</value>
+  </data>
+  <data name="InspALevelInDbOr" xml:space="preserve">
+    <value>A level in dB, or “-inf” / “off” for silence.</value>
+  </data>
+  <data name="InspDuration" xml:space="preserve">
+    <value>Duration</value>
+  </data>
+  <data name="InspFadeEverythingCurrentlySounding" xml:space="preserve">
+    <value>Fade everything currently sounding</value>
+  </data>
+  <data name="InspStopTheTargetsWhenThe" xml:space="preserve">
+    <value>Stop the targets when the fade completes</value>
+  </data>
+  <data name="InspJumpTo" xml:space="preserve">
+    <value>Jump to</value>
+  </data>
+  <data name="InspCondition" xml:space="preserve">
+    <value>Condition</value>
+  </data>
+  <data name="InspJumpVisits" xml:space="preserve">
+    <value>Jump visits</value>
+  </data>
+  <data name="InspPickAtRandomFromA" xml:space="preserve">
+    <value>Pick at random from a list of targets</value>
+  </data>
+  <data name="InspFireTheTargetCueOn" xml:space="preserve">
+    <value>Fire the target cue on arrival</value>
+  </data>
+  <data name="InspWords" xml:space="preserve">
+    <value>Words</value>
+  </data>
+  <data name="InspTheWordsOnTheCard" xml:space="preserve">
+    <value>the words on the card</value>
+  </data>
+  <data name="InspFace" xml:space="preserve">
+    <value>Face</value>
+  </data>
+  <data name="InspTheAppSOwnMatched" xml:space="preserve">
+    <value>the app's own - matched by name, like a device hint</value>
+  </data>
+  <data name="InspAHintABoothMachine" xml:space="preserve">
+    <value>A hint. A booth machine that does not have this face falls back to a readable one rather than refusing to draw.</value>
+  </data>
+  <data name="InspCapHeightAsAFraction" xml:space="preserve">
+    <value>Cap height as a fraction of the frame height, so the card survives a canvas resize.</value>
+  </data>
+  <data name="InspWeight" xml:space="preserve">
+    <value>Weight</value>
+  </data>
+  <data name="InspBold" xml:space="preserve">
+    <value>bold</value>
+  </data>
+  <data name="InspItalic" xml:space="preserve">
+    <value>italic</value>
+  </data>
+  <data name="InspInkGround" xml:space="preserve">
+    <value>Ink / ground</value>
+  </data>
+  <data name="InspFfffff" xml:space="preserve">
+    <value>#FFFFFF</value>
+  </data>
+  <data name="InspTransparent" xml:space="preserve">
+    <value>transparent</value>
+  </data>
+  <data name="InspAlign" xml:space="preserve">
+    <value>Align</value>
+  </data>
+  <data name="InspAnchor" xml:space="preserve">
+    <value>Anchor</value>
+  </data>
+  <data name="InspOutlineColour" xml:space="preserve">
+    <value>Outline / colour</value>
+  </data>
+  <data name="InspHold" xml:space="preserve">
+    <value>Hold</value>
+  </data>
+  <data name="InspMilliseconds0HoldsTheCard" xml:space="preserve">
+    <value>Milliseconds. 0 holds the card until something stops it, which is what a title card wants.</value>
+  </data>
+  <data name="InspFadeInOut" xml:space="preserve">
+    <value>Fade in / out</value>
+  </data>
+  <data name="InspPresetPack" xml:space="preserve">
+    <value>Preset pack</value>
+  </data>
+  <data name="InspAPresetDirectoryUnderThe" xml:space="preserve">
+    <value>a preset directory under the projectM pack root</value>
+  </data>
+  <data name="InspHoldEach" xml:space="preserve">
+    <value>Hold each</value>
+  </data>
+  <data name="InspBlend" xml:space="preserve">
+    <value>Blend</value>
+  </data>
+  <data name="InspAudioFeed" xml:space="preserve">
+    <value>Audio feed</value>
+  </data>
+  <data name="InspAllSoundingMedia" xml:space="preserve">
+    <value>All sounding media</value>
+  </data>
+  <data name="InspCueNumbersEG12" xml:space="preserve">
+    <value>cue numbers, e.g. 12, 14.2</value>
+  </data>
+  <data name="InspLockToThisPresetNo" xml:space="preserve">
+    <value>Lock to this preset (no auto-advance)</value>
+  </data>
+  <data name="InspPlacementLivesOnTheVideo" xml:space="preserve">
+    <value>Placement lives on the Video tab - a visualizer is a cue, and its canvas presence is an ordinary layer.</value>
+  </data>
+  <data name="InspEndpoint" xml:space="preserve">
+    <value>Endpoint</value>
+  </data>
+  <data name="InspAddress" xml:space="preserve">
+    <value>Address</value>
+  </data>
+  <data name="InspEosCue2Fire" xml:space="preserve">
+    <value>/eos/cue/2/fire</value>
+  </data>
+  <data name="InspArguments" xml:space="preserve">
+    <value>Arguments</value>
+  </data>
+  <data name="InspWhitespaceSeparated" xml:space="preserve">
+    <value>whitespace-separated</value>
+  </data>
+  <data name="LaunchNoProjectOpen" xml:space="preserve">
+    <value>no project open</value>
+  </data>
+  <data name="LaunchHacue201Framework2026" xml:space="preserve">
+    <value>HaCue2 0.1 · framework 2026.07</value>
+  </data>
+  <data name="LaunchProjectsOpenInEditingMode" xml:space="preserve">
+    <value>projects open in editing mode</value>
+  </data>
+  <data name="LaunchRecentProjects" xml:space="preserve">
+    <value>Recent projects</value>
+  </data>
+  <data name="LaunchRecovery" xml:space="preserve">
+    <value>RECOVERY</value>
+  </data>
+  <data name="LaunchRecover" xml:space="preserve">
+    <value>RECOVER</value>
+  </data>
+  <data name="LaunchDiscard" xml:space="preserve">
+    <value>DISCARD</value>
+  </data>
+  <data name="LaunchStart" xml:space="preserve">
+    <value>Start</value>
+  </data>
+  <data name="LaunchNewProject" xml:space="preserve">
+    <value>NEW PROJECT…</value>
+  </data>
+  <data name="LaunchOpen" xml:space="preserve">
+    <value>OPEN…</value>
+  </data>
+  <data name="LaunchThisMachine" xml:space="preserve">
+    <value>This machine</value>
+  </data>
+  <data name="OutInfoHacue2OutputInfo" xml:space="preserve">
+    <value>HaCue2 - Output info</value>
+  </data>
+  <data name="OutInfoLines" xml:space="preserve">
+    <value>LINES</value>
+  </data>
+  <data name="OutInfoBay" xml:space="preserve">
+    <value>BAY</value>
+  </data>
+  <data name="PlaceComposition" xml:space="preserve">
+    <value>Composition</value>
+  </data>
+  <data name="PlaceLayer" xml:space="preserve">
+    <value>Layer</value>
+  </data>
+  <data name="PlaceFit" xml:space="preserve">
+    <value>Fit</value>
+  </data>
+  <data name="PlaceDestXY" xml:space="preserve">
+    <value>Dest x / y</value>
+  </data>
+  <data name="PlaceDestWH" xml:space="preserve">
+    <value>Dest w / h</value>
+  </data>
+  <data name="PlaceClockwiseAboutTheRectangleS" xml:space="preserve">
+    <value>Clockwise, about the rectangle's centre. A rotated layer overflows its rectangle rather than being trimmed to it.</value>
+  </data>
+  <data name="PlaceFull" xml:space="preserve">
+    <value>FULL</value>
+  </data>
+  <data name="PlaceLeftHalf" xml:space="preserve">
+    <value>Left half</value>
+  </data>
+  <data name="PlaceRightHalf" xml:space="preserve">
+    <value>Right half</value>
+  </data>
+  <data name="PlaceTopHalf" xml:space="preserve">
+    <value>Top half</value>
+  </data>
+  <data name="PlaceBottomHalf" xml:space="preserve">
+    <value>Bottom half</value>
+  </data>
+  <data name="PlaceTopLeft" xml:space="preserve">
+    <value>Top left</value>
+  </data>
+  <data name="PlaceTopRight" xml:space="preserve">
+    <value>Top right</value>
+  </data>
+  <data name="PlaceBottomLeft" xml:space="preserve">
+    <value>Bottom left</value>
+  </data>
+  <data name="PlaceBottomRight" xml:space="preserve">
+    <value>Bottom right</value>
+  </data>
+  <data name="PlaceResize" xml:space="preserve">
+    <value>Resize</value>
+  </data>
+  <data name="PlacePreserveAspect" xml:space="preserve">
+    <value>preserve aspect</value>
+  </data>
+  <data name="PlaceSnapGuides" xml:space="preserve">
+    <value>snap + guides</value>
+  </data>
+  <data name="PlaceSourceCrop" xml:space="preserve">
+    <value>Source crop</value>
+  </data>
+  <data name="PlaceLeftTop" xml:space="preserve">
+    <value>Left / top</value>
+  </data>
+  <data name="PlaceRightBottom" xml:space="preserve">
+    <value>Right / bottom</value>
+  </data>
+  <data name="PlaceNoCrop" xml:space="preserve">
+    <value>NO CROP</value>
+  </data>
+  <data name="PlaceCentreWide" xml:space="preserve">
+    <value>CENTRE ½ WIDE</value>
+  </data>
+  <data name="PlaceCentreTall" xml:space="preserve">
+    <value>CENTRE ½ TALL</value>
+  </data>
+  <data name="PlaceCentreBox" xml:space="preserve">
+    <value>CENTRE BOX</value>
+  </data>
+  <data name="PlaceEffectRack" xml:space="preserve">
+    <value>Effect rack</value>
+  </data>
+  <data name="PlaceOnOff" xml:space="preserve">
+    <value>ON/OFF</value>
+  </data>
+  <data name="PlaceAddEffect" xml:space="preserve">
+    <value>ADD EFFECT ▾</value>
+  </data>
+  <data name="PlaceBrightnessContrast" xml:space="preserve">
+    <value>Brightness / contrast</value>
+  </data>
+  <data name="PlaceKey" xml:space="preserve">
+    <value>Key</value>
+  </data>
+  <data name="PlaceKeyThisLayer" xml:space="preserve">
+    <value>key this layer</value>
+  </data>
+  <data name="PlaceN00ff00" xml:space="preserve">
+    <value>#00FF00</value>
+  </data>
+  <data name="PlaceSimilarSoft" xml:space="preserve">
+    <value>Similar / soft</value>
+  </data>
+  <data name="PlaceSpill" xml:space="preserve">
+    <value>Spill</value>
+  </data>
+  <data name="PlaceHowMuchOfTheKey" xml:space="preserve">
+    <value>How much of the key colour is pulled out of what remains - the green fringe.</value>
+  </data>
+  <data name="PlaceAutomateChroma" xml:space="preserve">
+    <value>AUTOMATE CHROMA ▾</value>
+  </data>
+  <data name="PlaceAdjust" xml:space="preserve">
+    <value>Adjust</value>
+  </data>
+  <data name="PlaceBrightnessAndContrast" xml:space="preserve">
+    <value>brightness and contrast</value>
+  </data>
+  <data name="PlaceBrightContrast" xml:space="preserve">
+    <value>Bright / contrast</value>
+  </data>
+  <data name="PlaceAutomateColour" xml:space="preserve">
+    <value>AUTOMATE COLOUR ▾</value>
+  </data>
+  <data name="PlaceDragOrResizeThisPlacement" xml:space="preserve">
+    <value>Drag or resize this placement. Exact numeric fields are above.</value>
+  </data>
+  <data name="PlacePopOut" xml:space="preserve">
+    <value>POP OUT ↗</value>
+  </data>
+  <data name="PlaceOpenALargePlacementCanvas" xml:space="preserve">
+    <value>Open a large placement canvas for precise mouse editing.</value>
+  </data>
+  <data name="PlacePlacement" xml:space="preserve">
+    <value>PLACEMENT</value>
+  </data>
+  <data name="PlaceDragHereForRoughPop" xml:space="preserve">
+    <value>drag here for rough · pop out for precision</value>
+  </data>
+  <data name="PlaceWinHacue2PreciseVideoPlacement" xml:space="preserve">
+    <value>HaCue2 · precise video placement</value>
+  </data>
+  <data name="PlaceWinDragInsideToMoveEdges" xml:space="preserve">
+    <value>drag inside to move · edges and corners resize · arrows nudge · Shift reverses aspect lock · Alt suspends guides</value>
+  </data>
+  <data name="StatusHacue2ProjectStatus" xml:space="preserve">
+    <value>HaCue2 - Project status</value>
+  </data>
+  <data name="StatusReRunAll" xml:space="preserve">
+    <value>RE-RUN ALL</value>
+  </data>
+  <data name="StatusChecks" xml:space="preserve">
+    <value>Checks</value>
+  </data>
+  <data name="StatusCheck" xml:space="preserve">
+    <value>CHECK</value>
+  </data>
+  <data name="StatusResult" xml:space="preserve">
+    <value>RESULT</value>
+  </data>
+  <data name="StatusDetail" xml:space="preserve">
+    <value>DETAIL</value>
+  </data>
+  <data name="StatusFix" xml:space="preserve">
+    <value>FIX</value>
+  </data>
+  <data name="StatusRelink" xml:space="preserve">
+    <value>Relink</value>
+  </data>
+  <data name="StatusMissing" xml:space="preserve">
+    <value>Missing</value>
+  </data>
+  <data name="StatusSearchByFilenameUnderMedia" xml:space="preserve">
+    <value>SEARCH BY FILENAME UNDER MEDIA ROOT…</value>
+  </data>
+  <data name="StatusPickFileManually" xml:space="preserve">
+    <value>PICK FILE MANUALLY…</value>
+  </data>
+  <data name="StatusMatchesByNameDurationA" xml:space="preserve">
+    <value>Matches by name + duration; a duration mismatch relinks with a warning badge on the cue.</value>
+  </data>
+  <data name="StatusConsolidate" xml:space="preserve">
+    <value>Consolidate</value>
+  </data>
+  <data name="StatusInto" xml:space="preserve">
+    <value>Into</value>
+  </data>
+  <data name="StatusCopyMediaRewriteToRelative" xml:space="preserve">
+    <value>Copy media, rewrite to relative paths</value>
+  </data>
+  <data name="StatusIncludeProjectThisReport" xml:space="preserve">
+    <value>Include project + this report</value>
+  </data>
+  <data name="StatusZipWhenDone" xml:space="preserve">
+    <value>Zip when done</value>
+  </data>
+  <data name="StatusConsolidate2" xml:space="preserve">
+    <value>CONSOLIDATE</value>
+  </data>
+  <data name="StatusAnythingThatCannotBeCopied" xml:space="preserve">
+    <value>Anything that cannot be copied is reported, not skipped silently.</value>
+  </data>
+  <data name="PromptCancel" xml:space="preserve">
+    <value>CANCEL</value>
+  </data>
+  <data name="PromptCommonValuesAnythingCanStill" xml:space="preserve">
+    <value>Common values. Anything can still be typed.</value>
+  </data>
+  <data name="PromptBrowse" xml:space="preserve">
+    <value>BROWSE…</value>
+  </data>
+  <data name="ScopeScope" xml:space="preserve">
+    <value>SCOPE</value>
+  </data>
+  <data name="ScopeViewOnlyNotSavedIn" xml:space="preserve">
+    <value>view only · not saved in the project · GO still fires the show's next cue</value>
+  </data>
+  <data name="ScopeCueLists" xml:space="preserve">
+    <value>CUE LISTS</value>
+  </data>
+  <data name="SetHacue2Settings" xml:space="preserve">
+    <value>HaCue2 - Settings</value>
+  </data>
+  <data name="SetSettings" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="SetApplicationThisMachine" xml:space="preserve">
+    <value>APPLICATION · THIS MACHINE</value>
+  </data>
+  <data name="SetAppearanceLayout" xml:space="preserve">
+    <value>Appearance &amp; layout</value>
+  </data>
+  <data name="SetTheme" xml:space="preserve">
+    <value>Theme</value>
+  </data>
+  <data name="SetDensity" xml:space="preserve">
+    <value>Density</value>
+  </data>
+  <data name="SetCueRowSize" xml:space="preserve">
+    <value>Cue row size</value>
+  </data>
+  <data name="SetFontScale" xml:space="preserve">
+    <value>Font scale</value>
+  </data>
+  <data name="SetRememberInspectorTabPerCue" xml:space="preserve">
+    <value>Remember inspector tab per cue kind</value>
+  </data>
+  <data name="SetFlatActiveListDefaultGrouped" xml:space="preserve">
+    <value>Flat active list (default grouped)</value>
+  </data>
+  <data name="SetOpenOutputInfoDrawerOn" xml:space="preserve">
+    <value>Open Output info drawer on launch</value>
+  </data>
+  <data name="SetMeters" xml:space="preserve">
+    <value>Meters</value>
+  </data>
+  <data name="SetBallistics" xml:space="preserve">
+    <value>Ballistics</value>
+  </data>
+  <data name="SetPeakHold" xml:space="preserve">
+    <value>Peak hold</value>
+  </data>
+  <data name="SetClipResets" xml:space="preserve">
+    <value>Clip resets</value>
+  </data>
+  <data name="SetTransportDefaults" xml:space="preserve">
+    <value>Transport defaults</value>
+  </data>
+  <data name="SetNewProjectStopFade" xml:space="preserve">
+    <value>New-project stop fade</value>
+  </data>
+  <data name="SetPanicFade" xml:space="preserve">
+    <value>Panic fade</value>
+  </data>
+  <data name="SetDoubleGoGuard" xml:space="preserve">
+    <value>Double-GO guard</value>
+  </data>
+  <data name="SetSpaceIsGo" xml:space="preserve">
+    <value>Space is GO</value>
+  </data>
+  <data name="SetConfirmStopAll" xml:space="preserve">
+    <value>Confirm Stop All</value>
+  </data>
+  <data name="SetNewProjectsStartWithClicking" xml:space="preserve">
+    <value>New projects start with “clicking a cue row moves standby” on</value>
+  </data>
+  <data name="SetHotkeys" xml:space="preserve">
+    <value>Hotkeys</value>
+  </data>
+  <data name="SetResetProfile" xml:space="preserve">
+    <value>RESET PROFILE</value>
+  </data>
+  <data name="SetCommand" xml:space="preserve">
+    <value>COMMAND</value>
+  </data>
+  <data name="SetGesture" xml:space="preserve">
+    <value>GESTURE</value>
+  </data>
+  <data name="SetRemoteApi" xml:space="preserve">
+    <value>Remote API</value>
+  </data>
+  <data name="SetElsewhere" xml:space="preserve">
+    <value>ELSEWHERE</value>
+  </data>
+  <data name="SetTheRunningServerAndIts" xml:space="preserve">
+    <value>the running server and its endpoint list live in Targets · Remote API - this pane only sets what a new project inherits</value>
+  </data>
+  <data name="SetPort" xml:space="preserve">
+    <value>Port</value>
+  </data>
+  <data name="SetAllowCallsFromTheLan" xml:space="preserve">
+    <value>Allow calls from the LAN (otherwise local only)</value>
+  </data>
+  <data name="SetToken" xml:space="preserve">
+    <value>Token</value>
+  </data>
+  <data name="SetRotate" xml:space="preserve">
+    <value>ROTATE</value>
+  </data>
+  <data name="SetMediaCache" xml:space="preserve">
+    <value>Media cache</value>
+  </data>
+  <data name="SetLocalAudioBackend" xml:space="preserve">
+    <value>Local audio backend</value>
+  </data>
+  <data name="SetLocation" xml:space="preserve">
+    <value>Location</value>
+  </data>
+  <data name="SetWaveforms" xml:space="preserve">
+    <value>Waveforms</value>
+  </data>
+  <data name="SetYoutubeMedia" xml:space="preserve">
+    <value>YouTube media</value>
+  </data>
+  <data name="SetInUse" xml:space="preserve">
+    <value>In use</value>
+  </data>
+  <data name="SetClearWaveformCache" xml:space="preserve">
+    <value>CLEAR WAVEFORM CACHE</value>
+  </data>
+  <data name="SetClearYoutubeCache" xml:space="preserve">
+    <value>CLEAR YOUTUBE CACHE</value>
+  </data>
+  <data name="SetEverythingHereIsReDerivable" xml:space="preserve">
+    <value>Everything here is re-derivable from the media. Clearing costs time on the next open, never show data.</value>
+  </data>
+  <data name="SetLoggingCrashReports" xml:space="preserve">
+    <value>Logging &amp; crash reports</value>
+  </data>
+  <data name="SetFileLogLevel" xml:space="preserve">
+    <value>File log level</value>
+  </data>
+  <data name="SetRetention" xml:space="preserve">
+    <value>Retention</value>
+  </data>
+  <data name="SetWriteACrashReportWhen" xml:space="preserve">
+    <value>Write a crash report when the app faults</value>
+  </data>
+  <data name="SetOpenLogsFolder" xml:space="preserve">
+    <value>OPEN LOGS FOLDER</value>
+  </data>
+  <data name="SetSaveAutosaveRecovery" xml:space="preserve">
+    <value>Save, autosave &amp; recovery</value>
+  </data>
+  <data name="SetAutosaveEvery" xml:space="preserve">
+    <value>Autosave every</value>
+  </data>
+  <data name="SetKeep" xml:space="preserve">
+    <value>Keep</value>
+  </data>
+  <data name="SetRecoveryIn" xml:space="preserve">
+    <value>Recovery in</value>
+  </data>
+  <data name="SetSaveOnEveryGo" xml:space="preserve">
+    <value>Save on every GO</value>
+  </data>
+  <data name="SetAnAutosaveNewerThanThe" xml:space="preserve">
+    <value>An autosave newer than the file is offered on the launcher, beside the project it belongs to - recover or discard, never silently.</value>
+  </data>
+  <data name="SetNewProjectDefaults" xml:space="preserve">
+    <value>New project defaults</value>
+  </data>
+  <data name="SetAutoRenumberOnInsert" xml:space="preserve">
+    <value>Auto-renumber on insert</value>
+  </data>
+  <data name="SetSeedAudio" xml:space="preserve">
+    <value>Seed audio</value>
+  </data>
+  <data name="SetSystemDefaultDeviceMainL" xml:space="preserve">
+    <value>system default device → Main L/R</value>
+  </data>
+  <data name="SetDefaultFades" xml:space="preserve">
+    <value>Default fades</value>
+  </data>
+  <data name="SetANewProjectIsSeeded" xml:space="preserve">
+    <value>A new project is seeded with a Main L/R pair patched to this machine's default device, so the first sound is never silence.</value>
+  </data>
+  <data name="SetShowBehaviour" xml:space="preserve">
+    <value>Show behaviour</value>
+  </data>
+  <data name="SetOpenIn" xml:space="preserve">
+    <value>Open in</value>
+  </data>
+  <data name="SetRunStatusChecksOnOpen" xml:space="preserve">
+    <value>Run status checks on open, surface issues in the status bar</value>
+  </data>
+  <data name="SetAtListEnd" xml:space="preserve">
+    <value>At list end</value>
+  </data>
+  <data name="SetStopFade" xml:space="preserve">
+    <value>Stop fade</value>
+  </data>
+  <data name="SetEditExactPointsShapedSegments" xml:space="preserve">
+    <value>Edit exact points, shaped segments and project presets</value>
+  </data>
+  <data name="SetFollowsThisMachine" xml:space="preserve">
+    <value>follows this machine</value>
+  </data>
+  <data name="SetAVOffset" xml:space="preserve">
+    <value>A/V offset</value>
+  </data>
+  <data name="SetPositiveShowsThePictureEarlier" xml:space="preserve">
+    <value>positive shows the picture earlier · set by eye at the venue</value>
+  </data>
+  <data name="SetFollowLead" xml:space="preserve">
+    <value>Follow lead</value>
+  </data>
+  <data name="SetOpensAFollowCueS" xml:space="preserve">
+    <value>opens a follow cue's next cue this early · 0 disables · costs a second decoder while open</value>
+  </data>
+  <data name="SetExternalInputOffWhenThe" xml:space="preserve">
+    <value>External input off when the project opens</value>
+  </data>
+  <data name="SetClickingACueRowMoves" xml:space="preserve">
+    <value>Clicking a cue row moves standby, so GO fires it</value>
+  </data>
+  <data name="SetOnByDefaultTurnIt" xml:space="preserve">
+    <value>On by default. Turn it off to drive the show strictly from the STBY keys and leave the selection free to wander while it runs.</value>
+  </data>
+  <data name="SetAuthoringDefaults" xml:space="preserve">
+    <value>Authoring defaults</value>
+  </data>
+  <data name="SetNewCueTrigger" xml:space="preserve">
+    <value>New cue trigger</value>
+  </data>
+  <data name="SetAutoRenumberOnInsertStep" xml:space="preserve">
+    <value>Auto-renumber on insert · step 1, children .1</value>
+  </data>
+  <data name="SetMediaRoot" xml:space="preserve">
+    <value>Media root</value>
+  </data>
+  <data name="SetRelativePathsResolveAgainstThis" xml:space="preserve">
+    <value>relative paths resolve against this folder</value>
+  </data>
+  <data name="SetOutsideMedia" xml:space="preserve">
+    <value>Outside media</value>
+  </data>
+  <data name="SetAddingAFileFromOutside" xml:space="preserve">
+    <value>adding a file from outside the root warns and offers move/copy · this picks the default</value>
+  </data>
+  <data name="SetOverrides" xml:space="preserve">
+    <value>Overrides</value>
+  </data>
+  <data name="SetRule" xml:space="preserve">
+    <value>RULE</value>
+  </data>
+  <data name="SetSetting" xml:space="preserve">
+    <value>SETTING</value>
+  </data>
+  <data name="SetAppValue" xml:space="preserve">
+    <value>APP VALUE</value>
+  </data>
+  <data name="SetProjectValue" xml:space="preserve">
+    <value>PROJECT VALUE</value>
+  </data>
+  <data name="SetRevert" xml:space="preserve">
+    <value>revert ×</value>
+  </data>
+  <data name="SetInheritTheMachineSValue" xml:space="preserve">
+    <value>Inherit the machine's value again</value>
+  </data>
+  <data name="SetProjectStatus" xml:space="preserve">
+    <value>Project status</value>
+  </data>
+  <data name="SetMediaThatCannotBeFound" xml:space="preserve">
+    <value>Media that cannot be found, audio lines and screens this machine does not have, outputs nothing is patched to, and whether the show still compiles. Run it after a get-in, and before doors.</value>
+  </data>
+  <data name="SetOpenProjectStatus" xml:space="preserve">
+    <value>OPEN PROJECT STATUS</value>
+  </data>
+  <data name="SetOpenAProjectFirstThere" xml:space="preserve">
+    <value>open a project first - there is nothing to check yet</value>
+  </data>
+  <data name="ShellHide" xml:space="preserve">
+    <value>HIDE ▾</value>
+  </data>
+  <data name="SubPickSidecarFile" xml:space="preserve">
+    <value>+ SIDECAR FILE…</value>
+  </data>
+  <data name="SubPickNothingEmbeddedInThisFile" xml:space="preserve">
+    <value>Nothing embedded in this file. A sidecar (.srt / .ass) can still be added.</value>
+  </data>
+  <data name="SubPickSidecar" xml:space="preserve">
+    <value>SIDECAR</value>
+  </data>
+  <data name="TgtActionEndpoints" xml:space="preserve">
+    <value>Action endpoints</value>
+  </data>
+  <data name="TgtOscOut" xml:space="preserve">
+    <value>+ OSC OUT…</value>
+  </data>
+  <data name="TgtMidiOut" xml:space="preserve">
+    <value>+ MIDI OUT…</value>
+  </data>
+  <data name="TgtEndpoint" xml:space="preserve">
+    <value>ENDPOINT</value>
+  </data>
+  <data name="TgtUsedBy" xml:space="preserve">
+    <value>USED BY</value>
+  </data>
+  <data name="TgtLastSent" xml:space="preserve">
+    <value>LAST SENT</value>
+  </data>
+  <data name="TgtEdit" xml:space="preserve">
+    <value>Edit…</value>
+  </data>
+  <data name="TgtSendTest" xml:space="preserve">
+    <value>Send test</value>
+  </data>
+  <data name="TgtHost" xml:space="preserve">
+    <value>Host</value>
+  </data>
+  <data name="TgtTestMessage" xml:space="preserve">
+    <value>Test message</value>
+  </data>
+  <data name="TgtSendTest2" xml:space="preserve">
+    <value>SEND TEST</value>
+  </data>
+  <data name="TgtMonitor" xml:space="preserve">
+    <value>Monitor</value>
+  </data>
+  <data name="TgtTriggerInputs" xml:space="preserve">
+    <value>Trigger inputs</value>
+  </data>
+  <data name="TgtMidiIn" xml:space="preserve">
+    <value>+ MIDI IN…</value>
+  </data>
+  <data name="TgtOscListener" xml:space="preserve">
+    <value>+ OSC LISTENER…</value>
+  </data>
+  <data name="TgtKeyboard" xml:space="preserve">
+    <value>+ KEYBOARD…</value>
+  </data>
+  <data name="TgtSchedule" xml:space="preserve">
+    <value>+ SCHEDULE…</value>
+  </data>
+  <data name="TgtTimecode" xml:space="preserve">
+    <value>+ TIMECODE…</value>
+  </data>
+  <data name="TgtDeviceSource" xml:space="preserve">
+    <value>DEVICE / SOURCE</value>
+  </data>
+  <data name="TgtBindings" xml:space="preserve">
+    <value>BINDINGS</value>
+  </data>
+  <data name="TgtLastSeen" xml:space="preserve">
+    <value>LAST SEEN</value>
+  </data>
+  <data name="TgtRemoveBinding" xml:space="preserve">
+    <value>REMOVE BINDING</value>
+  </data>
+  <data name="TgtInput" xml:space="preserve">
+    <value>INPUT</value>
+  </data>
+  <data name="TgtFires" xml:space="preserve">
+    <value>FIRES</value>
+  </data>
+  <data name="TgtFilter" xml:space="preserve">
+    <value>FILTER</value>
+  </data>
+  <data name="TgtRemoveBinding2" xml:space="preserve">
+    <value>Remove binding</value>
+  </data>
+  <data name="TgtLearn" xml:space="preserve">
+    <value>Learn</value>
+  </data>
+  <data name="TgtBind" xml:space="preserve">
+    <value>BIND</value>
+  </data>
+  <data name="TgtLearn2" xml:space="preserve">
+    <value>LEARN</value>
+  </data>
+  <data name="TgtListening" xml:space="preserve">
+    <value>Listening</value>
+  </data>
+  <data name="TgtCaught" xml:space="preserve">
+    <value>Caught</value>
+  </data>
+  <data name="TgtFires2" xml:space="preserve">
+    <value>Fires</value>
+  </data>
+  <data name="TgtNoRepeat" xml:space="preserve">
+    <value>No repeat</value>
+  </data>
+  <data name="TgtWhileTyping" xml:space="preserve">
+    <value>While typing</value>
+  </data>
+  <data name="TgtKeepThisBindingGlobalWhile" xml:space="preserve">
+    <value>Keep this binding global while editing text</value>
+  </data>
+  <data name="TgtServer" xml:space="preserve">
+    <value>Server</value>
+  </data>
+  <data name="TgtOverride" xml:space="preserve">
+    <value>OVERRIDE</value>
+  </data>
+  <data name="TgtProjectOverrideAppDefaultIs" xml:space="preserve">
+    <value>project override - app default is off</value>
+  </data>
+  <data name="TgtState" xml:space="preserve">
+    <value>State</value>
+  </data>
+  <data name="TgtLan" xml:space="preserve">
+    <value>LAN</value>
+  </data>
+  <data name="TgtLastCall" xml:space="preserve">
+    <value>Last call</value>
+  </data>
+  <data name="TgtEndpoints" xml:space="preserve">
+    <value>Endpoints</value>
+  </data>
+  <data name="TgtDocs" xml:space="preserve">
+    <value>DOCS</value>
+  </data>
+  <data name="TgtGetServesThisTableAs" xml:space="preserve">
+    <value>GET / serves this table as JSON + examples with the token pre-filled</value>
+  </data>
+  <data name="TgtMethod" xml:space="preserve">
+    <value>METHOD</value>
+  </data>
+  <data name="TgtPath" xml:space="preserve">
+    <value>PATH</value>
+  </data>
+  <data name="TgtDoes" xml:space="preserve">
+    <value>DOES</value>
+  </data>
+  <data name="TgtCalls" xml:space="preserve">
+    <value>CALLS</value>
+  </data>
+  <data name="VidVideoOutputs" xml:space="preserve">
+    <value>Video outputs</value>
+  </data>
+  <data name="VidLocal" xml:space="preserve">
+    <value>+ LOCAL…</value>
+  </data>
+  <data name="VidNdi" xml:space="preserve">
+    <value>+ NDI…</value>
+  </data>
+  <data name="VidRename" xml:space="preserve">
+    <value>RENAME…</value>
+  </data>
+  <data name="VidOutput" xml:space="preserve">
+    <value>OUTPUT</value>
+  </data>
+  <data name="VidShows" xml:space="preserve">
+    <value>SHOWS</value>
+  </data>
+  <data name="VidMap" xml:space="preserve">
+    <value>MAP</value>
+  </data>
+  <data name="VidEditMapping" xml:space="preserve">
+    <value>Edit mapping</value>
+  </data>
+  <data name="VidShows2" xml:space="preserve">
+    <value>Shows</value>
+  </data>
+  <data name="VidScreen" xml:space="preserve">
+    <value>Screen</value>
+  </data>
+  <data name="VidWindowSize" xml:space="preserve">
+    <value>Window size</value>
+  </data>
+  <data name="VidTheWindowSSizeOn" xml:space="preserve">
+    <value>The window's size on screen. Empty takes the composition's size.</value>
+  </data>
+  <data name="VidCommonSizesAnythingCanStill" xml:space="preserve">
+    <value>Common sizes. Anything can still be typed.</value>
+  </data>
+  <data name="VidWindowLocks" xml:space="preserve">
+    <value>Window locks</value>
+  </data>
+  <data name="VidAspectRatio" xml:space="preserve">
+    <value>aspect ratio</value>
+  </data>
+  <data name="VidKeepTheConfiguredWidthTo" xml:space="preserve">
+    <value>Keep the configured width-to-height ratio while resizing the real output window.</value>
+  </data>
+  <data name="VidResolution" xml:space="preserve">
+    <value>resolution</value>
+  </data>
+  <data name="VidPreventTheRealOutputWindow" xml:space="preserve">
+    <value>Prevent the real output window from being resized.</value>
+  </data>
+  <data name="VidOutputRaster" xml:space="preserve">
+    <value>Output raster</value>
+  </data>
+  <data name="VidTheRasterMappingDestinationsAre" xml:space="preserve">
+    <value>The raster mapping destinations are measured in. Empty follows the composition's size.</value>
+  </data>
+  <data name="VidIdleFallback" xml:space="preserve">
+    <value>Idle fallback</value>
+  </data>
+  <data name="VidBlack" xml:space="preserve">
+    <value>black</value>
+  </data>
+  <data name="VidShownWhenTheCompositionHas" xml:space="preserve">
+    <value>Shown when the composition has no idle image of its own. Empty means black.</value>
+  </data>
+  <data name="VidIdleFit" xml:space="preserve">
+    <value>Idle fit</value>
+  </data>
+  <data name="VidMapping" xml:space="preserve">
+    <value>Mapping</value>
+  </data>
+  <data name="VidEdit" xml:space="preserve">
+    <value>EDIT ›</value>
+  </data>
+  <data name="VidRequired" xml:space="preserve">
+    <value>Required</value>
+  </data>
+  <data name="VidTheShowCannotRunWithout" xml:space="preserve">
+    <value>the show cannot run without this output</value>
+  </data>
+  <data name="VidIdentifyFlashOutputNameOn" xml:space="preserve">
+    <value>IDENTIFY - FLASH OUTPUT NAME ON SCREEN</value>
+  </data>
+  <data name="VidAdd" xml:space="preserve">
+    <value>+ ADD…</value>
+  </data>
+  <data name="VidRemoveTakesTheCompositionThe" xml:space="preserve">
+    <value>remove takes the composition the last-touched pane belongs to</value>
+  </data>
+  <data name="VidSizeByRaster" xml:space="preserve">
+    <value>SIZE BY RASTER</value>
+  </data>
+  <data name="VidLayOutEveryScreenAt" xml:space="preserve">
+    <value>Lay out every screen at its output resolution, left to right.</value>
+  </data>
+  <data name="VidSteelOutlinePhysicalOutputPixels" xml:space="preserve">
+    <value>Steel outline = physical output pixels; coloured box = composition region it samples. Drag inside to move; edges resize. Shift reverses aspect lock; Alt suspends guides.</value>
+  </data>
+  <data name="VidSizeRate" xml:space="preserve">
+    <value>Size / rate</value>
+  </data>
+  <data name="VidCommonSizesThisMachineS" xml:space="preserve">
+    <value>Common sizes, this machine's screens first. Anything can still be typed.</value>
+  </data>
+  <data name="VidIdleImage" xml:space="preserve">
+    <value>Idle image</value>
+  </data>
+  <data name="VidFeeds" xml:space="preserve">
+    <value>FEEDS</value>
+  </data>
+  <data name="VidNoOutputShowsThisCanvas" xml:space="preserve">
+    <value>no output shows this canvas - assign one on the right</value>
+  </data>
+  <data name="VidSliceXY" xml:space="preserve">
+    <value>Slice x / y</value>
+  </data>
+  <data name="VidSliceWH" xml:space="preserve">
+    <value>Slice w / h</value>
+  </data>
+  <data name="VidWarpThisScreen" xml:space="preserve">
+    <value>WARP THIS SCREEN ›</value>
+  </data>
+  <data name="VidMeshBlendAndPerSection" xml:space="preserve">
+    <value>Mesh, blend and per-section geometry for this output.</value>
+  </data>
+  <data name="VidFeeds2" xml:space="preserve">
+    <value>Feeds</value>
+  </data>
+  <data name="VidAnOutputToSendThis" xml:space="preserve">
+    <value>an output to send this canvas to</value>
+  </data>
+  <data name="VidAssign" xml:space="preserve">
+    <value>+ ASSIGN</value>
+  </data>
+  <data name="VidStopSendingThisCompositionTo" xml:space="preserve">
+    <value>Stop sending this composition to that output. The output stays.</value>
+  </data>
+  <data name="VidMapping2" xml:space="preserve">
+    <value>MAPPING</value>
+  </data>
+  <data name="VidCalibrationGrid" xml:space="preserve">
+    <value>CALIBRATION GRID</value>
+  </data>
+  <data name="VidShowsOrientationCornersATen" xml:space="preserve">
+    <value>Shows orientation corners, a ten-by-ten warp grid and section boundaries on this output until the mapping editor closes.</value>
+  </data>
+  <data name="VidClose" xml:space="preserve">
+    <value>✕ CLOSE</value>
+  </data>
+  <data name="VidSplitInto" xml:space="preserve">
+    <value>Split into</value>
+  </data>
+  <data name="VidCols" xml:space="preserve">
+    <value>cols ×</value>
+  </data>
+  <data name="VidRows" xml:space="preserve">
+    <value>rows</value>
+  </data>
+  <data name="VidSplit" xml:space="preserve">
+    <value>SPLIT</value>
+  </data>
+  <data name="VidReplacesEverySectionWithAn" xml:space="preserve">
+    <value>Replaces every section with an even grid, one per panel - then nudge each into place. This is how you hit exactly half.</value>
+  </data>
+  <data name="VidReset" xml:space="preserve">
+    <value>RESET</value>
+  </data>
+  <data name="VidBackToOneSectionShowing" xml:space="preserve">
+    <value>Back to one section showing the whole canvas across the whole output</value>
+  </data>
+  <data name="VidSections" xml:space="preserve">
+    <value>Sections</value>
+  </data>
+  <data name="VidAddASectionCoveringThe" xml:space="preserve">
+    <value>Add a section covering the whole frame</value>
+  </data>
+  <data name="VidRemoveTheSelectedSection" xml:space="preserve">
+    <value>Remove the selected section</value>
+  </data>
+  <data name="VidDrawEarlierFurtherBack" xml:space="preserve">
+    <value>Draw earlier - further back</value>
+  </data>
+  <data name="VidDrawLaterFurtherFront" xml:space="preserve">
+    <value>Draw later - further front</value>
+  </data>
+  <data name="VidDrawThisSection" xml:space="preserve">
+    <value>Draw this section</value>
+  </data>
+  <data name="VidSourceCropWhatItSamples" xml:space="preserve">
+    <value>Source crop · what it samples</value>
+  </data>
+  <data name="VidSrcX" xml:space="preserve">
+    <value>Src X</value>
+  </data>
+  <data name="VidSrcY" xml:space="preserve">
+    <value>Src Y</value>
+  </data>
+  <data name="VidSrcW" xml:space="preserve">
+    <value>Src W</value>
+  </data>
+  <data name="VidSrcH" xml:space="preserve">
+    <value>Src H</value>
+  </data>
+  <data name="VidRot" xml:space="preserve">
+    <value>Rot °</value>
+  </data>
+  <data name="VidBright" xml:space="preserve">
+    <value>Bright</value>
+  </data>
+  <data name="VidPanelBrightnessMatching100" xml:space="preserve">
+    <value>Panel brightness matching - 1.00 is the projector's own</value>
+  </data>
+  <data name="VidDragOnTheCanvasType" xml:space="preserve">
+    <value>drag on the canvas · type for exact values</value>
+  </data>
+  <data name="VidDestX" xml:space="preserve">
+    <value>Dest X</value>
+  </data>
+  <data name="VidDestY" xml:space="preserve">
+    <value>Dest Y</value>
+  </data>
+  <data name="VidDestW" xml:space="preserve">
+    <value>Dest W</value>
+  </data>
+  <data name="VidDestH" xml:space="preserve">
+    <value>Dest H</value>
+  </data>
+  <data name="VidMeshWarp" xml:space="preserve">
+    <value>Mesh warp</value>
+  </data>
+  <data name="VidBendThisSectionThroughA" xml:space="preserve">
+    <value>Bend this section through a control-point grid for a non-flat surface. GL output path only.</value>
+  </data>
+  <data name="VidCols2" xml:space="preserve">
+    <value>Cols</value>
+  </data>
+  <data name="VidRows2" xml:space="preserve">
+    <value>Rows</value>
+  </data>
+  <data name="VidResetMesh" xml:space="preserve">
+    <value>RESET MESH</value>
+  </data>
+  <data name="VidBackToTheFlatIdentity" xml:space="preserve">
+    <value>Back to the flat identity grid, keeping its size</value>
+  </data>
+  <data name="VidDragAControlPointArrow" xml:space="preserve">
+    <value>Drag a control point. Arrow keys nudge; Shift plus arrow nudges coarsely.</value>
+  </data>
+  <data name="VidPoint" xml:space="preserve">
+    <value>Point</value>
+  </data>
+  <data name="VidDxDy" xml:space="preserve">
+    <value>dx / dy</value>
+  </data>
+  <data name="YtAddDownloadInBackground" xml:space="preserve">
+    <value>ADD &amp; DOWNLOAD IN BACKGROUND</value>
+  </data>
+  <data name="YtLink" xml:space="preserve">
+    <value>Link</value>
+  </data>
+  <data name="YtHttpsWwwYoutubeComWatch" xml:space="preserve">
+    <value>https://www.youtube.com/watch?v=…</value>
+  </data>
+  <data name="YtFetch" xml:space="preserve">
+    <value>FETCH</value>
+  </data>
+  <data name="YtVideo" xml:space="preserve">
+    <value>Video</value>
+  </data>
+  <data name="YtAudio" xml:space="preserve">
+    <value>Audio</value>
+  </data>
+  <data name="YtSoundOnlyDoNotDownload" xml:space="preserve">
+    <value>Sound only - do not download the picture</value>
+  </data>
+  <data name="YtIncludeTheThumbnailAsA" xml:space="preserve">
+    <value>Include the thumbnail as a still picture</value>
+  </data>
 </root>
