@@ -75,9 +75,10 @@ public sealed class AudioOutputDeviceLossTests(ITestOutputHelper output)
         Assert.True(Environment.TickCount64 - started < 1000, "latched WaitForCapacity must fail fast");
     }
 
-    [Fact]
+    [SkippableFact]
     public void PortAudio_LatchedDeviceLoss_FailsSubmitWaitForCapacityAndIsAdvancingFast()
     {
+        AudioDeviceTestGate.RequirePortAudio();
         PortAudioOutput outputDevice;
         try
         {

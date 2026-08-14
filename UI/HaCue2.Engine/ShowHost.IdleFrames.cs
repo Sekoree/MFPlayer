@@ -14,9 +14,18 @@ public sealed partial class ShowHost
     /// Every edit reloads the document, and reloads are debounced at 300 ms rather than rare - so
     /// without this, typing a cue label re-decodes every composition's idle image FROM DISK three times
     /// a second, and re-allocates a canvas-sized buffer per output while it does. The signature is the
-    /// authored path plus the size, which is the whole of what the frame is built from.
+    /// resolved file stamp plus the fit and canvas, which is the whole of what the frame is built from.
     /// </remarks>
     private readonly Dictionary<string, string> _idleSignatures = [];
+
+    /// <summary>Signatures whose decode FAILED, kept separately so an unchanged broken file is
+    /// reported once rather than re-decoded (and re-reported) on every 300 ms edit reload. The
+    /// signature embeds the file's length + write stamp, so repairing or replacing the file changes
+    /// it and triggers the retry - no re-poll of a byte-identical failure is needed for recovery.</summary>
+    private readonly Dictionary<string, string> _idleFailureSignatures = [];
+
+    /// <summary>Test seam: only successfully applied idle sources are cached here.</summary>
+    internal int CachedIdleFrameCount => _idleSignatures.Count;
 
     /// <summary>Decodes authored stills once and transfers their frames to the composition runtime.</summary>
     private async Task ApplyIdleFramesAsync(HaCueProject project, string? projectPath)
@@ -28,7 +37,8 @@ public sealed partial class ShowHost
             var key = $"c:{composition.Id}";
             // The FIT is part of the signature: changing how the slate fills the canvas rebuilds the
             // frame, exactly as changing the picture does.
-            var signature = $"{composition.IdleImagePath}|{composition.IdleImageFit}|{Canvas(composition)}";
+            var signature =
+                $"{IdleSourceStamp(project, composition.IdleImagePath, projectPath)}|{composition.IdleImageFit}|{Canvas(composition)}";
             wanted.Add(key);
 
             if (!Changed(key, signature))
@@ -40,11 +50,13 @@ public sealed partial class ShowHost
                 projectPath,
                 $"“{composition.Name}” idle image").ConfigureAwait(false);
 
+            var sourceLoaded = string.IsNullOrWhiteSpace(composition.IdleImagePath) || frame is not null;
             if (frame is not null)
                 frame = IdleFrames.Fitted(
                     frame, composition.Width, composition.Height, composition.IdleImageFit);
 
             await _session.SetCompositionIdleFrameAsync(composition.Id.ToString(), frame).ConfigureAwait(false);
+            CacheIfLoaded(key, signature, sourceLoaded);
         }
 
         foreach (var output in project.VideoOutputs)
@@ -56,7 +68,7 @@ public sealed partial class ShowHost
 
             var key = $"o:{output.Id}";
             var signature =
-                $"{output.IdleFallbackPath}|{output.IdleFallbackFit}|{compositionId}|{Canvas(canvas)}";
+                $"{IdleSourceStamp(project, output.IdleFallbackPath, projectPath)}|{output.IdleFallbackFit}|{compositionId}|{Canvas(canvas)}";
             wanted.Add(key);
 
             if (!Changed(key, signature))
@@ -68,6 +80,7 @@ public sealed partial class ShowHost
                 projectPath,
                 $"“{output.Name}” idle fallback").ConfigureAwait(false);
 
+            var sourceLoaded = string.IsNullOrWhiteSpace(output.IdleFallbackPath) || frame is not null;
             if (frame is not null)
                 frame = IdleFrames.Fitted(frame, canvas.Width, canvas.Height, output.IdleFallbackFit);
 
@@ -80,6 +93,7 @@ public sealed partial class ShowHost
                 compositionId.ToString(),
                 open.OutputId,
                 frame ?? IdleFrames.Black(canvas.Width, canvas.Height)).ConfigureAwait(false);
+            CacheIfLoaded(key, signature, sourceLoaded);
         }
 
         // A surface that is gone must lose its signature, or re-adding an output with the same id - an
@@ -87,6 +101,8 @@ public sealed partial class ShowHost
         // its window.
         foreach (var stale in _idleSignatures.Keys.Where(key => !wanted.Contains(key)).ToList())
             _idleSignatures.Remove(stale);
+        foreach (var stale in _idleFailureSignatures.Keys.Where(key => !wanted.Contains(key)).ToList())
+            _idleFailureSignatures.Remove(stale);
     }
 
     /// <summary>
@@ -101,14 +117,54 @@ public sealed partial class ShowHost
     private static string Canvas(CompositionDefinition composition) =>
         $"{composition.Width}×{composition.Height}@{composition.FramesPerSecond:0.###}";
 
-    /// <summary>Whether this surface's idle frame has to be rebuilt, recording the new signature.</summary>
-    private bool Changed(string key, string signature)
-    {
-        if (_idleSignatures.TryGetValue(key, out var last) && last == signature)
-            return false;
+    /// <summary>Whether this surface's idle frame has to be rebuilt. An unchanged signature in
+    /// EITHER cache answers no: a success needs no rework, and a failure whose file has not changed
+    /// would only fail (and report) again - the file-identity part of the signature is what brings
+    /// a repaired source back through here.</summary>
+    private bool Changed(string key, string signature) =>
+        !(_idleSignatures.TryGetValue(key, out var last) && last == signature)
+        && !(_idleFailureSignatures.TryGetValue(key, out var failed) && failed == signature);
 
-        _idleSignatures[key] = signature;
-        return true;
+    private void CacheIfLoaded(string key, string signature, bool loaded)
+    {
+        if (loaded)
+        {
+            _idleSignatures[key] = signature;
+            _idleFailureSignatures.Remove(key);
+        }
+        else
+        {
+            _idleFailureSignatures[key] = signature;
+            _idleSignatures.Remove(key);
+        }
+    }
+
+    /// <summary>The authored source plus cheap filesystem identity. A replacement at the same path
+    /// must invalidate the cache; hashing on every 300 ms edit reload would recreate the disk churn
+    /// this cache exists to avoid, so length + UTC write stamp is the appropriate file-version key.</summary>
+    private static string IdleSourceStamp(
+        HaCueProject project, string authoredPath, string? projectPath)
+    {
+        if (string.IsNullOrWhiteSpace(authoredPath))
+            return "<black>";
+
+        try
+        {
+            var resolved = MediaPaths.Resolve(project, authoredPath, projectPath);
+            var file = new FileInfo(resolved);
+            return $"{resolved}|{file.Exists}|{(file.Exists ? file.Length : -1)}|" +
+                   $"{(file.Exists ? file.LastWriteTimeUtc.Ticks : 0)}";
+        }
+        catch (Exception failure) when (
+            failure is ArgumentException or NotSupportedException or PathTooLongException
+                or UnauthorizedAccessException or IOException)
+        {
+            // DecodeIdleAsync owns the operator-facing problem. The authored path is the stable
+            // fallback signature: a source that cannot even be stat-ed offers no change signal, so
+            // its failure is reported once and retried when the authored path (or fit/canvas)
+            // changes - same as any other unchanged broken source.
+            return authoredPath;
+        }
     }
 
     private async Task<VideoFrame?> DecodeIdleAsync(

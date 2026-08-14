@@ -8,10 +8,10 @@ namespace S.Media.Decode.FFmpeg.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// It did not. <c>Dispose</c> nulled <c>AVFormatContext.pb</c> before <c>avformat_close_input</c> — right for the
+/// It did not. <c>Dispose</c> nulled <c>AVFormatContext.pb</c> before <c>avformat_close_input</c> - right for the
 /// custom-IO opens, where <c>StreamAvioBridge</c> owns that context and frees it separately, but it ran on every
 /// open. On the native file path FFmpeg owns pb and closing it is what releases the OS handle, so every container
-/// opened from a PATH stayed open for the life of the process — on the success path as much as the failure one.
+/// opened from a PATH stayed open for the life of the process - on the success path as much as the failure one.
 /// </para>
 /// <para>
 /// What that cost: a cue player probes every file an operator adds to a show. On Linux the descriptors simply
@@ -21,7 +21,7 @@ namespace S.Media.Decode.FFmpeg.Tests;
 /// </para>
 /// <para>
 /// Asserted per platform because neither probe answers on both: /proc/self/fd counts the real descriptors on
-/// Linux, and Windows has no such view but does enforce sharing — so an exclusive open asks the same question in
+/// Linux, and Windows has no such view but does enforce sharing - so an exclusive open asks the same question in
 /// the way that platform can answer, and is also precisely the thing the operator could not do.
 /// </para>
 /// </remarks>
@@ -70,7 +70,7 @@ public sealed class ContainerHandleReleaseTests : IDisposable
         for (var i = 0; i < 5; i++)
         {
             try { using var decoder = MediaContainerDecoder.Open(path); }
-            catch { /* expected — the point is what happens to the handle */ }
+            catch { /* expected - the point is what happens to the handle */ }
         }
 
         AssertClosed(path);

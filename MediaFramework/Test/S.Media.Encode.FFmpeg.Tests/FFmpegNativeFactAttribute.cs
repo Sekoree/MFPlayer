@@ -13,7 +13,7 @@ namespace S.Media.Encode.FFmpeg.Tests;
 /// and twenty identical "FFmpeg native libraries are not loadable" failures say nothing about the encoders
 /// they were meant to be testing. An environment that cannot load FFmpeg has no verdict to give on encoding.
 ///
-/// The reason comes from <see cref="FFmpegRuntime.UnavailableReason"/> rather than a probe of its own — that
+/// The reason comes from <see cref="FFmpegRuntime.UnavailableReason"/> rather than a probe of its own - that
 /// property already names the required and the found sonames, initializes itself, and never throws.
 /// </remarks>
 public sealed class FFmpegNativeFactAttribute : FactAttribute

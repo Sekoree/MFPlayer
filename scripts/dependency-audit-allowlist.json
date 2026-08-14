@@ -1,0 +1,18 @@
+{
+  "exceptions": [
+    {
+      "kind": "deprecated",
+      "package": "xunit*",
+      "owner": "framework-maintainers",
+      "expires": "2027-02-14",
+      "reason": "The suite still uses Xunit.SkippableFact 1.x, which targets xUnit v2. Migrate the test stack and hardware skip gate together rather than mixing runners."
+    },
+    {
+      "kind": "missing-license",
+      "package": "AvaloniaUI.DiagnosticsSupport",
+      "owner": "ui-maintainers",
+      "expires": "2026-11-14",
+      "reason": "Package 2.2.3 omits NuGet license metadata. It is development diagnostics tooling; confirm the vendor terms or remove it before this exception expires."
+    }
+  ]
+}

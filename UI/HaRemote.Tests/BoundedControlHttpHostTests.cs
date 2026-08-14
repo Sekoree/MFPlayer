@@ -88,6 +88,66 @@ public sealed class BoundedControlHttpHostTests
     }
 
     [Fact]
+    public async Task ATokenIgnoringTimedOutDispatchKeepsItsAdmissionSlotUntilItEnds()
+    {
+        var firstDispatch = new TaskCompletionSource<ControlHttpResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var dispatchCount = 0;
+        var options = new ControlHttpHostOptions
+        {
+            Dispatch = (_, _) => Interlocked.Increment(ref dispatchCount) == 1
+                ? firstDispatch.Task
+                : Task.FromResult(new ControlHttpResult(200, "{}")),
+            Error = Err,
+            MaxConcurrentRequests = 1,
+            OverCapacity = OverCapacityPolicy.Refuse,
+            RequestDeadline = TimeSpan.FromMilliseconds(250),
+            DeadlineExceeded = _ => Err(503, "deadline"),
+        };
+        var (host, port) = Start(options);
+        await using (host)
+        {
+            try
+            {
+                using var client = new HttpClient();
+                var timedOut = await client.GetAsync($"http://localhost:{port}/first")
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, timedOut.StatusCode);
+
+                // The caller has its answer, but the dispatch ignored cancellation and is still
+                // live. It must continue occupying the only slot rather than allowing another
+                // dispatch to accumulate behind it.
+                var refused = await client.GetAsync($"http://localhost:{port}/second")
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, refused.StatusCode);
+                Assert.Contains("concurrent-request limit", await refused.Content.ReadAsStringAsync());
+                Assert.Equal(1, Volatile.Read(ref dispatchCount));
+
+                firstDispatch.TrySetResult(new ControlHttpResult(200, "{}"));
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+                HttpResponseMessage? admitted = null;
+                while (DateTime.UtcNow < deadline)
+                {
+                    admitted = await client.GetAsync($"http://localhost:{port}/after");
+                    if (admitted.StatusCode == HttpStatusCode.OK)
+                        break;
+                    admitted.Dispose();
+                    admitted = null;
+                    await Task.Delay(20);
+                }
+
+                Assert.NotNull(admitted);
+                using (admitted)
+                    Assert.Equal(HttpStatusCode.OK, admitted.StatusCode);
+            }
+            finally
+            {
+                firstDispatch.TrySetResult(new ControlHttpResult(200, "{}"));
+            }
+        }
+    }
+
+    [Fact]
     public async Task RefusePolicyAnswers503WhenEverySlotIsTaken()
     {
         var parked = new TaskCompletionSource<ControlHttpResult>(
@@ -234,7 +294,7 @@ public sealed class BoundedControlHttpHostTests
         {
             Dispatch = (_, _) => throw new InvalidOperationException("boom"),
             Error = Err,
-            DispatchFailure = failure => Err(500, $"failed: {failure.Message}"),
+            DispatchFailure = () => Err(500, "the request failed"),
         };
         var (host, port) = Start(options);
         await using (host)
@@ -244,7 +304,9 @@ public sealed class BoundedControlHttpHostTests
                 .WaitAsync(TimeSpan.FromSeconds(10));
 
             Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
-            Assert.Contains("boom", await response.Content.ReadAsStringAsync());
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Contains("request failed", body);
+            Assert.DoesNotContain("boom", body);
         }
     }
 }

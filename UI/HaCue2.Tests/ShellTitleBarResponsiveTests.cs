@@ -68,7 +68,7 @@ public sealed class ShellTitleBarResponsiveTests
             // Overriding the bound text locally simulates the pathological filename without
             // touching the project model; the MaxWidth + trimming contract is on the CONTROL.
             var identity = window.FindControl<TextBlock>("ProjectIdentity")!;
-            identity.Text = new string('滝', 24) + " — the annual gala — rev 17 (FINAL final).hacue2proj";
+            identity.Text = new string('滝', 24) + " - the annual gala - rev 17 (FINAL final).hacue2proj";
             Dispatcher.UIThread.RunJobs();
 
             Assert.True(identity.Bounds.Width <= 220 + 1,

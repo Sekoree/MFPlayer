@@ -226,13 +226,13 @@ public class CueNumberingAndStandbyTests
         var late = Time(() => shell.Cues.AddMedia(Batch("late")));
 
         // Drain before leaving the body. 420 imports queue a lot of dispatcher work, and the PerTest
-        // isolation scope resets the dispatcher the moment this returns — on a loaded win-x64 runner that
+        // isolation scope resets the dispatcher the moment this returns - on a loaded win-x64 runner that
         // reset landed on a queue that was still draining and threw InvalidProgramException, "You've caused
         // dispatcher loop", out of teardown rather than out of anything this test asserts.
         //
         // Draining here, not retrying: the retry in HeadlessDispatchExtensions is deliberately confined to
         // SETUP failures, where the body has provably not run yet. This one fires after the body, so a retry
-        // would re-run it — exactly what that guard's own reasoning rules out.
+        // would re-run it - exactly what that guard's own reasoning rules out.
         Dispatcher.UIThread.RunJobs();
 
         // A SCALING assertion, not a benchmark, so the allowance is deliberately huge - it has to

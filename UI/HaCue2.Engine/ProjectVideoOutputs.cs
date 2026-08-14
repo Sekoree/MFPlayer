@@ -139,8 +139,6 @@ public sealed class ProjectVideoOutputs : IDisposable
             _recorders.Remove(stale.Id);
         }
 
-        _unopened.RemoveWhere(id => !wanted.Contains(id));
-
         var failures = new List<string>();
         var unopened = new HashSet<Guid>();
         var opened = new List<OpenVideoOutput>();
@@ -279,8 +277,11 @@ public sealed class ProjectVideoOutputs : IDisposable
         foreach (var (id, recorder) in recorders)
             _recorders[id] = recorder;
 
-        foreach (var id in unopened)
-            _unopened.Add(id);
+        // This is a snapshot, like Failures below, not a history. In particular, remove an id that
+        // failed on an earlier pass but opened now; leaving it behind kept Identify/calibration and
+        // the status view reporting a recovered projector as absent for the rest of the process.
+        _unopened.Clear();
+        _unopened.UnionWith(unopened);
 
         // Only THIS pass's failures are kept and returned, so the host reports a newly broken output
         // once rather than re-reporting every old one on every edit - and the member list stays the

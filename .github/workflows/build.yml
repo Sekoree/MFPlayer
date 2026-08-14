@@ -34,6 +34,48 @@ permissions:
   contents: read
 
 jobs:
+  dependency-integrity:
+    name: Managed dependency + package integrity
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      SkipProjectMNativeBuild: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      # F-16/F-17: this graph is intentionally independent of Android workloads, so dependency
+      # integrity cannot be hidden by a mobile toolchain problem.
+      - name: Restore non-Android graph
+        run: dotnet restore MFPlayer.NoAndroid.slnf
+
+      - name: Vulnerability and deprecation policy
+        run: scripts/audit-managed-dependencies.sh MFPlayer.NoAndroid.slnf
+
+      - name: Strict Reference cache manifest
+        run: scripts/check-reference-drift.sh --strict
+
+      - name: Generate managed CycloneDX SBOM
+        run: scripts/generate-managed-sbom.sh artifacts/managed-sbom.cdx.json
+
+      # The packages are currently an internal staged-feed contract (Doc/Packages.md), not a public
+      # nuget.org promise. This still proves every first-party dependency is packed and a blank
+      # consumer can restore/build/run without reaching back into project references.
+      - name: Staged-feed package consumer smoke
+        run: scripts/test-package-consumer.sh
+
+      - name: Upload managed SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: managed-sbom
+          path: artifacts/managed-sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+
   build-test:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
@@ -59,13 +101,14 @@ jobs:
         with:
           global-json-file: global.json
 
-      # HaViz.Android (net10.0-android) is in the solution, so `dotnet build MFPlayer.sln` needs the
-      # android workload (NETSDK1147 otherwise). The windows-2025/VS2026 image happens to ship it, but
-      # install explicitly on both legs so the build doesn't depend on image contents. Runners preinstall
-      # ANDROID_HOME + JDK. The vendored NDI SDK (Reference/) is deliberately untracked (NDI license), so
-      # APK packaging skips libndi.so in CI via the Exists() guard in HaViz.Android.csproj.
-      - name: Install Android workload
-        run: dotnet workload install android --skip-manifest-update
+      # HaViz.Android (net10.0-android) is in the solution, so let the SDK restore the COMPLETE workload
+      # set declared by that project rather than assuming `android` is the only pack it needs. Servicing
+      # SDKs can add/update shared Mono/wasm packs; installing one named workload with stale manifests
+      # produced a misleading NETSDK1147 for wasm-tools even though `workload list` showed it installed.
+      # Runners preinstall ANDROID_HOME + JDK. The vendored NDI SDK (Reference/) is deliberately untracked
+      # (NDI license), so APK packaging skips libndi.so in CI via the Exists() guard in HaViz.Android.csproj.
+      - name: Restore declared .NET workloads
+        run: dotnet workload restore UI/HaViz.Android/HaViz.Android.csproj
 
       # The runner image preinstalls ANDROID_HOME but its platform/build-tools set drifts; let the
       # android SDK resolve + install exactly what HaViz.Android targets (API 36). Windows skips this:

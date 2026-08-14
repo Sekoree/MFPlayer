@@ -132,7 +132,7 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
             {
                 if (!_admission.Wait(0))
                 {
-                    _ = RefuseBusyAsync(context);
+                    RefuseBusy(context);
                     continue;
                 }
             }
@@ -170,7 +170,15 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
     {
         try
         {
-            await ServeAsync(context, serverLife).ConfigureAwait(false);
+            var dispatchStillRunning = await ServeAsync(context, serverLife).ConfigureAwait(false);
+            if (dispatchStillRunning is not null)
+            {
+                // The response deadline bounds the caller's wait, not the amount of admitted work.
+                // Keep this slot occupied until a token-ignoring dispatch really ends; otherwise a
+                // stream of timeouts could grow unbounded work while every handler appeared done.
+                try { await dispatchStillRunning.ConfigureAwait(false); }
+                catch { /* ServeAsync already reported the request; this only observes late completion */ }
+            }
         }
         finally
         {
@@ -178,15 +186,16 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
         }
     }
 
-    /// <summary>The over-capacity answer, kept deliberately cheap: no routing, no dispatch, no
-    /// tracked handler - just a 503 and the connection back.</summary>
-    private async Task RefuseBusyAsync(HttpListenerContext context)
+    /// <summary>The over-capacity answer, kept deliberately cheap: no routing, no dispatch, and no
+    /// task allocation that a refusal flood could accumulate. HttpListener owns the asynchronous
+    /// socket flush after the fixed-size payload is handed to it.</summary>
+    private void RefuseBusy(HttpListenerContext context)
     {
         try
         {
-            await WriteAsync(context.Response,
-                    _options.Error(503, "the API is at its concurrent-request limit - retry shortly"))
-                .ConfigureAwait(false);
+            var result = _options.Error(503, "the API is at its concurrent-request limit - retry shortly");
+            var payload = PrepareResponse(context.Response, result);
+            context.Response.Close(payload, willBlock: false);
         }
         catch (Exception failure) when (
             failure is HttpListenerException or IOException or ObjectDisposedException or InvalidOperationException)
@@ -198,7 +207,9 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
         }
     }
 
-    private async Task ServeAsync(HttpListenerContext context, CancellationToken serverLife)
+    /// <returns>A dispatch that outlived its response deadline, if any. The admitted wrapper keeps
+    /// the concurrency slot until this task really completes.</returns>
+    private async Task<Task?> ServeAsync(HttpListenerContext context, CancellationToken serverLife)
     {
         var started = Stopwatch.GetTimestamp();
         var request = context.Request;
@@ -207,6 +218,8 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
         var path = request.Url?.AbsolutePath ?? "/";
         var remote = request.RemoteEndPoint?.ToString() ?? "<unknown>";
         var statusCode = 500;
+        Task<ControlHttpResult>? dispatch = null;
+        Task? dispatchToDrain = null;
 
         try
         {
@@ -218,14 +231,14 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
                 response.StatusCode = statusCode;
                 response.Headers["Allow"] = allowFor(path);
                 TryClose(response);
-                return;
+                return null;
             }
 
             if (TryRejectOversized(request, out var limitStatus, out var limitMessage))
             {
                 statusCode = limitStatus;
                 await WriteAsync(response, _options.Error(limitStatus, limitMessage)).ConfigureAwait(false);
-                return;
+                return null;
             }
 
             var query = ParseQuery(request);
@@ -240,11 +253,13 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
             requestCts.CancelAfter(_options.RequestDeadline);
             try
             {
-                result = await _options.Dispatch(httpRequest, requestCts.Token)
+                dispatch = _options.Dispatch(httpRequest, requestCts.Token);
+                result = await dispatch
                     .WaitAsync(_options.RequestDeadline, serverLife).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
+                dispatchToDrain = dispatch;
                 statusCode = 503;
                 if (_options.DeadlineExceeded?.Invoke(_options.RequestDeadline) is not { } deadlineAnswer)
                 {
@@ -252,25 +267,27 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
                         "request {Method} {Path} from {Remote} exceeded the {Timeout}s deadline",
                         method, path, remote, _options.RequestDeadline.TotalSeconds);
                     TryAbort(response);
-                    return;
+                    return dispatchToDrain;
                 }
 
                 result = deadlineAnswer;
             }
             catch (OperationCanceledException) when (serverLife.IsCancellationRequested)
             {
+                dispatchToDrain = dispatch;
                 statusCode = 503;
                 result = _options.Error(503, "the API is shutting down");
             }
             catch (OperationCanceledException)
             {
+                dispatchToDrain = dispatch;
                 // The linked per-request token fired (a deadline-observing dispatch cancelled
                 // itself) - same answer as the host-side deadline.
                 statusCode = 503;
                 if (_options.DeadlineExceeded?.Invoke(_options.RequestDeadline) is not { } deadlineAnswer)
                 {
                     TryAbort(response);
-                    return;
+                    return dispatchToDrain;
                 }
 
                 result = deadlineAnswer;
@@ -279,11 +296,11 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
             {
                 statusCode = 500;
                 _options.Problem?.Invoke($"remote request failed - {failure.Message}");
-                if (_options.DispatchFailure?.Invoke(failure) is not { } failureAnswer)
+                _log.LogWarning(failure, "request {Method} {Path} from {Remote} failed", method, path, remote);
+                if (_options.DispatchFailure?.Invoke() is not { } failureAnswer)
                 {
-                    _log.LogWarning(failure, "request {Method} {Path} from {Remote} failed", method, path, remote);
                     TryAbort(response);
-                    return;
+                    return null;
                 }
 
                 result = failureAnswer;
@@ -291,11 +308,20 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
 
             statusCode = result.Status;
             await WriteAsync(response, result).ConfigureAwait(false);
+            return dispatchToDrain;
         }
         catch (Exception failure) when (
             failure is HttpListenerException or IOException or ObjectDisposedException or InvalidOperationException)
         {
             // The caller hung up (or the listener is gone). Nothing to report and nothing to do.
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // A host-provided answer shaper or telemetry callback failed. Keep exception details in
+            // diagnostics and abort; never let that secondary failure lose accounting for a late dispatch.
+            _log.LogWarning(failure, "request {Method} {Path} from {Remote} failed while shaping its response",
+                method, path, remote);
+            TryAbort(response);
         }
         finally
         {
@@ -309,6 +335,8 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
                     method, path, remote, statusCode, elapsedMs);
             }
         }
+
+        return dispatchToDrain;
     }
 
     private static Dictionary<string, string> ParseQuery(HttpListenerRequest request)
@@ -362,13 +390,19 @@ public sealed class BoundedControlHttpHost : IAsyncDisposable
 
     private static async Task WriteAsync(HttpListenerResponse response, ControlHttpResult result)
     {
+        var payload = PrepareResponse(response, result);
+        await response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
+    }
+
+    private static byte[] PrepareResponse(HttpListenerResponse response, ControlHttpResult result)
+    {
         var payload = Encoding.UTF8.GetBytes(result.Body);
         response.StatusCode = result.Status;
         response.ContentType = result.ContentType;
         if (result.Allow is { } allow)
             response.Headers["Allow"] = allow;
         response.ContentLength64 = payload.Length;
-        await response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
+        return payload;
     }
 
     private static void TryClose(HttpListenerResponse response)

@@ -39,6 +39,7 @@ public sealed class AudioOutputClockEpochTests
     [SkippableFact]
     public void PortAudio_DeviceLoss_TakesANewEpoch()
     {
+        AudioDeviceTestGate.RequirePortAudio();
         var outputDevice = CreatePortAudioOutputOrSkip();
 
         using (outputDevice)
@@ -78,6 +79,7 @@ public sealed class AudioOutputClockEpochTests
     [SkippableFact]
     public void PortAudio_StartAndFlush_EachTakeANewEpoch()
     {
+        AudioDeviceTestGate.RequirePortAudio();
         var outputDevice = CreatePortAudioOutputOrSkip();
 
         using (outputDevice)

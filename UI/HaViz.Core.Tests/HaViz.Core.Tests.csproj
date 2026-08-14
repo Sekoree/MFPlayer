@@ -16,6 +16,8 @@
 
     <ItemGroup>
         <ProjectReference Include="../HaViz.Core/HaViz.Core.csproj" />
+        <!-- F-23 persistence fault-injection: the settings writer belongs to the desktop head. -->
+        <ProjectReference Include="../HaViz.Desktop/HaViz.Desktop.csproj" />
     </ItemGroup>
 
 </Project>

@@ -125,4 +125,70 @@ public sealed class GoFireIndependenceTests
         Assert.True(session.CueFireTimings.GroupLockWait.MaxMs >= 300,
             $"expected a measured same-group lock wait; max was {session.CueFireTimings.GroupLockWait.MaxMs:0} ms");
     }
+
+    [Fact]
+    public async Task PanicCancelsAGoQueuedBehindASameGroupFire()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("slow", 1, "Slow", PreWait: TimeSpan.FromSeconds(30), GroupId: "g"),
+            ],
+            Clips: [new ShowClipBinding("slow", "fake://slow")],
+            Compositions: [], Routes: []));
+
+        var holdingFire = session.FireCueAsync("slow");
+        await Task.Delay(150); // the explicit fire owns g and is sleeping in its pre-wait
+        var queuedGo = session.GoAsync("g");
+        await Task.Delay(150); // GO is now a semaphore waiter, not yet inside graph.FireAsync
+        Assert.False(queuedGo.IsCompleted);
+
+        await session.StopAllAsync(TimeSpan.Zero).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(CueExecutionStatus.Failed,
+            await holdingFire.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(CueExecutionStatus.Failed,
+            await queuedGo.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task ReloadCancelsAQueuedFireInsteadOfRunningItAgainstTheReplacementGraph()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("slow", 1, "Slow", PreWait: TimeSpan.FromSeconds(30), GroupId: "old"),
+                new CueDefinition("moved", 2, "Moved", GroupId: "old"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("slow", "fake://slow"),
+                new ShowClipBinding("moved", "fake://old"),
+            ],
+            Compositions: [], Routes: []));
+
+        var holdingFire = session.FireCueAsync("slow");
+        await Task.Delay(150);
+        var queuedFire = session.FireCueAsync("moved");
+        await Task.Delay(150);
+        Assert.False(queuedFire.IsCompleted);
+
+        // The replacement moves the cue to a different runtime group. A request whose lock set was
+        // selected from the old graph must be invalidated, never execute the new graph while holding
+        // only the old group's lock.
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 2,
+            Cues: [new CueDefinition("moved", 1, "Moved", GroupId: "new")],
+            Clips: [new ShowClipBinding("moved", "fake://new")],
+            Compositions: [], Routes: [])).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(CueExecutionStatus.Failed,
+            await holdingFire.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(CueExecutionStatus.Failed,
+            await queuedFire.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
 }

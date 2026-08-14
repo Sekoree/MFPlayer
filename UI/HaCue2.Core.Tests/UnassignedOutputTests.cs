@@ -96,11 +96,14 @@ public class UnassignedOutputTests
         using var outputs = ProjectVideoOutputs.OpenAll(project, headless: true);
 
         Assert.Empty(outputs.Leases(project));
+        Assert.Contains(project.VideoOutputs[0].Id, outputs.Unopened);
 
         project.VideoOutputs[0].CompositionId = canvas.Id;
         outputs.Sync(project);
 
         Assert.Single(outputs.Leases(project));
+        Assert.DoesNotContain(project.VideoOutputs[0].Id, outputs.Unopened);
+        Assert.Empty(outputs.Failures);
     }
 
     /// <summary>

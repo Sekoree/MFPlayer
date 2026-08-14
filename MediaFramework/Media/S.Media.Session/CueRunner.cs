@@ -23,9 +23,11 @@ internal sealed class CueRunner
 {
     private readonly ICueRunnerHost _host;
 
-    // The in-flight cue fires (each one's pre/post-wait + open + auto-continue chain), WITH their
+    // The queued and in-flight cue fires (each one's lock wait + pre/post-wait + open + auto-continue
+    // chain), WITH their
     // identity: which cue ids each can start (the fired cues plus their static auto-continue closure)
-    // and which runtime groups those land on. Entries live while a fire runs; read off-dispatcher so
+    // and which runtime groups those land on. Entries live from request admission through execution;
+    // read off-dispatcher so
     // STOP/LOAD/DISPOSE can abort them (NXT-03). The identity is what makes a per-cue or per-group
     // stop surgical: this was a bare single CancellationTokenSource once, and CancelFiresForCue/Group
     // cancelled it UNCONDITIONALLY - so stopping unrelated cue B while cue A sat in its pre-wait or
@@ -95,7 +97,7 @@ internal sealed class CueRunner
     /// caller-synthesized <paramref name="runtimeGroupIds"/>. Never empty - a fire of an unknown cue
     /// still serializes on the default group rather than running unlocked.</summary>
     private IReadOnlyCollection<string> FireLockSet(
-        IEnumerable<string> cueIds, IEnumerable<string>? runtimeGroupIds = null)
+        CueGraph graph, IEnumerable<string> cueIds, IEnumerable<string>? runtimeGroupIds = null)
     {
         var groups = new HashSet<string>(runtimeGroupIds ?? [], StringComparer.Ordinal);
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -103,7 +105,7 @@ internal sealed class CueRunner
         while (walk.Count > 0)
         {
             var id = walk.Pop();
-            if (!seen.Add(id) || !_graph.TryGetCue(id, out var cue))
+            if (!seen.Add(id) || !graph.TryGetCue(id, out var cue))
                 continue;
             groups.Add(cue.GroupId ?? _host.DefaultGroupId);
             if (cue is { AutoContinue: true, FollowOnCueId: not null })
@@ -184,10 +186,19 @@ internal sealed class CueRunner
     // still runs if its open ever returns.
     internal TimeSpan AbandonedBatchDrainTimeout { get; set; } = TimeSpan.FromSeconds(15);
 
-    /// <summary>The live cue graph. Volatile: staged off the dispatcher during a load and swapped in by a
-    /// single atomic reference assignment, so a fire that straddles the load sees one graph or the other -
-    /// never a half-built one.</summary>
-    private volatile CueGraph _graph = new();
+    /// <summary>The live cue graph and its lifetime. A fire captures both: its lock set, identity, and
+    /// execution all use the same graph. Committing a replacement atomically swaps the pair and cancels
+    /// the old lifetime, closing the narrow race where a fire could register after Load's initial
+    /// cancellation but before the graph swap.</summary>
+    private sealed class CueGraphState(CueGraph graph)
+    {
+        public CueGraph Graph { get; } = graph;
+        public CancellationTokenSource Lifetime { get; } = new();
+    }
+
+    private CueGraphState _graphState = new(new CueGraph());
+
+    private CueGraphState CurrentGraphState => Volatile.Read(ref _graphState);
 
     // In-flight explicit crossfade fires' windows, KEYED BY CUE ID: published just before the graph
     // action runs and consumed by that cue's own action. A map rather than a parameter because the
@@ -201,13 +212,13 @@ internal sealed class CueRunner
     public CueRunner(ICueRunnerHost host) => _host = host;
 
     /// <summary>Every cue in the live graph, in registration order.</summary>
-    public IReadOnlyList<CueDefinition> Cues => _graph.Cues;
+    public IReadOnlyList<CueDefinition> Cues => CurrentGraphState.Graph.Cues;
 
     /// <summary>An immutable snapshot of the cue execution log.</summary>
-    public IReadOnlyList<CueExecutionLogEntry> ExecutionLog => _graph.ExecutionLog;
+    public IReadOnlyList<CueExecutionLogEntry> ExecutionLog => CurrentGraphState.Graph.ExecutionLog;
 
     /// <summary>Looks a cue up in the live graph.</summary>
-    public bool TryGetCue(string cueId, out CueDefinition cue) => _graph.TryGetCue(cueId, out cue);
+    public bool TryGetCue(string cueId, out CueDefinition cue) => CurrentGraphState.Graph.TryGetCue(cueId, out cue);
 
     /// <summary>
     /// Builds a replacement cue graph without installing it - each cue wired to the engine's play primitive.
@@ -243,8 +254,14 @@ internal sealed class CueRunner
         return graph;
     }
 
-    /// <summary>Installs a staged graph. One atomic reference assignment - the load's commit point.</summary>
-    public void Commit(CueGraph graph) => _graph = graph;
+    /// <summary>Installs a staged graph. One atomic reference assignment is the load's commit point;
+    /// cancelling the previous graph lifetime prevents any request queued against it from running later.</summary>
+    public void Commit(CueGraph graph)
+    {
+        var previous = Interlocked.Exchange(ref _graphState, new CueGraphState(graph));
+        try { previous.Lifetime.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
 
     /// <summary>Consumes the cue's pending crossfade window, if any. Read once per graph action.</summary>
     private (TimeSpan Duration, FadeShape Curve)? TakePendingFireCrossfade(string cueId) =>
@@ -254,14 +271,17 @@ internal sealed class CueRunner
 
     /// <summary>Runs a cue's fire against the live graph, publishing its crossfade window first.</summary>
     private async Task<CueExecutionStatus> FireOnGraphAsync(
-        string cueId, CancellationToken token, (TimeSpan Duration, FadeShape Curve)? crossfade = null)
+        CueGraph graph,
+        string cueId,
+        CancellationToken token,
+        (TimeSpan Duration, FadeShape Curve)? crossfade = null)
     {
         if (crossfade is { } window)
             _pendingFireCrossfades[cueId] = Tuple.Create(window.Duration, window.Curve);
         var started = Stopwatch.GetTimestamp();
         try
         {
-            return await _graph.FireAsync(cueId, token).ConfigureAwait(false);
+            return await graph.FireAsync(cueId, token).ConfigureAwait(false);
         }
         finally
         {
@@ -279,10 +299,11 @@ internal sealed class CueRunner
     /// </summary>
     /// <remarks>Reads the cursor from the engine, then decides here - "next" is a cue-list question, and a
     /// disabled or unarmed cue is skipped rather than fired (NXT-07).</remarks>
-    private async Task<(CueDefinition? Next, int Generation)> SelectNextGoCueAsync(string groupId, string defaultGroup)
+    private async Task<(CueDefinition? Next, int Generation)> SelectNextGoCueAsync(
+        CueGraph graph, string groupId, string defaultGroup)
     {
         var (cursor, generation) = await _host.ReadGoCursorAsync(groupId).ConfigureAwait(false);
-        var next = _graph.Cues
+        var next = graph.Cues
             .Where(c => (c.GroupId ?? defaultGroup) == groupId && c.Number > cursor && c.Armed && c.Enabled)
             .OrderBy(c => c.Number)
             .FirstOrDefault();
@@ -296,7 +317,8 @@ internal sealed class CueRunner
     /// "next cue" rule, so what a list says it will do and what it then does cannot disagree.</remarks>
     public async Task<CueDefinition?> PeekNextAsync(string groupId)
     {
-        var (next, _) = await SelectNextGoCueAsync(groupId, _host.DefaultGroupId).ConfigureAwait(false);
+        var graph = CurrentGraphState.Graph;
+        var (next, _) = await SelectNextGoCueAsync(graph, groupId, _host.DefaultGroupId).ConfigureAwait(false);
         return next;
     }
 
@@ -304,7 +326,7 @@ internal sealed class CueRunner
     /// <remarks>One before the cue's own number: GO selects the lowest number strictly greater than the
     /// cursor, so parking the cursor just below a cue makes that cue next.</remarks>
     public int? CursorForStandby(string cueId, string groupId, string defaultGroup) =>
-        _graph.TryGetCue(cueId, out var cue)
+        CurrentGraphState.Graph.TryGetCue(cueId, out var cue)
         && string.Equals(cue.GroupId ?? defaultGroup, groupId, StringComparison.Ordinal)
             ? cue.Number - 1
             : null;
@@ -312,7 +334,7 @@ internal sealed class CueRunner
     /// <summary>The next <paramref name="count"/> clip-bound cue ids on a group after <paramref name="cursor"/> -
     /// what the engine pre-rolls so the next GO opens warm.</summary>
     public IReadOnlyList<string> UpcomingCueIds(string groupId, string defaultGroup, int cursor, int count) =>
-        [.. _graph.Cues
+        [.. CurrentGraphState.Graph.Cues
             .Where(c => (c.GroupId ?? defaultGroup) == groupId && c.Number > cursor)
             .OrderBy(c => c.Number)
             .Take(count)
@@ -324,25 +346,30 @@ internal sealed class CueRunner
     public async Task<CueExecutionStatus> FireCueAsync(
         string cueId, (TimeSpan Duration, FadeShape Curve)? crossfade = null)
     {
-        var locks = await AcquireGroupLocksAsync(FireLockSet([cueId])).ConfigureAwait(false);
-        try { return await FireUnderLocksAsync(cueId, crossfade).ConfigureAwait(false); }
-        catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled by stop/load/dispose
-        finally { ReleaseGroupLocks(locks); }
-    }
-
-    /// <summary>The lock-free fire core (the caller MUST hold the fire locks of every group the cue's
-    /// chain can land on): runs the cue graph fire OFF the serial dispatcher (NXT-03) - its
-    /// pre/post-wait and media open no longer park the loop; only the short state commits re-enter it.
-    /// The fire's identity and cancellation source are registered in <see cref="_activeFires"/> so the
-    /// stop forms can abort it surgically; cancellation propagates as
-    /// <see cref="OperationCanceledException"/> (callers map it to a non-advancing result).</summary>
-    private async Task<CueExecutionStatus> FireUnderLocksAsync(
-        string cueId, (TimeSpan Duration, FadeShape Curve)? crossfade = null)
-    {
-        using var cts = new CancellationTokenSource();
-        _activeFires.TryAdd(cts, DescribeFire(cts, [cueId]));
-        try { return await FireOnGraphAsync(cueId, cts.Token, crossfade).ConfigureAwait(false); }
-        finally { _activeFires.TryRemove(cts, out _); }
+        var state = CurrentGraphState;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(state.Lifetime.Token);
+        _activeFires.TryAdd(cts, DescribeFire(state.Graph, cts, [cueId]));
+        IReadOnlyList<SemaphoreSlim>? locks = null;
+        try
+        {
+            // Register BEFORE waiting: panic/load/group-stop must be able to cancel a request queued
+            // behind an earlier same-group fire. The cancellation token also removes it from the
+            // semaphore's waiter queue instead of letting it start after the stop returns.
+            locks = await AcquireGroupLocksAsync(FireLockSet(state.Graph, [cueId]), cts.Token)
+                .ConfigureAwait(false);
+            cts.Token.ThrowIfCancellationRequested();
+            return await FireOnGraphAsync(state.Graph, cueId, cts.Token, crossfade).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return CueExecutionStatus.Failed; // cancelled by stop/load/dispose
+        }
+        finally
+        {
+            _activeFires.TryRemove(cts, out _);
+            if (locks is not null)
+                ReleaseGroupLocks(locks);
+        }
     }
 
     /// <summary>
@@ -352,6 +379,7 @@ internal sealed class CueRunner
     /// groups of an independent/scheduled batch, which are not in the graph.
     /// </summary>
     private ActiveFire DescribeFire(
+        CueGraph graph,
         CancellationTokenSource cts,
         IEnumerable<string> cueIds,
         IEnumerable<string>? runtimeGroupIds = null)
@@ -368,7 +396,7 @@ internal sealed class CueRunner
                 continue;
 
             ids.Add(id);
-            if (!_graph.TryGetCue(id, out var cue))
+            if (!graph.TryGetCue(id, out var cue))
                 continue;
 
             groups.Add(cue.GroupId ?? _host.DefaultGroupId);
@@ -387,20 +415,28 @@ internal sealed class CueRunner
         if (cueIds.Count == 1)
             return [await FireCueAsync(cueIds[0]).ConfigureAwait(false)];
 
-        var locks = await AcquireGroupLocksAsync(FireLockSet(cueIds)).ConfigureAwait(false);
-        using var cts = new CancellationTokenSource();
-        _activeFires.TryAdd(cts, DescribeFire(cts, cueIds));
+        var state = CurrentGraphState;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(state.Lifetime.Token);
+        _activeFires.TryAdd(cts, DescribeFire(state.Graph, cts, cueIds));
+        IReadOnlyList<SemaphoreSlim>? locks = null;
         try
         {
+            locks = await AcquireGroupLocksAsync(FireLockSet(state.Graph, cueIds), cts.Token)
+                .ConfigureAwait(false);
             var fires = new Task<CueExecutionStatus>[cueIds.Count];
             for (var i = 0; i < cueIds.Count; i++)
-                fires[i] = FireForGroupAsync(cueIds[i], cts.Token);
+                fires[i] = FireForGroupAsync(state.Graph, cueIds[i], cts.Token);
             return await Task.WhenAll(fires).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return [.. cueIds.Select(static _ => CueExecutionStatus.Failed)];
         }
         finally
         {
             _activeFires.TryRemove(cts, out _);
-            ReleaseGroupLocks(locks);
+            if (locks is not null)
+                ReleaseGroupLocks(locks);
         }
     }
 
@@ -416,15 +452,18 @@ internal sealed class CueRunner
         if (targets.Count == 0)
             return [];
 
-        var locks = await AcquireGroupLocksAsync(
-                FireLockSet(targets.Select(t => t.CueId), targets.Select(t => t.RuntimeGroupId)),
-                cancellationToken)
-            .ConfigureAwait(false);
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var state = CurrentGraphState;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, state.Lifetime.Token);
         _activeFires.TryAdd(cts, DescribeFire(
-            cts, targets.Select(t => t.CueId), targets.Select(t => t.RuntimeGroupId)));
+            state.Graph, cts, targets.Select(t => t.CueId), targets.Select(t => t.RuntimeGroupId)));
+        IReadOnlyList<SemaphoreSlim>? locks = null;
         try
         {
+            locks = await AcquireGroupLocksAsync(
+                    FireLockSet(state.Graph, targets.Select(t => t.CueId), targets.Select(t => t.RuntimeGroupId)),
+                    cts.Token)
+                .ConfigureAwait(false);
             var startBarrier = new CoordinatedFireBarrier(targets.Count);
             // The second edge: voices commit and fully prepare (decode spin-up, buffer wait, sync
             // present) behind the first barrier, then start their clocks together behind this one.
@@ -462,10 +501,15 @@ internal sealed class CueRunner
                 throw;
             }
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return [.. targets.Select(static _ => CueExecutionStatus.Failed)];
+        }
         finally
         {
             _activeFires.TryRemove(cts, out _);
-            ReleaseGroupLocks(locks);
+            if (locks is not null)
+                ReleaseGroupLocks(locks);
         }
     }
 
@@ -484,22 +528,25 @@ internal sealed class CueRunner
             return [];
         }
 
-        var locks = await AcquireGroupLocksAsync(
-                FireLockSet(targets.Select(t => t.CueId), targets.Select(t => t.RuntimeGroupId)),
-                cancellationToken)
-            .ConfigureAwait(false);
+        var state = CurrentGraphState;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, state.Lifetime.Token);
+        IReadOnlyList<SemaphoreSlim>? locks = null;
         var lockHeld = true;
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _pendingScheduledFires.TryAdd(cts, new PendingScheduledFire(
             [.. targets.Select(t => t.CueId)],
             [.. targets.Select(t => t.RuntimeGroupId)]));
         _activeFires.TryAdd(cts, DescribeFire(
-            cts, targets.Select(t => t.CueId), targets.Select(t => t.RuntimeGroupId)));
+            state.Graph, cts, targets.Select(t => t.CueId), targets.Select(t => t.RuntimeGroupId)));
 
         var releasePrepared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<CueExecutionStatus>[]? fires = null;
         try
         {
+            locks = await AcquireGroupLocksAsync(
+                    FireLockSet(state.Graph, targets.Select(t => t.CueId), targets.Select(t => t.RuntimeGroupId)),
+                    cts.Token)
+                .ConfigureAwait(false);
             var startBarrier = new CoordinatedFireBarrier(targets.Count);
             var preparedEdge = new CoordinatedFireBarrier(targets.Count);
             fires = new Task<CueExecutionStatus>[targets.Count];
@@ -562,7 +609,7 @@ internal sealed class CueRunner
         {
             _pendingScheduledFires.TryRemove(cts, out _);
             _activeFires.TryRemove(cts, out _);
-            if (lockHeld)
+            if (lockHeld && locks is not null)
                 ReleaseGroupLocks(locks);
         }
     }
@@ -570,9 +617,10 @@ internal sealed class CueRunner
     /// <summary>One cue's fire within a <see cref="FireCuesAsync"/> group: maps cancellation to a non-throwing
     /// <see cref="CueExecutionStatus.Failed"/> (so one cancelled cue doesn't fault the whole <c>WhenAll</c>); a
     /// <see cref="CueFaultPolicy.StopShow"/> fault still propagates, matching single-cue fire.</summary>
-    private async Task<CueExecutionStatus> FireForGroupAsync(string cueId, CancellationToken token)
+    private async Task<CueExecutionStatus> FireForGroupAsync(
+        CueGraph graph, string cueId, CancellationToken token)
     {
-        try { return await FireOnGraphAsync(cueId, token).ConfigureAwait(false); }
+        try { return await FireOnGraphAsync(graph, cueId, token).ConfigureAwait(false); }
         catch (OperationCanceledException) { return CueExecutionStatus.Failed; }
     }
 
@@ -645,7 +693,7 @@ internal sealed class CueRunner
         }
     }
 
-    /// <summary>Cancels every in-flight cue fire, WITHOUT marshaling onto the dispatcher - so a stop/load/
+    /// <summary>Cancels every queued or in-flight cue fire, WITHOUT marshaling onto the dispatcher - so a stop/load/
     /// dispose can unblock the serial loop that a long pre-wait or open is parking, then run promptly (NXT-03).
     /// A no-op when nothing is firing. Note: a synchronous, uninterruptible native open still runs to completion;
     /// this preempts the (common) pre/post-wait and any cancellable stage.
@@ -727,41 +775,59 @@ internal sealed class CueRunner
         // deadlock), and re-select, because the cursor may have moved while unlocked. The set only grows
         // and groups are finite, so the loop terminates; the generation check keeps a stale advance a
         // no-op regardless.
+        var state = CurrentGraphState;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(state.Lifetime.Token);
+        _activeFires.TryAdd(cts, new ActiveFire([], [groupId], cts));
         var lockSet = new HashSet<string>(StringComparer.Ordinal) { groupId };
-        while (true)
+        try
         {
-            var locks = await AcquireGroupLocksAsync(lockSet).ConfigureAwait(false);
-            try
+            while (true)
             {
-                // Selection on the dispatcher (reads the cue graph + the group cursor).
-                var selectStarted = Stopwatch.GetTimestamp();
-                var (next, generation) = await SelectNextGoCueAsync(groupId, _host.DefaultGroupId).ConfigureAwait(false);
-                _goSelectTiming.RecordSince(selectStarted);
-                if (next is null)
-                    return CueExecutionStatus.NotReady;
-
-                var needed = FireLockSet([next.Id]);
-                if (!needed.All(lockSet.Contains))
+                var locks = await AcquireGroupLocksAsync(lockSet, cts.Token).ConfigureAwait(false);
+                try
                 {
-                    lockSet.UnionWith(needed);
-                    continue; // finally releases; the loop reacquires the wider set and re-selects
+                    // Selection on the dispatcher (reads the captured cue graph + the group cursor).
+                    var selectStarted = Stopwatch.GetTimestamp();
+                    var (next, generation) = await SelectNextGoCueAsync(
+                            state.Graph, groupId, _host.DefaultGroupId)
+                        .ConfigureAwait(false);
+                    _goSelectTiming.RecordSince(selectStarted);
+                    cts.Token.ThrowIfCancellationRequested();
+                    if (next is null)
+                        return CueExecutionStatus.NotReady;
+
+                    // Publish the selected cue before any wider-lock retry. A targeted cue stop can
+                    // now cancel this queued GO as well as a GO already executing the cue.
+                    _activeFires[cts] = DescribeFire(state.Graph, cts, [next.Id], [groupId]);
+                    var needed = FireLockSet(state.Graph, [next.Id]);
+                    if (!needed.All(lockSet.Contains))
+                    {
+                        lockSet.UnionWith(needed);
+                        continue; // finally releases; the loop reacquires the wider set and re-selects
+                    }
+
+                    // Fire OFF the dispatcher (we already hold every group the chain can land on).
+                    var status = await FireOnGraphAsync(state.Graph, next.Id, cts.Token).ConfigureAwait(false);
+
+                    // Advance the cursor on the dispatcher - only when the cue actually ran (or faulted), never a skip/cancel.
+                    if (status is CueExecutionStatus.Fired or CueExecutionStatus.Failed)
+                        await _host.AdvanceGoCursorAsync(groupId, next.Number, generation).ConfigureAwait(false);
+                    _ = _host.WarmUpcomingAsync(groupId); // pre-roll the next cue(s) in the background so the next GO is instant
+                    return status;
                 }
-
-                // Fire OFF the dispatcher (we already hold every group the chain can land on).
-                CueExecutionStatus status;
-                try { status = await FireUnderLocksAsync(next.Id).ConfigureAwait(false); }
-                catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled - do NOT advance
-
-                // Advance the cursor on the dispatcher - only when the cue actually ran (or faulted), never a skip/cancel.
-                if (status is CueExecutionStatus.Fired or CueExecutionStatus.Failed)
-                    await _host.AdvanceGoCursorAsync(groupId, next.Number, generation).ConfigureAwait(false);
-                _ = _host.WarmUpcomingAsync(groupId); // pre-roll the next cue(s) in the background so the next GO is instant
-                return status;
+                finally
+                {
+                    ReleaseGroupLocks(locks);
+                }
             }
-            finally
-            {
-                ReleaseGroupLocks(locks);
-            }
+        }
+        catch (OperationCanceledException)
+        {
+            return CueExecutionStatus.Failed; // cancelled - do NOT advance
+        }
+        finally
+        {
+            _activeFires.TryRemove(cts, out _);
         }
     }
 }

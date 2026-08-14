@@ -40,9 +40,9 @@ public enum OverCapacityPolicy
 public sealed class ControlHttpHostOptions
 {
     /// <summary>Resolves and carries out one request. Auth is this delegate's first job - the host
-    /// never sees credentials. The token is a linked server-life + request-deadline token; a
-    /// dispatch that observes it cancels at the deadline, one that does not is abandoned by the
-    /// host's deadline answer and runs on to whatever end it was going to have.</summary>
+    /// never sees credentials. The token is a linked server-life + request-deadline token. A
+    /// dispatch that ignores it may continue after the caller receives a deadline answer, but it
+    /// remains charged to its admission slot until it actually finishes.</summary>
     public required Func<ControlHttpRequest, CancellationToken, Task<ControlHttpResult>> Dispatch { get; init; }
 
     /// <summary>Shapes a host-generated refusal (503 over capacity, 431/414 oversize, shutdown)
@@ -50,8 +50,9 @@ public sealed class ControlHttpHostOptions
     public required Func<int, string, ControlHttpResult> Error { get; init; }
 
     /// <summary>Answer for a dispatch that threw. Null (or a null return) aborts the connection
-    /// instead - the policy for apps that must never leak internals to a remote caller.</summary>
-    public Func<Exception, ControlHttpResult?>? DispatchFailure { get; init; }
+    /// instead. The exception is deliberately not passed to this response shaper: details belong
+    /// in the host's diagnostics, never in a remotely visible body.</summary>
+    public Func<ControlHttpResult?>? DispatchFailure { get; init; }
 
     /// <summary>Answer for a dispatch that outlived <see cref="RequestDeadline"/>. Null (or a null
     /// return) aborts the connection instead.</summary>

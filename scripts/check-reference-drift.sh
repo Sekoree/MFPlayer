@@ -8,7 +8,8 @@
 #   UNKNOWN      an on-disk directory scripts/reference-manifest.json does not list
 #   OK / ABSENT  matches its pin / not present locally (absent is fine - fetch on demand)
 #
-# Advisory by default (always exits 0); --strict exits 1 when anything is STALE or UNKNOWN.
+# Advisory by default (always exits 0); --strict exits 1 when anything is STALE, NO-IDENTITY,
+# or UNKNOWN. A rolling clone is not auditable merely because its manifest entry admits that fact.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,6 +50,7 @@ for name in on_disk:
     seen_patterns.add(pattern)
     if name.endswith(("-master", "-main")):
         rows.append(("NO-IDENTITY", name, "a rolling clone carries no version; re-snapshot with a tag"))
+        failures += 1
         continue
     package = entry.get("package")
     if not package:

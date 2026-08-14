@@ -1,66 +1,15 @@
-# Basic (C#) Media Framework & Demo Player App
+# A media playback thing
 
-## Documentation
+### HaPlay
+Sort of a "demo" app for a lot of things this can do. Some parts had some feature creep so now HaCue2 exists.<br>
 
-| Doc | What it covers |
-|---|---|
-| [Quickstart](Doc/MediaFramework-Quickstart.md) | Registry → `MediaPlayer` → audio/video output in a few lines |
-| [Architecture](Doc/MediaFramework-Architecture.md) | Layering, core ideas, ownership/threading rules |
-| [Packages](Doc/Packages.md) | The NuGet surface: entry packages vs feature modules vs low-level bindings |
-| [Native dependencies](Doc/Native-Dependencies.md) | Which natives each feature needs, pins, and acceptance policies |
-| [Release tiers](Doc/Release-Tiers.md) | What full/core/minimal artifacts promise and the gates that enforce it |
-| [Release acceptance](Doc/Release-Acceptance.md) | The automated matrix per push + the hardware checklist per release candidate |
-| [NativeAOT](Doc/NativeAOT.md) | AOT rules, what CI enforces, publishing the C ABI |
-| [Control guides](Doc/HaPlay-Control-Getting-Started.md) | HaPlay show control setup, scripting reference, X32/BCF2000/X-Touch layouts |
-
-Platform policy: **Linux first, Windows supported, macOS currently unsupported** (best-effort code paths only).
-
-## Building
-
-Day-to-day desktop/framework work does not need the Android workload — use the solution filters:
-
-```
-dotnet build MFPlayer.NoAndroid.slnf     # everything except HaViz.Android (no Android workload needed)
-dotnet build MFPlayer.Framework.slnf     # MediaFramework libraries + tests/tools only
-dotnet build MFPlayer.sln                # full solution (requires: dotnet workload install android)
-```
-
-## Testing
-Test builds for Windows and Linux are on the Releases page (the newest release may lag the
-current source version — check the tag against `Directory.Version.props`):<br>
-https://github.com/Sekoree/MFPlayer/releases<br>
-CI also uploads per-commit artifacts (HaPlay full/core/minimal tiers + HaCue2) with launch-gated
-full bundles — see [Release tiers](Doc/Release-Tiers.md).<br>
-
-## Linux show-safe UI mode
-
-On Linux systems where the GLX driver can stall during a window/dialog close, launch HaPlayer with
-`--safe-ui` (or set `HAPLAY_SAFE_UI=1`). This keeps the Avalonia UI on its software renderer while
-video outputs and visualizers continue to use their dedicated rendering paths. The selected mode is
-recorded in the startup log.
-
-## The Framework
-
-Initially this started as a silly way of adding an FFmpeg decoder to [OwnAudioSharp](https://github.com/ModernMube/OwnAudioSharp) which then led to a hacked-together addon that made it play video as well.<br>
-Realizing that was a bad idea but liking OwnAudioSharp's overall structure, this came to be.<br>
-<br>
-### Core Stuff
-Decoding is done via FFmpeg and then fed through various syncing layers to either PortAudio for audio or SDL3, Avalonia or NDI outputs for video (Yes I know NDI audio too).<br>
-A bit of mixing functionality for (mostly audio) to route N amount of channel to M amount of outputs.<br>
-- See the Media Player and Cue Player of the HaPlayer demo app<br>
-
-### Core Extras
-Mainly the composition things. Helpful when just displaying one type of media at a time isn't enough, supporting layers, images, text including positioning.<br>
-See Cue Player stuff in the HaPlayer demo app<br>
-
-### Other Extras
-Aka. the OSC and MIDI library. Why? I'm forced to use tablet mixers at work currently, so these are for gluing random MIDI controllers to mixer OSC commands.<br>
-Also I love [Mond](https://github.com/Rohansi/Mond), an extremely cool scripting runtime for .Net that does support NativeAOT.<br>
-- See the Control parts of the HaPlayer demo app<br>
-
-### HaPlayer
-Started out as a quick and dirty way to test playback and all sorts of functions.<br>
-By now it has grown into a real operator-facing app: workspace sidebar, media/cue/soundboard players, edit-mode gating, output mapping, session recovery, and a LAN/controller remote surface. Rough edges remain, but the "test harness" days are over.<br>
+### HaCue2
+Silly cue player with lots of input and output options. Current theme is a bit dark so might need a bit of work in the future.<br>
+Things mostly work as one expects, it still needs some docs but for the most part its:
+- Audio: Media Cue with audio -> Cue audio matrix -> Virtual Output -> Virtual-to-Physical audio matrix -> Physical Output<br>
+- Video: Media Cue with video -> Placement on Composition -> Composition -> Real video output<br>
+  - A Composition can be an intermediary video surface, real video outputs can display it either in full or only parts of it.
+  - Multiple real outputs can display the same Composition.
 
 ### Disclaimer
 I did use a lot of AI tools for this, mainly to experiment to see what's possible (or the usual ffmpeg boilerplate to get stream data etc. or OpenGL shaders).<br>

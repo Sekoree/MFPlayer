@@ -32,8 +32,12 @@ public sealed record HaVizDesktopSettings
     /// F-23: an unreadable MAIN file first falls back to the one-deep <c>.bak</c> the atomic save
     /// keeps, so a write torn by power loss costs one save, not the box's device picks.</summary>
     public static HaVizDesktopSettings Load()
+        => LoadFrom(SettingsPath);
+
+    /// <summary>Path-injected core for recovery/fault tests; production uses <see cref="Load()"/>.</summary>
+    internal static HaVizDesktopSettings LoadFrom(string path)
     {
-        return TryRead(SettingsPath) ?? TryRead(SettingsPath + ".bak") ?? new HaVizDesktopSettings();
+        return TryRead(path) ?? TryRead(path + ".bak") ?? new HaVizDesktopSettings();
 
         static HaVizDesktopSettings? TryRead(string path)
         {
@@ -53,11 +57,14 @@ public sealed record HaVizDesktopSettings
     /// F-23: writes through a unique flushed temp file and an atomic replace that keeps the previous
     /// good file as <c>.bak</c> - the old bare <c>File.Create</c> could tear the ONLY copy.</summary>
     public void Save()
+        => SaveTo(SettingsPath);
+
+    /// <summary>Path-injected atomic writer for recovery/fault tests; production uses <see cref="Save()"/>.</summary>
+    internal void SaveTo(string path)
     {
         var temp = (string?)null;
         try
         {
-            var path = SettingsPath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))

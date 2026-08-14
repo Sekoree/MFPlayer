@@ -64,4 +64,76 @@ public sealed class IdleImageFaultTests
             File.Delete(garbage);
         }
     }
+
+    [Fact]
+    public async Task AnUnchangedBrokenIdleImageIsReportedOnceNotOncePerReload()
+    {
+        var fixture = new TestProject();
+        var garbage = Path.Combine(
+            Path.GetTempPath(), $"hacue2-persistent-corrupt-idle-{Guid.NewGuid():N}.png");
+        await File.WriteAllTextAsync(garbage, "永 not an image");
+
+        try
+        {
+            fixture.Cyc.IdleImagePath = garbage;
+            await using var host = await ShowHost.StartAsync(
+                fixture.Project, backend: null, headless: true);
+
+            int IdleProblems() => host.Problems.Count(problem =>
+                problem.Contains("idle image", StringComparison.OrdinalIgnoreCase));
+
+            var reported = IdleProblems();
+            Assert.Equal(1, reported);
+
+            // Edits reload the document debounced at ~300 ms; an operator typing a label produces a
+            // stream of these. A broken slate whose file has not changed must not re-decode and
+            // re-report on each one - its failed signature holds until the file itself changes.
+            await host.ReloadAsync(fixture.Project);
+            await host.ReloadAsync(fixture.Project);
+
+            Assert.Equal(reported, IdleProblems());
+            Assert.Equal(0, host.CachedIdleFrameCount);
+        }
+        finally
+        {
+            File.Delete(garbage);
+        }
+    }
+
+    [Fact]
+    public async Task AFailedIdleDecodeIsRetriedWhenTheFileAtTheSamePathIsRepaired()
+    {
+        var fixture = new TestProject();
+        var image = Path.Combine(Path.GetTempPath(), $"hacue2-repaired-idle-{Guid.NewGuid():N}.ppm");
+        await File.WriteAllTextAsync(image, "not an image");
+
+        try
+        {
+            fixture.Cyc.IdleImagePath = image;
+            await using var host = await ShowHost.StartAsync(
+                fixture.Project, backend: null, headless: true);
+
+            Assert.Equal(0, host.CachedIdleFrameCount);
+
+            // A tiny binary PPM is understood by FFmpeg and deliberately differs in size/stamp from
+            // the corrupt placeholder. The authored path itself does not change.
+            await File.WriteAllBytesAsync(image,
+            [
+                (byte)'P', (byte)'6', (byte)'\n',
+                (byte)'2', (byte)' ', (byte)'1', (byte)'\n',
+                (byte)'2', (byte)'5', (byte)'5', (byte)'\n',
+                255, 0, 0, 0, 255, 0,
+            ]);
+            File.SetLastWriteTimeUtc(image, DateTime.UtcNow.AddSeconds(1));
+
+            await host.ReloadAsync(fixture.Project);
+
+            Assert.Equal(1, host.CachedIdleFrameCount);
+            _ = await host.SnapshotAsync();
+        }
+        finally
+        {
+            File.Delete(image);
+        }
+    }
 }

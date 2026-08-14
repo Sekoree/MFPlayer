@@ -45,18 +45,20 @@ public sealed class AudioBackendConformanceTests(ITestOutputHelper output)
 
     // ---- enumeration ---------------------------------------------------------------------------
 
-    [Theory]
+    [SkippableTheory]
     [MemberData(nameof(Backends))]
     public void EnumerateOutputDevices_ReturnsAWellFormedList(string name)
     {
+        RequirePortAudioHardware(name);
         if (TryEnumerate(() => Create(name).EnumerateOutputDevices(), name, "output") is { } devices)
             AssertWellFormed(devices);
     }
 
-    [Theory]
+    [SkippableTheory]
     [MemberData(nameof(Backends))]
     public void EnumerateInputDevices_ReturnsAWellFormedList(string name)
     {
+        RequirePortAudioHardware(name);
         if (TryEnumerate(() => Create(name).EnumerateInputDevices(), name, "input") is { } devices)
             AssertWellFormed(devices);
     }
@@ -72,10 +74,11 @@ public sealed class AudioBackendConformanceTests(ITestOutputHelper output)
 
     // ---- format + lifecycle --------------------------------------------------------------------
 
-    [Theory]
+    [SkippableTheory]
     [MemberData(nameof(Backends))]
     public void CreateOutput_OnDefaultDevice_StartsWithAUsableFormat_AndDisposesCleanly(string name)
     {
+        RequirePortAudioHardware(name);
         var output = TryOpenDefault(Create(name), name);
         if (output is null)
             return;
@@ -90,10 +93,11 @@ public sealed class AudioBackendConformanceTests(ITestOutputHelper output)
         }
     }
 
-    [Theory]
+    [SkippableTheory]
     [MemberData(nameof(Backends))]
     public void CreateOutput_RepeatedOpenDispose_IsStable(string name)
     {
+        RequirePortAudioHardware(name);
         var backend = Create(name);
         // First open decides availability; if there's no device, skip the whole loop.
         var first = TryOpenDefault(backend, name);
@@ -121,10 +125,11 @@ public sealed class AudioBackendConformanceTests(ITestOutputHelper output)
         Assert.Throws<ArgumentException>(() => backend.CreateOutput("not-a-device-index", StandardFormat));
     }
 
-    [Theory]
+    [SkippableTheory]
     [MemberData(nameof(Backends))]
     public void CreateOutput_OnAnUnknownDevice_FailsControllably_NotSilently(string name)
     {
+        RequirePortAudioHardware(name);
         // A device id that cannot exist must not crash the process: the backend rejects it up front (PortAudio
         // parses an out-of-range index), fails when opening it, or falls back to a real default device. Any of
         // those is acceptable; a hang or a fatal crash is not.
@@ -139,6 +144,12 @@ public sealed class AudioBackendConformanceTests(ITestOutputHelper output)
         {
             Assert.False(ex is OutOfMemoryException or StackOverflowException, "unexpected fatal exception kind");
         }
+    }
+
+    private static void RequirePortAudioHardware(string name)
+    {
+        if (name == "PortAudio")
+            AudioDeviceTestGate.RequirePortAudio();
     }
 
     // ---- device-availability gating (codebase convention: early-return, reason logged) ---------

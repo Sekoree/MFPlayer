@@ -9,7 +9,7 @@ namespace S.Media.Stream.Http.Tests;
 /// </summary>
 /// <remarks>
 /// Every live-stream test here goes live through an encode session, so each one dies at
-/// <c>LiveStreamOptions.Validate</c> on a runner whose FFmpeg does not match the bindings — eleven copies of
+/// <c>LiveStreamOptions.Validate</c> on a runner whose FFmpeg does not match the bindings - eleven copies of
 /// one environment fault, none of them about HTTP, mounts or the carrier. Mirrors the attribute of the same
 /// name in <c>S.Media.Decode.FFmpeg.Tests</c> and <c>S.Media.Encode.FFmpeg.Tests</c>.
 /// </remarks>

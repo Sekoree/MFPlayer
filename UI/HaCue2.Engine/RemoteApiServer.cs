@@ -57,9 +57,9 @@ public sealed class RemoteApiServer : IAsyncDisposable
     private BoundedControlHttpHost? _http;
 
     /// <summary>A dispatch that has not answered in this long is stuck behind something (a wedged
-    /// open under a GO, most plausibly); the CALLER gets a 503 and can retry, while the underlying
-    /// transport call runs on to whatever end it was going to have. Settable so a test can prove the
-    /// deadline without waiting half a minute; production never writes it. Read at
+    /// open under a GO, most plausibly); the CALLER gets a 503 and can retry. A transport call that
+    /// cannot observe cancellation may run on, but remains charged to the host's admission bound
+    /// until it ends. Settable so a test can prove the deadline without waiting half a minute. Read at
     /// <see cref="StartAsync"/> time.</summary>
     internal TimeSpan RequestDeadline { get; set; } = TimeSpan.FromSeconds(30);
 
@@ -111,19 +111,22 @@ public sealed class RemoteApiServer : IAsyncDisposable
         {
             // Deadlined, and cancelled by server shutdown: a dispatch stuck behind a wedged
             // transport call answers the CALLER with a 503 instead of holding the connection (and
-            // shutdown) open indefinitely. The abandoned dispatch runs on; its verb is the same one
-            // the UI buttons call and owns its own recovery. (HandleAsync takes no token - the
-            // host's WaitAsync bound is what answers the caller.)
-            Dispatch = (request, _) => ToHostResult(
-                HandleAsync(request.Method, request.Path, request.Header("X-HaCue2-Token"))),
+            // shutdown) open indefinitely. The token prevents work that has already expired from
+            // entering a transport verb; once a verb has started, the shared host keeps it inside
+            // the admission bound until it really ends.
+            Dispatch = (request, cancellationToken) => ToHostResult(
+                HandleAsync(
+                    request.Method,
+                    request.Path,
+                    request.Header("X-HaCue2-Token"),
+                    cancellationToken)),
             Error = (status, message) => ToHostResult(Error(status, message)),
             DeadlineExceeded = budget => ToHostResult(
                 Error(503, $"the request did not complete within {budget.TotalSeconds:0} s")),
-            // The reason rides along: the API is token-gated, and a controller integrator staring
-            // at a bare "could not be completed" has no way to tell a show fault from their own
-            // request. (The slot-collision incident fired 12 of 13 cues and answered exactly that.)
-            DispatchFailure = failure => ToHostResult(
-                Error(500, $"the request could not be completed - {failure.Message}")),
+            // Keep the remote answer generic: exception details can contain paths/device names and
+            // belong in the structured host log plus the local Problem event, not on the wire.
+            DispatchFailure = () => ToHostResult(
+                Error(500, "the request could not be completed")),
             // Late-bound: subscribers may attach after StartAsync.
             Problem = message => Problem?.Invoke(message),
             OverCapacity = OverCapacityPolicy.Refuse,
@@ -165,8 +168,13 @@ public sealed class RemoteApiServer : IAsyncDisposable
     /// a known path with the wrong verb is a mistake about HOW to call it, and collapsing them into one
     /// answer sends people looking in the wrong place.
     /// </remarks>
-    public async Task<RemoteApiResult> HandleAsync(string method, string path, string? token)
+    public async Task<RemoteApiResult> HandleAsync(
+        string method,
+        string path,
+        string? token,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         // A missing configured token REFUSES every call rather than waving them through. The app
         // always supplies one (AppSettings.EnsureRemoteToken mints it), so this can only be reached by
         // a hand-edited settings file or a future call site - and either of those combined with
@@ -193,17 +201,21 @@ public sealed class RemoteApiServer : IAsyncDisposable
         route.Count();
         LastCall = $"{method} {path} · {DateTime.Now:HH:mm:ss}";
 
-        return await DispatchAsync(route, segments).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return await DispatchAsync(route, segments, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<RemoteApiResult> DispatchAsync(RemoteApiRoute route, string[] segments)
+    private async Task<RemoteApiResult> DispatchAsync(
+        RemoteApiRoute route, string[] segments, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var project = _project();
 
         switch (route.Pattern)
         {
             case "/api/v1/status":
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var state = await _host.SnapshotAsync().ConfigureAwait(false);
 
                 return new RemoteApiResult(200, JsonSerializer.Serialize(
@@ -240,6 +252,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
                 if (Find(project.CueLists, segments[3], list => list.Id, list => list.Name) is not { } list)
                     return Error(404, $"no cue list '{segments[3]}'");
 
+                cancellationToken.ThrowIfCancellationRequested();
                 var fired = await _host.GoAsync(list).ConfigureAwait(false);
                 return Ack(new RemoteAck(Fired: fired?.ToString(), Ok: fired is not null));
             }
@@ -249,6 +262,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
                 if (!Guid.TryParse(segments[3], out var cueId) || project.FindCue(cueId) is null)
                     return Error(404, $"no cue '{segments[3]}'");
 
+                cancellationToken.ThrowIfCancellationRequested();
                 var ok = await _host.FireAsync(cueId).ConfigureAwait(false);
                 return Ack(new RemoteAck(Fired: ok ? cueId.ToString() : null, Ok: ok));
             }
@@ -258,6 +272,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
                 if (!Guid.TryParse(segments[3], out var cueId) || project.FindCue(cueId) is null)
                     return Error(404, $"no cue '{segments[3]}'");
 
+                cancellationToken.ThrowIfCancellationRequested();
                 await _host.StopCueAsync(cueId).ConfigureAwait(false);
                 return Ack(new RemoteAck(Stopped: cueId.ToString(), Ok: true));
             }
@@ -268,6 +283,7 @@ public sealed class RemoteApiServer : IAsyncDisposable
                     || project.ListOf(cueId) is not { } owner)
                     return Error(404, $"no cue '{segments[3]}'");
 
+                cancellationToken.ThrowIfCancellationRequested();
                 var moved = await _host.StandbyAsync(owner, cueId).ConfigureAwait(false);
                 return Ack(new RemoteAck(
                     Standby: moved ? cueId.ToString() : null,
@@ -276,14 +292,17 @@ public sealed class RemoteApiServer : IAsyncDisposable
             }
 
             case "/api/v1/transport/stop":
+                cancellationToken.ThrowIfCancellationRequested();
                 await _host.StopAllAsync().ConfigureAwait(false);
                 return Ack(new RemoteAck(Ok: true));
 
             case "/api/v1/transport/panic":
+                cancellationToken.ThrowIfCancellationRequested();
                 await _host.PanicAsync().ConfigureAwait(false);
                 return Ack(new RemoteAck(Ok: true));
 
             case "/api/v1/transport/pause":
+                cancellationToken.ThrowIfCancellationRequested();
                 await _host.SetPausedAsync(!_host.IsPaused).ConfigureAwait(false);
                 return Ack(new RemoteAck(Paused: _host.IsPaused, Ok: true));
 
