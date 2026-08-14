@@ -486,6 +486,25 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             compositorFactory: ShowSessionWiring.CreateCompositor,
             effectRegistry: BuildEffectRegistry());
         var host = new ShowHost(registry, bay, screens, session, runtimeProject);
+
+        try
+        {
+            return await StartCoreAsync(host, runtimeProject, context).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The host owns the bay, the screens, the session and the registry from the moment it is
+            // constructed. A start that faults after this point used to throw PAST them - the audio
+            // devices and windows it had already opened were held until process exit, and a second
+            // start attempt then found its own devices busy.
+            await host.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task<ShowHost> StartCoreAsync(
+        ShowHost host, HaCueProject runtimeProject, ShowCompileContext context)
+    {
         host.SetActiveCueList(runtimeProject.CueLists.FirstOrDefault()?.Id);
 
         // External input drives the show through the SAME verbs the buttons do - a triggered GO is a
@@ -493,13 +512,13 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         host._triggers.Triggered += action => _ = host.ApplyAsync(action);
         host._triggers.Problem += host.Report;
 
-        foreach (var failure in screens.Failures)
+        foreach (var failure in host._screens.Failures)
             host.Report(failure);
 
         // The bay collects these the same way the screens do, and they were the ONLY failure list
         // nobody reported: a line that failed to open left the show silently silent - the log for
         // the incident session showed no device activity at all and no reason why.
-        foreach (var failure in bay.Failures)
+        foreach (var failure in host._bay.Failures)
             host.Report($"audio line {failure}");
 
         // A rig that records every performance says so in the document; everything else waits for the
@@ -513,20 +532,20 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         // Sounding is tracked HERE rather than queried: the session's sounding bus is keyed by label,
         // and the events that matter carry the cue id. A fire adds, a natural end removes, and a stop
         // clears - which is the whole life of a cue as far as the cue list is concerned.
-        session.ClipNaturallyEnded += id => host.OnClipNaturallyEnded(id);
-        session.ClipApproachingEnd += id => host.OnClipApproachingEnd(id);
+        host._session.ClipNaturallyEnded += id => host.OnClipNaturallyEnded(id);
+        host._session.ClipApproachingEnd += id => host.OnClipApproachingEnd(id);
 
         // A crossfade's outgoing cue never reaches a natural end - it left the transport when the next
         // item took over - so this is the only thing that says it stopped. Forget, not the natural-end
         // path: the run that displaced it has already moved on, and putting a tail through the executor
         // would advance the playlist a second time. Without it the first item of every crossfaded
         // playlist stayed in the Active panel for the rest of the show, its clock counting up.
-        session.ClipTailEnded += id => host.Forget(id);
-        session.VoiceEnded += id => host.Forget(id);
+        host._session.ClipTailEnded += id => host.Forget(id);
+        host._session.VoiceEnded += id => host.Forget(id);
 
         // A preview that runs to its end releases itself, so the host has to stop claiming it is
         // auditioning - otherwise the button stays lit over a rig that is already silent.
-        session.PreviewEnded += id =>
+        host._session.PreviewEnded += id =>
         {
             if (!Guid.TryParse(id, out var previewed))
                 return;
@@ -790,18 +809,50 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             foreach (var failure in _screens.Sync(next))
                 Report(failure);
 
-            await AttachScreensAsync().ConfigureAwait(false);
-            await ApplyIdleFramesAsync(next, context.ProjectPath).ConfigureAwait(false);
-            await RestoreCalibrationPatternsAsync().ConfigureAwait(false);
-            await RetireDeletedVisualizersAsync(next).ConfigureAwait(false);
-            await _triggers.ReloadAsync(next).ConfigureAwait(false);
-            _recorders.Adopt(next);
-            _actions.Adopt(next);
+            // Each tail step is isolated: past this point the document swap has already happened, and
+            // one subsystem refusing its share of the reload (an idle image that will not decode, a
+            // trigger port that will not reopen) must cost a reported line, not the steps behind it -
+            // an abort here used to leave triggers, recorders and actions still on the OLD document.
+            await ReloadStepAsync("video outputs", AttachScreensAsync).ConfigureAwait(false);
+            await ReloadStepAsync(
+                "idle frames", () => ApplyIdleFramesAsync(next, context.ProjectPath)).ConfigureAwait(false);
+            await ReloadStepAsync(
+                "calibration patterns", RestoreCalibrationPatternsAsync).ConfigureAwait(false);
+            await ReloadStepAsync(
+                "visualizers", () => RetireDeletedVisualizersAsync(next)).ConfigureAwait(false);
+            await ReloadStepAsync("trigger inputs", () => _triggers.ReloadAsync(next)).ConfigureAwait(false);
+            await ReloadStepAsync("recorders", () =>
+            {
+                _recorders.Adopt(next);
+                return Task.CompletedTask;
+            }).ConfigureAwait(false);
+            await ReloadStepAsync("action endpoints", () =>
+            {
+                _actions.Adopt(next);
+                return Task.CompletedTask;
+            }).ConfigureAwait(false);
             return true;
         }
         finally
         {
             _reloading.Release();
+        }
+    }
+
+    /// <summary>One tail step of a reload: reported by name on failure, never fatal to its siblings.</summary>
+    private async Task ReloadStepAsync(string step, Func<Task> action)
+    {
+        try
+        {
+            await action().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_life.IsCancellationRequested)
+        {
+            // The show is going down; the reload's remaining steps are moot and not a fault.
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            Report($"reload could not update {step} - {failure.Message}");
         }
     }
 

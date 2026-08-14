@@ -584,10 +584,26 @@ public partial class ShellViewModel : ObservableObject
         if (Host is not { } host)
             return "the show is not running";
 
-        foreach (var child in group.Children)
+        // The whole SUBTREE, not only direct children: a timeline can hold a nested group, and firing
+        // that group at its offset starts grandchildren the direct walk never reached - so the scene's
+        // ⏹ left them playing. Depth-first, children before their group, so a nested playlist's
+        // current item is released before anything could advance it.
+        foreach (var child in Subtree(group))
             await host.StopCueAsync(child.Id).ConfigureAwait(true);
 
         return null;
+
+        static IEnumerable<CueNode> Subtree(GroupCueNode parent)
+        {
+            foreach (var child in parent.Children)
+            {
+                if (child is GroupCueNode nested)
+                    foreach (var descendant in Subtree(nested))
+                        yield return descendant;
+
+                yield return child;
+            }
+        }
     }
 
     /// <summary>
@@ -928,30 +944,60 @@ public partial class ShellViewModel : ObservableObject
     /// </remarks>
     public event Action<string>? Saved;
 
+    /// <summary>One save at a time: a double Ctrl+S queues rather than interleaving two writes.</summary>
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
+
     /// <summary>Saves to a path the operator chose, and adopts it.</summary>
+    /// <remarks>
+    /// The document is serialized HERE, on the UI thread, together with the journal revision - one
+    /// atomic reading of "what is being saved". The UI stays editable while the bytes go to disk, so
+    /// an edit can land mid-write; <see cref="ProjectJournal.MarkSavedIfCurrent"/> then keeps the
+    /// document dirty (and its recovery copies alive) instead of calling it clean while it differs
+    /// from the file - which is how a save that "worked" used to lose the edit made during it.
+    /// </remarks>
     public async Task SaveToAsync(string path)
     {
-        var result = await ProjectFiles.SaveAsync(Project, ProjectFiles.WithExtension(path))
-            .ConfigureAwait(true);
+        await _saveGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            var revision = Journal.Revision;
+            var json = HaCueProjectFile.Serialize(Project);
+            var result = await ProjectFiles.SaveSerializedAsync(json, ProjectFiles.WithExtension(path))
+                .ConfigureAwait(true);
 
-        FileMessage = result.Message;
+            FileMessage = result.Message;
 
-        if (!result.Succeeded)
-            return;
+            if (!result.Succeeded)
+                return;
 
-        Path = result.Path;
-        Machine.Media.Refresh(Project, ProjectPath);
-        // Clean means "matches the file", so this is the ONE place the flag may be cleared: after a
-        // write that actually happened.
-        Journal.MarkSaved();
+            Path = result.Path;
+            Machine.Media.Refresh(Project, ProjectPath);
 
-        // The autosaves described a document that no longer differs from its file. Keeping them would
-        // offer a recovery at the next launch for work that is already saved, which teaches the
-        // operator to dismiss the banner without reading it.
-        RecoveryStore.Clear(Path, Project.Title);
-        Refresh();
-        RaisePathProperties();
-        Saved?.Invoke(Path);
+            // Clean means "matches the file", so it may only be recorded when the document still IS
+            // the snapshot that reached the disk.
+            if (Journal.MarkSavedIfCurrent(revision))
+            {
+                // The autosaves described a document that no longer differs from its file. Keeping
+                // them would offer a recovery at the next launch for work that is already saved,
+                // which teaches the operator to dismiss the banner without reading it.
+                RecoveryStore.Clear(Path, Project.Title);
+            }
+            else
+            {
+                // The file is valid and holds the captured snapshot; the edits made during the write
+                // are simply not in it yet. Dirty stays on, recovery stays armed, and the operator is
+                // told why the title still shows the marker they expected to disappear.
+                FileMessage = $"{result.Message} · an edit landed during the save - save again to include it";
+            }
+
+            Refresh();
+            RaisePathProperties();
+            Saved?.Invoke(Path);
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
     }
 
     /// <summary>Adopts a path for a project that was just opened from it.</summary>

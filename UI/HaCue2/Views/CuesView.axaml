@@ -255,9 +255,12 @@
                            Text="{Binding Label}" />
               </DataTemplate>
 
+              <!-- The column truncates freely (a media path or a snapshot name is longer than any
+                   sensible column), so the untruncated text rides the tooltip. -->
               <DataTemplate x:Key="SourceCell" x:DataType="vm:CueRow">
                 <TextBlock Classes="src" Margin="0,0,8,0" VerticalAlignment="Center"
-                           Classes.is-broke="{Binding IsBroken}" Text="{Binding Source}" />
+                           Classes.is-broke="{Binding IsBroken}" Text="{Binding Source}"
+                           ToolTip.Tip="{Binding Source}" />
               </DataTemplate>
 
               <DataTemplate x:Key="FadeCell" x:DataType="vm:CueRow">

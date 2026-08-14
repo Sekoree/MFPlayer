@@ -131,6 +131,31 @@ public static class ProjectFiles
         }
     }
 
+    /// <summary>
+    /// Writes an already-serialized document - the shell's save path.
+    /// </summary>
+    /// <remarks>
+    /// The shell serializes on the UI thread (an atomic read of the document) and records the journal
+    /// revision at that same moment, so it can refuse to call the document clean if an edit landed
+    /// while these bytes were still being written. Passing the string rather than the project is what
+    /// guarantees the file holds exactly the captured snapshot.
+    /// </remarks>
+    public static async Task<ProjectFileResult> SaveSerializedAsync(string json, string path)
+    {
+        if (path.Length == 0)
+            return ProjectFileResult.Cancelled;
+
+        try
+        {
+            await HaCueProjectFile.SaveSerializedAsync(json, path).ConfigureAwait(false);
+            return new ProjectFileResult(true, path, $"saved {Path.GetFileName(path)}");
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            return ProjectFileResult.Failed($"could not save - {failure.Message}");
+        }
+    }
+
     /// <summary>Adds the project's own extension when the operator did not type one.</summary>
     public static string WithExtension(string path) =>
         path.EndsWith(Extension, StringComparison.OrdinalIgnoreCase) ? path : path + Extension;

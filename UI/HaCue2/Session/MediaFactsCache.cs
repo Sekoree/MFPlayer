@@ -6,7 +6,7 @@ using HaCue2.Machine;
 namespace HaCue2.Session;
 
 /// <summary>
-/// What every cue's media turned out to be, asked once and kept.
+/// What every cue's media turned out to be, asked once per file IDENTITY and kept.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -20,10 +20,22 @@ namespace HaCue2.Session;
 /// yet reads "-", which is the same thing the shell said before any of this existed: the honest
 /// answer to "how long is it" is "nobody has looked".
 /// </para>
+/// <para>
+/// An answer is keyed by what the file IS, not only by where it is: the path plus its length and
+/// last-write time. Re-exporting a file over the same name is the normal workflow mid-production,
+/// and a cache keyed by path alone kept the OLD duration and stream identities for the rest of the
+/// session - out-points compiled against the wrong length, and a re-mux that reordered streams
+/// silently played the wrong track. The same stamp also notices a file that APPEARS after being
+/// probed as missing, so copying media in no longer needs an app restart to clear the broken badge.
+/// This is the same rule <see cref="WaveformCache"/> has always followed, for the same reason.
+/// </para>
 /// </remarks>
 public sealed class MediaFactsCache
 {
-    private readonly Dictionary<string, MediaFacts> _byPath = [];
+    /// <summary>What the file was when its answer was recorded; null when it did not exist.</summary>
+    private readonly record struct FileStamp(long Length, long LastWriteTicks);
+
+    private readonly Dictionary<string, (MediaFacts Facts, FileStamp? Stamp)> _byPath = [];
     private readonly HashSet<string> _inFlight = [];
     private readonly Lock _gate = new();
 
@@ -34,7 +46,7 @@ public sealed class MediaFactsCache
     public MediaFacts? Facts(string path)
     {
         lock (_gate)
-            return _byPath.TryGetValue(path, out var facts) ? facts : null;
+            return _byPath.TryGetValue(path, out var known) ? known.Facts : null;
     }
 
     /// <summary>Cue ids whose media could not be opened - what <see cref="ShowRuntime.Broken"/> wants.</summary>
@@ -153,31 +165,45 @@ public sealed class MediaFactsCache
         && Path.IsPathRooted(MediaPaths.Resolve(project, path, projectPath));
 
     /// <summary>
-    /// Probes every media file the project references that has not been looked at yet.
+    /// Probes every referenced media file whose answer is missing OR stale.
     /// </summary>
     /// <remarks>
     /// Fire and forget by design - the caller carries on drawing and the answers arrive through
-    /// <see cref="Changed"/>. Paths already in flight are skipped, so calling this on every document
-    /// edit costs nothing after the first pass.
+    /// <see cref="Changed"/>. A path whose recorded stamp still matches the file on disk is skipped,
+    /// so calling this on every document edit costs a stat per referenced file and nothing more; a
+    /// file that changed (or appeared, or vanished) since its last probe is asked again.
     /// </remarks>
     public void Refresh(HaCueProject project, string? projectPath = null)
     {
-        var pending = new List<string>();
+        // Stat OUTSIDE the gate: file metadata is I/O, and holding the cache lock across it would
+        // stall every concurrent Facts() read on a slow network mount.
+        var candidates = new Dictionary<string, FileStamp?>(StringComparer.Ordinal);
+        foreach (var reference in MediaPaths.ReferencesIn(project))
+        {
+            var resolved = MediaPaths.Resolve(project, reference.Path, projectPath);
+
+            // Nothing to open: a relative path with no media root is not a location.
+            if (!Path.IsPathRooted(resolved) || candidates.ContainsKey(resolved))
+                continue;
+
+            candidates[resolved] = StampOf(resolved);
+        }
+
+        var pending = new List<(string Path, FileStamp? Stamp)>();
 
         lock (_gate)
         {
-            foreach (var reference in MediaPaths.ReferencesIn(project))
+            foreach (var (resolved, stamp) in candidates)
             {
-                var resolved = MediaPaths.Resolve(project, reference.Path, projectPath);
-
-                // Nothing to open: a relative path with no media root is not a location.
-                if (!Path.IsPathRooted(resolved))
+                // Current answer for the file as it is NOW - a missing file whose answer says
+                // "missing" is current too, so absence is not re-probed on every edit.
+                if (_byPath.TryGetValue(resolved, out var known) && known.Stamp == stamp)
                     continue;
 
-                if (_byPath.ContainsKey(resolved) || !_inFlight.Add(resolved))
+                if (!_inFlight.Add(resolved))
                     continue;
 
-                pending.Add(resolved);
+                pending.Add((resolved, stamp));
             }
         }
 
@@ -187,15 +213,32 @@ public sealed class MediaFactsCache
         _ = ProbeAsync(pending);
     }
 
-    private async Task ProbeAsync(IReadOnlyList<string> paths)
+    /// <summary>The file's identity right now, or null when it does not exist or cannot be asked.</summary>
+    private static FileStamp? StampOf(string path)
     {
-        foreach (var path in paths)
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? new FileStamp(info.Length, info.LastWriteTimeUtc.Ticks) : null;
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException
+                                            or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private async Task ProbeAsync(IReadOnlyList<(string Path, FileStamp? Stamp)> paths)
+    {
+        foreach (var (path, stamp) in paths)
         {
             var facts = await MediaProbe.ProbeAsync(path).ConfigureAwait(false);
 
             lock (_gate)
             {
-                _byPath[path] = facts;
+                // Recorded against the stamp taken BEFORE the probe: a file replaced mid-probe has a
+                // newer stamp on disk, so the next Refresh sees the mismatch and asks again.
+                _byPath[path] = (facts, stamp);
                 _inFlight.Remove(path);
             }
         }

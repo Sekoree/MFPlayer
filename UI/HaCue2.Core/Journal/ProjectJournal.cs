@@ -49,6 +49,17 @@ public sealed class ProjectJournal
     /// <summary>Raised after any change to the document, the stacks, or the dirty flag.</summary>
     public event Action? Changed;
 
+    /// <summary>
+    /// Counts every change to the document, whatever its route - commands, undo, redo, coalesced
+    /// merges, composite steps, and the deliberately un-undoable <see cref="MarkDirty"/> writes.
+    /// </summary>
+    /// <remarks>
+    /// This is what makes a save honest: the saver records the revision at the moment it serialized,
+    /// and <see cref="MarkSavedIfCurrent"/> refuses to call the document clean if anything moved the
+    /// number while the bytes were still on their way to disk.
+    /// </remarks>
+    public long Revision { get; private set; }
+
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
 
@@ -80,6 +91,10 @@ public sealed class ProjectJournal
     /// </remarks>
     public void MarkDirty(bool documentChanged = true)
     {
+        // The revision moves EVERY time, even when the flag is already set: each patch-cue fire is a
+        // fresh change, and a save racing the second fire must not call itself current.
+        Revision++;
+
         if (_dirtyOutsideTheStack)
             return;
 
@@ -100,6 +115,7 @@ public sealed class ProjectJournal
             return;
 
         command.Apply(Project);
+        Revision++;
 
         if (_scope is { } scope)
         {
@@ -197,6 +213,7 @@ public sealed class ProjectJournal
         var command = _undo[^1];
         _undo.RemoveAt(_undo.Count - 1);
         command.Revert(Project);
+        Revision++;
         _redo.Add(command);
         CloseGroup();
         Changed?.Invoke();
@@ -215,6 +232,7 @@ public sealed class ProjectJournal
         var command = _redo[^1];
         _redo.RemoveAt(_redo.Count - 1);
         command.Apply(Project);
+        Revision++;
         _undo.Add(command);
         CloseGroup();
         Changed?.Invoke();
@@ -237,10 +255,36 @@ public sealed class ProjectJournal
         return hash;
     }
 
+    /// <summary>
+    /// Marks the state saved ONLY when nothing has changed since <paramref name="revision"/> was
+    /// captured - the moment the saver serialized the document.
+    /// </summary>
+    /// <remarks>
+    /// The manual save serializes on the UI thread and then writes asynchronously, and the UI stays
+    /// editable through the write. An edit landing in that window is real work that is NOT in the
+    /// file - so a blanket <see cref="MarkSaved"/> after the write called the document clean while it
+    /// differed from disk, which is the one lie the dirty flag must never tell. Returning false keeps
+    /// the document dirty (and its recovery copies alive); the save itself still succeeded, and the
+    /// file holds exactly the snapshot that was captured.
+    /// </remarks>
+    /// <returns>Whether the document was current and is now recorded clean.</returns>
+    public bool MarkSavedIfCurrent(long revision)
+    {
+        if (Revision != revision)
+            return false;
+
+        CloseGroup();
+        _savedAt = NextUndo;
+        _dirtyOutsideTheStack = false;
+        Changed?.Invoke();
+        return true;
+    }
+
     /// <summary>Adopts a freshly loaded project and drops the history that belonged to the old one.</summary>
     public void Reset(HaCueProject project)
     {
         Project = project;
+        Revision++;
         _undo.Clear();
         _redo.Clear();
         _savedAt = null;

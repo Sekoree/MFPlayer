@@ -215,39 +215,21 @@ public class WaveformGraph : Control
         if (width <= 0 || height <= 0)
             return;
 
-        var middle = height / 2;
         var kept = WaveBrush ?? Brushes.White;
         var cut = TrimmedBrush ?? Brushes.Gray;
 
         if (Peaks is { Count: > 0 } peaks)
         {
-            var columns = (int)Math.Ceiling(width);
+            // The columns are CACHED as two geometries and rebuilt only when the peaks, the size or
+            // the trim window change. The playhead is in AffectsRender and moves on every UI tick of
+            // a playing cue, and each tick used to re-fold every bucket and issue one FillRectangle
+            // per pixel column - hundreds of draw calls a frame for a picture that had not changed.
+            EnsureColumnGeometries(peaks, width, height);
 
-            for (var column = 0; column < columns; column++)
-            {
-                // The MAXIMUM of every bucket this column covers. Averaging four thousand buckets into
-                // six hundred columns would flatten exactly the transients somebody is looking for.
-                var from = (int)((double)column / columns * peaks.Count);
-                var to = Math.Max(from + 1, (int)((double)(column + 1) / columns * peaks.Count));
-                var peak = 0f;
-
-                for (var index = from; index < to && index < peaks.Count; index++)
-                {
-                    if (peaks[index] > peak)
-                        peak = peaks[index];
-                }
-
-                if (peak <= 0)
-                    continue;
-
-                var fraction = (column + 0.5) / columns;
-                var brush = fraction >= TrimIn && fraction <= TrimOut ? kept : cut;
-
-                // Symmetrical about the centre, which is what a peak reading looks like and what makes
-                // a quiet passage read as quiet rather than as an absence.
-                var half = Math.Max(0.5, peak * (middle - 1));
-                context.FillRectangle(brush, new Rect(column, middle - half, 1, half * 2));
-            }
+            if (_keptColumns is { } keptColumns)
+                context.DrawGeometry(kept, null, keptColumns);
+            if (_cutColumns is { } cutColumns)
+                context.DrawGeometry(cut, null, cutColumns);
         }
 
         var handles = HandleBrush ?? Brushes.Orange;
@@ -270,9 +252,90 @@ public class WaveformGraph : Control
             PlayheadBrush ?? Brushes.White, new Rect((Playhead * width) - 0.5, 0, 1, height));
     }
 
-    /// <summary>The trimmed wash: the cut colour at low opacity, so what is under it still reads.</summary>
-    private static IBrush Dim(IBrush brush) =>
-        brush is ISolidColorBrush solid
-            ? new SolidColorBrush(solid.Color, 0.18)
-            : new SolidColorBrush(Colors.Black, 0.35);
+    private IReadOnlyList<float>? _columnsPeaks;
+    private double _columnsWidth;
+    private double _columnsHeight;
+    private double _columnsTrimIn;
+    private double _columnsTrimOut;
+    private StreamGeometry? _keptColumns;
+    private StreamGeometry? _cutColumns;
+
+    /// <summary>Rebuilds the column geometries when anything they are derived from changed.</summary>
+    private void EnsureColumnGeometries(IReadOnlyList<float> peaks, double width, double height)
+    {
+        if (ReferenceEquals(_columnsPeaks, peaks)
+            && _columnsWidth == width && _columnsHeight == height
+            && _columnsTrimIn == TrimIn && _columnsTrimOut == TrimOut)
+            return;
+
+        _columnsPeaks = peaks;
+        _columnsWidth = width;
+        _columnsHeight = height;
+        _columnsTrimIn = TrimIn;
+        _columnsTrimOut = TrimOut;
+
+        var middle = height / 2;
+        var columns = (int)Math.Ceiling(width);
+        var kept = new StreamGeometry();
+        var cut = new StreamGeometry();
+        var anyKept = false;
+        var anyCut = false;
+
+        using var keptWriter = kept.Open();
+        using var cutWriter = cut.Open();
+
+        for (var column = 0; column < columns; column++)
+        {
+            // The MAXIMUM of every bucket this column covers. Averaging four thousand buckets into
+            // six hundred columns would flatten exactly the transients somebody is looking for.
+            var from = (int)((double)column / columns * peaks.Count);
+            var to = Math.Max(from + 1, (int)((double)(column + 1) / columns * peaks.Count));
+            var peak = 0f;
+
+            for (var index = from; index < to && index < peaks.Count; index++)
+            {
+                if (peaks[index] > peak)
+                    peak = peaks[index];
+            }
+
+            if (peak <= 0)
+                continue;
+
+            var fraction = (column + 0.5) / columns;
+            var inWindow = fraction >= TrimIn && fraction <= TrimOut;
+            var writer = inWindow ? keptWriter : cutWriter;
+            anyKept |= inWindow;
+            anyCut |= !inWindow;
+
+            // Symmetrical about the centre, which is what a peak reading looks like and what makes
+            // a quiet passage read as quiet rather than as an absence.
+            var half = Math.Max(0.5, peak * (middle - 1));
+            writer.BeginFigure(new Point(column, middle - half), isFilled: true);
+            writer.LineTo(new Point(column + 1, middle - half));
+            writer.LineTo(new Point(column + 1, middle + half));
+            writer.LineTo(new Point(column, middle + half));
+            writer.EndFigure(isClosed: true);
+        }
+
+        _keptColumns = anyKept ? kept : null;
+        _cutColumns = anyCut ? cut : null;
+    }
+
+    /// <summary>The trimmed wash: the cut colour at low opacity, so what is under it still reads.
+    /// Cached per source brush - a render pass must not allocate two brushes to draw two washes.</summary>
+    private IBrush Dim(IBrush brush)
+    {
+        if (!ReferenceEquals(_dimSource, brush) || _dim is null)
+        {
+            _dimSource = brush;
+            _dim = brush is ISolidColorBrush solid
+                ? new Avalonia.Media.Immutable.ImmutableSolidColorBrush(solid.Color, 0.18)
+                : new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Colors.Black, 0.35);
+        }
+
+        return _dim;
+    }
+
+    private IBrush? _dimSource;
+    private IBrush? _dim;
 }

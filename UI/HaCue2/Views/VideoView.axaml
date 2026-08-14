@@ -138,7 +138,8 @@
                                       IsVisible="{Binding IsOutputWindowed}">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
                   <TextBox Grid.Column="0" Text="{Binding OutputWindowSize}"
-                           PlaceholderText="960×540 · empty takes the composition's size" />
+                           PlaceholderText="960×540"
+                           ToolTip.Tip="The window's size on screen. Empty takes the composition's size." />
                   <Button Grid.Column="1" Classes="icon" Content="▾"
                           ToolTip.Tip="Common sizes. Anything can still be typed.">
                     <Button.Flyout>
@@ -168,8 +169,12 @@
               <!-- The number a video wall is built from: mapping destinations are measured in it. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Output raster">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+                  <!-- A watermark the field can actually SHOW: the old full sentence clipped mid-word at
+                       inspector width, and a truncated hint reads as a broken control. The sentence
+                       lives in the tooltip instead. -->
                   <TextBox Grid.Column="0" Text="{Binding OutputRaster}"
-                           PlaceholderText="1920×1080 · empty follows the composition" />
+                           PlaceholderText="1920×1080"
+                           ToolTip.Tip="The raster mapping destinations are measured in. Empty follows the composition's size." />
                   <Button Grid.Column="1" Classes="icon" Content="▾"
                           ToolTip.Tip="Common sizes. Anything can still be typed.">
                     <Button.Flyout>
@@ -191,7 +196,8 @@
                    (register item 23), and black is what both fall back to. -->
               <HeaderedContentControl Theme="{StaticResource Field}" Header="Idle fallback">
                 <TextBox Text="{Binding OutputIdleFallback}"
-                         PlaceholderText="used when the composition has no idle image · black otherwise" />
+                         PlaceholderText="black"
+                         ToolTip.Tip="Shown when the composition has no idle image of its own. Empty means black." />
               </HeaderedContentControl>
               <!-- A slate is rarely the canvas's own shape. Without a choice it was stretched, which
                    is the one option that always looks wrong on a logo. -->
@@ -512,7 +518,8 @@
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="Output raster">
                   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
                     <TextBox Grid.Column="0" Text="{Binding OutputRaster}"
-                             PlaceholderText="1920×1080 · empty follows the composition" />
+                             PlaceholderText="1920×1080"
+                             ToolTip.Tip="The raster mapping destinations are measured in. Empty follows the composition's size." />
                     <Button Grid.Column="1" Classes="icon" Content="▾"
                             ToolTip.Tip="Common sizes. Anything can still be typed.">
                       <Button.Flyout>

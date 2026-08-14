@@ -61,7 +61,9 @@ public sealed class ProjectVideoOutputs : IDisposable
     private readonly List<RetargetedOutput> _retargeted = [];
     private bool _headless;
 
-    /// <summary>What could not be opened, and why - joined into the host's problem list.</summary>
+    /// <summary>What could not be opened on the LAST sync, and why - joined into the host's problem
+    /// list at start-up. Replaced per pass: appending forever grew one duplicate row per 300 ms
+    /// debounced reload for as long as an output kept failing.</summary>
     public IReadOnlyList<string> Failures => _failures;
 
     /// <summary>
@@ -199,13 +201,14 @@ public sealed class ProjectVideoOutputs : IDisposable
                 // 160×90 stub (the floor in OpenWindow) and asked the window manager to promote THAT to
                 // fullscreen. A refused or slow promotion left a chip of a window nobody could find,
                 // which reads exactly like an output that never opened.
-                if (OpenWindow(output, 1280, 720) is { } dark)
+                var (dark, darkProblem) = OpenWindow(output, 1280, 720);
+                if (dark is not null)
                 {
                     opened.Add(new OpenVideoOutput(output.Id, null, dark));
                     continue;
                 }
 
-                failures.Add($"“{output.Name}” could not open a window");
+                failures.Add($"“{output.Name}” could not open a window - {darkProblem}");
                 unopened.Add(output.Id);
                 continue;
             }
@@ -259,13 +262,14 @@ public sealed class ProjectVideoOutputs : IDisposable
             // The window's own size when the document gives one, and the COMPOSITION's otherwise: the
             // operator authored placements against that canvas, so opening at some other aspect would
             // show them a letterboxed version of their own layout on first launch.
-            if (OpenWindow(output, composition.Width, composition.Height) is { } screen)
+            var (screen, screenProblem) = OpenWindow(output, composition.Width, composition.Height);
+            if (screen is not null)
             {
                 opened.Add(new OpenVideoOutput(output.Id, compositionId, screen));
                 continue;
             }
 
-            failures.Add($"“{output.Name}” could not open a window");
+            failures.Add($"“{output.Name}” could not open a window - {screenProblem}");
             unopened.Add(output.Id);
         }
 
@@ -278,21 +282,26 @@ public sealed class ProjectVideoOutputs : IDisposable
         foreach (var id in unopened)
             _unopened.Add(id);
 
-        // Only THIS pass's failures are returned, so the host reports a newly broken output once
-        // rather than re-reporting every old one on every edit.
+        // Only THIS pass's failures are kept and returned, so the host reports a newly broken output
+        // once rather than re-reporting every old one on every edit - and the member list stays the
+        // last sync's answer instead of an ever-growing history of duplicates.
+        _failures.Clear();
         _failures.AddRange(failures);
         return failures;
     }
 
     /// <summary>
-    /// Opens one local screen's window, placed where the document says. Null when it would not open.
+    /// Opens one local screen's window, placed where the document says. A null window carries the
+    /// reason instead, and the CALLER records it - exactly once. This used to write its own row into
+    /// the failure list while the caller wrote a second, vaguer one, so every refused window was
+    /// reported twice.
     /// </summary>
     /// <remarks>
     /// The window's size falls back to <paramref name="fallbackWidth"/>×<paramref name="fallbackHeight"/>
     /// - the composition's, when it shows one, and a plain 1280×720 when it does not yet. Reported
     /// rather than thrown: one screen that will not open must not take the show down.
     /// </remarks>
-    private SDL3GLVideoOutput? OpenWindow(
+    private static (SDL3GLVideoOutput? Window, string? Problem) OpenWindow(
         VideoOutputDefinition output, int fallbackWidth, int fallbackHeight)
     {
         try
@@ -318,12 +327,11 @@ public sealed class ProjectVideoOutputs : IDisposable
             else if (output.Fullscreen)
                 window.ApplyWindowPlacement(0, fullscreen: true, null, null);
 
-            return window;
+            return (window, null);
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
-            _failures.Add($"“{output.Name}”: {failure.Message}");
-            return null;
+            return (null, failure.Message);
         }
     }
 

@@ -1759,10 +1759,10 @@ public partial class CuesViewModel : ObservableObject
     /// </remarks>
     public void Tick()
     {
-        ActiveCues.Clear();
-
-        foreach (var row in _runtime.ActiveCues)
-            ActiveCues.Add(row);
+        // In place, like the panel rows below: Clear-and-refill raised one CollectionChanged per row
+        // four times a second (and bounced the Active subhead's count through zero on every tick) for
+        // a list whose membership usually has not changed at all.
+        SyncActiveCues(_runtime.ActiveCues);
 
         RebuildActivePanel();
 
@@ -2151,6 +2151,42 @@ public partial class CuesViewModel : ObservableObject
 
         while (ActivePanelRows.Count > fresh.Count)
             ActivePanelRows.RemoveAt(ActivePanelRows.Count - 1);
+    }
+
+    /// <summary>Reconciles the raw sounding list against one poll, by the same identity-and-shape
+    /// rules the panel's children use. A row already present keeps its object and adopts the fresh
+    /// measurements; membership changes insert, move or trim.</summary>
+    private void SyncActiveCues(IReadOnlyList<ActiveCueRow> fresh)
+    {
+        for (var i = 0; i < fresh.Count; i++)
+        {
+            var found = -1;
+            for (var j = i; j < ActiveCues.Count; j++)
+            {
+                if (ActiveCues[j].StructurallySame(fresh[i]))
+                {
+                    found = j;
+                    break;
+                }
+            }
+
+            if (found < 0)
+            {
+                ActiveCues.Insert(i, fresh[i]);
+                continue;
+            }
+
+            if (found != i)
+                ActiveCues.Move(found, i);
+
+            // The flat panel holds these same objects, so a row can meet itself here; adopting from
+            // itself would be a harmless no-op, but there is nothing to adopt.
+            if (!ReferenceEquals(ActiveCues[i], fresh[i]))
+                ActiveCues[i].UpdateFrom(fresh[i]);
+        }
+
+        while (ActiveCues.Count > fresh.Count)
+            ActiveCues.RemoveAt(ActiveCues.Count - 1);
     }
 
     /// <summary>An existing row matching <paramref name="incoming"/>'s identity and shape, at or

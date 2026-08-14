@@ -155,9 +155,11 @@
               </ItemsControl>
 
               <ContentControl Theme="{StaticResource Subhead}" Content="Patched to" />
+              <!-- Through the view-model, never a literal: this used to hardcode "Lobby" whichever
+                   output was selected, which misdirected exactly the no-sound diagnosis it exists for. -->
               <TextBlock Margin="10,4,10,8" FontSize="{DynamicResource FontSizeSmall}" TextWrapping="Wrap"
                          Classes="err" IsVisible="{Binding IsSelectedOutputUnpatched}"
-                         Text="No device channel receives Lobby on this machine. Cues sending here run silent - never redirected to a default device." />
+                         Text="{Binding UnpatchedWarning}" />
               <ContentControl Theme="{StaticResource FieldWide}">
                 <Button Classes="primary block" Content="PATCH → PICK DEVICE CHANNELS…" Click="OnDialog"
                         Tag="patch" IsEnabled="{Binding CanPatchToDevice}" />

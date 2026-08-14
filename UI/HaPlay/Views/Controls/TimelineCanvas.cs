@@ -33,6 +33,74 @@ namespace HaPlay.Views.Controls;
 /// </summary>
 public sealed class TimelineCanvas : Control
 {
+    // The fixed palette, allocated once. Render runs on every playhead tick while a timeline plays,
+    // and building these per pass made the hottest UI surface in the workspace allocate dozens of
+    // brushes and pens per frame - steady GC pressure exactly where frame time is visible.
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush StripeBrush =
+        new(Color.FromArgb(0x10, 0xFF, 0xFF, 0xFF));
+    private static readonly Pen PlayheadPen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromRgb(0xE5, 0x39, 0x35)), 2);
+    private static readonly Pen GridPen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromArgb(0x16, 0xFF, 0xFF, 0xFF)));
+    private static readonly Pen TickPen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromArgb(0x50, 0xC0, 0xC0, 0xC0)));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush RulerLabelBrush =
+        new(Color.FromArgb(0xAA, 0xC0, 0xC0, 0xC0));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush ReadoutBackground =
+        new(Color.FromArgb(0xD8, 0x20, 0x20, 0x20));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush BlockFillProbed =
+        new(Color.FromArgb(0x3C, 0x4F, 0x9C, 0xFF));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush BlockFillUnprobed =
+        new(Color.FromArgb(0x20, 0x4F, 0x9C, 0xFF));
+    private static readonly Pen BlockStroke =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromArgb(0xB0, 0x4F, 0x9C, 0xFF)), 1);
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush PreWaitFill =
+        new(Color.FromArgb(0x28, 0x4F, 0x9C, 0xFF));
+    private static readonly Pen PreWaitPen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromArgb(0x60, 0x4F, 0x9C, 0xFF)), 1);
+    private static readonly Pen WaveformPen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromArgb(0x48, 0xCF, 0xE8, 0xFF)), 1);
+    private static readonly Color EnvelopeLineColor = Color.FromArgb(0xE6, 0x7F, 0xD8, 0x62);
+    private static readonly Pen EnvelopeFlatPen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromArgb(0x80, 0x7F, 0xD8, 0x62)), 1)
+        { DashStyle = DashStyle.Dash };
+    private static readonly Pen EnvelopeRefPen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF)), 1)
+        { DashStyle = DashStyle.Dot };
+    private static readonly Pen EnvelopeLinePen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(EnvelopeLineColor), 1.5);
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush EnvelopeDotBrush =
+        new(EnvelopeLineColor);
+    private static readonly Pen EnvelopeSelectedPen = new(Brushes.White, 1.5);
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush BadgeBackground =
+        new(Color.FromArgb(0xC0, 0x1A, 0x1A, 0x1A));
+    private static readonly Pen BadgeLitPen = new(Brushes.White, 1.5);
+    private static readonly Pen BadgePen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(EnvelopeLineColor), 1);
+    private static readonly Pen ChevronLitPen = new(Brushes.White, 1.5);
+    private static readonly Pen ChevronPen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(EnvelopeLineColor), 1.5);
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush BadgeLitTextBrush =
+        new(Colors.White);
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush BadgeTextBrush =
+        new(EnvelopeLineColor);
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush FadeBrush =
+        new(Color.FromArgb(0x46, 0x00, 0x00, 0x00));
+    private static readonly Pen FadePen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromArgb(0xC8, 0xE0, 0xE0, 0xE0)), 1);
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush FadeHandleBrush =
+        new(Color.FromRgb(0xE0, 0xE0, 0xE0));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush MarkerCommentBrush =
+        new(Color.FromArgb(0xB0, 0x90, 0x90, 0x90));
+    private static readonly Pen MarkerCommentPen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromRgb(0x90, 0x90, 0x90)));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush MarkerBrush =
+        new(Color.FromArgb(0xD0, 0xFF, 0xD1, 0x66));
+    private static readonly Pen MarkerPen =
+        new(new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.FromRgb(0xFF, 0xD1, 0x66)));
+    private static readonly Avalonia.Media.Immutable.ImmutableSolidColorBrush MarkerLabelBrush =
+        new(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF));
+
     private const int MinEffectiveMs = 100;
     private const double MinPxPerMs = 0.002; // 2 px/s
     private const double MaxPxPerMs = 1.0; // 1 px/ms
@@ -252,11 +320,10 @@ public sealed class TimelineCanvas : Control
         var height = TimelineMath.LanesHeight(Math.Max(1, lanes.Count));
 
         // Lane stripes (alternating) under everything.
-        var stripe = new SolidColorBrush(Color.FromArgb(0x10, 0xFF, 0xFF, 0xFF));
         for (var i = 0; i < lanes.Count; i++)
         {
             if (i % 2 == 0)
-                ctx.FillRectangle(stripe, new Rect(0, TimelineMath.LaneTop(i), width, TimelineMath.LaneHeight));
+                ctx.FillRectangle(StripeBrush, new Rect(0, TimelineMath.LaneTop(i), width, TimelineMath.LaneHeight));
         }
 
         RenderGridAndRuler(ctx, width, height, pxPerMs);
@@ -267,7 +334,7 @@ public sealed class TimelineCanvas : Control
         if (PlayheadMs >= 0)
         {
             var x = TimelineMath.XForMs(PlayheadMs, pxPerMs);
-            ctx.DrawLine(new Pen(new SolidColorBrush(Color.FromRgb(0xE5, 0x39, 0x35)), 2), new Point(x, 0), new Point(x, height));
+            ctx.DrawLine(PlayheadPen, new Point(x, 0), new Point(x, height));
         }
 
         RenderReadout(ctx, width);
@@ -289,7 +356,7 @@ public sealed class TimelineCanvas : Control
             Math.Clamp(_readoutAnchor.X, minX, Math.Max(minX, visibleRight - text.Width - 8)),
             Math.Max(TimelineMath.RulerHeight, _readoutAnchor.Y));
         ctx.FillRectangle(
-            new SolidColorBrush(Color.FromArgb(0xD8, 0x20, 0x20, 0x20)),
+            ReadoutBackground,
             new Rect(pos.X - 4, pos.Y - 2, text.Width + 8, text.Height + 4));
         ctx.DrawText(text, pos);
     }
@@ -311,17 +378,13 @@ public sealed class TimelineCanvas : Control
 
     private void RenderGridAndRuler(DrawingContext ctx, double width, double height, double pxPerMs)
     {
-        var gridPen = new Pen(new SolidColorBrush(Color.FromArgb(0x16, 0xFF, 0xFF, 0xFF)));
-        var tickPen = new Pen(new SolidColorBrush(Color.FromArgb(0x50, 0xC0, 0xC0, 0xC0)));
-        var labelBrush = new SolidColorBrush(Color.FromArgb(0xAA, 0xC0, 0xC0, 0xC0));
-
         // Snap grid (only when readable - a 100 ms grid fully zoomed out is just noise).
         if (SnapEnabled && GridMs > 0 && GridMs * pxPerMs >= 6)
         {
             for (var ms = 0; ms * pxPerMs <= width; ms += GridMs)
             {
                 var x = TimelineMath.XForMs(ms, pxPerMs);
-                ctx.DrawLine(gridPen, new Point(x, TimelineMath.RulerHeight), new Point(x, height));
+                ctx.DrawLine(GridPen, new Point(x, TimelineMath.RulerHeight), new Point(x, height));
             }
         }
 
@@ -329,36 +392,35 @@ public sealed class TimelineCanvas : Control
         for (var ms = 0; ms * pxPerMs <= width; ms += step)
         {
             var x = TimelineMath.XForMs(ms, pxPerMs);
-            ctx.DrawLine(tickPen, new Point(x, TimelineMath.RulerHeight - 6), new Point(x, TimelineMath.RulerHeight));
-            ctx.DrawLine(gridPen, new Point(x, TimelineMath.RulerHeight), new Point(x, height));
+            ctx.DrawLine(TickPen, new Point(x, TimelineMath.RulerHeight - 6), new Point(x, TimelineMath.RulerHeight));
+            ctx.DrawLine(GridPen, new Point(x, TimelineMath.RulerHeight), new Point(x, height));
             var label = new FormattedText(
                 TimelineMath.FormatRulerLabel(ms), CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                Typeface.Default, 10, labelBrush);
+                Typeface.Default, 10, RulerLabelBrush);
             // Clamp to the extent: the last tick sits at (or within a few px of) the right edge, so a
             // label drawn at x+3 ran past the measured width and was clipped mid-digit.
             ctx.DrawText(label, new Point(Math.Max(0, Math.Min(x + 3, width - label.Width)), 2));
         }
-        ctx.DrawLine(tickPen, new Point(0, TimelineMath.RulerHeight), new Point(width, TimelineMath.RulerHeight));
+        ctx.DrawLine(TickPen, new Point(0, TimelineMath.RulerHeight), new Point(width, TimelineMath.RulerHeight));
     }
 
     private void RenderLaneItem(DrawingContext ctx, CueNodeViewModel node, int laneIndex, double width, double pxPerMs)
     {
         if (node.Kind == CueNodeKind.Comment)
         {
-            RenderMarker(ctx, node, laneIndex, width, pxPerMs, Color.FromArgb(0xB0, 0x90, 0x90, 0x90));
+            RenderMarker(ctx, node, laneIndex, width, pxPerMs, MarkerCommentBrush, MarkerCommentPen);
             return;
         }
 
         if (TimelineMath.IsMarker(node))
         {
-            RenderMarker(ctx, node, laneIndex, width, pxPerMs, Color.FromArgb(0xD0, 0xFF, 0xD1, 0x66));
+            RenderMarker(ctx, node, laneIndex, width, pxPerMs, MarkerBrush, MarkerPen);
             return;
         }
 
         var block = TimelineMath.BlockRect(laneIndex, TimelineMath.BlockStartMs(node), TimelineMath.BlockDurationMs(node), pxPerMs);
         var probed = node.Kind != CueNodeKind.Media || node.DurationMs > 0;
-        var fill = new SolidColorBrush(Color.FromArgb(probed ? (byte)0x3C : (byte)0x20, 0x4F, 0x9C, 0xFF));
-        var stroke = new Pen(new SolidColorBrush(Color.FromArgb(0xB0, 0x4F, 0x9C, 0xFF)), 1);
+        var fill = probed ? BlockFillProbed : BlockFillUnprobed;
 
         // Pre-wait span: a dimmed strip from the authored start to the block's (audible) left edge,
         // so a pre-waited lane reads as "arms here, sounds there".
@@ -367,14 +429,12 @@ public sealed class TimelineCanvas : Control
             var preWaitX = TimelineMath.XForMs(Math.Max(0, node.TimelineStartMs), pxPerMs);
             var strip = new Rect(
                 preWaitX, block.Y + block.Height * 0.35, Math.Max(0, block.X - preWaitX), block.Height * 0.3);
-            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(0x28, 0x4F, 0x9C, 0xFF)), strip);
-            ctx.DrawLine(
-                new Pen(new SolidColorBrush(Color.FromArgb(0x60, 0x4F, 0x9C, 0xFF)), 1),
-                new Point(preWaitX, block.Y), new Point(preWaitX, block.Bottom));
+            ctx.FillRectangle(PreWaitFill, strip);
+            ctx.DrawLine(PreWaitPen, new Point(preWaitX, block.Y), new Point(preWaitX, block.Bottom));
         }
 
         ctx.FillRectangle(fill, block);
-        ctx.DrawRectangle(null, stroke, block);
+        ctx.DrawRectangle(null, BlockStroke, block);
 
         if (node.Kind == CueNodeKind.Media)
             RenderWaveform(ctx, node, block);
@@ -435,7 +495,7 @@ public sealed class TimelineCanvas : Control
         if (windowSpan <= 0)
             return;
 
-        var pen = new Pen(new SolidColorBrush(Color.FromArgb(0x48, 0xCF, 0xE8, 0xFF)), 1);
+        var pen = WaveformPen;
         var midY = block.Center.Y;
         var halfMax = block.Height / 2 - 2;
         for (var x = block.X + 1; x < block.Right - 1; x += 2)
@@ -514,23 +574,17 @@ public sealed class TimelineCanvas : Control
         if (envelope.Count == 0 && !editable)
             return;
 
-        var lineColor = Color.FromArgb(0xE6, 0x7F, 0xD8, 0x62);
         if (envelope.Count == 0)
         {
-            var flatPen = new Pen(
-                new SolidColorBrush(Color.FromArgb(0x80, lineColor.R, lineColor.G, lineColor.B)), 1)
-            { DashStyle = DashStyle.Dash };
             var unityY = TimelineMath.EnvelopeYForDb(block, 0);
-            ctx.DrawLine(flatPen, new Point(block.X, unityY), new Point(block.Right, unityY));
+            ctx.DrawLine(EnvelopeFlatPen, new Point(block.X, unityY), new Point(block.Right, unityY));
             return;
         }
 
         if (editable)
         {
-            var refPen = new Pen(new SolidColorBrush(Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF)), 1)
-            { DashStyle = DashStyle.Dot };
             var refY = TimelineMath.EnvelopeYForDb(block, 0);
-            ctx.DrawLine(refPen, new Point(block.X, refY), new Point(block.Right, refY));
+            ctx.DrawLine(EnvelopeRefPen, new Point(block.X, refY), new Point(block.Right, refY));
         }
 
         var overlay = TimelineMath.ProjectEnvelope(block, envelope, pxPerMs);
@@ -554,13 +608,13 @@ public sealed class TimelineCanvas : Control
             var levelDb = TimelineMath.EnvelopeLevelDbAt(envelope, (x - block.X) / pxPerMs);
             line.Add(new Point(x, TimelineMath.EnvelopeYForDb(block, levelDb)));
         }
-        ctx.DrawGeometry(null, new Pen(new SolidColorBrush(lineColor), 1.5), new PolylineGeometry(line, false));
+        ctx.DrawGeometry(null, EnvelopeLinePen, new PolylineGeometry(line, false));
 
         if (!editable)
             return;
 
-        var dotBrush = new SolidColorBrush(lineColor);
-        var selectedPen = new Pen(Brushes.White, 1.5);
+        var dotBrush = EnvelopeDotBrush;
+        var selectedPen = EnvelopeSelectedPen;
         var selectedIndex = ReferenceEquals(node, _selectedEnvelopeNode) ? _selectedEnvelopeIndex : -1;
         foreach (var projection in overlay.Points)
         {
@@ -574,8 +628,8 @@ public sealed class TimelineCanvas : Control
         }
 
         var selectedRange = overlay.RangeOf(selectedIndex);
-        RenderEnvelopeEdgeIndicator(ctx, overlay.BeforeStart, lineColor, selectedRange);
-        RenderEnvelopeEdgeIndicator(ctx, overlay.BeyondEnd, lineColor, selectedRange);
+        RenderEnvelopeEdgeIndicator(ctx, overlay.BeforeStart, selectedRange);
+        RenderEnvelopeEdgeIndicator(ctx, overlay.BeyondEnd, selectedRange);
     }
 
     /// <summary>The out-of-range keyframe badge: a chevron pointing off the affected edge plus the
@@ -585,7 +639,7 @@ public sealed class TimelineCanvas : Control
     /// still be selected, dragged back into range and deleted - they are inset clear of the block's
     /// trim grip so grabbing the right edge keeps working.</summary>
     private static void RenderEnvelopeEdgeIndicator(
-        DrawingContext ctx, EnvelopeEdgeIndicator? indicator, Color lineColor, TimelineEnvelopeRange selectedRange)
+        DrawingContext ctx, EnvelopeEdgeIndicator? indicator, TimelineEnvelopeRange selectedRange)
     {
         if (indicator is not { } badge)
             return;
@@ -594,8 +648,8 @@ public sealed class TimelineCanvas : Control
         var lit = selectedRange == badge.Edge;
         var bounds = badge.Bounds;
         ctx.DrawRectangle(
-            new SolidColorBrush(Color.FromArgb(0xC0, 0x1A, 0x1A, 0x1A)),
-            new Pen(new SolidColorBrush(lit ? Colors.White : lineColor), lit ? 1.5 : 1),
+            BadgeBackground,
+            lit ? BadgeLitPen : BadgePen,
             new RoundedRect(bounds, 3));
 
         // Chevron on the OUTWARD side, count text beside it.
@@ -603,7 +657,7 @@ public sealed class TimelineCanvas : Control
         var chevronX = pointsLeft ? bounds.X + 5 : bounds.Right - 5;
         var tipX = pointsLeft ? chevronX - chevronHalf : chevronX + chevronHalf;
         var midY = bounds.Center.Y;
-        var chevronPen = new Pen(new SolidColorBrush(lit ? Colors.White : lineColor), 1.5);
+        var chevronPen = lit ? ChevronLitPen : ChevronPen;
         ctx.DrawGeometry(null, chevronPen, new PolylineGeometry(
             [new Point(chevronX, midY - chevronHalf), new Point(tipX, midY), new Point(chevronX, midY + chevronHalf)],
             false));
@@ -611,7 +665,7 @@ public sealed class TimelineCanvas : Control
         var text = new FormattedText(
             badge.Count.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture,
             FlowDirection.LeftToRight, Typeface.Default, 9,
-            new SolidColorBrush(lit ? Colors.White : lineColor));
+            lit ? BadgeLitTextBrush : BadgeTextBrush);
         var textX = pointsLeft
             ? Math.Min(chevronX + 4, bounds.Right - text.Width - 1)
             : Math.Max(chevronX - 4 - text.Width, bounds.X + 1);
@@ -620,30 +674,26 @@ public sealed class TimelineCanvas : Control
 
     private void RenderFades(DrawingContext ctx, CueNodeViewModel node, Rect block, double pxPerMs)
     {
-        var fadeBrush = new SolidColorBrush(Color.FromArgb(0x46, 0x00, 0x00, 0x00));
-        var fadePen = new Pen(new SolidColorBrush(Color.FromArgb(0xC8, 0xE0, 0xE0, 0xE0)), 1);
-
         var inCenter = TimelineMath.FadeInHandleCenter(block, node.FadeInMs, pxPerMs);
         if (node.FadeInMs > 0)
         {
             var tri = new PolylineGeometry([new Point(block.X, block.Y), inCenter, new Point(block.X, block.Bottom)], true);
-            ctx.DrawGeometry(fadeBrush, null, tri);
-            ctx.DrawLine(fadePen, new Point(block.X, block.Bottom), inCenter);
+            ctx.DrawGeometry(FadeBrush, null, tri);
+            ctx.DrawLine(FadePen, new Point(block.X, block.Bottom), inCenter);
         }
 
         var outCenter = TimelineMath.FadeOutHandleCenter(block, node.FadeOutMs, pxPerMs);
         if (node.FadeOutMs > 0)
         {
             var tri = new PolylineGeometry([new Point(block.Right, block.Y), outCenter, new Point(block.Right, block.Bottom)], true);
-            ctx.DrawGeometry(fadeBrush, null, tri);
-            ctx.DrawLine(fadePen, outCenter, new Point(block.Right, block.Bottom));
+            ctx.DrawGeometry(FadeBrush, null, tri);
+            ctx.DrawLine(FadePen, outCenter, new Point(block.Right, block.Bottom));
         }
 
         if (IsEditable)
         {
-            var handleBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0));
-            DrawHandle(ctx, handleBrush, inCenter);
-            DrawHandle(ctx, handleBrush, outCenter);
+            DrawHandle(ctx, FadeHandleBrush, inCenter);
+            DrawHandle(ctx, FadeHandleBrush, outCenter);
         }
     }
 
@@ -651,13 +701,14 @@ public sealed class TimelineCanvas : Control
         ctx.FillRectangle(brush, new Rect(center.X - 3, center.Y - 3, 6, 6));
 
     private void RenderMarker(
-        DrawingContext ctx, CueNodeViewModel node, int laneIndex, double width, double pxPerMs, Color color)
+        DrawingContext ctx, CueNodeViewModel node, int laneIndex, double width, double pxPerMs,
+        IBrush fill, IPen outline)
     {
         var c = TimelineMath.MarkerCenter(laneIndex, TimelineMath.BlockStartMs(node), pxPerMs);
         const double r = TimelineMath.MarkerHalfPx;
         var diamond = new PolylineGeometry(
             [new Point(c.X, c.Y - r), new Point(c.X + r, c.Y), new Point(c.X, c.Y + r), new Point(c.X - r, c.Y)], true);
-        ctx.DrawGeometry(new SolidColorBrush(color), new Pen(new SolidColorBrush(Color.FromArgb(0xFF, color.R, color.G, color.B))), diamond);
+        ctx.DrawGeometry(fill, outline, diamond);
 
         var label = $"{node.Number} {node.Label}".Trim();
         if (label.Length > 0)
@@ -667,7 +718,7 @@ public sealed class TimelineCanvas : Control
             // outside the canvas entirely).
             var labelX = c.X + r + 4;
             var text = new FormattedText(label, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
-                Typeface.Default, 11, new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF)))
+                Typeface.Default, 11, MarkerLabelBrush)
             {
                 MaxTextWidth = Math.Max(1, width - labelX - 4),
                 MaxLineCount = 1,

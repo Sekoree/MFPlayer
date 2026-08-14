@@ -170,16 +170,56 @@ public static class HaCueProjectFile
     public static string ComputeHash(HaCueProject project) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Serialize(project))));
 
-    public static async Task SaveAsync(HaCueProject project, string path, CancellationToken ct = default)
-    {
-        var json = Serialize(project);
+    /// <summary>
+    /// Serializes and writes. The serialization happens SYNCHRONOUSLY, before the first await - a
+    /// caller on the UI thread therefore reads the document atomically, and edits made while the
+    /// disk write is still in flight cannot tear the bytes being written. Callers that must also
+    /// know whether such edits happened (the manual save's dirty flag) serialize themselves and use
+    /// <see cref="SaveSerializedAsync"/> with a journal revision check.
+    /// </summary>
+    public static Task SaveAsync(HaCueProject project, string path, CancellationToken ct = default) =>
+        SaveSerializedAsync(Serialize(project), path, ct);
 
-        // Same directory as the target, so the move is a rename within one filesystem and therefore
-        // atomic. A temp file in the system temp dir would make this a copy across devices, which is
-        // exactly the non-atomic write we are avoiding.
-        var temp = path + ".tmp";
-        await File.WriteAllTextAsync(temp, json, ct).ConfigureAwait(false);
-        File.Move(temp, path, overwrite: true);
+    /// <summary>
+    /// Writes already-serialized bytes atomically and durably.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Same directory as the target, so the move is a rename within one filesystem and therefore
+    /// atomic. A temp file in the system temp dir would make this a copy across devices, which is
+    /// exactly the non-atomic write we are avoiding.
+    /// </para>
+    /// <para>
+    /// A UNIQUE temp name per write: the fixed <c>.tmp</c> sibling meant two overlapping saves (a
+    /// double Ctrl+S, or a manual save racing an autosave of the same show) wrote into one file and
+    /// whichever finished second could move a torn mix of both. And flushed to disk before the
+    /// rename, so a power cut straight after a "successful" save cannot leave a valid-looking rename
+    /// over unwritten data - the previous file survives instead.
+    /// </para>
+    /// </remarks>
+    public static async Task SaveSerializedAsync(string json, string path, CancellationToken ct = default)
+    {
+        var temp = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(json);
+            var stream = new FileStream(
+                temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 64 * 1024);
+            await using (stream.ConfigureAwait(false))
+            {
+                await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            // Never leave a stray temp beside the show; the target is untouched either way.
+            try { File.Delete(temp); }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
     }
 
     public static async Task<HaCueProject> LoadAsync(string path, CancellationToken ct = default)

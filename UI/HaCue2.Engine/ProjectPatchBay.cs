@@ -40,8 +40,13 @@ public sealed class ProjectPatchBay : IDisposable
     /// Kept so <see cref="Apply"/> can rebuild exactly the matrices that are live. The width comes from
     /// the LINE rather than from the document because a device may have opened at a different channel
     /// count than the document asked for, and a matrix sized to the document would be rejected.
+    /// <para>Guarded by <see cref="_openGate"/>: a patch cue's ramp iterates this from a pool thread
+    /// while arming a recorder adds to it from the UI - a realistic pair whose unguarded overlap is a
+    /// collection-modified throw in the middle of an audible ramp.</para>
     /// </remarks>
     private readonly List<(Guid LineId, int Channels)> _open = [];
+
+    private readonly Lock _openGate = new();
 
     private ProjectPatchBay(AudioPatchBay bay, IReadOnlyList<string> channelIds, string? monitor)
     {
@@ -295,7 +300,11 @@ public sealed class ProjectPatchBay : IDisposable
 
         var failures = new List<string>();
 
-        foreach (var (lineId, lineChannels) in _open)
+        (Guid LineId, int Channels)[] open;
+        lock (_openGate)
+            open = [.. _open];
+
+        foreach (var (lineId, lineChannels) in open)
         {
             var forLine = cells.Where(cell => cell.LineId == lineId).ToList();
 
@@ -363,7 +372,10 @@ public sealed class ProjectPatchBay : IDisposable
         if (channels.Count != LogicalChannelIds.Count)
             return "the logical outputs changed - reopen the show before soloing";
 
-        if (_open.FirstOrDefault(open => open.LineId == monitorLineId) is not { Channels: > 0 } monitorLine)
+        (Guid LineId, int Channels) monitorLine;
+        lock (_openGate)
+            monitorLine = _open.FirstOrDefault(open => open.LineId == monitorLineId);
+        if (monitorLine.Channels <= 0)
             return "the monitor line is not open on this machine";
 
         float[,] matrix;
@@ -427,8 +439,11 @@ public sealed class ProjectPatchBay : IDisposable
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(sink);
 
-        if (_open.Any(item => item.LineId == lineId))
-            return "that line is already attached";
+        lock (_openGate)
+        {
+            if (_open.Any(item => item.LineId == lineId))
+                return "that line is already attached";
+        }
 
         var channels = project.AudioPatch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
 
@@ -446,7 +461,8 @@ public sealed class ProjectPatchBay : IDisposable
             return failure.Message;
         }
 
-        _open.Add((lineId, sink.Format.Channels));
+        lock (_openGate)
+            _open.Add((lineId, sink.Format.Channels));
         return null;
     }
 
@@ -461,7 +477,8 @@ public sealed class ProjectPatchBay : IDisposable
     public void DetachRecorder(Guid lineId)
     {
         Bay.RemoveTerminal(lineId.ToString());
-        _open.RemoveAll(item => item.LineId == lineId);
+        lock (_openGate)
+            _open.RemoveAll(item => item.LineId == lineId);
     }
 
     /// <summary>

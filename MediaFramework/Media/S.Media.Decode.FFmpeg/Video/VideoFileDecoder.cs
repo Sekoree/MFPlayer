@@ -270,6 +270,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             var avTarget = FfmpegVideoPixelMaps.ToAvPixelFormat(format)
                 ?? throw new NotSupportedException($"pixel format {format} has no FFmpeg mapping");
             ReleaseSws();
+            EnsureScalableSource();
             _swsCtx = sws_getCachedContext(null,
                 _codecCtx->width, _codecCtx->height, _srcPixelFormat,
                 _codecCtx->width, _codecCtx->height, avTarget,
@@ -495,6 +496,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (hw == null && !_passThrough)
         {
             // Codec's native format isn't in our enum - fall back to BGRA32.
+            EnsureScalableSource();
             _swsCtx = sws_getCachedContext(null,
                 _codecCtx->width, _codecCtx->height, _srcPixelFormat,
                 _codecCtx->width, _codecCtx->height, AVPixelFormat.AV_PIX_FMT_BGRA,
@@ -511,6 +513,27 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (_hwAccel != null && !_drmGpuNv12Path && !_d3d11GpuNv12Path)
             PrimeHardwareTransferPixelFormat();
         timing?.SetOutcome($"path={Path.GetFileName(path)} stream={_videoStreamIndex} codec={CodecName} format={Format} hw={_hwAccel is not null} drm={_drmGpuNv12Path} d3d11={_d3d11GpuNv12Path}");
+    }
+
+    /// <summary>
+    /// Refuses to build a swscale context over a source with no usable picture.
+    /// </summary>
+    /// <remarks>
+    /// <c>sws_getCachedContext</c> does not return NULL for <c>AV_PIX_FMT_NONE</c> or zero
+    /// dimensions - it hits <c>av_assert0(desc)</c> inside libswscale and ABORTS THE PROCESS. A text
+    /// file that FFmpeg's tty demuxer happily sniffs as "video" reaches exactly this state, so a
+    /// stray non-media file handed to the decoder took the whole application down natively instead
+    /// of failing as the managed exception every caller is prepared for.
+    /// </remarks>
+    private void EnsureScalableSource()
+    {
+        if (_srcPixelFormat == AVPixelFormat.AV_PIX_FMT_NONE
+            || _codecCtx->width <= 0
+            || _codecCtx->height <= 0)
+            throw new FFmpegException(
+                _videoStreamIndex,
+                $"the source reports no decodable picture (pixel format {_srcPixelFormat}, "
+                + $"{_codecCtx->width}x{_codecCtx->height}) - not a playable video/image");
     }
 
     private void MaybeLogSlowRead(long started, bool gotFrame)

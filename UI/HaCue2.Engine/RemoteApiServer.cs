@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using HaCue2.Core.Model;
+using S.Media.Core.Diagnostics;
 
 namespace HaCue2.Engine;
 
@@ -53,6 +54,30 @@ public sealed class RemoteApiServer : IAsyncDisposable
     private Task? _loop;
     private readonly object _handlersGate = new();
     private readonly HashSet<Task> _handlers = [];
+
+    /// <summary>
+    /// Admission: at most this many requests are in flight; excess callers get an immediate 503.
+    /// </summary>
+    /// <remarks>
+    /// The server used to spawn one unbounded <c>Task.Run</c> per accepted connection - anything on
+    /// the venue network (authorized or not; the token is checked inside the handler) could pile up
+    /// handler tasks without limit. The figure matches HaPlay's REST server, which has run shows
+    /// with the same bound.
+    /// </remarks>
+    private const int MaxConcurrentRequests = 32;
+
+    /// <summary>A dispatch that has not answered in this long is stuck behind something (a wedged
+    /// open under a GO, most plausibly); the CALLER gets a 503 and can retry, while the underlying
+    /// transport call runs on to whatever end it was going to have. Settable so a test can prove the
+    /// deadline without waiting half a minute; production never writes it.</summary>
+    internal TimeSpan RequestDeadline { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>How long shutdown waits for in-flight handlers before abandoning them. Unbounded, a
+    /// single hung dispatch could hold the whole application's teardown hostage. Settable for the
+    /// same test reason as <see cref="RequestDeadline"/>.</summary>
+    internal TimeSpan ShutdownDrainBudget { get; set; } = TimeSpan.FromSeconds(2);
+
+    private readonly SemaphoreSlim _admission = new(MaxConcurrentRequests, MaxConcurrentRequests);
 
     public RemoteApiServer(IRemoteApiTransport host, Func<HaCueProject> project, string token)
     {
@@ -133,9 +158,18 @@ public sealed class RemoteApiServer : IAsyncDisposable
                 return;
             }
 
+            // Admission BEFORE the handler task exists: a flood - authorized or not, the token is
+            // only checked inside the handler - is refused with a cheap 503 rather than allowed to
+            // pile up unbounded work.
+            if (!_admission.Wait(0))
+            {
+                _ = RefuseBusyAsync(context);
+                continue;
+            }
+
             // A slow request must not stop acceptance, but handlers remain tracked so shutdown can
-            // wait for every response that already entered the server.
-            var handler = Task.Run(() => ServeAsync(context), CancellationToken.None);
+            // wait (boundedly) for every response that already entered the server.
+            var handler = Task.Run(() => ServeAdmittedAsync(context, cancellationToken), CancellationToken.None);
             lock (_handlersGate)
                 _handlers.Add(handler);
             _ = handler.ContinueWith(
@@ -150,14 +184,67 @@ public sealed class RemoteApiServer : IAsyncDisposable
         }
     }
 
-    private async Task ServeAsync(HttpListenerContext context)
+    private async Task ServeAdmittedAsync(HttpListenerContext context, CancellationToken serverLife)
     {
         try
         {
-            var result = await HandleAsync(
-                context.Request.HttpMethod,
-                context.Request.Url?.AbsolutePath ?? "",
-                context.Request.Headers["X-HaCue2-Token"]).ConfigureAwait(false);
+            await ServeAsync(context, serverLife).ConfigureAwait(false);
+        }
+        finally
+        {
+            _admission.Release();
+        }
+    }
+
+    /// <summary>The over-capacity answer, kept deliberately cheap: no routing, no dispatch, no
+    /// tracked handler - just a 503 and the connection back.</summary>
+    private async Task RefuseBusyAsync(HttpListenerContext context)
+    {
+        try
+        {
+            var result = Error(503, "the remote API is at its concurrent-request limit - retry shortly");
+            var bytes = Encoding.UTF8.GetBytes(result.Body);
+            context.Response.StatusCode = result.Status;
+            context.Response.ContentType = result.ContentType;
+            context.Response.ContentLength64 = bytes.Length;
+            await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (
+            failure is HttpListenerException or IOException or ObjectDisposedException)
+        {
+        }
+        finally
+        {
+            try { context.Response.Close(); }
+            catch (Exception failure) when (failure is HttpListenerException or ObjectDisposedException) { }
+        }
+    }
+
+    private async Task ServeAsync(HttpListenerContext context, CancellationToken serverLife)
+    {
+        try
+        {
+            RemoteApiResult result;
+            try
+            {
+                // Deadlined, and cancelled by server shutdown: a dispatch stuck behind a wedged
+                // transport call answers the CALLER with a 503 instead of holding the connection (and
+                // shutdown) open indefinitely. The abandoned dispatch runs on; its verb is the same
+                // one the UI buttons call and owns its own recovery.
+                result = await HandleAsync(
+                        context.Request.HttpMethod,
+                        context.Request.Url?.AbsolutePath ?? "",
+                        context.Request.Headers["X-HaCue2-Token"])
+                    .WaitAsync(RequestDeadline, serverLife).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                result = Error(503, $"the request did not complete within {RequestDeadline.TotalSeconds:0} s");
+            }
+            catch (OperationCanceledException) when (serverLife.IsCancellationRequested)
+            {
+                result = Error(503, "the remote API is shutting down");
+            }
 
             var bytes = Encoding.UTF8.GetBytes(result.Body);
             context.Response.StatusCode = result.Status;
@@ -395,7 +482,17 @@ public sealed class RemoteApiServer : IAsyncDisposable
 
         try
         {
-            await Task.WhenAll(handlers).ConfigureAwait(false);
+            // BOUNDED: in-flight responses get a short grace, then the shutdown proceeds without
+            // them. An unbounded join here let one hung dispatch hold the application's whole
+            // teardown hostage - and the per-request deadline above normally ends the handler well
+            // before this budget matters.
+            await Task.WhenAll(handlers).WaitAsync(ShutdownDrainBudget).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            MediaDiagnostics.LogWarning(
+                "HaCue2 remote API: {Count} in-flight request(s) did not finish within the shutdown "
+                + "drain budget and were abandoned", handlers.Count(h => !h.IsCompleted));
         }
         catch (Exception failure) when (
             failure is HttpListenerException or IOException or ObjectDisposedException)

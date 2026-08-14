@@ -114,7 +114,16 @@ internal sealed class OutboundEffects : IAsyncDisposable
             return;
 
         foreach (var run in runs)
-            run.Cancellation.Cancel();
+            CancelRun(run);
+    }
+
+    /// <summary>Cancels one run, tolerating the run finishing (and disposing its source) concurrently:
+    /// a completed run needs no cancel, and the same race guard exists at every other Cancel site in
+    /// the engine (see CueExecutor's prepared follows).</summary>
+    private static void CancelRun(Run run)
+    {
+        try { run.Cancellation.Cancel(); }
+        catch (ObjectDisposedException) { }
     }
 
     private async Task InterruptAndWaitAsync(Guid cueId)
@@ -125,7 +134,7 @@ internal sealed class OutboundEffects : IAsyncDisposable
             if (!_running.TryGetValue(cueId, out var runs))
                 return;
             foreach (var run in runs)
-                run.Cancellation.Cancel();
+                CancelRun(run);
             tasks = [.. runs.Select(run => run.Task)];
         }
         await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -142,7 +151,7 @@ internal sealed class OutboundEffects : IAsyncDisposable
         foreach (var run in runs)
         {
             run.CompleteNaturally = true;
-            run.Cancellation.Cancel();
+            CancelRun(run);
         }
     }
 
@@ -206,7 +215,11 @@ internal sealed class OutboundEffects : IAsyncDisposable
         finally
         {
             await run.Runner.WaitForPendingSendAsync().ConfigureAwait(false);
-            run.Cancellation.Dispose();
+
+            // Removed from the map BEFORE the source is disposed, and the Cancel call sites guard
+            // against the remaining sliver: Interrupt/Complete resolve the run under the gate but
+            // cancel outside it, so disposing while still discoverable threw ObjectDisposedException
+            // into whatever engine thread happened to be stopping the cue at that moment.
             lock (_gate)
             {
                 if (_running.TryGetValue(cueId, out var runs))
@@ -216,6 +229,8 @@ internal sealed class OutboundEffects : IAsyncDisposable
                         _running.Remove(cueId);
                 }
             }
+
+            run.Cancellation.Dispose();
         }
     }
 
@@ -326,7 +341,7 @@ internal sealed class OutboundEffects : IAsyncDisposable
         lock (_gate)
         {
             foreach (var run in _running.Values.SelectMany(runs => runs))
-                run.Cancellation.Cancel();
+                CancelRun(run);
             tasks = [.. _running.Values.SelectMany(runs => runs).Select(run => run.Task)];
         }
         await Task.WhenAll(tasks).ConfigureAwait(false);

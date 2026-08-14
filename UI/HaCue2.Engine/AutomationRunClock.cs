@@ -14,6 +14,15 @@ internal sealed class AutomationRunClock
     private static readonly TimeSpan MaxPoll = TimeSpan.FromMilliseconds(5);
     private static readonly TimeSpan MinimumPoll = TimeSpan.FromMilliseconds(1);
 
+    /// <summary>Inside this distance of the target the fine 1–5 ms poll runs, exactly as it always
+    /// has, so dispatch lateness is unchanged.</summary>
+    private static readonly TimeSpan FineApproach = TimeSpan.FromSeconds(1);
+
+    /// <summary>The coarse tier's ceiling. Far from the target the clock cannot need millisecond
+    /// answers - but it CAN be seeked or paused at any moment, so the nap stays short enough that a
+    /// jump toward the edge is noticed well inside the fine-approach window.</summary>
+    private static readonly TimeSpan CoarsePollCeiling = TimeSpan.FromMilliseconds(250);
+
     private readonly ICueExecutionHost _host;
     private readonly SessionClock _master;
     private readonly object _gate = new();
@@ -57,6 +66,13 @@ internal sealed class AutomationRunClock
         }
     }
 
+    /// <remarks>
+    /// Two-tier: far from the target it naps at up to a quarter second, and only inside the last
+    /// second does it drop to the 1–5 ms fine poll. The fine approach is what bounds dispatch
+    /// lateness, and it is unchanged - but a timeline whose next authored edge is ten minutes away
+    /// used to wake two hundred times a second for the whole ten minutes. Pause and seek both move
+    /// the coordinate this reads, so the coarse tier still notices them within one nap.
+    /// </remarks>
     public async Task WaitUntilAsync(TimeSpan target, CancellationToken cancellationToken)
     {
         while (true)
@@ -66,9 +82,22 @@ internal sealed class AutomationRunClock
             if (remaining <= TimeSpan.Zero)
                 return;
 
-            var wait = remaining > MaxPoll ? MaxPoll : remaining;
-            if (wait < MinimumPoll)
-                wait = MinimumPoll;
+            TimeSpan wait;
+            if (remaining > FineApproach)
+            {
+                // Half the distance, capped: a seek can only shorten the remaining time by so much
+                // per nap before the next pass re-measures.
+                var coarse = TimeSpan.FromTicks((remaining - FineApproach).Ticks / 2);
+                wait = coarse > CoarsePollCeiling ? CoarsePollCeiling
+                    : coarse < MaxPoll ? MaxPoll : coarse;
+            }
+            else
+            {
+                wait = remaining > MaxPoll ? MaxPoll : remaining;
+                if (wait < MinimumPoll)
+                    wait = MinimumPoll;
+            }
+
             await _host.DelayTimelineAsync(wait, cancellationToken).ConfigureAwait(false);
         }
     }

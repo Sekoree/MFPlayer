@@ -410,13 +410,44 @@ public sealed class SessionRecoveryService : IDisposable
         {
             // Stop only prevents new ticks. Drain the already-started capture before taking the final snapshot,
             // otherwise its older write can land after this flush or recreate the deleted session directory.
-            _activeCapture?.GetAwaiter().GetResult();
+            //
+            // BOUNDED, on both waits. This method blocks the UI thread during app teardown, and the
+            // capture path underneath it must never marshal back to that thread (CaptureCoreAsync and
+            // the persistence delegate say ConfigureAwait(false) throughout - keep it that way); the
+            // budget is the second line of defence, so a wedged disk or a future accidental UI-thread
+            // hop degrades to "recovery folder retained" instead of a shutdown that never returns.
+            if (_activeCapture is { } active)
+            {
+                if (!TryWaitBounded(active, FinalFlushBudget))
+                {
+                    Trace.LogWarning(
+                        "Session recovery: an in-flight capture did not finish within {Budget}; retaining the recovery folder",
+                        FinalFlushBudget);
+                    return false;
+                }
+
+                if (active.Exception is { } drained)
+                    Trace.LogWarning(drained.GetBaseException(),
+                        "Session recovery: the drained in-flight capture had failed");
+            }
+
             var path = _currentProjectPath();
             if (!discardChanges && _autoSaveEnabled() && !string.IsNullOrEmpty(path))
             {
                 var snapshot = _buildSnapshot();
                 var scripts = _recoveryScripts();
-                var result = CaptureCoreAsync(snapshot, path, true, scripts).GetAwaiter().GetResult();
+                var capture = CaptureCoreAsync(snapshot, path, true, scripts);
+                if (!TryWaitBounded(capture, FinalFlushBudget))
+                {
+                    Trace.LogWarning(
+                        "Session recovery: the final auto-save flush did not finish within {Budget}; retaining the recovery folder",
+                        FinalFlushBudget);
+                    StatusChanged?.Invoke(new SessionRecoveryStatus(
+                        SessionRecoveryState.Failed, Error: "final auto-save flush timed out"));
+                    return false;
+                }
+
+                var result = capture.GetAwaiter().GetResult();
                 mayDeleteRecovery = result.ProjectPersisted;
                 PublishStatus(result, projectWriteExpected: true);
             }
@@ -443,6 +474,25 @@ public sealed class SessionRecoveryService : IDisposable
             }
         }
         return mayDeleteRecovery;
+    }
+
+    /// <summary>How long the clean-shutdown flush may block the UI thread. Generous for a final disk
+    /// write, small against "the window never closes"; on overrun the recovery folder is retained,
+    /// which is the safe outcome - the next launch offers it back.</summary>
+    private static readonly TimeSpan FinalFlushBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>A bounded blocking wait that reports completion honestly: true when the task finished
+    /// inside the budget (faulted counts - the caller observes the fault itself), false on timeout.</summary>
+    private static bool TryWaitBounded(Task task, TimeSpan budget)
+    {
+        try
+        {
+            return task.Wait(budget);
+        }
+        catch (AggregateException)
+        {
+            return true; // completed by faulting inside the budget; the caller's own read rethrows
+        }
     }
 
     private void WriteSessionInfo()

@@ -262,6 +262,7 @@ public partial class AudioViewModel : ObservableObject
         OnPropertyChanged(nameof(MeterInSummaryIndex));
         OnPropertyChanged(nameof(SelectedOutputHint));
         OnPropertyChanged(nameof(IsSelectedOutputUnpatched));
+        OnPropertyChanged(nameof(UnpatchedWarning));
         // A refusal and a SOLO/CLEAR label are both about the output that was selected when they were
         // produced, so both follow the selection.
         OnPropertyChanged(nameof(SoloLabel));
@@ -426,6 +427,18 @@ public partial class AudioViewModel : ObservableObject
     public bool HasSelectedOutput => SelectedOutput is not null;
 
     public bool IsSelectedOutputUnpatched => SelectedOutput?.PatchedTo.IsBad ?? false;
+
+    /// <summary>
+    /// The unpatched warning, naming the SELECTED output.
+    /// </summary>
+    /// <remarks>
+    /// Computed here rather than written into the markup because the markup version was a literal
+    /// that named "Lobby" whichever output was selected - the one screen an operator opens to answer
+    /// "why is there no sound" pointed them at the wrong bus by name.
+    /// </remarks>
+    public string UnpatchedWarning =>
+        $"No device channel receives {SelectedOutputName} on this machine. "
+        + "Cues sending here run silent - never redirected to a default device.";
 
     public IReadOnlyList<string> Senders => SelectedOutput is null
         ? []

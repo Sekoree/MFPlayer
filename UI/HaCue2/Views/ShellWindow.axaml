@@ -82,10 +82,12 @@
           <TextBlock Text="{Binding ModeLabel}" />
         </Border>
 
-        <!-- Register item 2: opt-in latch, read-only document, GO untouched, never the launch state. -->
+        <!-- Register item 2: opt-in latch, authoring locked, GO untouched, never the launch state.
+             The copy says exactly what the journal enforces: notes stay editable under lock (the one
+             deliberate exception), so "read-only document" was a promise the app did not keep. -->
         <ToggleButton Grid.Column="5" Theme="{StaticResource ChipToggle}" Classes="latch-warn"
                       IsChecked="{Binding IsLocked}" Content="LOCK"
-                      ToolTip.Tip="Read-only document and destructive commands disabled. GO, preview and audition are untouched." />
+                      ToolTip.Tip="Authoring locked: cue structure and show settings cannot change. Notes stay editable. GO, preview and audition are untouched." />
 
         <Button Grid.Column="6" Theme="{StaticResource ChipButton}" Content="SETTINGS" Click="OnSettings" />
         <!-- Exactly one Diagnostics button in the whole app, and it is here. -->

@@ -1,0 +1,922 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>MFPlayer comprehensive engineering &amp; UX review — 2026-08-14</title>
+  <style>
+    :root {
+      --bg: #0a0d12;
+      --panel: #111722;
+      --panel2: #171f2c;
+      --ink: #eef4ff;
+      --muted: #9cabc0;
+      --line: #2b3748;
+      --accent: #74d7ff;
+      --accent2: #b594ff;
+      --good: #62d99b;
+      --critical: #ff5d73;
+      --high: #ff9b62;
+      --medium: #ffd166;
+      --low: #89b8ff;
+      --shadow: 0 18px 60px rgba(0,0,0,.24);
+      --radius: 16px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% -10%, rgba(116,215,255,.17), transparent 30rem),
+        radial-gradient(circle at 92% 0%, rgba(181,148,255,.15), transparent 30rem),
+        var(--bg);
+      line-height: 1.58;
+    }
+    a { color: var(--accent); text-underline-offset: .18em; }
+    a:hover { color: #bcecff; }
+    code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    code { color: #c9eaff; overflow-wrap: anywhere; }
+    pre {
+      overflow: auto;
+      margin: .8rem 0;
+      padding: .9rem 1rem;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      color: #d9e6f7;
+      background: #0b1018;
+      font-size: .86rem;
+    }
+    h1, h2, h3, h4 { line-height: 1.15; text-wrap: balance; }
+    h1 { max-width: 1050px; margin: .2rem 0 1rem; font-size: clamp(2.1rem, 6vw, 5.2rem); letter-spacing: -.055em; }
+    h2 { margin: 0 0 1rem; font-size: clamp(1.55rem, 3vw, 2.45rem); letter-spacing: -.025em; }
+    h3 { margin: 0 0 .75rem; font-size: 1.22rem; }
+    h4 { margin: 1.2rem 0 .35rem; font-size: .92rem; color: #c8d7ea; text-transform: uppercase; letter-spacing: .07em; }
+    p { margin: .55rem 0 .9rem; }
+    ul, ol { padding-left: 1.25rem; }
+    li + li { margin-top: .38rem; }
+    .shell { width: min(1500px, calc(100% - 32px)); margin: 0 auto; }
+    .hero { padding: clamp(3rem, 8vw, 8rem) 0 3rem; }
+    .eyebrow { color: var(--accent); font-size: .8rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    .lede { max-width: 920px; color: #c3d0e2; font-size: clamp(1.05rem, 2vw, 1.35rem); }
+    .meta, .stat-grid, .verdict-grid, .road-grid { display: grid; gap: 12px; }
+    .meta { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 2rem; }
+    .meta > div, .stat, .verdict, .road, .callout, .finding, .arch, .table-wrap {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(150deg, rgba(23,31,44,.94), rgba(14,20,29,.94));
+      box-shadow: var(--shadow);
+    }
+    .meta > div { padding: .9rem 1rem; }
+    .meta small, .stat small { display: block; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+    .meta strong { display: block; margin-top: .2rem; font-size: .96rem; overflow-wrap: anywhere; }
+    nav.sticky {
+      position: sticky; top: 0; z-index: 20;
+      border-block: 1px solid var(--line);
+      background: rgba(10,13,18,.92);
+      backdrop-filter: blur(16px);
+    }
+    nav .shell { display: flex; gap: .4rem; overflow: auto; padding: .65rem 0; scrollbar-width: thin; }
+    nav a { flex: 0 0 auto; padding: .45rem .7rem; border-radius: 8px; color: #c6d2e2; text-decoration: none; font-size: .82rem; }
+    nav a:hover { background: var(--panel2); color: white; }
+    main section { padding: 4.25rem 0 0; scroll-margin-top: 64px; }
+    .section-note { max-width: 900px; color: var(--muted); }
+    .stat-grid { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); margin-top: 1.5rem; }
+    .stat { padding: 1.1rem; box-shadow: none; }
+    .stat b { display: block; margin-top: .15rem; font-size: 1.65rem; letter-spacing: -.04em; }
+    .verdict-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 1.5rem; }
+    .verdict { padding: 1.2rem 1.3rem; box-shadow: none; }
+    .verdict.good { border-top: 3px solid var(--good); }
+    .verdict.warn { border-top: 3px solid var(--high); }
+    .verdict.info { border-top: 3px solid var(--accent); }
+    .pill, .tag {
+      display: inline-flex; align-items: center; gap: .35rem;
+      border: 1px solid currentColor; border-radius: 999px;
+      padding: .2rem .55rem; font-size: .72rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+    }
+    .critical { color: var(--critical); }
+    .high { color: var(--high); }
+    .medium { color: var(--medium); }
+    .low { color: var(--low); }
+    .confirmed { color: #80e6b1; }
+    .measured { color: #78dcff; }
+    .risk { color: #d0a8ff; }
+    .gap { color: #c3cedd; }
+    .callout { padding: 1.2rem 1.35rem; margin: 1.25rem 0; box-shadow: none; }
+    .callout.urgent { border-left: 4px solid var(--critical); }
+    .callout.good { border-left: 4px solid var(--good); }
+    .callout.note { border-left: 4px solid var(--accent); }
+    .table-wrap { overflow: auto; box-shadow: none; }
+    table { width: 100%; border-collapse: collapse; font-size: .91rem; }
+    th, td { padding: .8rem .85rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: #d9e7f8; background: rgba(255,255,255,.025); font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    .nowrap { white-space: nowrap; }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; margin: 1.25rem 0; }
+    .toolbar input, .toolbar button {
+      min-height: 40px; border: 1px solid var(--line); border-radius: 9px;
+      color: var(--ink); background: var(--panel); font: inherit;
+    }
+    .toolbar input { min-width: min(420px, 100%); flex: 1; padding: .6rem .8rem; }
+    .toolbar button { cursor: pointer; padding: .45rem .72rem; }
+    .toolbar button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: rgba(116,215,255,.09); }
+    .findings { display: grid; gap: 14px; }
+    .finding { padding: clamp(1.1rem, 3vw, 1.55rem); box-shadow: none; scroll-margin-top: 76px; }
+    .finding[data-severity="critical"] { border-left: 4px solid var(--critical); }
+    .finding[data-severity="high"] { border-left: 4px solid var(--high); }
+    .finding[data-severity="medium"] { border-left: 4px solid var(--medium); }
+    .finding[data-severity="low"] { border-left: 4px solid var(--low); }
+    .finding.hidden { display: none; }
+    .finding-head { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: .65rem; }
+    .finding-id { color: var(--muted); font: 800 .78rem ui-monospace, monospace; letter-spacing: .08em; }
+    .finding h3 { width: 100%; margin-top: .25rem; }
+    .finding-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(260px, .75fr); gap: 1.25rem 2rem; }
+    .evidence-list { color: #bdcadb; font-size: .9rem; }
+    .evidence-list a { text-decoration-style: dotted; }
+    .accept { border-left: 2px solid var(--good); padding-left: .85rem; }
+    .arch { padding: 1.2rem; box-shadow: none; }
+    .arch-grid { display: grid; gap: 9px; }
+    .arch-row { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: stretch; }
+    .arch-label { display: grid; place-items: center; color: var(--muted); font-size: .75rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+    .arch-boxes { display: flex; flex-wrap: wrap; gap: 8px; padding: .8rem; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.02); }
+    .arch-boxes span { padding: .38rem .58rem; border-radius: 7px; background: #202a39; color: #dfeafa; font-size: .83rem; }
+    .road-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .road { padding: 1.25rem; box-shadow: none; }
+    .road .num { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; color: #06111a; background: var(--accent); font-weight: 900; }
+    .footnotes { color: var(--muted); font-size: .86rem; }
+    footer { padding: 5rem 0 3rem; color: var(--muted); }
+    @media (max-width: 780px) {
+      .shell { width: min(100% - 20px, 1500px); }
+      .finding-grid { grid-template-columns: 1fr; }
+      .arch-row { grid-template-columns: 1fr; }
+      .arch-label { justify-content: start; }
+      th, td { padding: .65rem; }
+    }
+    @media (prefers-color-scheme: light) {
+      :root { --bg:#f3f6fa; --panel:#fff; --panel2:#edf2f8; --ink:#132033; --muted:#5e6e82; --line:#ccd7e5; --accent:#006b94; --accent2:#6b46b8; --good:#0b7d4c; --critical:#bc1530; --high:#a8470a; --medium:#846000; --low:#1e5fa7; --shadow:0 16px 42px rgba(26,46,70,.09); }
+      body { background: radial-gradient(circle at 8% -10%, rgba(30,170,220,.13), transparent 30rem), var(--bg); }
+      .lede { color:#42556d; }
+      nav.sticky { background: rgba(243,246,250,.94); }
+      nav a { color:#32445b; }
+      code { color:#075e80; }
+      pre { background:#f7f9fc; color:#1c2c40; }
+      .finding, .meta > div, .stat, .verdict, .road, .callout, .arch, .table-wrap { background:linear-gradient(150deg,#fff,#f8fafc); }
+      .arch-boxes span { background:#e8eef6; color:#26374e; }
+    }
+    @media print {
+      :root { --bg:white; --panel:white; --panel2:white; --ink:#111; --muted:#444; --line:#bbb; --shadow:none; }
+      body { background:white; font-size:10pt; }
+      nav.sticky, .toolbar { display:none; }
+      main section { padding-top:1.6rem; }
+      .hero { padding:1rem 0; }
+      .finding, .callout, .verdict, .road, .stat, .arch { break-inside:avoid; box-shadow:none; }
+      a { color:#111; text-decoration:none; }
+      a[href^="http"]::after { content:" (" attr(href) ")"; font-size:8pt; overflow-wrap:anywhere; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="shell">
+      <div class="eyebrow">Independent repository review · audit only</div>
+      <h1>MFPlayer engineering, playback &amp; operator UX review</h1>
+      <p class="lede">A whole-repository assessment with emphasis on the reusable media framework, HaPlay, and especially HaCue2. The implementation is substantially stronger than its public packaging and documentation imply; the most urgent work is concentrated in release truth, two correctness races, remote-service lifecycle, and CPU fallback budgets—not a wholesale rewrite.</p>
+      <div class="meta">
+        <div><small>Snapshot</small><strong><code>19e5a68ee7dd</code> · next-experiment</strong></div>
+        <div><small>Reviewed</small><strong>14 August 2026 · Europe/Berlin</strong></div>
+        <div><small>Repository surface</small><strong>2,555 tracked files · 106 projects under MediaFramework/UI</strong></div>
+        <div><small>Scope</small><strong>Framework · HaCue2 · HaPlay · HaViz · CI · docs · references</strong></div>
+      </div>
+    </div>
+  </header>
+
+  <nav class="sticky" aria-label="Report sections">
+    <div class="shell">
+      <a href="#verdict">Verdict</a>
+      <a href="#method">Method</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#findings">Findings</a>
+      <a href="#framework">Framework</a>
+      <a href="#hacue2">HaCue2</a>
+      <a href="#haplay">HaPlay</a>
+      <a href="#extras">Extras</a>
+      <a href="#performance">Performance</a>
+      <a href="#validation">Validation</a>
+      <a href="#roadmap">Roadmap</a>
+    </div>
+  </nav>
+
+  <main>
+    <section id="verdict">
+      <div class="shell">
+        <div class="eyebrow">Executive verdict</div>
+        <h2>Strong runtime engineering, blocked distribution truth, focused correctness work</h2>
+        <p class="section-note">This is not a fragile prototype. The repository has unusually good ownership documentation, architecture tests, AOT discipline, lifecycle regression coverage, bounded real-time queues, and operator-oriented UI work. It is also not yet a framework that an external user can install from the advertised package surface, and HaCue2 has two code-path defects capable of losing confidence in saved state or cancelling the wrong cue.</p>
+
+        <div class="verdict-grid">
+          <article class="verdict good">
+            <h3>What is already strong</h3>
+            <p>Explicit registries and native lifetimes, a single show-session dispatcher, frame ownership, pooled hot paths, architecture graph enforcement, warning-as-error/AOT gates, broad regression tests, and launch smokes. HaCue2’s direct placement/warp and absolute-time automation UX are particularly well judged.</p>
+          </article>
+          <article class="verdict warn">
+            <h3>What blocks a release claim</h3>
+            <p><code>S.Media.Full</code> cannot restore from public NuGet because it requires a repository-local <code>FFmpeg.AutoGen 9.0.0</code>. Linux release jobs fetch a mutable FFmpeg master artifact while the emitted manifest, docs, and native SBOM say “8.1”.</p>
+          </article>
+          <article class="verdict info">
+            <h3>Where to invest next</h3>
+            <p>Fix package/native provenance as one program; introduce version-aware HaCue2 persistence; scope active cue cancellation; qualify the exact HaCue2 upload bytes; then bound its remote transport and establish CPU-fallback tiers before decomposing large coordinators.</p>
+          </article>
+        </div>
+
+        <div class="stat-grid" aria-label="Finding counts">
+          <div class="stat"><small>Critical</small><b class="critical">1</b></div>
+          <div class="stat"><small>High</small><b class="high">6</b></div>
+          <div class="stat"><small>Medium</small><b class="medium">14</b></div>
+          <div class="stat"><small>Low</small><b class="low">3</b></div>
+          <div class="stat"><small>Passing tests observed</small><b>4,441</b></div>
+          <div class="stat"><small>Source / AXAML</small><b>391,565 lines</b></div>
+        </div>
+
+        <div class="callout urgent">
+          <strong>Release recommendation.</strong> Continue using the current branch for development and controlled internal use, but do not describe the framework packages as publicly consumable or the native artifact metadata as authoritative until F-01 and F-02 are closed. Treat F-03 and F-04 as show-safety defects and add their regression tests before broader HaCue2 rollout.
+        </div>
+      </div>
+    </section>
+
+    <section id="method">
+      <div class="shell">
+        <div class="eyebrow">Method &amp; confidence</div>
+        <h2>How the review was performed</h2>
+        <div class="verdict-grid">
+          <article class="verdict">
+            <h3>Static inspection</h3>
+            <p>Mapped the solution and project-reference graph; traced registry/native ownership, decode/player/session/compositor paths, output leases, project restore, cue dispatch, persistence, remote APIs, and application composition roots. Reviewed current XAML and view-model paths rather than treating older plans as current truth.</p>
+          </article>
+          <article class="verdict">
+            <h3>Executable validation</h3>
+            <p>Ran targeted Release builds, 25 test assemblies, timing opt-ins, direct HaCue2 and HaPlay first-frame launches with isolated settings/cache roots, package vulnerability/deprecation/outdated checks, package creation, a public-feed-only restore, and a fresh NativeAOT publish/run.</p>
+          </article>
+          <article class="verdict">
+            <h3>UX review</h3>
+            <p>Inspected full app shells, command priority, responsive behavior, focus/accessibility tests, editing models, dialogs, failure/status surfaces, localization and operator safety. A real desktop launch succeeded, but capture on this host produced an unusable black screenshot; visual conclusions therefore combine live smoke, headless rendered-control tests, and layout inspection rather than a pixel-perfect screenshot review.</p>
+          </article>
+          <article class="verdict">
+            <h3>Upstream check</h3>
+            <p>Compared central pins and ignored reference snapshots with official package/release sources. The checks were current on 2026-08-14; they should be refreshed automatically rather than copied indefinitely into documentation.</p>
+          </article>
+        </div>
+
+        <div class="callout note">
+          <strong>Evidence labels used below:</strong> <span class="tag confirmed">confirmed</span> means the code path or command directly demonstrates the condition; <span class="tag measured">measured</span> is observed test, launch, or benchmark data; <span class="tag risk">design risk</span> is strongly supported but needs an operational reproduction; <span class="tag gap">coverage gap</span> identifies missing proof, not a demonstrated runtime failure.
+        </div>
+
+        <h3>Limitations</h3>
+        <ul>
+          <li>No Windows runner, Android SDK/workload, NDI receiver, projector hot-plug rig, physical MIDI/OSC controller, multi-channel audio interface, or real MMD corpus was available locally. The repository’s CI paths and tests for those surfaces were inspected, but hardware behavior was not re-certified.</li>
+          <li>The checked-in BenchmarkDotNet artifacts were analyzed rather than rerunning the full benchmark matrix. They were committed after the last relevant CPU compositor change and remain useful, but the roadmap calls for repeatable current-head performance gates.</li>
+          <li>“Comprehensive” means repository-wide risk-based coverage, not proof of every codec/device/driver combination. Optional live YouTube and real-asset MMD tests remain environment-gated.</li>
+          <li>This deliverable intentionally changes no framework or application source. Only this report was added.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <div class="shell">
+        <div class="eyebrow">System shape</div>
+        <h2>Architecture assessment</h2>
+        <p class="section-note">The dependency direction is coherent and executable: architecture tests parse every production project reference and explicitly permit only downward edges. The main risk is not layer inversion; it is behavioral surface area accumulating behind a few very large coordinators.</p>
+        <div class="arch" role="img" aria-label="MFPlayer architecture layers">
+          <div class="arch-grid">
+            <div class="arch-row"><div class="arch-label">Applications</div><div class="arch-boxes"><span>HaCue2 shell</span><span>HaCue2.Engine</span><span>HaPlay</span><span>HaViz Desktop / Android</span><span>Check &amp; Seed tools</span></div></div>
+            <div class="arch-row"><div class="arch-label">Product runtime</div><div class="arch-boxes"><span>S.Media.Session</span><span>S.Media.Players</span><span>S.Control</span><span>Output/session coordinators</span></div></div>
+            <div class="arch-row"><div class="arch-label">Media graph</div><div class="arch-boxes"><span>Routing</span><span>Time</span><span>Compositor</span><span>GPU</span><span>Encode / Stream</span></div></div>
+            <div class="arch-row"><div class="arch-label">Features</div><div class="arch-boxes"><span>FFmpeg decode</span><span>PortAudio / miniaudio</span><span>SDL3 / Avalonia present</span><span>NDI</span><span>Subtitles</span><span>projectM</span><span>YouTube</span><span>MMD</span><span>Text</span></div></div>
+            <div class="arch-row"><div class="arch-label">Contracts</div><div class="arch-boxes"><span>S.Media.Core</span><span>Frames &amp; ownership</span><span>Registry &amp; capabilities</span><span>Diagnostics</span></div></div>
+            <div class="arch-row"><div class="arch-label">Native boundary</div><div class="arch-boxes"><span>FFmpeg.AutoGen</span><span>PALib / MALib</span><span>NDILib</span><span>LibAssLib</span><span>ProjectMLib</span><span>PMLib / OSCLib</span><span>SDL3</span><span>Bullet shim</span></div></div>
+          </div>
+        </div>
+
+        <div class="callout good">
+          <strong>Keep these architectural constraints.</strong> The immutable <code>MediaRegistry</code>, owned-versus-borrowed lifetime contract, reverse-order native unwind, single-dispatcher show state, feature modules, separate app composition roots, and test-enforced dependency map are the right foundation. The long-term recommendations below preserve those properties.
+        </div>
+      </div>
+    </section>
+
+    <section id="findings">
+      <div class="shell">
+        <div class="eyebrow">Finding index</div>
+        <h2>24 ranked findings</h2>
+        <div class="toolbar" aria-label="Finding filters">
+          <input id="finding-search" type="search" placeholder="Search findings, components, evidence…" aria-label="Search findings">
+          <button type="button" data-filter="all" aria-pressed="true">All</button>
+          <button type="button" data-filter="critical" aria-pressed="false">Critical</button>
+          <button type="button" data-filter="high" aria-pressed="false">High</button>
+          <button type="button" data-filter="medium" aria-pressed="false">Medium</button>
+          <button type="button" data-filter="low" aria-pressed="false">Low</button>
+          <span id="finding-count" class="mono" aria-live="polite">24 shown</span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Severity</th><th>Area</th><th>Finding</th><th>Evidence</th></tr></thead>
+            <tbody>
+              <tr><td><a href="#f01">F-01</a></td><td class="critical">Critical</td><td>Packages</td><td>Advertised framework graph cannot restore from public NuGet</td><td>Confirmed</td></tr>
+              <tr><td><a href="#f02">F-02</a></td><td class="high">High</td><td>Native release</td><td>Mutable FFmpeg master is described and SBOM-labelled as stable 8.1</td><td>Confirmed</td></tr>
+              <tr><td><a href="#f03">F-03</a></td><td class="high">High</td><td>HaCue2</td><td>An edit during Save can be absent from disk while the document becomes clean</td><td>Confirmed code path</td></tr>
+              <tr><td><a href="#f04">F-04</a></td><td class="high">High</td><td>Session</td><td>Stopping one cue/group can cancel an unrelated ordinary in-flight fire</td><td>Confirmed code path</td></tr>
+              <tr><td><a href="#f05">F-05</a></td><td class="high">High</td><td>HaCue2 remote</td><td>Unbounded request tasks and unbounded shutdown drain</td><td>Confirmed design</td></tr>
+              <tr><td><a href="#f06">F-06</a></td><td class="high">High</td><td>HaCue2 release</td><td>The exact uploaded app is never launch-gated</td><td>Confirmed</td></tr>
+              <tr><td><a href="#f07">F-07</a></td><td class="high">High</td><td>Performance</td><td>Common CPU-compositor fallback shapes miss a 60 fps budget at 720p</td><td>Measured artifact</td></tr>
+              <tr><td><a href="#f08">F-08</a></td><td class="medium">Medium</td><td>Session</td><td>One global fire lock creates cross-list head-of-line blocking</td><td>Confirmed design</td></tr>
+              <tr><td><a href="#f09">F-09</a></td><td class="medium">Medium</td><td>HaCue2 UX</td><td>Long project identities can crowd the fixed-priority title bar</td><td>Design risk</td></tr>
+              <tr><td><a href="#f10">F-10</a></td><td class="medium">Medium</td><td>HaPlay UX</td><td>Cue-list command bar is wider than the supported minimum workspace</td><td>Design risk</td></tr>
+              <tr><td><a href="#f11">F-11</a></td><td class="medium">Medium</td><td>Maintainability</td><td>Session and view-model coordinators have grown beyond reviewable feature boundaries</td><td>Measured structure</td></tr>
+              <tr><td><a href="#f12">F-12</a></td><td class="medium">Medium</td><td>Startup</td><td>Cold initialization breaches its own slow thresholds and device probing floods diagnostics</td><td>Measured</td></tr>
+              <tr><td><a href="#f13">F-13</a></td><td class="medium">Medium</td><td>Framework API</td><td>Stop/Pause, TryOpen, console subscription, and disposal diagnostics create semantic friction</td><td>Confirmed API</td></tr>
+              <tr><td><a href="#f14">F-14</a></td><td class="medium">Medium</td><td>Compositor</td><td>GPU-only effects silently become pass-through on CPU fallback</td><td>Confirmed contract</td></tr>
+              <tr><td><a href="#f15">F-15</a></td><td class="medium">Medium</td><td>HaPlay security</td><td>LAN control deliberately permits no-token operation</td><td>Confirmed policy</td></tr>
+              <tr><td><a href="#f16">F-16</a></td><td class="medium">Medium</td><td>Developer experience</td><td>SDK/workload coupling and a user-specific NDK fallback reduce reproducibility</td><td>Confirmed / reproduced</td></tr>
+              <tr><td><a href="#f17">F-17</a></td><td class="medium">Medium</td><td>CI security</td><td>Dependency, code-scanning, action-integrity, and managed-SBOM gates are absent</td><td>Coverage gap</td></tr>
+              <tr><td><a href="#f18">F-18</a></td><td class="medium">Medium</td><td>References</td><td>The 22 GB ignored reference cache drifts from authoritative pins without a lock manifest</td><td>Confirmed drift</td></tr>
+              <tr><td><a href="#f19">F-19</a></td><td class="medium">Medium</td><td>Documentation</td><td>Version, native ABI, package, and product-positioning claims contradict current code</td><td>Confirmed</td></tr>
+              <tr><td><a href="#f20">F-20</a></td><td class="medium">Medium</td><td>Acceptance</td><td>Automated UI coverage is strong but not a physical show-rig certification</td><td>Coverage gap</td></tr>
+              <tr><td><a href="#f21">F-21</a></td><td class="medium">Medium</td><td>HaCue2 UX</td><td>Operator copy is hardcoded, unlike HaPlay’s localization-ready surface</td><td>Confirmed design</td></tr>
+              <tr><td><a href="#f22">F-22</a></td><td class="low">Low</td><td>HaCue2 UX</td><td>“Read-only” lock copy contradicts the intentionally writable note field</td><td>Confirmed</td></tr>
+              <tr><td><a href="#f23">F-23</a></td><td class="low">Low</td><td>HaViz</td><td>Settings durability and terse output-health UX lag the main apps</td><td>Confirmed / UX risk</td></tr>
+              <tr><td><a href="#f24">F-24</a></td><td class="low">Low</td><td>Dependencies</td><td>SkiaSharp needs a planned major migration; Extensions has a patch update</td><td>Current upstream check</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="framework">
+      <div class="shell">
+        <div class="eyebrow">Detailed findings · framework &amp; release</div>
+        <h2>Media framework libraries</h2>
+        <div class="findings">
+
+          <article class="finding" id="f01" data-severity="critical" data-text="packages nuget ffmpeg autogen restore distribution full consumer">
+            <div class="finding-head"><span class="finding-id">F-01</span><span class="pill critical">Critical</span><span class="tag confirmed">Confirmed</span><h3>The advertised framework package graph cannot restore from public NuGet</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p><strong>Observation.</strong> The central package graph requires <code>FFmpeg.AutoGen 9.0.0</code>, explicitly notes that it is not on nuget.org, and resolves it through the repository-local <code>./packages</code> feed. The produced <code>S.Media.Full 1.1.0</code> package carries that dependency. A consumer without this checkout therefore has no source for one of the graph’s required packages.</p>
+                <p><strong>Direct reproduction.</strong> Restoring <code>S.Media.Full.csproj</code> with a fresh global-package cache and nuget.org as the only source failed with <code>NU1102</code>: 61 versions were found and the nearest was 8.1.0. Packaging <code>S.Media.Core</code> and <code>S.Media.Full</code> inside the repo succeeds, which shows why the problem is easy to miss locally.</p>
+                <h4>Long-term fix</h4>
+                <p>Choose one supported distribution contract: (1) align the public framework with an official FFmpeg.AutoGen release; (2) publish the generated fork under a unique, owned package ID and documented feed; or (3) internalize the generated bindings into the first-party FFmpeg binding package. Do not publish a private rebuild under an upstream ID/version. Add an end-to-end package job that packs every first-party package, restores a blank consumer from a staged feed plus nuget.org, compiles/runs a minimal player, validates symbols/docs/license metadata, and publishes only from a signed tag.</p>
+                <div class="accept"><strong>Acceptance.</strong> A machine with no clone, empty NuGet cache, and only documented feeds can install <code>S.Media</code>/<code>S.Media.Full</code>, build, and run the sample; the exact published nupkgs are retained as CI artifacts and provenance-linked to the tag.</div>
+              </div>
+              <div class="evidence-list">
+                <h4>Evidence</h4>
+                <ul>
+                  <li><a href="../Directory.Packages.props"><code>Directory.Packages.props:34–43</code></a> — local-only 9.0.0 pin.</li>
+                  <li><a href="../nuget.config"><code>nuget.config:3–10</code></a> — repo-local package source.</li>
+                  <li><a href="../Doc/Packages.md"><code>Doc/Packages.md:1–34</code></a> — packages described as published/installable.</li>
+                  <li><a href="https://www.nuget.org/packages/FFmpeg.AutoGen">Official NuGet version list</a> — current public package is 8.1.0.</li>
+                  <li>No <code>dotnet pack</code>, staged-consumer restore, or <code>nuget push</code> step exists under <code>.github/</code>.</li>
+                </ul>
+              </div>
+            </div>
+          </article>
+
+          <article class="finding" id="f02" data-severity="high" data-text="native ffmpeg provenance sbom mutable master 8.1 9.0 supply chain">
+            <div class="finding-head"><span class="finding-id">F-02</span><span class="pill high">High</span><span class="tag confirmed">Confirmed</span><h3>Mutable FFmpeg master is shipped under stable-8.1 provenance</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p><strong>Observation.</strong> Linux CI downloads <code>releases/download/latest/ffmpeg-master-latest…</code> and checks only for the current <code>libavformat.so.63</code> name. That URL is mutable. Meanwhile the required-native manifest says “FFmpeg 8.1”, the dependency matrix says “8.1 / avcodec-62”, the release-tier document says “8.1”, and the SBOM generator labels every FFmpeg binary <code>n8.1</code>. The central binding is a custom “9.0.0” targeting ABI 63. These claims cannot all describe the same binary.</p>
+                <p>The official FFmpeg release index currently contains 8.1.2 and snapshots, while official FFmpeg.AutoGen is 8.1.0. The repository is intentionally consuming a future/master ABI snapshot, not an FFmpeg 9 stable release. That can be legitimate, but its identity must be exact and immutable.</p>
+                <h4>Long-term fix</h4>
+                <p>Create one machine-readable native lock (for example <code>native-dependencies.lock.json</code>) containing upstream project, exact tag/commit or immutable artifact URL, SHA-256, expected ABI/version function result, license, redistribution policy, and supported RIDs. Generate package pins, docs, manifests, CI download steps, and SBOM labels from it. Verify every FFmpeg library’s runtime version/ABI—not just filename presence—and fail on drift. If master is required, call it a dated snapshot tied to a commit/digest.</p>
+                <div class="accept"><strong>Acceptance.</strong> Changing any FFmpeg URL, hash, ABI, binding version, documentation claim, or SBOM label independently breaks CI; the uploaded artifact’s queried versions and hashes match the generated provenance record.</div>
+              </div>
+              <div class="evidence-list">
+                <h4>Evidence</h4>
+                <ul>
+                  <li><a href="../.github/workflows/build.yml"><code>build.yml:91–115, 487–505</code></a> — mutable master/latest download.</li>
+                  <li><a href="../.github/native-manifest/linux-x64.txt"><code>linux-x64.txt:1–11</code></a> — 8.1 label.</li>
+                  <li><a href="../Doc/Native-Dependencies.md"><code>Native-Dependencies.md:7–18</code></a> — avcodec-62 and stale SDL version.</li>
+                  <li><a href="../scripts/generate-native-sbom.sh"><code>generate-native-sbom.sh:14–35</code></a> — hardcoded 8.1 provenance.</li>
+                  <li><a href="../scripts/check-native-versions.sh"><code>check-native-versions.sh:1–145</code></a> — version gates omit FFmpeg.</li>
+                  <li><a href="https://ffmpeg.org/releases/">Official FFmpeg release index</a>.</li>
+                </ul>
+              </div>
+            </div>
+          </article>
+
+          <article class="finding" id="f04" data-severity="high" data-text="session cue stop cancel unrelated active fire group correctness">
+            <div class="finding-head"><span class="finding-id">F-04</span><span class="pill high">High</span><span class="tag confirmed">Confirmed code path</span><h3>Targeted stop can cancel an unrelated ordinary in-flight cue fire</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p><strong>Observation.</strong> <code>CueRunner</code> stores a single anonymous <code>_activeFireCts</code>. Both <code>CancelFiresForCue(cueId)</code> and <code>CancelFiresForGroup(groupId)</code> unconditionally call <code>CancelActiveFire()</code> before applying identity-aware matching only to prepared scheduled batches. <code>ShowSession.StopCueAsync</code> and group <code>StopAsync</code> call those methods. If cue A is in pre-wait/open while the operator stops unrelated cue B or group B, A is cancelled.</p>
+                <p>Existing scoping tests correctly protect scheduled batches, but they park <code>FireCuesIndependentScheduledAsync</code>; they do not cover the ordinary <code>_activeFireCts</code> path. The nearby comments promise targeted semantics that the active-fire representation cannot express.</p>
+                <h4>Long-term fix</h4>
+                <p>Replace the anonymous CTS with an active-fire record containing cue IDs, affected runtime group IDs, generation, kind, and CTS. Targeted stop cancels only a matching record; panic/load/dispose retain blanket cancellation. If simultaneous fires are introduced for F-08, make this an indexed set rather than another single slot.</p>
+                <div class="accept"><strong>Acceptance.</strong> Deterministic tests block cue A in pre-wait and in cancellable open, stop unrelated cue/group B, then prove A fires. Matching cue/group stop must cancel it; panic/load/dispose must cancel all. Include parallel list and scheduled-batch combinations.</div>
+              </div>
+              <div class="evidence-list">
+                <h4>Evidence</h4>
+                <ul>
+                  <li><a href="../MediaFramework/Media/S.Media.Session/CueRunner.cs"><code>CueRunner.cs:24–44, 191–211, 475–517</code></a>.</li>
+                  <li><a href="../MediaFramework/Media/S.Media.Session/ShowSession.Stops.cs"><code>ShowSession.Stops.cs:31–46, 130–154</code></a>.</li>
+                  <li><a href="../MediaFramework/Test/S.Media.Session.Tests/CueFireScopingTests.cs"><code>CueFireScopingTests.cs:5–115</code></a> — scheduled-only coverage.</li>
+                </ul>
+              </div>
+            </div>
+          </article>
+
+          <article class="finding" id="f07" data-severity="high" data-text="performance cpu compositor 60 fps 720p bilinear bicubic layers clear">
+            <div class="finding-head"><span class="finding-id">F-07</span><span class="pill high">High</span><span class="tag measured">Measured artifact</span><h3>Common CPU fallback shapes miss a 60 fps budget at 720p</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p><strong>Observation.</strong> The checked-in BenchmarkDotNet results report 21.21 ms for the representative four-layer 1280×720 deck shape, versus a 16.67 ms 60 fps budget. One bilinear layer costs roughly 28–36 ms and bicubic 69–92 ms. Only nearest/source/identity reaches the specialized 222 µs path. Allocations are already excellent (312 B), so the bottleneck is compute/memory bandwidth, not GC.</p>
+                <p>The compositor clears the full rented output before examining layers, even when the first opaque source layer provably overwrites the canvas. The generic path performs inverse mapping, sampling, effects, and blend dispatch per pixel. CPU fallback is valuable for tests, servers, and degraded operation, but the supported quality/frame-rate envelope is currently implicit.</p>
+                <h4>Long-term fix</h4>
+                <p>Define explicit CPU fallback tiers and budgets first. Then skip the clear when coverage analysis proves a full overwrite; specialize common bilinear/source-over/effect chains by rows or tiles; vectorize kernels; cache transform increments; and parallelize tiles only where the crossover is measured. Default operational apps to GPU and surface a conspicuous degraded-mode/capability warning rather than silently promising the same output class.</p>
+                <div class="accept"><strong>Acceptance.</strong> CI tracks 720p/1080p/4K at 1/4/8 layers, nearest/bilinear, identity/scale/rotate, source/source-over and built-in effects; named supported tiers stay inside p95 frame budgets on a pinned reference machine with a reviewed regression threshold.</div>
+              </div>
+              <div class="evidence-list">
+                <h4>Existing benchmark artifact</h4>
+                <table>
+                  <tr><th>1280×720 case</th><th>Mean</th></tr>
+                  <tr><td>Nearest, Source, identity</td><td>0.222 ms</td></tr>
+                  <tr><td>Nearest, SourceOver, identity</td><td>13.90 ms</td></tr>
+                  <tr><td>Nearest, Source, rotated</td><td>17.14 ms</td></tr>
+                  <tr><td>Four-layer deck shape</td><td>21.21 ms</td></tr>
+                  <tr><td>Bilinear, one layer</td><td>28.00–36.33 ms</td></tr>
+                  <tr><td>Bicubic, one layer</td><td>69.22–91.88 ms</td></tr>
+                </table>
+                <ul>
+                  <li><a href="../BenchmarkDotNet.Artifacts/results/S.Media.Compositor.Benchmarks.CpuCompositorBenchmarks-report-github.md"><code>CpuCompositorBenchmarks report</code></a>.</li>
+                  <li><a href="../BenchmarkDotNet.Artifacts/results/S.Media.Compositor.Benchmarks.CpuCompositorMultiLayerBenchmarks-report-github.md"><code>MultiLayer report</code></a>.</li>
+                  <li><a href="../MediaFramework/Media/S.Media.Compositor/CpuVideoCompositor.cs"><code>CpuVideoCompositor.cs:78–110, 148–180</code></a>.</li>
+                </ul>
+              </div>
+            </div>
+          </article>
+
+          <article class="finding" id="f08" data-severity="medium" data-text="session cue runner global fire lock head of line latency lists groups">
+            <div class="finding-head"><span class="finding-id">F-08</span><span class="pill medium">Medium</span><span class="tag confirmed">Confirmed design</span><h3>One global fire lock creates cross-list head-of-line blocking</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p><code>_fireLock</code> serializes every ordinary fire and holds across cue selection, authored pre-wait, media open, fire, and cursor advance. This protects duplicate GO/cursor correctness, but an unrelated list’s GO can wait behind a cold or slow open—up to the 30-second batch preparation bound in some paths. The UI dispatcher remains responsive; operator action latency does not.</p>
+                <h4>Long-term fix</h4>
+                <p>Use per-runtime-group serialization with stable multi-lock ordering for multi-group batches, or a two-phase model: reserve identities/cursors, prepare off-lock, then perform a short generation-checked commit. Preserve exactly-once GO and stale-generation rejection. This work should be designed together with F-04 because multiple active fires need identity-aware cancellation.</p>
+                <div class="accept"><strong>Acceptance.</strong> A blocked open on list A does not delay GO on unrelated list B; two simultaneous GO commands on the same list cannot double-fire; overlapping batches remain deadlock-free; latency histograms expose select, prepare, commit, and wait phases.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../MediaFramework/Media/S.Media.Session/CueRunner.cs"><code>CueRunner.cs:40–60, 191–224, 531–558</code></a>.</li><li>Current comments explicitly note that a wedged open once held the lock for every GO.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f11" data-severity="medium" data-text="maintainability large files viewmodels show session decomposition complexity">
+            <div class="finding-head"><span class="finding-id">F-11</span><span class="pill medium">Medium</span><span class="tag risk">Measured structure</span><h3>Session and UI coordinators have grown beyond comfortable feature boundaries</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>The dependency graph is layered, but behavioral ownership is concentrated. Examples: HaCue2 <code>InspectorViewModel</code> is 3,935 lines, <code>CuesViewModel</code> 3,473, <code>VideoViewModel</code> 2,578; framework <code>ClipCompositionRuntime</code> is 3,692 and the primary <code>ShowSession.cs</code> is 2,238 before its partials; HaPlay’s <code>MediaPlayerViewModel</code> is 2,439 plus a 1,533-line session partial, <code>CueNodeViewModel</code> 2,105, <code>CueShowSessionCoordinator</code> 1,964, and <code>CuePlayerView.axaml</code> 1,680. There are 331 public declarations across <code>ShowSession*.cs</code>, including nested public members/types.</p>
+                <p>Large files are not a defect by themselves. Here they increase the chance that save, live-edit, output lease, transport, visualizer, audition, diagnostics, and view state changes interact through implicit sequencing.</p>
+                <h4>Long-term fix</h4>
+                <p>Preserve one dispatcher and one transaction boundary, but extract narrow, testable facades: transport/fire, composition/output leases, audition/taps, live-edit/control ownership, and diagnostics. Split HaCue2 inspector behavior by feature editor session/tab; split HaPlay workspaces into lifecycle-owned subgraphs. Avoid “service per method”: each extraction needs a clear state owner, contract tests, and explicit disposal.</p>
+                <div class="accept"><strong>Acceptance.</strong> Each feature has one owner and bounded public contract; adding a cue type or output no longer edits several thousand-line coordinators; architecture tests enforce the new edges; concurrency/lifecycle integration tests continue to cross the real composition root.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../MediaFramework/Test/S.Media.Arch.Tests/ArchitectureTests.cs"><code>ArchitectureTests.cs:6–223</code></a> — strong dependency enforcement.</li><li>Line counts were computed from current tracked C#/AXAML sources.</li><li><a href="../MediaFramework/Media/S.Media.Session/ShowSession.cs"><code>S.Media.Session/ShowSession*.cs</code></a>.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f13" data-severity="medium" data-text="framework API semantics stop pause tryopen console cancel dispose diagnostics registry">
+            <div class="finding-head"><span class="finding-id">F-13</span><span class="pill medium">Medium</span><span class="tag confirmed">Confirmed API</span><h3>Several public API contracts are documented but still surprising to consumers</h3></div>
+            <div class="finding-grid">
+              <div>
+                <ul>
+                  <li><code>IMediaClock.Stop()</code> is currently exactly <code>Pause()</code>; common transport expectations make that a semantic trap beside a separate <code>Reset()</code>.</li>
+                  <li><code>TryOpenVideo/TryOpenAudio</code> return false only when no provider is selected; a selected provider’s open failure throws. XML documentation is clear, but the conventional “Try” shape suggests no-throw outcome semantics.</li>
+                  <li><code>MediaPlayer.AttachConsoleCancelKeyPress</code> installs a static event handler capturing a CTS and returns no unsubscription handle.</li>
+                  <li><code>MediaRegistry</code> correctly unwinds native lifetimes in reverse order but silently swallows every disposal/rollback failure, leaving no health signal for a leaked native runtime.</li>
+                </ul>
+                <h4>Long-term fix</h4>
+                <p>Design a vNext surface rather than changing behavior in place: deprecate or define Stop as an atomic pause+reset; steer consumers to the already-better atomic <code>OpenAsync(MediaOpenRequest)</code> and return a structured resolution/open result where needed; make host event subscriptions return <code>IDisposable</code> and move console helpers to tools; aggregate native-release failures into diagnostics/health while keeping <code>Dispose</code> non-throwing.</p>
+                <div class="accept"><strong>Acceptance.</strong> API docs and names predict exception/state behavior without caveats; compatibility shims are obsolete-marked with migration examples; repeated console host creation does not retain CTS instances; teardown failures appear in structured diagnostics.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../MediaFramework/Media/S.Media.Time/MediaClock.cs"><code>MediaClock.cs:325–364</code></a>.</li><li><a href="../MediaFramework/Media/S.Media.Core/Registry/IMediaRegistry.cs"><code>IMediaRegistry.cs:30–68</code></a>.</li><li><a href="../MediaFramework/Media/S.Media.Players/MediaPlayer.cs"><code>MediaPlayer.cs:511–519</code></a>.</li><li><a href="../MediaFramework/Media/S.Media.Core/Registry/MediaRegistry.cs"><code>MediaRegistry.cs:138–184</code></a>.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f14" data-severity="medium" data-text="gpu effects cpu fallback silent pass through capability negotiation compositor">
+            <div class="finding-head"><span class="finding-id">F-14</span><span class="pill medium">Medium</span><span class="tag confirmed">Confirmed contract</span><h3>GPU-only effects silently become pass-through on CPU fallback</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>The extension contract permits an effect with no CPU kernel and explicitly skips it in <code>CpuVideoCompositor</code>. Built-in HaCue2 effects currently supply CPU implementations, but a future/plugin effect can produce a materially different show when GPU initialization fails—precisely when an operator is already diagnosing degraded output.</p>
+                <h4>Long-term fix</h4>
+                <p>Add compositor capability negotiation and preflight. The show compiler/runtime should know whether every active effect has a valid implementation on the selected backend. Policy can be fail-closed, disable the affected output, or allow an explicitly acknowledged degraded render, but it must never be silent. Include the chosen backend and unsupported effect IDs in output health.</p>
+                <div class="accept"><strong>Acceptance.</strong> A GPU-only test effect on CPU fallback yields a deterministic validation issue and conspicuous runtime state; the operator can identify the affected cue/output and policy; supported effects retain visual parity fixtures across CPU/GPU.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../MediaFramework/Media/S.Media.Core/Video/Effects/VideoLayerEffectDescriptor.cs"><code>VideoLayerEffectDescriptor.cs:15–30</code></a>.</li><li><a href="../MediaFramework/Media/S.Media.Compositor/CpuVideoCompositor.cs"><code>CpuVideoCompositor.cs:148–160</code></a>.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f17" data-severity="medium" data-text="ci dependency vulnerability codeql permissions action sha sbom supply chain">
+            <div class="finding-head"><span class="finding-id">F-17</span><span class="pill medium">Medium</span><span class="tag gap">Coverage gap</span><h3>Managed supply-chain and workflow-integrity checks are manual</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>The single workflow is extensive, but there is no visible Dependabot/Renovate configuration, CodeQL/static security workflow, managed dependency/license/SBOM gate, or public package consumer gate. Actions are referenced by mutable major tags and no top-level least-privilege <code>permissions</code> declaration is present. Manual audit scans found no known vulnerable or deprecated packages in HaCue2.Desktop, HaPlay.Desktop, or <code>S.Media.Full</code>; this finding is about repeatability, not a currently vulnerable package.</p>
+                <h4>Long-term fix</h4>
+                <p>Add least-privilege permissions, pin third-party actions to reviewed commit SHAs with an update bot, run vulnerability/deprecation/license checks on the whole non-Android graph, emit a managed CycloneDX/SPDX SBOM alongside corrected native provenance, and add CodeQL or equivalent analyzers. Give Android its own filter/job so one workload error cannot hide the rest of a dependency scan.</p>
+                <div class="accept"><strong>Acceptance.</strong> Pull requests fail on newly introduced known vulnerabilities, disallowed licenses, unreviewed action digest changes, SBOM/provenance generation failures, or package consumer restore failures; approved exceptions have owner and expiry.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../.github/workflows/build.yml"><code>.github/workflows/build.yml</code></a> is the only workflow.</li><li>Uses <code>actions/checkout@v7</code>, <code>setup-dotnet@v6</code>, and <code>upload-artifact@v7</code>.</li><li>Targeted <code>dotnet list package --vulnerable --include-transitive</code> and <code>--deprecated</code> scans were clean.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f24" data-severity="low" data-text="dependencies skia sharp extensions logging update major patch outdated">
+            <div class="finding-head"><span class="finding-id">F-24</span><span class="pill low">Low</span><span class="tag gap">Current upstream check</span><h3>Dependency posture is healthy, with one planned major migration</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>Avalonia 12.1.1 and Vortice 3.8.3 match current public versions, and the targeted package graph did not report known vulnerabilities/deprecations. <code>Microsoft.Extensions.*</code> has a 10.0.10 → 10.0.11 patch update. SkiaSharp is pinned at 3.119.4 while current public NuGet is 4.151.1; that is a major native/rendering transition, not a routine bump.</p>
+                <h4>Long-term fix</h4>
+                <p>Take the Extensions patch through normal automation. Treat Skia 4 as a scheduled compatibility program: inventory public type exposure, text/image golden fixtures, NativeAOT, Linux/Windows native staging, Avalonia compatibility, and package dependency constraints; measure before/after startup, memory, and render output. Do not conflate “latest” with “safe”.</p>
+                <div class="accept"><strong>Acceptance.</strong> The Skia migration has explicit visual/native/AOT gates and rollback criteria; patch updates arrive via an automated, reviewable cadence.</div>
+              </div>
+              <div class="evidence-list"><h4>Sources</h4><ul><li><a href="../Directory.Packages.props"><code>Directory.Packages.props:12–59</code></a>.</li><li><a href="https://www.nuget.org/packages/Avalonia">Avalonia on NuGet</a>.</li><li><a href="https://www.nuget.org/packages/Vortice.Direct3D11">Vortice.Direct3D11 on NuGet</a>.</li><li><a href="https://www.nuget.org/packages/SkiaSharp">SkiaSharp on NuGet</a>.</li></ul></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="hacue2">
+      <div class="shell">
+        <div class="eyebrow">Detailed findings · flagship cue authoring</div>
+        <h2>HaCue2</h2>
+        <div class="callout good">
+          <strong>UX strengths worth protecting.</strong> HaCue2 has a clear one-window model, visually dominant GO and hold-to-panic behavior, separate scheduling/trigger arms, output health doorway, lock mode, direct placement and warp manipulation, scrollable/zoomable absolute-time automation with waveform and exact fields, source preparation/status, and unusually useful headless render/focus/accessibility tests. The right inspector already collapses at laptop width and can be restored. Recommendations below extend this operator model rather than replacing it.
+        </div>
+        <div class="findings">
+
+          <article class="finding" id="f03" data-severity="high" data-text="hacue2 save race dirty data loss temp persistence serialization journal">
+            <div class="finding-head"><span class="finding-id">F-03</span><span class="pill high">High</span><span class="tag confirmed">Confirmed code path</span><h3>An edit during Save can be absent from disk while the document becomes clean</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p><strong>Failure sequence.</strong> <code>HaCueProjectFile.SaveAsync</code> synchronously serializes the live project, then awaits an asynchronous write to a fixed sibling <code>.tmp</code>. The UI remains editable. If an edit occurs after serialization but before the write completes, the file contains the old snapshot. On success, <code>ShellViewModel.SaveToAsync</code> calls <code>Journal.MarkSaved()</code> against the now-newer live project, moves the saved pointer to its current undo entry, clears the out-of-stack dirty flag, and clears recovery. The title/close path can therefore report clean while the edit is not on disk.</p>
+                <p>A second Save can also target the same fixed <code>path.tmp</code>. The final rename is atomic within a filesystem, but the write has no unique temp, generation/order, durable flush, or one-deep backup. HaPlay already demonstrates a stronger generation/hash/coordinator and unique write-through temp pattern.</p>
+                <h4>Long-term fix</h4>
+                <p>Build one shared project persistence component. Capture an immutable/versioned snapshot and journal revision; serialize that snapshot off the UI thread; serialize save requests through a generation-aware queue; write a unique same-directory temp with flush/write-through; atomically replace while retaining a known-good backup/recovery generation; and call <code>MarkSavedIfCurrent(revision, hash)</code>. If edits occurred after the snapshot, saving may still succeed but the document must remain dirty and recovery must remain.</p>
+                <div class="accept"><strong>Acceptance.</strong> An injected slow writer allows an edit between snapshot and completion; the file contains the captured snapshot and UI stays dirty. Double Ctrl+S cannot collide. Crash/fault injection at every write/flush/move stage leaves either the prior or new valid project, never a false-clean document.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../UI/HaCue2.Core/Serialization/HaCueProjectFile.cs"><code>HaCueProjectFile.cs:162–183</code></a>.</li><li><a href="../UI/HaCue2/ViewModels/ShellViewModel.cs"><code>ShellViewModel.cs:913–954</code></a>.</li><li><a href="../UI/HaCue2.Core/Journal/ProjectJournal.cs"><code>ProjectJournal.cs:61–88, 224–237</code></a>.</li><li><a href="../UI/HaPlay/Services/ProjectPersistenceCoordinator.cs"><code>HaPlay ProjectPersistenceCoordinator.cs:5–86</code></a>.</li><li><a href="../UI/HaPlay/Models/ProjectIO.cs"><code>HaPlay ProjectIO.cs:308–347</code></a>.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f05" data-severity="high" data-text="hacue2 remote http unbounded request concurrency timeout shutdown exception security">
+            <div class="finding-head"><span class="finding-id">F-05</span><span class="pill high">High</span><span class="tag confirmed">Confirmed design</span><h3>The HaCue2 remote server has unbounded handlers and an unbounded shutdown drain</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>Every accepted <code>HttpListenerContext</code> creates a new <code>Task.Run</code>, retained in a <code>HashSet</code>, with no concurrency admission, header/query limit, request deadline, rate control, or cancellation linked to server life. Unauthorized peers still consume handler resources. Handler dispatch can await transport operations such as GO/fire/open. Shutdown closes the listener and then waits indefinitely for every captured handler; a stuck transport call can hang application teardown. Unexpected exception text is also returned directly to a remote client.</p>
+                <p>HaPlay’s independent implementation already contains the missing transport mechanics: max 32 requests, input limits, linked 30-second deadlines, bounded two-second drain, safe abort, and structured logging. The route dispatchers must remain app-specific, but two HTTP lifecycle implementations should not drift.</p>
+                <h4>Long-term fix</h4>
+                <p>Extract an AOT-safe bounded HTTP control host with pluggable route dispatch. Enforce concurrency/backlog admission, early auth and size limits, per-request deadlines, server-life cancellation, bounded drain, safe client errors plus correlation IDs/full internal logs, constant-time token checks, and explicit idempotency/replay semantics for action commands.</p>
+                <div class="accept"><strong>Acceptance.</strong> Load tests cannot exceed the configured handler count; oversized/unauthorized traffic is rejected cheaply; a deliberately hung dispatch cannot delay shutdown beyond the drain budget; clients never receive internal exception details; both apps share the same transport tests.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../UI/HaCue2.Engine/RemoteApiServer.cs"><code>RemoteApiServer.cs:46–55, 121–185, 366–404</code></a>.</li><li><a href="../UI/HaPlay/Remote/RestApiServer.cs"><code>HaPlay RestApiServer.cs:22–33, 195–337, 358–401</code></a> — stronger existing reference.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f06" data-severity="high" data-text="hacue2 release artifact launch smoke exact uploaded gating ci">
+            <div class="finding-head"><span class="finding-id">F-06</span><span class="pill high">High</span><span class="tag confirmed">Confirmed</span><h3>The exact uploaded HaCue2 artifact is never launch-gated</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>The build job AOT-publishes HaCue2 and attempts a first-frame smoke, but both Linux and Windows launch steps use <code>continue-on-error: true</code> and the publish lacks the final staged native set. The artifact job later stages natives and gates manifest presence, loadability, and selected versions, then immediately uploads <code>hacue2-publish</code>. HaPlay launches that exact upload directory on both platforms and requires backend enumeration plus a first frame.</p>
+                <h4>Long-term fix</h4>
+                <p>Turn artifact qualification into one reusable script/job applied to every shipped desktop head. Launch the exact post-staging/post-strip directory, isolate settings/cache, require registry/backend enumeration, shell creation, first rendered frame, and normal teardown, then optionally open a generated minimal media/show fixture. Upload only qualified bytes.</p>
+                <div class="accept"><strong>Acceptance.</strong> Removing a required app-local native, breaking the HaCue2 composition root, failing GL creation, or wedging teardown fails the artifact job before upload on Linux and Windows; the hash of the tested directory matches the uploaded artifact.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../.github/workflows/build.yml"><code>build.yml:308–349</code></a> — best-effort HaCue2 launch.</li><li><a href="../.github/workflows/build.yml"><code>build.yml:780–809</code></a> — exact HaPlay artifact gate.</li><li><a href="../.github/workflows/build.yml"><code>build.yml:860–926</code></a> — HaCue2 validate then upload, no launch.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f09" data-severity="medium" data-text="hacue2 ux title bar long project file overflow responsive dpi">
+            <div class="finding-head"><span class="finding-id">F-09</span><span class="pill medium">Medium</span><span class="tag risk">Design risk</span><h3>Long project identities can crowd HaCue2’s fixed-priority title bar</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>The shell supports a 900 px minimum width. Its title bar is a single grid containing File, an auto-sized project filename with no maximum/trimming, the four-view selector, mode, Lock, Settings, and Diagnostics. A long filename or longer localized copy can consume the auto column and push safety/diagnostic controls outside the usable width. The main Cues inspector has a responsive collapse test at 960 px; the full shell title bar does not have equivalent long-content/DPI coverage.</p>
+                <h4>Long-term fix</h4>
+                <p>Define responsive command priority. Bound and middle-ellipsize the project identity while preserving the full path tooltip; retain mode/Lock and primary view switching; move lower-priority Settings/Diagnostics into a labelled overflow at compact thresholds, or use icon+accessible-name variants. Test the full <code>ShellWindow</code>, not only <code>CuesView</code>.</p>
+                <div class="accept"><strong>Acceptance.</strong> At 900×640 and 125/150/200% scaling with a long Unicode filename and expanded translations, Lock, mode, current view, File, and an overflow/diagnostics route remain visible, focusable, non-overlapping, and screen-reader named.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../UI/HaCue2/Views/ShellWindow.axaml"><code>ShellWindow.axaml:9–15, 31–93</code></a>.</li><li><a href="../UI/HaCue2.Tests/AccessibilityAndResponsiveTests.cs"><code>AccessibilityAndResponsiveTests.cs:14–67</code></a> — useful Cues-only coverage.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f21" data-severity="medium" data-text="hacue2 localization strings hardcoded ux language resources">
+            <div class="finding-head"><span class="finding-id">F-21</span><span class="pill medium">Medium</span><span class="tag confirmed">Confirmed design</span><h3>HaCue2 operator copy is hardcoded rather than localization-ready</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>HaCue2’s XAML and view models embed English labels, hints, tooltips, error sentences, and status grammar directly; no resx/string resource surface exists. This makes translation expensive, prevents long-string layout tests, and encourages terminology drift across Settings, Diagnostics, Inspector, and engine faults. HaPlay is not fully translated, but it has a central <code>Strings.resx</code>, generated accessor, and raw-literal ratchet tests.</p>
+                <h4>Long-term fix</h4>
+                <p>Introduce typed string resources by semantic domain, not one giant unstructured list. Separate operator-facing copy from log/developer diagnostics; use parameterized messages and plural-aware formatting; migrate screen by screen with a literal-lint ratchet. Add a pseudo-localization culture that expands strings and introduces non-ASCII/RTL markers to drive layout tests.</p>
+                <div class="accept"><strong>Acceptance.</strong> New user-visible literals fail lint; the complete shell renders under 30–40% expansion and pseudo-localization; terminology such as fire/go/standby/program/audition/lock is centrally defined.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li>No <code>.resx</code> or string resource/accessor exists under <code>UI/HaCue2*</code>.</li><li><a href="../UI/HaCue2/Views/ShellWindow.axaml"><code>ShellWindow.axaml</code></a> and <a href="../UI/HaCue2/Views/InspectorPane.axaml"><code>InspectorPane.axaml</code></a> embed operator copy.</li><li><a href="../UI/HaPlay/Resources/Strings.resx"><code>HaPlay/Resources/Strings.resx</code></a> and <a href="../UI/HaPlay.Tests/RawStringLiteralLintTests.cs"><code>RawStringLiteralLintTests.cs</code></a> are a reusable pattern.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f22" data-severity="low" data-text="hacue2 lock read only notes writable copy contradiction ux">
+            <div class="finding-head"><span class="finding-id">F-22</span><span class="pill low">Low</span><span class="tag confirmed">Confirmed</span><h3>Lock-mode copy contradicts the intentionally writable note field</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>The Lock tooltip says “Read-only document”, while <code>ProjectJournal</code> explicitly permits note-property commands under lock and the Note pane says notes remain writable. The behavior may be exactly right for show operation; the explanation is not.</p>
+                <h4>Long-term fix</h4>
+                <p>Rename the state to “Authoring locked” and say “Cue structure and show-critical settings are locked; notes remain editable. GO, preview, and audition are unchanged.” Visually identify the performance-note exception. If strict read-only is also needed, make it a separate, explicit mode.</p>
+                <div class="accept"><strong>Acceptance.</strong> Tooltip, mode chip, Note pane, help, and accessibility description agree; a first-time operator can predict exactly which changes are allowed.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../UI/HaCue2/Views/ShellWindow.axaml"><code>ShellWindow.axaml:78–88</code></a>.</li><li><a href="../UI/HaCue2.Core/Journal/ProjectJournal.cs"><code>ProjectJournal.cs:43–47, 94–100</code></a>.</li><li><a href="../UI/HaCue2/Views/InspectorPane.axaml"><code>InspectorPane.axaml:492–498</code></a>.</li></ul></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="haplay">
+      <div class="shell">
+        <div class="eyebrow">Detailed findings · operational player</div>
+        <h2>HaPlay</h2>
+        <div class="callout good">
+          <strong>UX and lifecycle strengths worth protecting.</strong> HaPlay’s workspace sidebar and discoverable menu/shortcuts, fixed-height status/toast strategy, dominant transport, wrapped secondary transport groups, edit-mode gate, scroll-owned workspaces, output warning surfaces, empty states, persistence coordinator, recovery generations, live output reconfiguration tests, and exact uploaded-artifact launch gate show mature operational thinking. The current 1,680-line CuePlayer view is busy because the feature set is real; responsive command prioritization and decomposition should preserve rather than flatten that context.
+        </div>
+        <div class="findings">
+
+          <article class="finding" id="f10" data-severity="medium" data-text="haplay ux minimum width cue list header overflow sidebar responsive command bar">
+            <div class="finding-head"><span class="finding-id">F-10</span><span class="pill medium">Medium</span><span class="tag risk">Design risk</span><h3>The cue-list command bar is wider than the supported minimum workspace</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>The main window supports 720×480. With the expanded 180 px sidebar, the cue workspace is roughly 540 px before borders/margins. Its first row is a non-wrapping grid containing a label, 160 px selector, name field with 120 px minimum, Add, Remove, Files, Output setup, Settings, and path. The transport row was correctly changed to a <code>WrapPanel</code> after clipping at 1024/1280; the list command row still has the same class of width pressure.</p>
+                <h4>Long-term fix</h4>
+                <p>Use a responsive command bar: keep list selection/name and primary add action, group remove/files/output/settings in a labelled overflow at narrow widths, allow the sidebar to collapse automatically with a reversible hint, and retain keyboard routes. Avoid horizontal scrolling for primary show controls.</p>
+                <div class="accept"><strong>Acceptance.</strong> Full <code>MainWindow</code> geometry tests cover 720×480 with expanded/collapsed sidebar, 125/150/200% scaling, pseudo-localized strings, and a long path; all commands remain reachable and focus order follows visual order.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../UI/HaPlay/Views/MainWindow.axaml"><code>MainWindow.axaml:7–13</code></a>.</li><li><a href="../UI/HaPlay/Views/MainView.axaml"><code>MainView.axaml:129–168</code></a> — 180 px sidebar.</li><li><a href="../UI/HaPlay/Views/CuePlayerView.axaml"><code>CuePlayerView.axaml:45–113</code></a> — list row.</li><li><a href="../UI/HaPlay/Views/CuePlayerView.axaml"><code>CuePlayerView.axaml:174–235</code></a> — already-fixed wrapped transport pattern.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f12" data-severity="medium" data-text="startup performance haplay hacue2 alsa diagnostics init first frame device probe">
+            <div class="finding-head"><span class="finding-id">F-12</span><span class="pill medium">Medium</span><span class="tag measured">Measured</span><h3>Cold initialization breaches its own slow thresholds and native probing floods diagnostics</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>On an empty isolated HaPlay launch, <code>App.Initialize</code> logged 317.65 ms against its 250 ms warning, <code>MainViewModel</code> construction 671.11 ms, and <code>OnFrameworkInitializationCompleted</code> 1,236.47 ms against 1,000 ms. The app still reached a first frame and clean shutdown. Both app launches emitted ALSA device-probe noise; HaCue2 produced a very large repeated stream. This degrades actionable logs and likely repeats native enumeration across composition-root consumers.</p>
+                <h4>Long-term fix</h4>
+                <p>Make startup phased: initialize resources and show the shell/readiness state, then perform cancellable capability/device discovery and project warm-up off the UI thread; preserve the single registry/lifetime owner and publish immutable device snapshots. Capture/coalesce native probe stderr into one structured backend summary while retaining full details behind Diagnostics. Instrument first-window and first-ready distributions, not only a watchdog result.</p>
+                <div class="accept"><strong>Acceptance.</strong> Cold-start p50/p95 budgets are gated on a reference machine; the window becomes interactive before slow device discovery; each backend enumerates once per shared generation; missing ALSA devices yield one structured warning and diagnostics detail, not hundreds of repeated lines.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../UI/HaPlay/App.axaml.cs"><code>HaPlay/App.axaml.cs:27–95, 143+</code></a> defines the timing thresholds.</li><li><a href="../UI/HaPlay/ViewModels/MainViewModel.cs"><code>MainViewModel.cs:72–75</code></a> times construction.</li><li>Current direct launch measurements are recorded in the validation ledger below.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f15" data-severity="medium" data-text="haplay remote lan unauthenticated token security companion warning">
+            <div class="finding-head"><span class="finding-id">F-15</span><span class="pill medium">Medium</span><span class="tag confirmed">Confirmed policy</span><h3>HaPlay LAN control deliberately permits no-token operation</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>LAN binding is an explicit choice and the UI shows an unmistakable warning, both good safeguards. The server nonetheless treats an empty token as authorization for every request. “Closed venue LAN” is often an aspiration rather than a security boundary; guest Wi-Fi bridging, misconfigured VLANs, laptops, and controller software make a fire/stop API consequential.</p>
+                <h4>Long-term fix</h4>
+                <p>Enabling LAN should mint and require a high-entropy token by default, with copy/QR/controller onboarding. If tokenless Companion compatibility is essential, expose a separate time-bounded “Open LAN” exception with confirmation, persistent high-visibility status, listener scope, audit log, and optional source-address allowlist. Never silently preserve tokenless mode through an upgrade.</p>
+                <div class="accept"><strong>Acceptance.</strong> Fresh LAN enablement is authenticated; tokenless mode requires an explicit exception and cannot be mistaken for the default; remote actions record source/correlation/result without logging secrets.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../UI/HaPlay/Remote/RestApiServer.cs"><code>RestApiServer.cs:11–16, 404–421</code></a>.</li><li><a href="../UI/HaPlay/Views/MainView.axaml"><code>MainView.axaml:483–518</code></a> — strong current warning UI.</li></ul></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="extras">
+      <div class="shell">
+        <div class="eyebrow">Detailed findings · repo operations &amp; secondary apps</div>
+        <h2>Build, references, documentation, and HaViz</h2>
+        <div class="findings">
+
+          <article class="finding" id="f16" data-severity="medium" data-text="build reproducibility dotnet sdk workload android solution filter ndk hardcoded developer">
+            <div class="finding-head"><span class="finding-id">F-16</span><span class="pill medium">Medium</span><span class="tag confirmed">Confirmed / reproduced</span><h3>SDK/workload coupling and a user-specific NDK fallback reduce reproducibility</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p><code>global.json</code> requests 10.0.100 but rolls forward to the latest feature band and permits prerelease. On this host, system SDK 10.0.111 expected a mismatched 10.0.11 host runtime while the repository-local 10.0.400 worked. The root solution requires the Android workload even for desktop/framework work; a full no-restore build also encountered stale RID host-pack assets until targeted restores. <code>build-projectm.sh</code> falls back to <code>/home/seko/Android/Sdk/…</code>, a developer-specific path.</p>
+                <h4>Long-term fix</h4>
+                <p>Provide solution filters for framework, desktop, Android, and CI; make desktop onboarding independent of Android. Pin an SDK policy intentionally (<code>latestPatch</code> or a tested feature band) and update it by bot. Add a bootstrap/preflight script that checks SDK/runtime/workloads/native toolchains. Discover NDK only from <code>ANDROID_NDK_ROOT</code>/<code>ANDROID_HOME</code> and known SDK metadata, otherwise fail with an actionable message—never a personal path.</p>
+                <div class="accept"><strong>Acceptance.</strong> A clean Linux/Windows clone can run documented framework and desktop build/test commands without Android; Android builds from a declared workload/toolchain manifest; preflight reports exact missing components before MSBuild; CI and developers use the same SDK policy.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../global.json"><code>global.json:1–6</code></a>.</li><li><a href="../.github/workflows/build.yml"><code>build.yml:55–72</code></a> — whole-solution Android coupling.</li><li><a href="../scripts/build-projectm.sh"><code>build-projectm.sh:16–20, 57–64</code></a>.</li><li>Local HaViz/Desktop and app builds required targeted RID restore refreshes.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f18" data-severity="medium" data-text="reference directory cache outdated drift 22gb manifest source truth snapshots">
+            <div class="finding-head"><span class="finding-id">F-18</span><span class="pill medium">Medium</span><span class="tag confirmed">Confirmed drift</span><h3>The 22 GB ignored reference cache drifts without an authority manifest</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p><code>Reference/</code> is correctly excluded from Git, so this is not repository bloat. Locally it is 22 GB—21 GB is <code>MMD_Test</code>—and source snapshots include Avalonia 12.1.0 versus pin 12.1.1, Mond 0.11.2 versus 0.12.0, Vortice 1.9.143 versus 3.8.3, YoutubeExplode 6.6 versus 6.6.1, and FFmpeg.AutoGen main/public 8.1 versus the custom binding. A directory name such as <code>SDL3-CS-master</code> is not an immutable identity. Editors/searches/tools can traverse this cache, while comments occasionally treat it as authoritative.</p>
+                <h4>Long-term fix</h4>
+                <p>Add a small tracked reference lock manifest with URL, tag/commit, hash, license, reason, authoritative package/source relationship, and optional local path. Fetch snapshots on demand into an external cache; exclude it from IDE indexing by default. Keep only minimal contract fixtures, patches, and legal metadata in the repository. Make central package/native locks—not reference folder names—the source of truth.</p>
+                <div class="accept"><strong>Acceptance.</strong> One command materializes/updates/verifies exactly the documented snapshots; stale references are reported; CI never depends on an untracked reference unless the feature is explicitly licensed/optional; normal code search excludes the corpus.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><code>.git/info/exclude:7</code> excludes <code>/Reference/</code>; zero files are tracked.</li><li>Measured local size: 22 GB; <code>MMD_Test</code> 21 GB, Silk 1.1 GB, NDI SDKs 415 MB combined.</li><li><a href="../Directory.Packages.props"><code>Directory.Packages.props:12–59</code></a> shows current authoritative managed pins.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f19" data-severity="medium" data-text="documentation readme release version 1.0 1.1 package ffmpeg abi product positioning typo bicubic">
+            <div class="finding-head"><span class="finding-id">F-19</span><span class="pill medium">Medium</span><span class="tag confirmed">Confirmed</span><h3>Version, native ABI, package, and product-positioning documentation contradict current code</h3></div>
+            <div class="finding-grid">
+              <div>
+                <ul>
+                  <li>Current first-party version is 1.1.0; README’s only test-build link and latest tag are v1.0.0.</li>
+                  <li>Quickstart and native/release documents require FFmpeg 8.x / avcodec-62, while the binding and Linux master artifact require ABI 63.</li>
+                  <li><code>Packages.md</code> says the framework “publishes” installable packages although no public package pipeline exists and F-01 blocks a public-feed consumer.</li>
+                  <li>README describes HaPlay’s UI/UX as “a crime against humanity” even though the app now has a substantial operational UI, and contains stale/duplicate dependency copy and visible spelling errors. That language undercuts adoption and contributor confidence.</li>
+                  <li><code>CpuVideoCompositor</code> documentation says bicubic is out of scope although the implementation and benchmarks include it.</li>
+                </ul>
+                <h4>Long-term fix</h4>
+                <p>Make docs part of release engineering: generate native/version tables from locks, execute quickstart snippets in a clean sample, link actual versioned release notes, and clearly distinguish available packages from planned publishing. Rewrite the root README around product roles, supported platforms/tier, a minimal working sample, screenshots, and contribution/support expectations. Add documentation assertions for version/ABI tokens.</p>
+                <div class="accept"><strong>Acceptance.</strong> A release/tag update changes one version source and generated docs; quickstart restores/runs externally; no document claims an ABI/package/artifact that automated gates do not prove.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../README.md"><code>README.md:17–20, 28–66</code></a>.</li><li><a href="../Directory.Version.props"><code>Directory.Version.props:5–13</code></a>.</li><li><a href="../Doc/MediaFramework-Quickstart.md"><code>Quickstart.md:1–6</code></a>.</li><li><a href="../Doc/Release-Tiers.md"><code>Release-Tiers.md:7–31</code></a>.</li><li><a href="../MediaFramework/Media/S.Media.Compositor/CpuVideoCompositor.cs"><code>CpuVideoCompositor.cs:23–29, 223+</code></a>.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f20" data-severity="medium" data-text="ui acceptance hardware accessibility screen reader dpi wayland windows touch projector hotplug">
+            <div class="finding-head"><span class="finding-id">F-20</span><span class="pill medium">Medium</span><span class="tag gap">Coverage gap</span><h3>Automated UI coverage is strong but not a physical show-rig certification</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>HaCue2 and HaPlay test focus, automation names, render realization, direct manipulation, output lifecycle, and responsive behaviors more deeply than most desktop media projects. Current coverage still concentrates on headless 1400×900 views plus a few laptop/minimum cases. It does not prove complete shells at high DPI, long/pseudo-localized strings, screen readers, keyboard-only end-to-end operation, touch, Wayland/X11/Windows differences, multiple displays, projector removal/re-add during playback, audio-device churn, NDI network loss, or real controller rigs.</p>
+                <h4>Long-term fix</h4>
+                <p>Create an explicit release acceptance matrix with automated geometry/screenshot baselines where stable and a short, reproducible hardware checklist where not. Prioritize safety paths: GO/standby/panic, current/next identity, armed states, lock, output lost/recovered, save/recovery, dialog focus/escape, and live output layout changes while playing. Store hardware/driver versions with results.</p>
+                <div class="accept"><strong>Acceptance.</strong> Every supported OS/render mode has min-size and scale coverage; a keyboard/screen-reader pass is recorded; a multi-output/audio/control rig checklist is attached to release candidates; disconnect/reconnect tests run during active playback, not only first open.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../UI/HaCue2.Tests/AccessibilityAndResponsiveTests.cs"><code>HaCue2 AccessibilityAndResponsiveTests.cs</code></a>.</li><li><a href="../UI/HaPlay.Tests/SoundboardAccessibilityTests.cs"><code>HaPlay SoundboardAccessibilityTests.cs</code></a>.</li><li>Direct launches reached first frame; pixel capture was unavailable on this host.</li></ul></div>
+            </div>
+          </article>
+
+          <article class="finding" id="f23" data-severity="low" data-text="haviz settings atomic preview accessibility health status luma">
+            <div class="finding-head"><span class="finding-id">F-23</span><span class="pill low">Low</span><span class="tag risk">Confirmed / UX risk</span><h3>HaViz settings durability and output-health UX lag the main apps</h3></div>
+            <div class="finding-grid">
+              <div>
+                <p>HaViz’s focused engine is well bounded: it tracks frame/luma/receiver/drop/submit metrics, keeps player/capture feeds mutually exclusive, and deliberately leaks rather than freeing natives under a wedged sender thread. The desktop settings path, however, writes directly with <code>File.Create</code> and silently falls back to defaults on any corrupt/unreadable file. Its UI exposes output health as terse text such as <code>f… tx…ms y…</code>, has no local thumbnail/test pattern, and transport glyph buttons lack explicit automation names/tooltips. The resizable desktop window also has no minimum size.</p>
+                <h4>Long-term fix</h4>
+                <p>Reuse the shared atomic settings writer with a one-deep known-good backup. Turn engine telemetry into labelled health chips (rendering, NDI connected, audio drops, frame lateness) with a diagnostics expansion, optional low-rate local thumbnail/test-pattern path, and meaningful automation names. Add min-size/compact layout behavior without turning HaViz into HaPlay.</p>
+                <div class="accept"><strong>Acceptance.</strong> Fault-injected settings writes recover the previous file; every icon-only control has an accessible name; output-health states are understandable without decoding abbreviations; a black/stalled visualizer is distinguishable from zero receivers.</div>
+              </div>
+              <div class="evidence-list"><h4>Evidence</h4><ul><li><a href="../UI/HaViz.Desktop/HaVizDesktopSettings.cs"><code>HaVizDesktopSettings.cs:28–59</code></a>.</li><li><a href="../UI/HaViz.Desktop/Views/MainWindow.axaml"><code>HaViz MainWindow.axaml:6–100</code></a>.</li><li><a href="../UI/HaViz.Desktop/ViewModels/MainViewModel.cs"><code>HaViz MainViewModel.cs:229–249</code></a>.</li><li><a href="../UI/HaViz.Core/VizNdiEngine.cs"><code>VizNdiEngine.cs:92–112, 343–385</code></a>.</li></ul></div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="performance">
+      <div class="shell">
+        <div class="eyebrow">Performance &amp; simplification</div>
+        <h2>What to optimize—and what not to disturb</h2>
+        <div class="verdict-grid">
+          <article class="verdict good">
+            <h3>Audio hot paths are in good shape</h3>
+            <p>The existing wide dense matrix benchmark scales from 6.11 µs at width 8 to 219.56 µs at width 64 with zero managed allocation. The program-sum maximum topology reports 2.033 ms, also with zero allocation. Preserve the ring/SIMD/whole-frame design and add regression envelopes; there is no evidence for a disruptive rewrite.</p>
+          </article>
+          <article class="verdict warn">
+            <h3>CPU video is the clear hotspot</h3>
+            <p>Prioritize fast-path coverage, redundant clear removal, row/tile specialization, and backend capability truth. Do not chase micro-allocations while 720p generic kernels take tens of milliseconds.</p>
+          </article>
+          <article class="verdict info">
+            <h3>Startup needs sequencing, not deletion</h3>
+            <p>The expensive work—XAML resource creation, backend/device discovery, session setup—is valuable. Reorder it around first interaction, publish readiness, share enumerations, and measure phases before removing capability.</p>
+          </article>
+          <article class="verdict">
+            <h3>Simplify ownership surfaces</h3>
+            <p>Decompose large coordinators around state ownership and transaction boundaries. Avoid additional global registries, duplicated remote/persistence transports, or a generic service layer that merely moves methods without shrinking coupling.</p>
+          </article>
+        </div>
+
+        <h3 style="margin-top:2rem">Existing benchmark baseline</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Subsystem</th><th>Case</th><th>Mean</th><th>Allocation</th><th>Interpretation</th></tr></thead>
+            <tbody>
+              <tr><td>CPU compositor</td><td>720p nearest/source/identity</td><td>222 µs</td><td>312 B</td><td>Excellent specialized blit</td></tr>
+              <tr><td>CPU compositor</td><td>720p four layers</td><td>21.21 ms</td><td>312 B</td><td>47 fps ceiling before scheduling/presentation</td></tr>
+              <tr><td>CPU compositor</td><td>720p bilinear one layer</td><td>28.00–36.33 ms</td><td>312 B</td><td>Below 30–36 fps</td></tr>
+              <tr><td>CPU compositor</td><td>720p bicubic one layer</td><td>69.22–91.88 ms</td><td>312 B</td><td>Offline/low-rate tier only without major optimization</td></tr>
+              <tr><td>Audio matrix</td><td>64×64 dense</td><td>219.56 µs</td><td>0 B</td><td>Healthy baseline</td></tr>
+              <tr><td>Program sum</td><td>Maximum topology</td><td>2.033 ms</td><td>0 B</td><td>Healthy, retain budget</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="footnotes">BenchmarkDotNet ShortRun, Ryzen 7 8840U, .NET 10.0.9. These checked-in artifacts were reviewed, not freshly rerun. Use them as the current repository baseline, then establish controlled repeatable runners before making comparative claims.</p>
+      </div>
+    </section>
+
+    <section id="validation">
+      <div class="shell">
+        <div class="eyebrow">Validation ledger</div>
+        <h2>What passed, what was skipped, and what failed intentionally</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Surface</th><th>Result</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td>Framework test sweep</td><td><strong class="confirmed">2,151 passed · 0 failed · 6 skipped</strong></td><td>21 test projects, run sequentially to avoid shared Avalonia/MSBuild output contention.</td></tr>
+              <tr><td>Framework timing opt-ins</td><td><strong class="confirmed">Passed</strong></td><td>Core rerun 846/846 and Players 32/32; this exercised the three timing tests skipped in the baseline. Remaining skips are live/real-asset opt-ins.</td></tr>
+              <tr><td>HaCue2.Core.Tests</td><td><strong class="confirmed">790 passed</strong></td><td>0 failed, 0 skipped.</td></tr>
+              <tr><td>HaCue2.Tests</td><td><strong class="confirmed">449 passed</strong></td><td>Headless UI/interaction suite; 0 failed, 0 skipped.</td></tr>
+              <tr><td>HaPlay.Tests</td><td><strong class="confirmed">1,031 passed</strong></td><td><code>MFP_TIMING_TESTS=1</code>; 0 failed, 0 skipped.</td></tr>
+              <tr><td>HaViz.Core.Tests</td><td><strong class="confirmed">20 passed</strong></td><td>0 failed, 0 skipped.</td></tr>
+              <tr><td>Desktop Release builds</td><td><strong class="confirmed">Passed</strong></td><td>HaCue2, HaPlay, and HaViz; zero warnings/errors after targeted restores.</td></tr>
+              <tr><td>HaCue2 direct launch</td><td><strong class="confirmed">First frame + clean exit</strong></td><td>Isolated settings/data; <code>HACUE2_SMOKE=1</code>, <code>HACUE2_START=main</code>.</td></tr>
+              <tr><td>HaPlay direct launch</td><td><strong class="confirmed">First frame + clean exit</strong></td><td>Isolated settings/cache; <code>HAPLAY_SMOKE=1</code>; normal MediaRuntime teardown.</td></tr>
+              <tr><td>NativeAOT framework smoke</td><td><strong class="confirmed">Publish + run passed</strong></td><td>Control profiles, Mond helper/error path, and subtitle-factory reachability executed in native image. One documented visible IL2026 Mond stack-detail warning.</td></tr>
+              <tr><td>Package creation</td><td><strong class="confirmed">Passed in repo</strong></td><td><code>S.Media.Core</code> and <code>S.Media.Full 1.1.0</code> packed; Full is a dependency-only meta-package.</td></tr>
+              <tr><td>Public-feed-only restore</td><td><strong class="critical">Failed as expected</strong></td><td><code>NU1102</code> for FFmpeg.AutoGen ≥9.0.0; nuget.org nearest 8.1.0. This confirms F-01.</td></tr>
+              <tr><td>Vulnerability/deprecation scan</td><td><strong class="confirmed">No known findings</strong></td><td>Targeted HaCue2.Desktop, HaPlay.Desktop, and S.Media.Full direct/transitive graphs. Whole-solution scan itself trips over the unavailable local Android workload, reinforcing F-16.</td></tr>
+              <tr><td>Full solution local build</td><td><strong class="medium">Not established on this host</strong></td><td>Android workload unavailable and stale host-pack assets initially blocked the root graph. Targeted desktop/framework graphs were restored and validated.</td></tr>
+              <tr><td>Physical/hardware matrix</td><td><strong class="medium">Not run</strong></td><td>No Windows/Android, NDI receiver, projector rig, MIDI/OSC hardware, multi-channel interface, or real MMD asset pass locally.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style="margin-top:2rem">Upstream/dependency snapshot (checked 2026-08-14)</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Dependency</th><th>Repository</th><th>Current source checked</th><th>Assessment</th></tr></thead>
+            <tbody>
+              <tr><td>Avalonia</td><td>12.1.1</td><td><a href="https://www.nuget.org/packages/Avalonia">NuGet 12.1.1</a></td><td>Current; local Reference snapshot 12.1.0 is stale.</td></tr>
+              <tr><td>Vortice.Direct3D11</td><td>3.8.3</td><td><a href="https://www.nuget.org/packages/Vortice.Direct3D11">NuGet 3.8.3</a></td><td>Current; local Reference 1.9.143 is stale.</td></tr>
+              <tr><td>FFmpeg.AutoGen</td><td>custom 9.0.0</td><td><a href="https://www.nuget.org/packages/FFmpeg.AutoGen">NuGet 8.1.0</a></td><td>Local-only fork blocks public restore.</td></tr>
+              <tr><td>FFmpeg native</td><td>master / ABI 63</td><td><a href="https://ffmpeg.org/releases/">Stable releases through 8.1.2</a></td><td>Master snapshot is valid only with exact immutable provenance.</td></tr>
+              <tr><td>SkiaSharp</td><td>3.119.4</td><td><a href="https://www.nuget.org/packages/SkiaSharp">NuGet 4.151.1</a></td><td>Major migration; plan and validate, do not auto-bump.</td></tr>
+              <tr><td>Microsoft.Extensions.*</td><td>10.0.10</td><td>NuGet 10.0.11</td><td>Patch update available.</td></tr>
+              <tr><td>SDL3-CS / Mond / YoutubeExplode</td><td>3.4.14.1 / 0.12.0 / 6.6.1</td><td><code>dotnet list package --outdated</code></td><td>Current in targeted graph; local Reference names are stale for Mond/YoutubeExplode.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <div class="shell">
+        <div class="eyebrow">Long-term remediation roadmap</div>
+        <h2>Sequence work by safety and shared foundations</h2>
+        <p class="section-note">The order matters. Closing documentation alone before provenance produces new drift; splitting coordinators before defining ownership produces more coupling; optimizing CPU kernels before defining supported tiers makes performance work unbounded.</p>
+        <div class="road-grid">
+          <article class="road"><span class="num">0</span><h3>Release truth &amp; show safety</h3><ol><li>Choose the FFmpeg binding/distribution contract and create the native lock.</li><li>Generate truthful docs, manifests, SBOM and immutable downloads from it.</li><li>Build the external staged-feed consumer gate.</li><li>Fix HaCue2 revision-aware durable saving (F-03).</li><li>Fix identity-aware active-fire cancellation (F-04).</li><li>Launch-gate exact HaCue2 artifacts (F-06).</li></ol></article>
+          <article class="road"><span class="num">1</span><h3>Bounded operation &amp; latency</h3><ol><li>Extract the shared bounded HTTP transport and migrate HaCue2 first.</li><li>Design multi-active-fire identity and per-group/two-phase serialization together.</li><li>Define CPU fallback tiers and current-head performance gates.</li><li>Implement coverage-aware clear elimination and common kernel specializations.</li><li>Phase app startup and coalesce device diagnostics.</li></ol></article>
+          <article class="road"><span class="num">2</span><h3>Operator surface certification</h3><ol><li>Responsive top/list command bars and pseudo-localization.</li><li>HaCue2 resource migration and truthful Lock language.</li><li>Authenticated-by-default HaPlay LAN control.</li><li>Cross-platform min-size/DPI/screen-reader tests.</li><li>Repeatable projector/audio/NDI/controller hot-plug release checklist.</li></ol></article>
+          <article class="road"><span class="num">3</span><h3>Sustainable architecture &amp; ecosystem</h3><ol><li>Extract narrow session/editor/workspace facades without breaking the dispatcher boundary.</li><li>Deprecate surprising API shapes with migration guidance.</li><li>Add solution filters, bootstrap/preflight, dependency automation and managed SBOM.</li><li>Move Reference to a verified fetch-on-demand cache.</li><li>Rewrite/test versioned public documentation and plan the Skia 4 migration.</li></ol></article>
+        </div>
+
+        <h3 style="margin-top:2rem">Suggested ownership boundaries</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Workstream</th><th>Single owner</th><th>Shared consumers</th><th>Key invariant</th></tr></thead>
+            <tbody>
+              <tr><td>Project persistence</td><td>Snapshot/versioned persistence coordinator</td><td>HaCue2, HaPlay, HaViz settings</td><td>“Clean” means exact content is durably persisted</td></tr>
+              <tr><td>HTTP control transport</td><td>Bounded AOT-safe listener host</td><td>HaCue2, HaPlay</td><td>No unbounded resource or shutdown path; route semantics remain app-owned</td></tr>
+              <tr><td>Native dependency truth</td><td>Machine-readable native lock</td><td>CI, manifests, SBOM, docs, packages</td><td>One exact identity per shipped binary</td></tr>
+              <tr><td>Cue execution</td><td>Session dispatcher + fire coordinator</td><td>HaCue2 engine, HaPlay</td><td>Targeted stop reaches only matching work; unrelated groups progress independently</td></tr>
+              <tr><td>Output capability</td><td>Backend capability/preflight model</td><td>Compositor, apps, diagnostics</td><td>No silent visual semantic degradation</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout good">
+          <strong>Bottom line.</strong> Keep the framework architecture and the operator-centric direction. The best next release is not a feature sprint: it is a truth-and-safety release that makes packages independently restorable, native artifacts exactly attributable, HaCue2 saves revision-correct, cue cancellation identity-correct, and the exact HaCue2 deliverable launch-qualified. Those changes unlock safer optimization and simplification afterward.
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell">
+      <p><strong>MFPlayer comprehensive review</strong> · repository snapshot <code>19e5a68ee7dd</code> · 2026-08-14.</p>
+      <p class="footnotes">Prepared as an evidence-backed audit. Source paths are relative to this report. External version links were checked on the review date. No source remediation is included.</p>
+    </div>
+  </footer>
+
+  <script>
+    (() => {
+      const cards = [...document.querySelectorAll('.finding')];
+      const input = document.getElementById('finding-search');
+      const buttons = [...document.querySelectorAll('[data-filter]')];
+      const count = document.getElementById('finding-count');
+      let severity = 'all';
+      const apply = () => {
+        const query = input.value.trim().toLowerCase();
+        let visible = 0;
+        for (const card of cards) {
+          const severityMatch = severity === 'all' || card.dataset.severity === severity;
+          const textMatch = !query || card.textContent.toLowerCase().includes(query) || (card.dataset.text || '').includes(query);
+          card.classList.toggle('hidden', !(severityMatch && textMatch));
+          if (severityMatch && textMatch) visible++;
+        }
+        count.textContent = `${visible} shown`;
+      };
+      input.addEventListener('input', apply);
+      for (const button of buttons) button.addEventListener('click', () => {
+        severity = button.dataset.filter;
+        for (const item of buttons) item.setAttribute('aria-pressed', String(item === button));
+        apply();
+      });
+    })();
+  </script>
+</body>
+</html>

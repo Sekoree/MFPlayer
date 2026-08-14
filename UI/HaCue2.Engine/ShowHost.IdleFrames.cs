@@ -137,10 +137,12 @@ public sealed partial class ShowHost
         {
             return null;
         }
-        catch (Exception failure) when (
-            failure is IOException or UnauthorizedAccessException or InvalidOperationException
-                or NotSupportedException or ArgumentException)
+        catch (Exception failure) when (failure is not OutOfMemoryException)
         {
+            // Broad by design: an idle frame is best-effort, and the decoder's failure surface is not
+            // a closed set - FFmpeg rejects a file with FFmpegException, and a decodable file with no
+            // frame is InvalidDataException, neither of which the old named list covered. A slate that
+            // will not decode must cost one reported line, never the reload it rode in on.
             Report($"{label} could not be loaded - {failure.Message}");
             return null;
         }

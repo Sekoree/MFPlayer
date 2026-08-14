@@ -21,9 +21,24 @@ internal sealed class CueRunner
 {
     private readonly ICueRunnerHost _host;
 
-    // The cancellation source of the in-flight cue fire (its pre/post-wait + open + auto-continue chain). Set
-    // while a fire runs; read off-dispatcher by CancelActiveFire so STOP/LOAD/DISPOSE can abort it (NXT-03).
-    private volatile CancellationTokenSource? _activeFireCts;
+    // The in-flight cue fire (its pre/post-wait + open + auto-continue chain), WITH its identity: which
+    // cue ids it can start (the fired cues plus their static auto-continue closure) and which runtime
+    // groups those land on. Set while a fire runs; read off-dispatcher so STOP/LOAD/DISPOSE can abort
+    // it (NXT-03). The identity is what makes a per-cue or per-group stop surgical: it was a bare
+    // CancellationTokenSource, and CancelFiresForCue/Group cancelled it UNCONDITIONALLY - so stopping
+    // unrelated cue B while cue A sat in its pre-wait or media open silently killed A's fire.
+    private volatile ActiveFire? _activeFire;
+
+    private sealed record ActiveFire(
+        IReadOnlyList<string> CueIds,
+        IReadOnlyList<string> RuntimeGroupIds,
+        CancellationTokenSource Cancellation)
+    {
+        public bool Involves(string cueId) => CueIds.Contains(cueId, StringComparer.Ordinal);
+
+        public bool InvolvesGroup(string runtimeGroupId) =>
+            RuntimeGroupIds.Contains(runtimeGroupId, StringComparer.Ordinal);
+    }
 
     // Absolute timeline fires release the ordinary fire lock once every voice is prepared, otherwise a cue
     // waiting several seconds for its authored edge would prevent later timeline events from preparing. They
@@ -206,9 +221,43 @@ internal sealed class CueRunner
         string cueId, (TimeSpan Duration, FadeShape Curve)? crossfade = null)
     {
         using var cts = new CancellationTokenSource();
-        _activeFireCts = cts;
+        _activeFire = DescribeFire(cts, [cueId]);
         try { return await FireOnGraphAsync(cueId, cts.Token, crossfade).ConfigureAwait(false); }
-        finally { _activeFireCts = null; }
+        finally { _activeFire = null; }
+    }
+
+    /// <summary>
+    /// The identity of a fire about to run: the requested cues plus their STATIC auto-continue closure
+    /// (one fire's token covers the whole chain, so a stop of any chain member must reach it), and the
+    /// runtime groups those cues land on. <paramref name="runtimeGroupIds"/> adds the caller-synthesized
+    /// groups of an independent/scheduled batch, which are not in the graph.
+    /// </summary>
+    private ActiveFire DescribeFire(
+        CancellationTokenSource cts,
+        IEnumerable<string> cueIds,
+        IEnumerable<string>? runtimeGroupIds = null)
+    {
+        var ids = new List<string>();
+        var groups = new List<string>(runtimeGroupIds ?? []);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var walk = new Stack<string>(cueIds);
+
+        while (walk.Count > 0)
+        {
+            var id = walk.Pop();
+            if (!seen.Add(id))
+                continue;
+
+            ids.Add(id);
+            if (!_graph.TryGetCue(id, out var cue))
+                continue;
+
+            groups.Add(cue.GroupId ?? _host.DefaultGroupId);
+            if (cue is { AutoContinue: true, FollowOnCueId: not null })
+                walk.Push(cue.FollowOnCueId);
+        }
+
+        return new ActiveFire(ids, [.. groups.Distinct(StringComparer.Ordinal)], cts);
     }
 
     /// <summary>See <see cref="ShowSession.FireCuesAsync"/> (the public doc lives there).</summary>
@@ -221,7 +270,7 @@ internal sealed class CueRunner
 
         await _fireLock.WaitAsync().ConfigureAwait(false);
         using var cts = new CancellationTokenSource();
-        _activeFireCts = cts;
+        _activeFire = DescribeFire(cts, cueIds);
         try
         {
             var fires = new Task<CueExecutionStatus>[cueIds.Count];
@@ -231,7 +280,7 @@ internal sealed class CueRunner
         }
         finally
         {
-            _activeFireCts = null;
+            _activeFire = null;
             _fireLock.Release();
         }
     }
@@ -249,7 +298,8 @@ internal sealed class CueRunner
 
         await _fireLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _activeFireCts = cts;
+        _activeFire = DescribeFire(
+            cts, targets.Select(t => t.CueId), targets.Select(t => t.RuntimeGroupId));
         try
         {
             var startBarrier = new CoordinatedFireBarrier(targets.Count);
@@ -291,7 +341,7 @@ internal sealed class CueRunner
         }
         finally
         {
-            _activeFireCts = null;
+            _activeFire = null;
             _fireLock.Release();
         }
     }
@@ -317,7 +367,9 @@ internal sealed class CueRunner
         _pendingScheduledFires.TryAdd(cts, new PendingScheduledFire(
             [.. targets.Select(t => t.CueId)],
             [.. targets.Select(t => t.RuntimeGroupId)]));
-        _activeFireCts = cts;
+        var thisFire = DescribeFire(
+            cts, targets.Select(t => t.CueId), targets.Select(t => t.RuntimeGroupId));
+        _activeFire = thisFire;
 
         var releasePrepared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task<CueExecutionStatus>[]? fires = null;
@@ -345,7 +397,7 @@ internal sealed class CueRunner
             // hold the fire lock over every list until the show ends.
             await preparedEdge.Released
                 .WaitAsync(BatchPreparationTimeout, cts.Token).ConfigureAwait(false);
-            _activeFireCts = null;
+            _activeFire = null;
             _fireLock.Release();
             lockHeld = false;
 
@@ -385,8 +437,8 @@ internal sealed class CueRunner
             _pendingScheduledFires.TryRemove(cts, out _);
             if (lockHeld)
             {
-                if (ReferenceEquals(_activeFireCts, cts))
-                    _activeFireCts = null;
+                if (ReferenceEquals(_activeFire, thisFire))
+                    _activeFire = null;
                 _fireLock.Release();
             }
         }
@@ -477,14 +529,19 @@ internal sealed class CueRunner
     /// Deliberately does NOT touch <see cref="_pendingScheduledFires"/>: a prepared timeline event waiting for
     /// its absolute edge is not "the in-flight fire", and a surgical stop must not kill it (see the field doc;
     /// use <see cref="CancelAllFires"/> or the targeted forms for that).</summary>
-    public void CancelActiveFire()
+    public void CancelActiveFire() => CancelActiveFireWhen(static _ => true);
+
+    /// <summary>Cancels the in-flight fire only when its IDENTITY matches - the surgical half of the
+    /// targeted stops. A stop of unrelated cue B used to cancel cue A's in-flight pre-wait/open here,
+    /// because the active fire was an anonymous token with nothing to match against.</summary>
+    private void CancelActiveFireWhen(Func<ActiveFire, bool> affects)
     {
-        var cts = _activeFireCts;
-        if (cts is not null)
-        {
-            try { cts.Cancel(); }
-            catch (ObjectDisposedException) { /* the fire already finished and disposed it */ }
-        }
+        var fire = _activeFire;
+        if (fire is null || !affects(fire))
+            return;
+
+        try { fire.Cancellation.Cancel(); }
+        catch (ObjectDisposedException) { /* the fire already finished and disposed it */ }
     }
 
     /// <summary>Panic/load/dispose semantics: the active fire AND every prepared batch still waiting for its
@@ -495,25 +552,27 @@ internal sealed class CueRunner
         CancelPendingScheduledFires(static _ => true);
     }
 
-    /// <summary>A per-cue stop's reach: the active fire, plus any pending scheduled batch that CONTAINS the
-    /// cue. The whole batch goes down, not just the one member - a scheduled batch shares one cancellation
-    /// source and one coordinated edge, and starting the surviving siblings without the stopped member would
-    /// mean firing an event the operator just visibly vetoed part of. Batches not involving the cue keep
-    /// waiting untouched.</summary>
+    /// <summary>A per-cue stop's reach: the in-flight fire IF it involves the cue (the fired cues plus
+    /// their auto-continue closure), plus any pending scheduled batch that CONTAINS the cue. The whole
+    /// batch goes down, not just the one member - a scheduled batch shares one cancellation source and
+    /// one coordinated edge, and starting the surviving siblings without the stopped member would mean
+    /// firing an event the operator just visibly vetoed part of. Batches - and an in-flight fire - not
+    /// involving the cue keep going untouched: stopping cue B while unrelated cue A sat in its pre-wait
+    /// or open used to cancel A's fire.</summary>
     public void CancelFiresForCue(string cueId)
     {
-        CancelActiveFire();
+        CancelActiveFireWhen(fire => fire.Involves(cueId));
         CancelPendingScheduledFires(pending => pending.CueIds.Contains(cueId, StringComparer.Ordinal));
     }
 
-    /// <summary>A group stop's reach: the active fire, plus any pending scheduled batch that would start a
-    /// voice on the group - "take this group down" includes what is about to come up on it. Note scheduled
-    /// batches run on RUNTIME group ids (per-child synthesized for timeline events), so a session-group stop
-    /// matches only batches actually targeting that id; non-matching batches are left alone, and a voice they
-    /// later start is still stoppable normally.</summary>
+    /// <summary>A group stop's reach: the in-flight fire IF it would land a voice on the group, plus any
+    /// pending scheduled batch that would - "take this group down" includes what is about to come up on
+    /// it, and nothing else. Note scheduled batches run on RUNTIME group ids (per-child synthesized for
+    /// timeline events), so a session-group stop matches only batches actually targeting that id;
+    /// non-matching batches are left alone, and a voice they later start is still stoppable normally.</summary>
     public void CancelFiresForGroup(string runtimeGroupId)
     {
-        CancelActiveFire();
+        CancelActiveFireWhen(fire => fire.InvolvesGroup(runtimeGroupId));
         CancelPendingScheduledFires(pending => pending.RuntimeGroupIds.Contains(runtimeGroupId, StringComparer.Ordinal));
     }
 
