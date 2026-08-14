@@ -21,7 +21,8 @@ public sealed class RawStringLiteralLintTests(ITestOutputHelper output)
     // DOWNWARD - never raise this to accommodate a new literal. Baselined 2026-08-14 after the
     // ShellWindow migration; the big remaining screens are InspectorPane (160), VideoView (118),
     // SettingsWindow (100), AudioView (75) and TargetsView (63).
-    private const int Baseline = 832;
+    // 832 -> 767 the same day: DiagnosticsWindow (27) and TimelineSheet (37) migrated.
+    private const int Baseline = 767;
 
     // The attribute name is matched WHOLE (any prefix, ending in one of the tokens) so compound
     // names like PlaceholderText and attached forms like ToolTip.Tip are covered - the exact

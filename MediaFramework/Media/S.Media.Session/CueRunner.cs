@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using S.Media.Core.Diagnostics;
 
 namespace S.Media.Session;
@@ -72,6 +73,23 @@ internal sealed class CueRunner
     private SemaphoreSlim GroupFireLock(string groupId) =>
         _groupFireLocks.GetOrAdd(groupId, static _ => new SemaphoreSlim(1, 1));
 
+    // F-08 acceptance: the fire path's latency phases are observable. Lock-wait is THE head-of-line
+    // signal (an unrelated group's fire can no longer cause it; a same-group wait is real
+    // serialization the operator should be able to see and attribute).
+    private readonly TimingAccumulator _lockWaitTiming = new();
+    private readonly TimingAccumulator _goSelectTiming = new();
+    private readonly TimingAccumulator _fireExecuteTiming = new();
+
+    /// <summary>A lock wait longer than this logs a warning naming the contended groups - the
+    /// "why was my GO late" answer, in the log, at the moment it happened. Same-group serialization
+    /// is CORRECT (a cue mid-pre-wait legitimately holds its group), so the default only speaks up
+    /// when the wait is long enough for an operator to have felt it. Settable for tests.</summary>
+    internal TimeSpan LockWaitWarnThreshold { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>Point-in-time fire-path timings; see <see cref="CueFireTimings"/> for semantics.</summary>
+    public CueFireTimings Timings => new(
+        _lockWaitTiming.Snapshot(), _goSelectTiming.Snapshot(), _fireExecuteTiming.Snapshot());
+
     /// <summary>Every runtime group the fire of <paramref name="cueIds"/> can land a voice on: the
     /// authored groups of the cues plus their static auto-continue closure, plus any
     /// caller-synthesized <paramref name="runtimeGroupIds"/>. Never empty - a fire of an unknown cue
@@ -103,6 +121,7 @@ internal sealed class CueRunner
     private async Task<IReadOnlyList<SemaphoreSlim>> AcquireGroupLocksAsync(
         IReadOnlyCollection<string> groupIds, CancellationToken cancellationToken = default)
     {
+        var started = Stopwatch.GetTimestamp();
         var ordered = groupIds
             .Distinct(StringComparer.Ordinal)
             .OrderBy(id => id, StringComparer.Ordinal)
@@ -122,6 +141,22 @@ internal sealed class CueRunner
             for (var i = acquired - 1; i >= 0; i--)
                 ordered[i].Release();
             throw;
+        }
+
+        var waitedTicks = Stopwatch.GetTimestamp() - started;
+        _lockWaitTiming.Record(waitedTicks);
+        var waited = TimeSpan.FromSeconds(waitedTicks / (double)Stopwatch.Frequency);
+        if (waited >= LockWaitWarnThreshold)
+        {
+            // The head-of-line answer, at the moment it happened: this fire waited behind another
+            // fire on the SAME group(s) - a pre-wait, a cold open, a preparing batch. Unrelated
+            // groups cannot cause this (F-08); a frequent warning here means the show's cue layout
+            // is serializing on one list, not that the runner regressed.
+            MediaDiagnostics.LogWarning(
+                "CueRunner: a fire waited {0:0} ms for the fire lock(s) of group(s) [{1}] - another "
+                + "fire on the same group(s) held them (pre-wait, media open, or batch preparation)",
+                waited.TotalMilliseconds,
+                string.Join(", ", groupIds.Distinct(StringComparer.Ordinal)));
         }
 
         return ordered;
@@ -223,12 +258,14 @@ internal sealed class CueRunner
     {
         if (crossfade is { } window)
             _pendingFireCrossfades[cueId] = Tuple.Create(window.Duration, window.Curve);
+        var started = Stopwatch.GetTimestamp();
         try
         {
             return await _graph.FireAsync(cueId, token).ConfigureAwait(false);
         }
         finally
         {
+            _fireExecuteTiming.RecordSince(started);
             // A skipped/failed/cancelled fire may never reach its clip action - the unconsumed window
             // must not leak into a later fire of the same cue. (A refire of this cue serializes on
             // its group lock, so this cleanup can never remove a newer fire's window.)
@@ -697,7 +734,9 @@ internal sealed class CueRunner
             try
             {
                 // Selection on the dispatcher (reads the cue graph + the group cursor).
+                var selectStarted = Stopwatch.GetTimestamp();
                 var (next, generation) = await SelectNextGoCueAsync(groupId, _host.DefaultGroupId).ConfigureAwait(false);
+                _goSelectTiming.RecordSince(selectStarted);
                 if (next is null)
                     return CueExecutionStatus.NotReady;
 

@@ -263,6 +263,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// <summary>Current bounded command-queue health for host monitoring and overload diagnostics.</summary>
     public SessionDispatcherDiagnostics DispatcherDiagnostics => _dispatcher.Diagnostics;
 
+    /// <summary>Fire-path phase timings (F-08 acceptance): group-lock wait (the head-of-line
+    /// signal), GO selection, and ordinary fire execution. See <see cref="CueFireTimings"/>.</summary>
+    public CueFireTimings CueFireTimings => _fires.Timings;
+
     // Lock-free query view (NXT-16): a volatile snapshot of each group's clock + active player, republished on
     // the dispatcher whenever the group set or active clip changes. Snapshot() reads THIS and pulls live
     // (thread-safe) position/duration/run-state off the captured references, so a position/state poll never

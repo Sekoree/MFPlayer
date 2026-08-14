@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:c="using:HaCue2.Controls"
              xmlns:vm="using:HaCue2.ViewModels"
+             xmlns:res="using:HaCue2.Resources"
              x:Class="HaCue2.Views.TimelineSheet"
              x:DataType="vm:TimelineViewModel"
              x:CompileBindings="True">
@@ -18,49 +19,49 @@
     <c:PanelBox.Footer>
       <Border Classes="chain">
         <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="7">
-          <Button Grid.Column="0" Classes="icon" Content="+ AUTOMATION ▾">
+          <Button Grid.Column="0" Classes="icon" Content="{x:Static res:Strings.TlAddAutomation}">
             <Button.Flyout>
               <!-- Tags address the four stable picker choices. Each item is disabled rather than hidden when the
                    selected cue cannot carry it (volume needs audio, opacity needs placeable video,
                    and one track per concrete target), so the rule is visible instead of arriving as a refusal
                    after the click. -->
               <MenuFlyout>
-                <MenuItem Header="Volume" Click="OnAddLane" Tag="cue.audio.volume"
+                <MenuItem Header="{x:Static res:Strings.TlLaneVolume}" Click="OnAddLane" Tag="cue.audio.volume"
                           IsEnabled="{Binding CanAddVolumeLane}" />
-                <MenuItem Header="Gain insert" Click="OnAddLane"
+                <MenuItem Header="{x:Static res:Strings.TlLaneGainInsert}" Click="OnAddLane"
                           Tag="audio.effect.parameter.gain.v1.gainDb"
                           IsVisible="{Binding HasAutomationAudioGain}"
                           IsEnabled="{Binding CanAddAudioGainLane}" />
-                <MenuItem Header="Opacity" Click="OnAddLane" Tag="video.placement.opacity"
+                <MenuItem Header="{x:Static res:Strings.TlLaneOpacity}" Click="OnAddLane" Tag="video.placement.opacity"
                           IsEnabled="{Binding CanAddOpacityLane}" />
-                <MenuItem Header="Position X" Click="OnAddLane" Tag="video.placement.x"
+                <MenuItem Header="{x:Static res:Strings.TlLanePositionX}" Click="OnAddLane" Tag="video.placement.x"
                           IsEnabled="{Binding CanAddPlacementXLane}" />
-                <MenuItem Header="Position Y" Click="OnAddLane" Tag="video.placement.y"
+                <MenuItem Header="{x:Static res:Strings.TlLanePositionY}" Click="OnAddLane" Tag="video.placement.y"
                           IsEnabled="{Binding CanAddPlacementYLane}" />
-                <MenuItem Header="Width" Click="OnAddLane" Tag="video.placement.width"
+                <MenuItem Header="{x:Static res:Strings.TlLaneWidth}" Click="OnAddLane" Tag="video.placement.width"
                           IsEnabled="{Binding CanAddPlacementWidthLane}" />
-                <MenuItem Header="Height" Click="OnAddLane" Tag="video.placement.height"
+                <MenuItem Header="{x:Static res:Strings.TlLaneHeight}" Click="OnAddLane" Tag="video.placement.height"
                           IsEnabled="{Binding CanAddPlacementHeightLane}" />
-                <MenuItem Header="Rotation" Click="OnAddLane" Tag="video.placement.rotation"
+                <MenuItem Header="{x:Static res:Strings.TlLaneRotation}" Click="OnAddLane" Tag="video.placement.rotation"
                           IsEnabled="{Binding CanAddPlacementRotationLane}" />
-                <MenuItem Header="Chroma key" IsVisible="{Binding HasAutomationChromaKey}">
-                  <MenuItem Header="Similarity" Click="OnAddLane" Tag="video.effect.chroma-key.similarity"
+                <MenuItem Header="{x:Static res:Strings.TlLaneChromaKey}" IsVisible="{Binding HasAutomationChromaKey}">
+                  <MenuItem Header="{x:Static res:Strings.TlLaneSimilarity}" Click="OnAddLane" Tag="video.effect.chroma-key.similarity"
                             IsEnabled="{Binding CanAddChromaSimilarityLane}" />
-                  <MenuItem Header="Smoothness" Click="OnAddLane" Tag="video.effect.chroma-key.smoothness"
+                  <MenuItem Header="{x:Static res:Strings.TlLaneSmoothness}" Click="OnAddLane" Tag="video.effect.chroma-key.smoothness"
                             IsEnabled="{Binding CanAddChromaSmoothnessLane}" />
-                  <MenuItem Header="Spill reduction" Click="OnAddLane" Tag="video.effect.chroma-key.spill-reduction"
+                  <MenuItem Header="{x:Static res:Strings.TlLaneSpillReduction}" Click="OnAddLane" Tag="video.effect.chroma-key.spill-reduction"
                             IsEnabled="{Binding CanAddChromaSpillLane}" />
                 </MenuItem>
-                <MenuItem Header="Colour adjust" IsVisible="{Binding HasAutomationColorAdjust}">
-                  <MenuItem Header="Brightness" Click="OnAddLane" Tag="video.effect.color-adjust.brightness"
+                <MenuItem Header="{x:Static res:Strings.TlLaneColourAdjust}" IsVisible="{Binding HasAutomationColorAdjust}">
+                  <MenuItem Header="{x:Static res:Strings.TlLaneBrightness}" Click="OnAddLane" Tag="video.effect.color-adjust.brightness"
                             IsEnabled="{Binding CanAddColorBrightnessLane}" />
-                  <MenuItem Header="Contrast" Click="OnAddLane" Tag="video.effect.color-adjust.contrast"
+                  <MenuItem Header="{x:Static res:Strings.TlLaneContrast}" Click="OnAddLane" Tag="video.effect.color-adjust.contrast"
                             IsEnabled="{Binding CanAddColorContrastLane}" />
                 </MenuItem>
                 <Separator />
-                <MenuItem Header="OSC value" Click="OnAddLane" Tag="external.osc.value"
+                <MenuItem Header="{x:Static res:Strings.TlLaneOscValue}" Click="OnAddLane" Tag="external.osc.value"
                           IsEnabled="{Binding CanAddOscLane}" />
-                <MenuItem Header="MIDI control" Click="OnAddLane" Tag="external.midi.control-value"
+                <MenuItem Header="{x:Static res:Strings.TlLaneMidiControl}" Click="OnAddLane" Tag="external.midi.control-value"
                           IsEnabled="{Binding CanAddMidiLane}" />
               </MenuFlyout>
             </Button.Flyout>
@@ -68,9 +69,9 @@
           <TextBlock Grid.Column="1" Classes="mono dim3 small" VerticalAlignment="Center"
                      TextTrimming="CharacterEllipsis"
                      Text="{Binding KeyframeStatus}" />
-          <Border Grid.Column="2" Classes="badge"><TextBlock Text="LIVE" /></Border>
+          <Border Grid.Column="2" Classes="badge"><TextBlock Text="{x:Static res:Strings.TlLive}" /></Border>
           <TextBlock Grid.Column="3" Classes="mono dim3 small" VerticalAlignment="Center"
-                     Text="edits while running apply on the next pass" />
+                     Text="{x:Static res:Strings.TlLiveHint}" />
         </Grid>
       </Border>
     </c:PanelBox.Footer>
@@ -79,14 +80,14 @@
 
       <Border Classes="transport" DockPanel.Dock="Top">
         <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="7">
-          <Button Grid.Column="0" Classes="icon" Content="▶ FROM PLAYHEAD" Click="OnPlayFrom" />
+          <Button Grid.Column="0" Classes="icon" Content="{x:Static res:Strings.TlFromPlayhead}" Click="OnPlayFrom" />
           <Button Grid.Column="1" Classes="icon" Content="⏹" Click="OnStopTimeline" />
-          <Button Grid.Column="2" Classes="icon" Content="ZOOM −" Click="OnZoomOut" />
-          <Button Grid.Column="3" Classes="icon" Content="ZOOM +" Click="OnZoomIn" />
-          <Button Grid.Column="4" Classes="icon" Content="FIT" Click="OnZoomFit" />
+          <Button Grid.Column="2" Classes="icon" Content="{x:Static res:Strings.TlZoomOut}" Click="OnZoomOut" />
+          <Button Grid.Column="3" Classes="icon" Content="{x:Static res:Strings.TlZoomIn}" Click="OnZoomIn" />
+          <Button Grid.Column="4" Classes="icon" Content="{x:Static res:Strings.TlZoomFit}" Click="OnZoomFit" />
           <ListBox Grid.Column="5" Theme="{StaticResource Segment}"
                    ItemsSource="{Binding SnapModes}" SelectedItem="{Binding SnapMode}" />
-          <Button Grid.Column="6" Content="DUCK UNDER…" Click="OnDuck" />
+          <Button Grid.Column="6" Content="{x:Static res:Strings.TlDuckUnder}" Click="OnDuck" />
           <TextBlock Grid.Column="7" Classes="mono dim3 small" VerticalAlignment="Center"
                      Margin="8,0" Text="{Binding PlayheadLabel, StringFormat='▮ {0}'}" />
           <!-- The refusal sits beside the buttons: "the show is not running" is the usual answer on a
@@ -94,7 +95,7 @@
           <TextBlock Grid.Column="7" Classes="mono small warn" HorizontalAlignment="Right"
                      VerticalAlignment="Center" Margin="8,0" Text="{Binding TransportProblem}" />
           <Button Grid.Column="8" Classes="icon" Content="{Binding DockLabel}" Click="OnUndock" />
-          <Button Grid.Column="9" Classes="icon" Content="CLOSE ⎋" Click="OnClose" />
+          <Button Grid.Column="9" Classes="icon" Content="{x:Static res:Strings.TlClose}" Click="OnClose" />
         </Grid>
       </Border>
 
@@ -162,22 +163,22 @@
                                        IsVisible="{Binding IsEffect}">
                               <Button Classes="icon" Content="{Binding ExpandLabel}"
                                       Click="OnToggleEffectLane"
-                                      ToolTip.Tip="Expand this lane into an inline point editor" />
-                              <Button Classes="icon" Content="CURVE…" Click="OnOpenLaneEditor"
-                                      ToolTip.Tip="Edit exact time/value fields and segment curves" />
-                              <Button Classes="icon" Content="ALL" Click="OnSelectAllKeyframes"
+                                      ToolTip.Tip="{x:Static res:Strings.TlCurveTooltip}" />
+                              <Button Classes="icon" Content="{x:Static res:Strings.TlCurve}" Click="OnOpenLaneEditor"
+                                      ToolTip.Tip="{x:Static res:Strings.TlCurveEditTooltip}" />
+                              <Button Classes="icon" Content="{x:Static res:Strings.TlSelectAll}" Click="OnSelectAllKeyframes"
                                       IsVisible="{Binding IsExpanded}"
-                                      ToolTip.Tip="Select every keyframe (Ctrl+A)" />
-                              <Button Classes="icon" Content="COPY" Click="OnCopyKeyframes"
+                                      ToolTip.Tip="{x:Static res:Strings.TlSelectAllTooltip}" />
+                              <Button Classes="icon" Content="{x:Static res:Strings.TlCopy}" Click="OnCopyKeyframes"
                                       IsVisible="{Binding IsExpanded}"
-                                      ToolTip.Tip="Copy selected keyframes (Ctrl+C)" />
-                              <Button Classes="icon" Content="PASTE" Click="OnPasteKeyframes"
+                                      ToolTip.Tip="{x:Static res:Strings.TlCopyTooltip}" />
+                              <Button Classes="icon" Content="{x:Static res:Strings.TlPaste}" Click="OnPasteKeyframes"
                                       IsVisible="{Binding IsExpanded}"
-                                      ToolTip.Tip="Paste at the playhead (Ctrl+V)" />
-                              <Button Classes="icon" Content="DEL" Click="OnDeleteKeyframes"
+                                      ToolTip.Tip="{x:Static res:Strings.TlPasteTooltip}" />
+                              <Button Classes="icon" Content="{x:Static res:Strings.TlDelete}" Click="OnDeleteKeyframes"
                                       IsVisible="{Binding IsExpanded}"
                                       IsEnabled="{Binding HasSelectedPoints}"
-                                      ToolTip.Tip="Delete selected keyframes" />
+                                      ToolTip.Tip="{x:Static res:Strings.TlDeleteTooltip}" />
                             </WrapPanel>
                           </Grid>
                         </Border>

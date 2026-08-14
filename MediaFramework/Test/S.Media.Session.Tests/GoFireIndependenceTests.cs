@@ -71,4 +71,58 @@ public sealed class GoFireIndependenceTests
         Assert.Equal(1, statuses.Count(s => s == CueExecutionStatus.Fired));
         Assert.Equal(1, statuses.Count(s => s == CueExecutionStatus.NotReady));
     }
+
+    [Fact]
+    public async Task FirePhaseTimings_AreRecordedForAGo()
+    {
+        // F-08 acceptance: the latency phases are OBSERVABLE - lock wait, selection, and execution
+        // each record, so a host can diff snapshots for windowed views like the composition stats.
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("one", 1, "One", GroupId: "g")],
+            Clips: [new ShowClipBinding("one", "fake://one")],
+            Compositions: [], Routes: []));
+
+        var before = session.CueFireTimings;
+        Assert.Equal(0, before.GroupLockWait.Count);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync("g").WaitAsync(TimeSpan.FromSeconds(10)));
+
+        var after = session.CueFireTimings;
+        Assert.True(after.GroupLockWait.Count >= 1, "lock-wait was not recorded");
+        Assert.True(after.GoSelect.Count >= 1, "GO selection was not recorded");
+        Assert.True(after.FireExecute.Count >= 1, "fire execution was not recorded");
+    }
+
+    [Fact]
+    public async Task ASameGroupWaitBehindAPreWaitingFire_ShowsUpInTheLockWaitTiming()
+    {
+        // The head-of-line signal itself: a GO on the SAME group as a pre-waiting fire waits for the
+        // group lock, and that wait is measured - the thing that was invisible (and global) before.
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(chunks: 100_000));
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 1,
+            Cues:
+            [
+                new CueDefinition("slow", 1, "Slow", PreWait: TimeSpan.FromMilliseconds(900), GroupId: "g"),
+                new CueDefinition("next", 2, "Next", GroupId: "g"),
+            ],
+            Clips:
+            [
+                new ShowClipBinding("slow", "fake://slow"),
+                new ShowClipBinding("next", "fake://next"),
+            ],
+            Compositions: [], Routes: []));
+
+        var fire = session.FireCueAsync("slow");
+        await Task.Delay(200); // let it take g's lock and enter its pre-wait
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync("g").WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(CueExecutionStatus.Fired, await fire.WaitAsync(TimeSpan.FromSeconds(10)));
+
+        // The GO waited out most of the 900 ms pre-wait behind the same group's fire.
+        Assert.True(session.CueFireTimings.GroupLockWait.MaxMs >= 300,
+            $"expected a measured same-group lock wait; max was {session.CueFireTimings.GroupLockWait.MaxMs:0} ms");
+    }
 }

@@ -11,6 +11,25 @@ public static class ProjectHash
     public static string Of(HaPlayProject project) =>
         OfSerializedJson(ProjectIO.Serialize(project));
 
+    /// <summary>
+    /// F-12: pays the serialize+hash path's first-use cost (serializer construction + JIT, measured
+    /// ~200 ms) somewhere it does not matter. The first REAL hash is MainViewModel's clean-baseline
+    /// capture, on the UI thread, inside the startup critical path - warming on a background thread
+    /// during app init overlaps that cost with XAML load instead (the second call measured 0.15 ms).
+    /// Safe from any thread: touches only a throwaway default project, never UI state.
+    /// </summary>
+    public static void WarmUp()
+    {
+        try
+        {
+            Of(new HaPlayProject());
+        }
+        catch (Exception)
+        {
+            // Warmup must never break startup - the real call simply pays the cost instead.
+        }
+    }
+
     /// <summary>Hashes an already-serialized project without serializing it a second time.</summary>
     public static string OfSerializedJson(string json)
     {

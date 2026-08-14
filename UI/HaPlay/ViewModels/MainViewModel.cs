@@ -72,27 +72,41 @@ public partial class MainViewModel : ViewModelBase
     public MainViewModel()
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor", slowWarningMs: 1000);
-        OutputManagement = new OutputManagementViewModel();
-        CuePlayer = new CuePlayerViewModel();
-        Control = new ControlWorkspaceViewModel();
-        CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
+        // F-12: the ctor is the single biggest startup phase, so its sub-phases are measured
+        // individually - "reorder around first interaction" starts with knowing which chunk costs.
+        using (MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor/workspaces", slowWarningMs: 400))
+        {
+            OutputManagement = new OutputManagementViewModel();
+            CuePlayer = new CuePlayerViewModel();
+            Control = new ControlWorkspaceViewModel();
+            CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
+        }
+
         Players = new ObservableCollection<MediaPlayerViewModel>();
         Players.CollectionChanged += (_, _) => OnPlayersChangedForPlayerTabs();
         RecentProjects.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasNoRecentProjects));
         // First player can't be removed - there's always at least one in the UI.
-        Players.Add(CreatePlayer(removable: false));
-        SelectedPlayer = Players[0];
-        Soundboard = new SoundboardWorkspaceViewModel(OutputManagement);
+        using (MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor/first-player", slowWarningMs: 400))
+        {
+            Players.Add(CreatePlayer(removable: false));
+            SelectedPlayer = Players[0];
+            Soundboard = new SoundboardWorkspaceViewModel(OutputManagement);
+        }
+
         Soundboard.ProbeDurationCallback = CueMediaProbe.TryProbeDurationMsAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) =>
             FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync suggested");
-        CuePlayer.RefreshPreviewAudioDevices();
+        using (MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor/preview-audio-devices", slowWarningMs: 250))
+            CuePlayer.RefreshPreviewAudioDevices();
         // The cue workspace + soundboard run on the headless ShowSession - the only playback runtime since the
         // legacy CuePlaybackEngine/SoundboardEngine were deleted (NXT-06/NXT-13 cutover completion). The session,
         // its output leases, reloads, and polls are owned by the coordinator.
-        _cueShow = new CueShowSessionCoordinator(CuePlayer, Soundboard, OutputManagement);
-        _cueShow.WireShowSessionCueTransport();
+        using (MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor/cue-session", slowWarningMs: 400))
+        {
+            _cueShow = new CueShowSessionCoordinator(CuePlayer, Soundboard, OutputManagement);
+            _cueShow.WireShowSessionCueTransport();
+        }
         // Timed cue triggers (Ideas/CuePlayer-Enhancements.md §4): one central 250 ms sweep over every
         // scheduled cue. Fires are gated on the session-scoped "Schedules armed" toggle + edit mode.
         _cueScheduler = new CueSchedulerService(CuePlayer);
@@ -110,7 +124,8 @@ public partial class MainViewModel : ViewModelBase
         CuePlayer.SetActionEndpoints(ActionEndpoints);
         ActionEndpoints.CollectionChanged += OnActionEndpointsCollectionChanged;
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
-        RefreshMIDIDeviceCatalog();
+        using (MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor/midi-catalog", slowWarningMs: 250))
+            RefreshMIDIDeviceCatalog();
         // APP-02: the endpoint-health polling lifecycle (5 s timer, single-flight guard, per-run CTS, timing)
         // lives in a dedicated service; the view model keeps only the probe loop (ProbeAllEndpointsAsync).
         // APP-01 behaviour - poll only while endpoints exist - is preserved by the pending-count gate + SyncEnabled.
@@ -137,8 +152,13 @@ public partial class MainViewModel : ViewModelBase
         };
         PipelineStats.Start();
 
-        LoadRecentProjects();
-        _appSettings = AppSettings.Load();
+        using var tailTiming = MediaDiagnostics.BeginTimedOperation(
+            Trace, "MainViewModel.ctor/settings-appearance-tail", slowWarningMs: 400);
+        using (MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor/load-settings", slowWarningMs: 250))
+        {
+            LoadRecentProjects();
+            _appSettings = AppSettings.Load();
+        }
         CuePlayer.Hotkeys = _appSettings.CueHotkeys.Copy();
         _sidebarCollapsed = _appSettings.SidebarCollapsed;
         // Appearance (§8.6) - load saved values and apply them immediately. The OnXChanged hooks would
@@ -153,9 +173,12 @@ public partial class MainViewModel : ViewModelBase
         _startupDensity = _density;
         // Base theme first (it decides whether the variant/density even apply), then variant + density.
         // ApplyTheme pins Light for Classic; ApplyDensity is a no-op unless Fluent is active.
-        AppearanceController.ApplyBaseTheme(_baseTheme);
-        AppearanceController.ApplyTheme(_theme);
-        AppearanceController.ApplyDensity(_density);
+        using (MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor/apply-appearance", slowWarningMs: 250))
+        {
+            AppearanceController.ApplyBaseTheme(_baseTheme);
+            AppearanceController.ApplyTheme(_theme);
+            AppearanceController.ApplyDensity(_density);
+        }
         if (!Playback.PlaybackVideoPipeline.CliRequestedUyvyPassthrough)
             Playback.PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = _appSettings.PreferLiveUyvyPassthrough;
         var lastWorkspaceId = WorkspaceItem.MigrateLegacyId(_appSettings.LastSelectedWorkspace);
@@ -183,7 +206,8 @@ public partial class MainViewModel : ViewModelBase
             AppSettings.Update(s => s.RestApiAccessToken = _appSettings.RestApiAccessToken);
         }
 
-        RestartRestApi();
+        using (MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor/rest-api", slowWarningMs: 250))
+            RestartRestApi();
 
         // Cue transport fade defaults (per-machine) - same seed-via-backing-field pattern.
         _cueStopFadeMs = Math.Max(0, _appSettings.StopFadeMs);
@@ -205,7 +229,8 @@ public partial class MainViewModel : ViewModelBase
             _recovery.Start();
 
         // Baseline for the unsaved-changes check: a freshly-launched, untouched project is "clean".
-        MarkProjectClean();
+        using (MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor/clean-baseline", slowWarningMs: 250))
+            MarkProjectClean();
 
         timing?.SetOutcome($"players={Players.Count} outputs={OutputManagement.Outputs.Count} endpoints={ActionEndpoints.Count} restApi={RestApiEnabled}");
     }

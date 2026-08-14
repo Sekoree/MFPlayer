@@ -25,6 +25,10 @@ public partial class App : Application
     public override void Initialize()
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "App.Initialize", slowWarningMs: 250);
+        // F-12: overlap the project-hash serializer's ~200 ms first-use cost with XAML load - the
+        // first real hash (MainViewModel's clean baseline) otherwise pays it on the UI thread
+        // inside the startup critical path.
+        _ = Task.Run(Models.ProjectHash.WarmUp);
         AvaloniaXamlLoader.Load(this);
         RegisterDockPaneTemplates();
 #if DEBUG

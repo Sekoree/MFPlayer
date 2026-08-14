@@ -2,10 +2,11 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:c="using:HaCue2.Controls"
         xmlns:vm="using:HaCue2.ViewModels"
+        xmlns:res="using:HaCue2.Resources"
         x:Class="HaCue2.Views.DiagnosticsWindow"
         x:DataType="vm:DiagnosticsViewModel"
         x:CompileBindings="True"
-        Title="HaCue2 - Diagnostics"
+        Title="{x:Static res:Strings.DiagWindowTitle}"
         Width="1140" Height="700"
         MinWidth="960" MinHeight="560"
         WindowStartupLocation="CenterOwner"
@@ -20,12 +21,12 @@
     <Border Classes="titlebar" DockPanel.Dock="Top">
       <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
         <TextBlock Grid.Column="0" Classes="mono" FontWeight="SemiBold" FontSize="11"
-                   LetterSpacing="0.45" Text="HaCue2" VerticalAlignment="Center" />
+                   LetterSpacing="0.45" Text="{x:Static res:Strings.DiagBrand}" VerticalAlignment="Center" />
         <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" Margin="14,0,0,0"
-                   Text="Diagnostics" VerticalAlignment="Center" />
-        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="CLEAR PROBLEMS + CLIPS" Click="OnReset" />
-        <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="COPY REPORT" Click="OnCopyReport" />
-        <Button Grid.Column="5" Theme="{StaticResource ChipButton}" Content="CLOSE" Click="OnClose" />
+                   Text="{x:Static res:Strings.DiagHeader}" VerticalAlignment="Center" />
+        <Button Grid.Column="3" Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.DiagClearProblems}" Click="OnReset" />
+        <Button Grid.Column="4" Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.DiagCopyReport}" Click="OnCopyReport" />
+        <Button Grid.Column="5" Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.DiagClose}" Click="OnClose" />
       </Grid>
     </Border>
 
@@ -34,19 +35,19 @@
         <TextBlock Grid.Column="0" Classes="mono dim3 small" Text="{Binding CountersSince}" />
         <TextBlock Grid.Column="2" Classes="mono warn small"
                    IsVisible="{Binding HasWarning}" Text="{Binding BayWarning}" />
-        <TextBlock Grid.Column="3" Classes="mono dim3 small" Text="copy report → clipboard as text" />
+        <TextBlock Grid.Column="3" Classes="mono dim3 small" Text="{x:Static res:Strings.DiagCopyReportHint}" />
       </Grid>
     </Border>
 
     <Grid RowDefinitions="*,Auto" Margin="7" RowSpacing="7">
 
-      <c:PanelBox Grid.Row="0" Header="Audio bay" Hint="{Binding BayHeader}">
+      <c:PanelBox Grid.Row="0" Header="{x:Static res:Strings.DiagAudioBayHeader}" Hint="{Binding BayHeader}">
         <c:PanelBox.Footer>
           <!-- Only when there IS something wrong. A standing "RECORD BEHIND" badge over an empty
                line was on screen whatever the bay was doing, which teaches an operator to ignore it. -->
           <Border Classes="chain" IsVisible="{Binding HasWarning}">
             <DockPanel LastChildFill="True">
-                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge bad"><TextBlock Text="ATTENTION" /></Border>
+                <Border DockPanel.Dock="Left" Margin="0,0,7,0" Classes="badge bad"><TextBlock Text="{x:Static res:Strings.DiagAttention}" /></Border>
                 <TextBlock Classes="mono dim2 small" VerticalAlignment="Center" TextWrapping="Wrap"
                          Text="{Binding BayWarning}" />
               </DockPanel>
@@ -57,16 +58,16 @@
           <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                   BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
             <Grid ColumnDefinitions="220,110,66,50,90,90,66,80,50,110" ColumnSpacing="6">
-              <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="TERMINAL / LEASE" />
-              <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="STATE" />
-              <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="IN FLIGHT" />
-              <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="CAP" />
-              <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="ENQUEUED" />
-              <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="PROCESSED" />
-              <TextBlock Grid.Column="6" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="DROPPED" />
-              <TextBlock Grid.Column="7" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="LATENCY" />
-              <TextBlock Grid.Column="8" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="EPOCH" />
-              <TextBlock Grid.Column="9" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="RATE" />
+              <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.DiagColTerminal}" />
+              <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.DiagColState}" />
+              <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColInFlight}" />
+              <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColCap}" />
+              <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColEnqueued}" />
+              <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColProcessed}" />
+              <TextBlock Grid.Column="6" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColDropped}" />
+              <TextBlock Grid.Column="7" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColLatency}" />
+              <TextBlock Grid.Column="8" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColEpoch}" />
+              <TextBlock Grid.Column="9" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColRate}" />
             </Grid>
           </Border>
 
@@ -105,17 +106,17 @@
 
       <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="7" Height="220">
 
-        <c:PanelBox Grid.Column="0" Header="Video &amp; compositions">
+        <c:PanelBox Grid.Column="0" Header="{x:Static res:Strings.DiagVideoHeader}">
           <DockPanel>
             <Border DockPanel.Dock="Top" Background="{DynamicResource BoothPanel2}"
                     BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,0,1" Padding="8,4">
               <Grid ColumnDefinitions="*,66,60,50,66,70" ColumnSpacing="6">
-                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="COMPOSITION" />
-                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="FPS" />
-                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="LAYERS" />
-                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="LATE" />
-                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="DROPPED" />
-                <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="BACKEND" />
+                <TextBlock Grid.Column="0" Theme="{StaticResource ColumnHeadText}" Text="{x:Static res:Strings.DiagColComposition}" />
+                <TextBlock Grid.Column="1" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColFps}" />
+                <TextBlock Grid.Column="2" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColLayers}" />
+                <TextBlock Grid.Column="3" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColLate}" />
+                <TextBlock Grid.Column="4" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColDropped}" />
+                <TextBlock Grid.Column="5" Theme="{StaticResource ColumnHeadText}" TextAlignment="Right" Text="{x:Static res:Strings.DiagColBackend}" />
               </Grid>
             </Border>
             <ListBox Theme="{StaticResource ReadonlyRows}" ItemsSource="{Binding Compositions}">
@@ -143,11 +144,11 @@
 
         <!-- Not a second event collector: a level-filtered tail of the SAME Microsoft.Extensions.Logging
              pipeline the file log uses (register item 27). One logging system, two readers. -->
-        <c:PanelBox Grid.Column="1" Header="Log tail" Hint="{Binding LogSummary}">
+        <c:PanelBox Grid.Column="1" Header="{x:Static res:Strings.DiagLogTailHeader}" Hint="{Binding LogSummary}">
           <DockPanel>
             <Border DockPanel.Dock="Top" Classes="chain flush" Padding="10,5">
               <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Classes="caps" VerticalAlignment="Center" Text="MINIMUM LEVEL" />
+                <TextBlock Classes="caps" VerticalAlignment="Center" Text="{x:Static res:Strings.DiagColMinimumLevel}" />
                 <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding MinimumLevel}"
                           MinWidth="120" />
               </StackPanel>

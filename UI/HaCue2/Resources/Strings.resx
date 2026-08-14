@@ -76,4 +76,196 @@
   <data name="ShellProgramCaption" xml:space="preserve">
     <value>PROGRAM</value>
   </data>
+  <data name="DiagWindowTitle" xml:space="preserve">
+    <value>HaCue2 - Diagnostics</value>
+  </data>
+  <data name="DiagBrand" xml:space="preserve">
+    <value>HaCue2</value>
+  </data>
+  <data name="DiagHeader" xml:space="preserve">
+    <value>Diagnostics</value>
+  </data>
+  <data name="DiagClearProblems" xml:space="preserve">
+    <value>CLEAR PROBLEMS + CLIPS</value>
+  </data>
+  <data name="DiagCopyReport" xml:space="preserve">
+    <value>COPY REPORT</value>
+  </data>
+  <data name="DiagClose" xml:space="preserve">
+    <value>CLOSE</value>
+  </data>
+  <data name="DiagCopyReportHint" xml:space="preserve">
+    <value>copy report → clipboard as text</value>
+  </data>
+  <data name="DiagAudioBayHeader" xml:space="preserve">
+    <value>Audio bay</value>
+  </data>
+  <data name="DiagAttention" xml:space="preserve">
+    <value>ATTENTION</value>
+  </data>
+  <data name="DiagColTerminal" xml:space="preserve">
+    <value>TERMINAL / LEASE</value>
+  </data>
+  <data name="DiagColState" xml:space="preserve">
+    <value>STATE</value>
+  </data>
+  <data name="DiagColInFlight" xml:space="preserve">
+    <value>IN FLIGHT</value>
+  </data>
+  <data name="DiagColCap" xml:space="preserve">
+    <value>CAP</value>
+  </data>
+  <data name="DiagColEnqueued" xml:space="preserve">
+    <value>ENQUEUED</value>
+  </data>
+  <data name="DiagColProcessed" xml:space="preserve">
+    <value>PROCESSED</value>
+  </data>
+  <data name="DiagColDropped" xml:space="preserve">
+    <value>DROPPED</value>
+  </data>
+  <data name="DiagColLatency" xml:space="preserve">
+    <value>LATENCY</value>
+  </data>
+  <data name="DiagColEpoch" xml:space="preserve">
+    <value>EPOCH</value>
+  </data>
+  <data name="DiagColRate" xml:space="preserve">
+    <value>RATE</value>
+  </data>
+  <data name="DiagVideoHeader" xml:space="preserve">
+    <value>Video &amp; compositions</value>
+  </data>
+  <data name="DiagColComposition" xml:space="preserve">
+    <value>COMPOSITION</value>
+  </data>
+  <data name="DiagColFps" xml:space="preserve">
+    <value>FPS</value>
+  </data>
+  <data name="DiagColLayers" xml:space="preserve">
+    <value>LAYERS</value>
+  </data>
+  <data name="DiagColLate" xml:space="preserve">
+    <value>LATE</value>
+  </data>
+  <data name="DiagColBackend" xml:space="preserve">
+    <value>BACKEND</value>
+  </data>
+  <data name="DiagLogTailHeader" xml:space="preserve">
+    <value>Log tail</value>
+  </data>
+  <data name="DiagColMinimumLevel" xml:space="preserve">
+    <value>MINIMUM LEVEL</value>
+  </data>
+  <data name="TlAddAutomation" xml:space="preserve">
+    <value>+ AUTOMATION ▾</value>
+  </data>
+  <data name="TlLaneVolume" xml:space="preserve">
+    <value>Volume</value>
+  </data>
+  <data name="TlLaneGainInsert" xml:space="preserve">
+    <value>Gain insert</value>
+  </data>
+  <data name="TlLaneOpacity" xml:space="preserve">
+    <value>Opacity</value>
+  </data>
+  <data name="TlLanePositionX" xml:space="preserve">
+    <value>Position X</value>
+  </data>
+  <data name="TlLanePositionY" xml:space="preserve">
+    <value>Position Y</value>
+  </data>
+  <data name="TlLaneWidth" xml:space="preserve">
+    <value>Width</value>
+  </data>
+  <data name="TlLaneHeight" xml:space="preserve">
+    <value>Height</value>
+  </data>
+  <data name="TlLaneRotation" xml:space="preserve">
+    <value>Rotation</value>
+  </data>
+  <data name="TlLaneChromaKey" xml:space="preserve">
+    <value>Chroma key</value>
+  </data>
+  <data name="TlLaneSimilarity" xml:space="preserve">
+    <value>Similarity</value>
+  </data>
+  <data name="TlLaneSmoothness" xml:space="preserve">
+    <value>Smoothness</value>
+  </data>
+  <data name="TlLaneSpillReduction" xml:space="preserve">
+    <value>Spill reduction</value>
+  </data>
+  <data name="TlLaneColourAdjust" xml:space="preserve">
+    <value>Colour adjust</value>
+  </data>
+  <data name="TlLaneBrightness" xml:space="preserve">
+    <value>Brightness</value>
+  </data>
+  <data name="TlLaneContrast" xml:space="preserve">
+    <value>Contrast</value>
+  </data>
+  <data name="TlLaneOscValue" xml:space="preserve">
+    <value>OSC value</value>
+  </data>
+  <data name="TlLaneMidiControl" xml:space="preserve">
+    <value>MIDI control</value>
+  </data>
+  <data name="TlLive" xml:space="preserve">
+    <value>LIVE</value>
+  </data>
+  <data name="TlLiveHint" xml:space="preserve">
+    <value>edits while running apply on the next pass</value>
+  </data>
+  <data name="TlFromPlayhead" xml:space="preserve">
+    <value>▶ FROM PLAYHEAD</value>
+  </data>
+  <data name="TlZoomOut" xml:space="preserve">
+    <value>ZOOM −</value>
+  </data>
+  <data name="TlZoomIn" xml:space="preserve">
+    <value>ZOOM +</value>
+  </data>
+  <data name="TlZoomFit" xml:space="preserve">
+    <value>FIT</value>
+  </data>
+  <data name="TlDuckUnder" xml:space="preserve">
+    <value>DUCK UNDER…</value>
+  </data>
+  <data name="TlClose" xml:space="preserve">
+    <value>CLOSE ⎋</value>
+  </data>
+  <data name="TlCurveTooltip" xml:space="preserve">
+    <value>Expand this lane into an inline point editor</value>
+  </data>
+  <data name="TlCurve" xml:space="preserve">
+    <value>CURVE…</value>
+  </data>
+  <data name="TlCurveEditTooltip" xml:space="preserve">
+    <value>Edit exact time/value fields and segment curves</value>
+  </data>
+  <data name="TlSelectAll" xml:space="preserve">
+    <value>ALL</value>
+  </data>
+  <data name="TlSelectAllTooltip" xml:space="preserve">
+    <value>Select every keyframe (Ctrl+A)</value>
+  </data>
+  <data name="TlCopy" xml:space="preserve">
+    <value>COPY</value>
+  </data>
+  <data name="TlCopyTooltip" xml:space="preserve">
+    <value>Copy selected keyframes (Ctrl+C)</value>
+  </data>
+  <data name="TlPaste" xml:space="preserve">
+    <value>PASTE</value>
+  </data>
+  <data name="TlPasteTooltip" xml:space="preserve">
+    <value>Paste at the playhead (Ctrl+V)</value>
+  </data>
+  <data name="TlDelete" xml:space="preserve">
+    <value>DEL</value>
+  </data>
+  <data name="TlDeleteTooltip" xml:space="preserve">
+    <value>Delete selected keyframes</value>
+  </data>
 </root>
