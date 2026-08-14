@@ -43,11 +43,20 @@ verb sets that already have one owner each; a facade would only add indirection.
 > `InspectorEditorBoundaryTests` pins it (the inspector may not build `SetCueSendCommand` or push
 > live sends itself).
 >
-> **Finding from attempting the next pane:** the per-kind panes (FADE/JUMP/ACTION/…) all write
-> through the inspector's shared `EditEach`/`TryParse*` plumbing - extracting any of them first
-> requires lifting that plumbing into a shared `CueEditPlumbing` component the editors take by
-> constructor (it IS the transaction boundary, so it moves once, deliberately). That is the next
-> step, before the remaining panes move one at a time.
+> **Status update, same day:** `CueEditPlumbing` is extracted (both `EditEach` overloads + the
+> field parsers; 30 call sites rewired), and SEVEN more editors landed on it: `FadePaneEditor`,
+> `JumpPaneEditor`, `ActionPaneEditor`, `PatchPaneEditor`, `VisualizerPaneEditor`,
+> `GroupPaneEditor`, `TextPaneEditor`. The inspector is down **3,935 → ~2,600 lines**, all
+> per-kind panes are out, and the full headless suite passes through the new boundaries.
+>
+> **Finding that stops the mechanical run here:** the Video pane and the automation block are ONE
+> coupled cluster - a video field notifies `PlacementHeaders` (automation region), and every
+> automation-lane projection (`CanAdd*Lane`, `EffectLanes`, target placements) derives from the
+> video pane's `SelectedPlacement`. Extracting Video alone would need cross-object notification
+> plumbing and still leave the coupling. The right next unit is **Video + media tracks + curve
+> pickers + automation as one `PlacementAndAutomationEditor` (~1,500 lines)**, done as its own
+> focused pass. What then remains on the inspector is exactly the plan's target: the General
+> fields, the tab router, and the editor construction.
 
 Its own region comments are the seams, and they are per-editor, exactly what the review proposed
 ("split inspector behavior by feature editor session/tab"):

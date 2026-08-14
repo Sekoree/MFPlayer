@@ -514,44 +514,44 @@
                  group described itself as one. Bound to the cue now. -->
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspFireMode}"
                                     IsEnabled="{Binding CanAuthor}">
-              <ComboBox ItemsSource="{Binding FireModes}" SelectedIndex="{Binding FireModeIndex}" />
+              <ComboBox ItemsSource="{Binding GroupPane.FireModes}" SelectedIndex="{Binding GroupPane.FireModeIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspChildren}">
-              <TextBox Classes="ro" IsReadOnly="True" Text="{Binding ChildCount}" />
+              <TextBox Classes="ro" IsReadOnly="True" Text="{Binding GroupPane.ChildCount}" />
             </HeaderedContentControl>
 
             <!-- A timeline group has authored offsets, so it opens the sheet instead of shuffling. -->
-            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding IsTimelineGroup}">
+            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding GroupPane.IsTimelineGroup}">
               <Button Classes="block" Content="{x:Static res:Strings.InspOpenTimeline}" Click="OnOpenTimeline" />
             </ContentControl>
 
-            <StackPanel IsVisible="{Binding IsSequencedGroup}" IsEnabled="{Binding CanAuthor}">
-              <CheckBox Margin="10,3" IsChecked="{Binding ShuffleValue}"
+            <StackPanel IsVisible="{Binding GroupPane.IsSequencedGroup}" IsEnabled="{Binding CanAuthor}">
+              <CheckBox Margin="10,3" IsChecked="{Binding GroupPane.ShuffleValue}"
                         Content="{x:Static res:Strings.InspShuffle}" />
-              <CheckBox Margin="10,3" IsChecked="{Binding ReshuffleValue}"
+              <CheckBox Margin="10,3" IsChecked="{Binding GroupPane.ReshuffleValue}"
                         Content="{x:Static res:Strings.InspReshuffleEachPass}" />
               <!-- Only while shuffling: an in-order playlist repeats by construction, and a checkbox
                    that does nothing is worse than one that is not there. -->
-              <CheckBox Margin="10,3" IsChecked="{Binding AvoidRepeatValue}"
-                        IsVisible="{Binding ShuffleValue}"
+              <CheckBox Margin="10,3" IsChecked="{Binding GroupPane.AvoidRepeatValue}"
+                        IsVisible="{Binding GroupPane.ShuffleValue}"
                         Content="{x:Static res:Strings.InspNeverRepeatAcrossAPass}"
                         ToolTip.Tip="{x:Static res:Strings.InspWithoutThisAShuffledBed}" />
 
               <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspPlayCount}">
                 <NumericUpDown Minimum="0" Maximum="999" Increment="1" FormatString="0"
-                               Value="{Binding LoopCountValue}"
+                               Value="{Binding GroupPane.LoopCountValue}"
                                ToolTip.Tip="{x:Static res:Strings.InspHowManyTimesThroughThe}" />
               </HeaderedContentControl>
               <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspItemsPerPass}">
                 <NumericUpDown Minimum="1" Maximum="999" Increment="1" FormatString="0"
-                               Value="{Binding PlayCountValue}"
+                               Value="{Binding GroupPane.PlayCountValue}"
                                ToolTip.Tip="{x:Static res:Strings.InspLeaveBlankToPlayEvery}" />
               </HeaderedContentControl>
 
-              <StackPanel IsVisible="{Binding IsPlaylistGroup}">
+              <StackPanel IsVisible="{Binding GroupPane.IsPlaylistGroup}">
                 <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.InspCrossfadeBetweenItems}" />
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspDefault}">
-                  <TextBox Classes="short" Text="{Binding CrossfadeValue}" LostFocus="OnFieldCommitted" />
+                  <TextBox Classes="short" Text="{Binding GroupPane.CrossfadeValue}" LostFocus="OnFieldCommitted" />
                 </HeaderedContentControl>
                 <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspCurve}">
                   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
@@ -597,9 +597,9 @@
 
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspAtEnd}"
                                     IsEnabled="{Binding CanAuthor}"
-                                    IsVisible="{Binding IsSequencedGroup}">
-              <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding AtEndOptions}"
-                       SelectedIndex="{Binding AtEndIndex}" />
+                                    IsVisible="{Binding GroupPane.IsSequencedGroup}">
+              <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding GroupPane.AtEndOptions}"
+                       SelectedIndex="{Binding GroupPane.AtEndIndex}" />
             </HeaderedContentControl>
             <TextBlock Margin="10,6" Classes="mono dim3 small"
                        Text="{x:Static res:Strings.InspPerItemFadeInOverrides}" />
@@ -609,12 +609,12 @@
           <StackPanel IsVisible="{Binding IsPatchPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudRecall2}">
-              <ComboBox ItemsSource="{Binding PatchSnapshots}"
-                        SelectedIndex="{Binding PatchSnapshotIndex}" />
+              <ComboBox ItemsSource="{Binding PatchPane.PatchSnapshots}"
+                        SelectedIndex="{Binding PatchPane.PatchSnapshotIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.CuesFade}">
               <Grid ColumnDefinitions="62,*,Auto" ColumnSpacing="6">
-                <TextBox Grid.Column="0" Text="{Binding PatchFadeValue}" LostFocus="OnFieldCommitted" />
+                <TextBox Grid.Column="0" Text="{Binding PatchPane.PatchFadeValue}" LostFocus="OnFieldCommitted" />
                 <ComboBox Grid.Column="1" ItemsSource="{Binding CurveChoices}"
                           SelectedIndex="{Binding PatchCurveIndex, Mode=TwoWay}"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
@@ -627,9 +627,9 @@
             <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.InspAlsoChange}" />
             <!-- The cue's OWN level changes. This pane used to show two fixed rows whatever the cue
                  carried, so one with three changes showed two and one with none still showed two. -->
-            <TextBlock Margin="10,2" Classes="mono dim3 small" IsVisible="{Binding !HasPatchLevelChanges}"
+            <TextBlock Margin="10,2" Classes="mono dim3 small" IsVisible="{Binding !PatchPane.HasPatchLevelChanges}"
                        Text="{x:Static res:Strings.InspNoInlineLevelChanges}" />
-            <ItemsControl ItemsSource="{Binding PatchLevelChanges}" Margin="10,2">
+            <ItemsControl ItemsSource="{Binding PatchPane.PatchLevelChanges}" Margin="10,2">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="sys:String">
                   <TextBlock Classes="mono dim2 small" Margin="0,2" Text="{Binding}" />
@@ -649,20 +649,20 @@
               </DockPanel>
             </Border>
             <TextBlock Margin="10,6" Classes="mono warn small" TextWrapping="Wrap"
-                       IsVisible="{Binding PatchHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                       Text="{Binding PatchHint}" />
+                       IsVisible="{Binding PatchPane.PatchHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       Text="{Binding PatchPane.PatchHint}" />
           </StackPanel>
 
           <!-- ══ FADE - targets, duration, curve, fade-everything ══════════════════════════ -->
           <StackPanel IsVisible="{Binding IsFadePane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspToLevel}">
-              <TextBox Classes="short" Text="{Binding FadeToLevelValue}" LostFocus="OnFieldCommitted"
+              <TextBox Classes="short" Text="{Binding FadePane.FadeToLevelValue}" LostFocus="OnFieldCommitted"
                        ToolTip.Tip="{x:Static res:Strings.InspALevelInDbOr}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspDuration}">
               <Grid ColumnDefinitions="62,*,Auto" ColumnSpacing="6">
-                <TextBox Grid.Column="0" Text="{Binding FadeDurationValue}" LostFocus="OnFieldCommitted" />
+                <TextBox Grid.Column="0" Text="{Binding FadePane.FadeDurationValue}" LostFocus="OnFieldCommitted" />
                 <ComboBox Grid.Column="1" ItemsSource="{Binding CurveChoices}"
                           SelectedIndex="{Binding FadeCurveIndex, Mode=TwoWay}"
                           ItemTemplate="{StaticResource CurveItemTemplate}"
@@ -670,13 +670,13 @@
                 <Button Grid.Column="2" Classes="icon" Content="✎" Click="OnEditCurve" Tag="fade" />
               </Grid>
             </HeaderedContentControl>
-            <CheckBox Margin="10,4" IsChecked="{Binding FadeEverythingValue}"
+            <CheckBox Margin="10,4" IsChecked="{Binding FadePane.FadeEverythingValue}"
                       Content="{x:Static res:Strings.InspFadeEverythingCurrentlySounding}" />
-            <CheckBox Margin="10,4" IsChecked="{Binding FadeStopsTargetsValue}"
+            <CheckBox Margin="10,4" IsChecked="{Binding FadePane.FadeStopsTargetsValue}"
                       Content="{x:Static res:Strings.InspStopTheTargetsWhenThe}" />
 
             <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.AudLogicalOutputs}" />
-            <ItemsControl ItemsSource="{Binding FadeTargets}" Margin="10,2">
+            <ItemsControl ItemsSource="{Binding FadePane.FadeTargets}" Margin="10,2">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:TargetToggle">
                   <CheckBox Margin="0,1" IsChecked="{Binding IsSelected}" Content="{Binding Name}" />
@@ -684,32 +684,32 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
             <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
-                       Text="{Binding FadeTargetHint}" />
+                       Text="{Binding FadePane.FadeTargetHint}" />
           </StackPanel>
 
           <!-- ══ JUMP - targets, random pick, fire-on-jump ═════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsJumpPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspJumpTo}">
-              <ComboBox ItemsSource="{Binding JumpTargets}" SelectedIndex="{Binding JumpTargetIndex}" />
+              <ComboBox ItemsSource="{Binding JumpPane.JumpTargets}" SelectedIndex="{Binding JumpPane.JumpTargetIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspCondition}">
-              <ComboBox ItemsSource="{Binding JumpConditions}"
-                        SelectedIndex="{Binding JumpConditionIndex}" />
+              <ComboBox ItemsSource="{Binding JumpPane.JumpConditions}"
+                        SelectedIndex="{Binding JumpPane.JumpConditionIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspJumpVisits}"
-                                    IsVisible="{Binding IsCountedJump}">
-              <TextBox Classes="short" Text="{Binding JumpCountValue}" LostFocus="OnFieldCommitted" />
+                                    IsVisible="{Binding JumpPane.IsCountedJump}">
+              <TextBox Classes="short" Text="{Binding JumpPane.JumpCountValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
-            <CheckBox Margin="10,4" IsChecked="{Binding JumpPickAtRandomValue}"
+            <CheckBox Margin="10,4" IsChecked="{Binding JumpPane.JumpPickAtRandomValue}"
                       Content="{x:Static res:Strings.InspPickAtRandomFromA}" />
-            <CheckBox Margin="10,4" IsChecked="{Binding JumpFiresOnArrivalValue}"
+            <CheckBox Margin="10,4" IsChecked="{Binding JumpPane.JumpFiresOnArrivalValue}"
                       Content="{x:Static res:Strings.InspFireTheTargetCueOn}" />
             <!-- A jump that lands somewhere no longer in the show is one of the checks Project status
                  runs; the editor says so rather than letting it become a get-in surprise. -->
             <TextBlock Margin="10,6" Classes="mono warn small" TextWrapping="Wrap"
-                       IsVisible="{Binding JumpHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                       Text="{Binding JumpHint}" />
+                       IsVisible="{Binding JumpPane.JumpHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       Text="{Binding JumpPane.JumpHint}" />
           </StackPanel>
 
           <!-- ══ TEXT - words on a canvas ══════════════════════════════════════════════════
@@ -719,12 +719,12 @@
           <StackPanel IsVisible="{Binding IsTextPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspWords}">
-              <TextBox Text="{Binding CardText}" AcceptsReturn="True" TextWrapping="Wrap"
+              <TextBox Text="{Binding TextPane.CardText}" AcceptsReturn="True" TextWrapping="Wrap"
                        MinHeight="90" VerticalContentAlignment="Top"
                        PlaceholderText="{x:Static res:Strings.InspTheWordsOnTheCard}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspFace}">
-              <TextBox Text="{Binding CardFont}"
+              <TextBox Text="{Binding TextPane.CardFont}"
                        PlaceholderText="{x:Static res:Strings.InspTheAppSOwnMatched}"
                        ToolTip.Tip="{x:Static res:Strings.InspAHintABoothMachine}" />
             </HeaderedContentControl>
@@ -732,53 +732,53 @@
                  is unreadable on a 4 K one. -->
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudnSize}">
               <NumericUpDown Minimum="0.01" Maximum="1" Increment="0.01" FormatString="0.###"
-                             Value="{Binding CardSize}"
+                             Value="{Binding TextPane.CardSize}"
                              ToolTip.Tip="{x:Static res:Strings.InspCapHeightAsAFraction}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.InspWeight}">
               <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                <CheckBox Grid.Column="0" IsChecked="{Binding CardBold}" Content="{x:Static res:Strings.InspBold}" />
-                <CheckBox Grid.Column="1" IsChecked="{Binding CardItalic}" Content="{x:Static res:Strings.InspItalic}" />
+                <CheckBox Grid.Column="0" IsChecked="{Binding TextPane.CardBold}" Content="{x:Static res:Strings.InspBold}" />
+                <CheckBox Grid.Column="1" IsChecked="{Binding TextPane.CardItalic}" Content="{x:Static res:Strings.InspItalic}" />
               </Grid>
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.InspInkGround}">
               <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                <TextBox Grid.Column="0" Text="{Binding CardInk}" PlaceholderText="{x:Static res:Strings.InspFfffff}" />
-                <TextBox Grid.Column="1" Text="{Binding CardGround}" PlaceholderText="{x:Static res:Strings.InspTransparent}" />
+                <TextBox Grid.Column="0" Text="{Binding TextPane.CardInk}" PlaceholderText="{x:Static res:Strings.InspFfffff}" />
+                <TextBox Grid.Column="1" Text="{Binding TextPane.CardGround}" PlaceholderText="{x:Static res:Strings.InspTransparent}" />
               </Grid>
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspAlign}">
-              <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding CardAligns}"
-                       SelectedIndex="{Binding CardAlignIndex}" />
+              <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding TextPane.CardAligns}"
+                       SelectedIndex="{Binding TextPane.CardAlignIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspAnchor}">
-              <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding CardAnchors}"
-                       SelectedIndex="{Binding CardAnchorIndex}" />
+              <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding TextPane.CardAnchors}"
+                       SelectedIndex="{Binding TextPane.CardAnchorIndex}" />
             </HeaderedContentControl>
             <!-- An outline is what makes a caption readable over picture. Without one the usual fix
                  is a background band, which covers the shot the caption is describing. -->
             <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.InspOutlineColour}">
               <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
                 <NumericUpDown Grid.Column="0" Minimum="0" Maximum="0.1" Increment="0.002"
-                               FormatString="0.###" Value="{Binding CardOutline}" />
-                <TextBox Grid.Column="1" Text="{Binding CardOutlineInk}" PlaceholderText="#000000" />
+                               FormatString="0.###" Value="{Binding TextPane.CardOutline}" />
+                <TextBox Grid.Column="1" Text="{Binding TextPane.CardOutlineInk}" PlaceholderText="#000000" />
               </Grid>
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspHold}">
               <NumericUpDown Minimum="0" Maximum="3600000" Increment="500" FormatString="0"
-                             Value="{Binding CardDuration}"
+                             Value="{Binding TextPane.CardDuration}"
                              ToolTip.Tip="{x:Static res:Strings.InspMilliseconds0HoldsTheCard}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.InspFadeInOut}">
               <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
                 <NumericUpDown Grid.Column="0" Minimum="0" Maximum="60000" Increment="100"
-                               FormatString="0" Value="{Binding CardFadeIn}" />
+                               FormatString="0" Value="{Binding TextPane.CardFadeIn}" />
                 <NumericUpDown Grid.Column="1" Minimum="0" Maximum="60000" Increment="100"
-                               FormatString="0" Value="{Binding CardFadeOut}" />
+                               FormatString="0" Value="{Binding TextPane.CardFadeOut}" />
               </Grid>
             </HeaderedContentControl>
             <ContentControl Theme="{StaticResource FieldWide}">
-              <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding CardHint}" />
+              <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap" Text="{Binding TextPane.CardHint}" />
             </ContentControl>
           </StackPanel>
 
@@ -786,51 +786,51 @@
           <StackPanel IsVisible="{Binding IsVisualizerPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspPresetPack}">
-              <TextBox Text="{Binding VisualizerPresetPackValue}" LostFocus="OnFieldCommitted"
+              <TextBox Text="{Binding VisualizerPane.VisualizerPresetPackValue}" LostFocus="OnFieldCommitted"
                        PlaceholderText="{x:Static res:Strings.InspAPresetDirectoryUnderThe}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspHoldEach}">
-              <TextBox Classes="short" Text="{Binding VisualizerHoldValue}" LostFocus="OnFieldCommitted" />
+              <TextBox Classes="short" Text="{Binding VisualizerPane.VisualizerHoldValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspBlend}">
-              <TextBox Classes="short" Text="{Binding VisualizerBlendValue}" LostFocus="OnFieldCommitted" />
+              <TextBox Classes="short" Text="{Binding VisualizerPane.VisualizerBlendValue}" LostFocus="OnFieldCommitted" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspAudioFeed}">
               <StackPanel>
-                <CheckBox IsChecked="{Binding VisualizerFeedAllValue}"
+                <CheckBox IsChecked="{Binding VisualizerPane.VisualizerFeedAllValue}"
                           Content="{x:Static res:Strings.InspAllSoundingMedia}" />
-                <TextBox IsVisible="{Binding !VisualizerFeedAllValue}"
-                         Text="{Binding VisualizerFeedCueNumbers}" LostFocus="OnFieldCommitted"
+                <TextBox IsVisible="{Binding !VisualizerPane.VisualizerFeedAllValue}"
+                         Text="{Binding VisualizerPane.VisualizerFeedCueNumbers}" LostFocus="OnFieldCommitted"
                          PlaceholderText="{x:Static res:Strings.InspCueNumbersEG12}" />
                 <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap"
-                           Text="{Binding VisualizerFeedHint}" />
+                           Text="{Binding VisualizerPane.VisualizerFeedHint}" />
               </StackPanel>
             </HeaderedContentControl>
-            <CheckBox Margin="10,4" IsChecked="{Binding VisualizerLocksPresetValue}"
+            <CheckBox Margin="10,4" IsChecked="{Binding VisualizerPane.VisualizerLocksPresetValue}"
                       Content="{x:Static res:Strings.InspLockToThisPresetNo}" />
             <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
                        Text="{x:Static res:Strings.InspPlacementLivesOnTheVideo}" />
             <TextBlock Margin="10,2,10,6" Classes="mono warn small" TextWrapping="Wrap"
-                       Text="{Binding VisualizerHint}" />
+                       Text="{Binding VisualizerPane.VisualizerHint}" />
           </StackPanel>
 
           <!-- ══ ACTION - endpoint, address, arguments ═════════════════════════════════════ -->
           <StackPanel IsVisible="{Binding IsActionPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspEndpoint}">
-              <ComboBox ItemsSource="{Binding ActionEndpoints}"
-                        SelectedIndex="{Binding ActionEndpointIndex}" />
+              <ComboBox ItemsSource="{Binding ActionPane.ActionEndpoints}"
+                        SelectedIndex="{Binding ActionPane.ActionEndpointIndex}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspAddress}">
-              <TextBox Text="{Binding ActionAddressValue}" LostFocus="OnFieldCommitted"
+              <TextBox Text="{Binding ActionPane.ActionAddressValue}" LostFocus="OnFieldCommitted"
                        PlaceholderText="{x:Static res:Strings.InspEosCue2Fire}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspArguments}">
-              <TextBox Text="{Binding ActionArgumentsValue}" LostFocus="OnFieldCommitted"
+              <TextBox Text="{Binding ActionPane.ActionArgumentsValue}" LostFocus="OnFieldCommitted"
                        PlaceholderText="{x:Static res:Strings.InspWhitespaceSeparated}" />
             </HeaderedContentControl>
             <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
-                       Text="{Binding ActionHint}" />
+                       Text="{Binding ActionPane.ActionHint}" />
           </StackPanel>
 
         </Panel>

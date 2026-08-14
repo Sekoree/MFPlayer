@@ -220,7 +220,7 @@ public class EditorRegressionTests
         list.Cues.AddRange([first, second]);
 
         shell.Cues.Inspector.Show([first.Id, second.Id]);
-        shell.Cues.Inspector.FadeDurationValue = "4 s";
+        shell.Cues.Inspector.FadePane.FadeDurationValue = "4 s";
 
         // It used to change the lead only, while the field showed the new value for both.
         Assert.Equal(4_000, first.DurationMs);
@@ -236,7 +236,7 @@ public class EditorRegressionTests
         list.Cues.AddRange([first, second]);
 
         shell.Cues.Inspector.Show([first.Id, second.Id]);
-        shell.Cues.Inspector.FadeDurationValue = "4 s";
+        shell.Cues.Inspector.FadePane.FadeDurationValue = "4 s";
 
         Assert.True(shell.Journal.Undo());
 
@@ -260,7 +260,7 @@ public class EditorRegressionTests
             list.Cues.AddRange([first, second]);
 
             shell.Cues.Inspector.Show([first.Id, second.Id]);
-            shell.Cues.Inspector.FadeTargets
+            shell.Cues.Inspector.FadePane.FadeTargets
                 .First(toggle => toggle.Name == channels[0].Name)
                 .IsSelected = true;
 

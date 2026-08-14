@@ -32,9 +32,9 @@ public class InspectorViewModelTests
         shell.Cues.Inspector.SendToVisualizerValue = true;
 
         shell.Cues.Inspector.Show([visualizer.Id]);
-        shell.Cues.Inspector.VisualizerFeedAllValue = false;
+        shell.Cues.Inspector.VisualizerPane.VisualizerFeedAllValue = false;
         shell.Cues.Inspector.Show([visualizer.Id]);
-        shell.Cues.Inspector.VisualizerFeedCueNumbers = "901";
+        shell.Cues.Inspector.VisualizerPane.VisualizerFeedCueNumbers = "901";
 
         Assert.Equal(target.Id, source.EndTargetCueId);
         Assert.True(source.SendToVisualizer);

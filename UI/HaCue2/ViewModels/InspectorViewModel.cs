@@ -48,12 +48,37 @@ public partial class InspectorViewModel : ObservableObject, IInspectorEditorCont
     public InspectorViewModel(ProjectJournal journal)
     {
         _journal = journal;
+        Edits = new CueEditPlumbing(journal, this);
         Audio = new AudioPaneEditor(journal, this);
+        FadePane = new FadePaneEditor(Edits, this);
+        JumpPane = new JumpPaneEditor(Edits, this);
+        GroupPane = new GroupPaneEditor(Edits, this);
+        TextPane = new TextPaneEditor(Edits, this);
+        ActionPane = new ActionPaneEditor(Edits, this);
+        PatchPane = new PatchPaneEditor(Edits, this);
+        VisualizerPane = new VisualizerPaneEditor(Edits, this);
     }
 
     /// <summary>The Audio pane's editor (review F-11's exemplar extraction): the send matrix,
     /// presets, route readout and live pushes, owned by one class over the shared journal.</summary>
     public AudioPaneEditor Audio { get; }
+
+    /// <summary>The shared multi-selection edit plumbing every pane writes through (F-11) - the
+    /// transaction boundary, extracted once so per-pane editors take it by constructor.</summary>
+    internal CueEditPlumbing Edits { get; }
+
+    /// <summary>The FADE pane's editor - the first per-kind editor over the shared plumbing.</summary>
+    public FadePaneEditor FadePane { get; }
+
+    /// <summary>The JUMP pane's editor.</summary>
+    public JumpPaneEditor JumpPane { get; }
+
+    /// <summary>The remaining per-kind pane editors (F-11).</summary>
+    public GroupPaneEditor GroupPane { get; }
+    public TextPaneEditor TextPane { get; }
+    public ActionPaneEditor ActionPane { get; }
+    public PatchPaneEditor PatchPane { get; }
+    public VisualizerPaneEditor VisualizerPane { get; }
 
     /// <summary>When false each selection starts on its cue-kind default instead of recalling a prior tab.</summary>
     public bool RememberTabs { get; set; } = true;
@@ -326,74 +351,22 @@ public partial class InspectorViewModel : ObservableObject, IInspectorEditorCont
         OnPropertyChanged(nameof(IsCoverArtOnly));
         OnPropertyChanged(nameof(CanBePlaced));
         OnPropertyChanged(nameof(CanChooseSubtitles));
-        OnPropertyChanged(nameof(FireModeIndex));
-        OnPropertyChanged(nameof(IsTimelineGroup));
-        OnPropertyChanged(nameof(IsPlaylistGroup));
-        OnPropertyChanged(nameof(IsSequencedGroup));
-        OnPropertyChanged(nameof(ChildCount));
-        OnPropertyChanged(nameof(ShuffleValue));
-        OnPropertyChanged(nameof(ReshuffleValue));
-        OnPropertyChanged(nameof(AvoidRepeatValue));
-        OnPropertyChanged(nameof(LoopCountValue));
-        OnPropertyChanged(nameof(PlayCountValue));
+        GroupPane.RaiseChanged();
         OnPropertyChanged(nameof(EndBehaviourIndex));
         OnPropertyChanged(nameof(IsLooping));
         OnPropertyChanged(nameof(LoopCrossfadeValue));
         OnPropertyChanged(nameof(ColorTagIndex));
         OnPropertyChanged(nameof(PreRollValue));
-        OnPropertyChanged(nameof(CardText));
-        OnPropertyChanged(nameof(CardFont));
-        OnPropertyChanged(nameof(CardSize));
-        OnPropertyChanged(nameof(CardBold));
-        OnPropertyChanged(nameof(CardItalic));
-        OnPropertyChanged(nameof(CardInk));
-        OnPropertyChanged(nameof(CardGround));
-        OnPropertyChanged(nameof(CardAlignIndex));
-        OnPropertyChanged(nameof(CardAnchorIndex));
-        OnPropertyChanged(nameof(CardOutline));
-        OnPropertyChanged(nameof(CardOutlineInk));
-        OnPropertyChanged(nameof(CardDuration));
-        OnPropertyChanged(nameof(CardFadeIn));
-        OnPropertyChanged(nameof(CardFadeOut));
-        OnPropertyChanged(nameof(CardHint));
-        OnPropertyChanged(nameof(CrossfadeValue));
-        OnPropertyChanged(nameof(AtEndIndex));
+        TextPane.RaiseChanged();
         OnPropertyChanged(nameof(SubtitlePicker));
 
         // The per-kind panes. Every one of these reads straight off the selected cue, so they all have
         // to be re-announced whenever the selection or the document changes.
-        OnPropertyChanged(nameof(FadeTargets));
-        OnPropertyChanged(nameof(FadeToLevelValue));
-        OnPropertyChanged(nameof(FadeDurationValue));
-        OnPropertyChanged(nameof(FadeEverythingValue));
-        OnPropertyChanged(nameof(FadeStopsTargetsValue));
-        OnPropertyChanged(nameof(FadeTargetHint));
-        OnPropertyChanged(nameof(JumpTargets));
-        OnPropertyChanged(nameof(JumpTargetIndex));
-        OnPropertyChanged(nameof(JumpConditionIndex));
-        OnPropertyChanged(nameof(JumpCountValue));
-        OnPropertyChanged(nameof(IsCountedJump));
-        OnPropertyChanged(nameof(JumpPickAtRandomValue));
-        OnPropertyChanged(nameof(JumpFiresOnArrivalValue));
-        OnPropertyChanged(nameof(JumpHint));
-        OnPropertyChanged(nameof(ActionEndpoints));
-        OnPropertyChanged(nameof(ActionEndpointIndex));
-        OnPropertyChanged(nameof(ActionAddressValue));
-        OnPropertyChanged(nameof(ActionArgumentsValue));
-        OnPropertyChanged(nameof(ActionHint));
-        OnPropertyChanged(nameof(PatchSnapshots));
-        OnPropertyChanged(nameof(PatchSnapshotIndex));
-        OnPropertyChanged(nameof(PatchFadeValue));
-        OnPropertyChanged(nameof(PatchLevelChanges));
-        OnPropertyChanged(nameof(HasPatchLevelChanges));
-        OnPropertyChanged(nameof(PatchHint));
-        OnPropertyChanged(nameof(VisualizerPresetPackValue));
-        OnPropertyChanged(nameof(VisualizerHoldValue));
-        OnPropertyChanged(nameof(VisualizerBlendValue));
-        OnPropertyChanged(nameof(VisualizerLocksPresetValue));
-        OnPropertyChanged(nameof(VisualizerFeedAllValue));
-        OnPropertyChanged(nameof(VisualizerFeedCueNumbers));
-        OnPropertyChanged(nameof(VisualizerFeedHint));
+        FadePane.RaiseChanged();
+        JumpPane.RaiseChanged();
+        ActionPane.RaiseChanged();
+        PatchPane.RaiseChanged();
+        VisualizerPane.RaiseChanged();
     }
 
     private CueKind KindOf() => Cue is null ? CueKind.Comment : CuePresentation.KindOf(Cue);
@@ -573,7 +546,7 @@ public partial class InspectorViewModel : ObservableObject, IInspectorEditorCont
         get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Db(media.LevelDb) : "-");
         set
         {
-            if (!TryParseDb(value, out var db))
+            if (!CueEditPlumbing.TryParseDb(value, out var db))
                 return;
 
             EditMedia("level", media => media.LevelDb, (media, parsed) => media.LevelDb = parsed, db);
@@ -696,7 +669,7 @@ public partial class InspectorViewModel : ObservableObject, IInspectorEditorCont
         get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Seconds(media.FadeInMs) : "-");
         set
         {
-            if (TryParseSeconds(value, out var ms))
+            if (CueEditPlumbing.TryParseSeconds(value, out var ms))
                 EditMedia("fadeIn", media => media.FadeInMs, (media, set) => media.FadeInMs = set, ms);
         }
     }
@@ -706,7 +679,7 @@ public partial class InspectorViewModel : ObservableObject, IInspectorEditorCont
         get => Shared(cue => cue is MediaCueNode media ? CuePresentation.Seconds(media.FadeOutMs) : "-");
         set
         {
-            if (TryParseSeconds(value, out var ms))
+            if (CueEditPlumbing.TryParseSeconds(value, out var ms))
                 EditMedia("fadeOut", media => media.FadeOutMs, (media, set) => media.FadeOutMs = set, ms);
         }
     }
@@ -895,7 +868,7 @@ public partial class InspectorViewModel : ObservableObject, IInspectorEditorCont
         get => Shared(cue => CuePresentation.Seconds(cue.PreWaitMs));
         set
         {
-            if (TryParseSeconds(value, out var ms))
+            if (CueEditPlumbing.TryParseSeconds(value, out var ms))
                 Edit("preWait", cue => cue.PreWaitMs, (cue, set) => cue.PreWaitMs = set, ms);
         }
     }
@@ -905,38 +878,11 @@ public partial class InspectorViewModel : ObservableObject, IInspectorEditorCont
         get => Shared(cue => CuePresentation.Seconds(cue.PostWaitMs));
         set
         {
-            if (TryParseSeconds(value, out var ms))
+            if (CueEditPlumbing.TryParseSeconds(value, out var ms))
                 Edit("postWait", cue => cue.PostWaitMs, (cue, set) => cue.PostWaitMs = set, ms);
         }
     }
 
-    /// <summary>
-    /// Reads a duration typed as seconds, accepting the unit the field renders.
-    /// </summary>
-    /// <remarks>
-    /// The display writes "4.0 s"; a parser that only accepted bare numbers would refuse to read back
-    /// the value it had just written, which is the commonest way a field appears not to work. Negative
-    /// durations are refused rather than clamped - the field keeps the old value so nothing silently
-    /// becomes zero.
-    /// </remarks>
-    private static bool TryParseSeconds(string text, out int milliseconds)
-    {
-        milliseconds = 0;
-
-        var cleaned = text.Replace("s", "", StringComparison.OrdinalIgnoreCase)
-            .Replace('−', '-')
-            .Trim();
-
-        if (!double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
-            && !double.TryParse(cleaned, NumberStyles.Float, CultureInfo.CurrentCulture, out seconds))
-            return false;
-
-        if (seconds < 0 || double.IsNaN(seconds))
-            return false;
-
-        milliseconds = (int)Math.Round(seconds * 1000);
-        return true;
-    }
 
     /// <summary>
     /// Ends the current coalescing group - called when a field loses focus.
@@ -1589,121 +1535,6 @@ public partial class InspectorViewModel : ObservableObject, IInspectorEditorCont
     }
 
     /// <summary>
-    /// Writes one property of a KIND-SPECIFIC pane across the whole selection.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The general fields (label, level, trigger, waits) have always applied to every selected cue; the
-    /// per-kind panes did not. Their setters closed over the LEAD cue's payload - <c>() =&gt;
-    /// group.Shuffle</c> - so selecting five fade cues and typing a duration changed exactly one of
-    /// them, silently, while the field showed the new value for the whole selection.
-    /// </para>
-    /// <para>
-    /// Resolved per cue by TYPE, which is also the safety rule: a selection of mixed kinds only sees a
-    /// pane at all when every member has that tab (the tab set is the intersection), and anything that
-    /// is not a <typeparamref name="TCue"/> is skipped rather than coerced.
-    /// </para>
-    /// <para>
-    /// Cues already holding the value are left out entirely, so a multi-selection edit produces one
-    /// undo step containing only the cues it actually changed - and none at all when it changed
-    /// nothing, which is what keeps a combo box re-announcing its own value from filling the stack.
-    /// </para>
-    /// </remarks>
-    /// <param name="lead">
-    /// The cue whose pane the operator is looking at. Present only so <typeparamref name="TCue"/> can
-    /// be inferred at the call site - the edit itself is resolved against the selection, and the lead
-    /// gets no special treatment beyond being one of them.
-    /// </param>
-    private void EditEach<TCue, T>(
-        TCue lead,
-        string property,
-        string domain,
-        Func<TCue, T> read,
-        Action<TCue, T> write,
-        T value,
-        string description)
-        where TCue : CueNode
-    {
-        _ = lead;
-
-        var targets = Selected
-            .OfType<TCue>()
-            .Where(cue => !EqualityComparer<T>.Default.Equals(read(cue), value))
-            .ToList();
-
-        if (targets.Count == 0)
-            return;
-
-        if (targets.Count > 1)
-        {
-            using (_journal.Composite($"{description} on {targets.Count} cues", domain))
-                foreach (var cue in targets)
-                    _journal.Do(Write(cue));
-        }
-        else
-        {
-            _journal.Do(Write(targets[0]));
-        }
-
-        _journal.CloseGroup();
-        Reload();
-        return;
-
-        SetValueCommand<T> Write(TCue cue) => new(
-            cue.Id, property, domain, () => read(cue), parsed => write(cue, parsed), value, description);
-    }
-
-    /// <summary>
-    /// The same, for a property whose new value has to be computed per cue.
-    /// </summary>
-    /// <remarks>
-    /// Needed by every LIST-valued property here - a fade's targets, a jump's destination, a
-    /// visualizer's feed. Handing one <c>List&lt;Guid&gt;</c> to eleven cues would alias them all onto
-    /// a single instance, so editing one afterwards would silently edit the rest; and a relative change
-    /// ("add this channel") means something different on each cue and must be recomputed from that
-    /// cue's own state rather than from the lead's.
-    /// </remarks>
-    private void EditEach<TCue, T>(
-        TCue lead,
-        string property,
-        string domain,
-        Func<TCue, T> read,
-        Action<TCue, T> write,
-        Func<TCue, T> value,
-        string description)
-        where TCue : CueNode
-    {
-        _ = lead;
-
-        var targets = Selected
-            .OfType<TCue>()
-            .Select(cue => (Cue: cue, Value: value(cue)))
-            .Where(pair => !EqualityComparer<T>.Default.Equals(read(pair.Cue), pair.Value))
-            .ToList();
-
-        if (targets.Count == 0)
-            return;
-
-        if (targets.Count > 1)
-        {
-            using (_journal.Composite($"{description} on {targets.Count} cues", domain))
-                foreach (var (cue, next) in targets)
-                    _journal.Do(Write(cue, next));
-        }
-        else
-        {
-            _journal.Do(Write(targets[0].Cue, targets[0].Value));
-        }
-
-        _journal.CloseGroup();
-        Reload();
-        return;
-
-        SetValueCommand<T> Write(TCue cue, T next) => new(
-            cue.Id, property, domain, () => read(cue), parsed => write(cue, parsed), next, description);
-    }
-
-    /// <summary>
     /// A drag on the inspector's placement preview.
     /// </summary>
     /// <remarks>
@@ -1825,886 +1656,11 @@ public partial class InspectorViewModel : ObservableObject, IInspectorEditorCont
     private readonly record struct LivePlacementEdit(
         LivePlacementKey Key, ShowVideoPlacement Placement);
 
-    // ── the Group pane ────────────────────────────────────────────────────────────────────────
-
-    private GroupCueNode? Group => Cue as GroupCueNode;
-
-    public IReadOnlyList<string> FireModes { get; } =
-        ["all together", "playlist", "timeline", "first cue only", "armed list · one per GO"];
-
-    /// <summary>
-    /// How this group fires. Was a hard-coded index, so a timeline group read "playlist".
-    /// </summary>
-    public int FireModeIndex
-    {
-        get => Group is { } group ? (int)group.FireMode : -1;
-        set
-        {
-            if (Group is not { } group || value < 0 || (GroupFireMode)value == group.FireMode)
-                return;
-
-            EditEach(group, "fireMode", "cues",
-                cue => cue.FireMode, (cue, mode) => cue.FireMode = mode, (GroupFireMode)value,
-                $"fire {FireModes[value]}");
-        }
-    }
-
-    public bool IsTimelineGroup => Group is { FireMode: GroupFireMode.Timeline };
-
-    /// <summary>Playlist-only options; a timeline group has no "next item" to cross into.</summary>
-    public bool IsPlaylistGroup => Group is { FireMode: GroupFireMode.Playlist };
-    public bool IsSequencedGroup => Group is
-        { FireMode: GroupFireMode.Playlist or GroupFireMode.ArmedList };
-
-    public string ChildCount => Group is { } group
-        ? $"{group.Children.Count} cue{(group.Children.Count == 1 ? "" : "s")}"
-        : "-";
-
-    public bool ShuffleValue
-    {
-        get => Group is { Shuffle: true };
-        set
-        {
-            if (Group is { } group && value != group.Shuffle)
-                EditEach(group, "shuffle", "cues",
-                cue => cue.Shuffle, (cue, on) => cue.Shuffle = on, value,
-                    value ? "shuffle" : "play in order");
-        }
-    }
-
-    public bool ReshuffleValue
-    {
-        get => Group is { ReshuffleEachPass: true };
-        set
-        {
-            if (Group is { } group && value != group.ReshuffleEachPass)
-                EditEach(group, "reshuffle", "cues",
-                cue => cue.ReshuffleEachPass, (cue, on) => cue.ReshuffleEachPass = on, value,
-                    "reshuffle each pass");
-        }
-    }
-
-    /// <summary>
-    /// Never open a pass with the item that closed the previous one.
-    /// </summary>
-    /// <remarks>
-    /// Only meaningful while shuffling - an in-order playlist repeats by construction, and hiding the
-    /// checkbox is clearer than offering one that does nothing.
-    /// </remarks>
-    public bool AvoidRepeatValue
-    {
-        get => Group is not { AvoidImmediateRepeat: false };
-        set
-        {
-            if (Group is { } group && value != group.AvoidImmediateRepeat)
-                EditEach(group, "avoidRepeat", "cues",
-                cue => cue.AvoidImmediateRepeat, (cue, on) => cue.AvoidImmediateRepeat = on, value,
-                    value ? "avoid immediate repeats" : "allow immediate repeats");
-        }
-    }
-
-    /// <summary>Passes through the list. Zero is forever, which is what the field's zero means.</summary>
-    public int LoopCountValue
-    {
-        get => Group?.LoopCount ?? 1;
-        set
-        {
-            if (Group is { } group && value >= 0 && value != group.LoopCount)
-                EditEach(group, "loopCount", "cues",
-                cue => cue.LoopCount, (cue, count) => cue.LoopCount = count, Math.Clamp(value, 0, 999),
-                    value == 0 ? "loop forever" : $"play {value} pass(es)");
-        }
-    }
-
-    /// <summary>Blank means every enabled child; otherwise a subset per pass.</summary>
-    public decimal? PlayCountValue
-    {
-        get => Group?.PlayCount;
-        set
-        {
-            if (Group is not { } group)
-                return;
-            var count = value is null ? (int?)null : Math.Max(1, (int)value.Value);
-            if (count == group.PlayCount)
-                return;
-            EditEach(group, "playCount", "cues",
-                cue => cue.PlayCount, (cue, set) => cue.PlayCount = set, count, count is null ? "play every item per pass" : $"play {count} item(s) per pass");
-        }
-    }
-
-    public string CrossfadeValue
-    {
-        get => Group is { } group ? $"{group.CrossfadeMs / 1000d:0.##} s" : "-";
-        set
-        {
-            if (Group is not { } group
-                || !double.TryParse(
-                    new string([.. value.Where(c => char.IsAsciiDigit(c) || c is '.' or ',')]),
-                    NumberStyles.Float, CultureInfo.CurrentCulture, out var seconds))
-                return;
-
-            EditEach(group, "crossfade", "cues",
-                cue => cue.CrossfadeMs, (cue, ms) => cue.CrossfadeMs = ms, (int)Math.Clamp(seconds * 1000, 0, 60_000), "set crossfade");
-        }
-    }
-
-    public IReadOnlyList<string> AtEndOptions { get; } = ["hold last", "loop", "next list"];
-
-    public int AtEndIndex
-    {
-        get => Group is { } group ? (int)group.AtEnd : -1;
-        set
-        {
-            if (Group is not { } group || value < 0 || (AtListEnd)value == group.AtEnd)
-                return;
-
-            EditEach(group, "atEnd", "cues",
-                cue => cue.AtEnd, (cue, at) => cue.AtEnd = at, (AtListEnd)value,
-                $"at end: {AtEndOptions[value]}");
-        }
-    }
-
     // ── the per-kind panes ────────────────────────────────────────────────────────────────────
     // Every control-flow kind EXECUTES (the transport resolves them app-side), so every one of them
     // has to be authorable. Until this landed the only working fade, jump, patch and action cues in
     // existence were the ones the fixture generator wrote - the panes were literals, so the transport
     // could fire a cue the editor could not create.
-
-    private FadeCueNode? Fade => Cue as FadeCueNode;
-    private JumpCueNode? Jump => Cue as JumpCueNode;
-    private ActionCueNode? Action => Cue as ActionCueNode;
-    private PatchCueNode? Patch => Cue as PatchCueNode;
-    // ── text cues ─────────────────────────────────────────────────────────────────────────────
-    // The document stores WORDS; the FRAMEWORK's text source draws them. Everything here is part of
-    // the render spec the compiler packs into the cue's `text:` URI, so an edit here changes the URI
-    // and the next fire opens the new card. There is no cache in the app to invalidate.
-
-    private TextCueNode? Card => Cue as TextCueNode;
-
-    public string CardText
-    {
-        get => Card?.Text ?? "";
-        set => EditCard("text", card => card.Text, (card, text) => card.Text = text, value ?? "");
-    }
-
-    /// <summary>
-    /// The face, or empty for the app's own.
-    /// </summary>
-    /// <remarks>
-    /// A hint, matched the way an audio line's device name is: a booth machine may not have the face a
-    /// show was authored with, and falling back to something readable beats refusing to draw.
-    /// </remarks>
-    public string CardFont
-    {
-        get => Card?.FontFamily ?? "";
-        set => EditCard("font",
-            card => card.FontFamily, (card, name) => card.FontFamily = name, (value ?? "").Trim());
-    }
-
-    /// <summary>Cap height as a fraction of the frame, so the card survives a canvas resize.</summary>
-    public double CardSize
-    {
-        get => Card?.FontScale ?? 0.12;
-        set => EditCard("fontScale",
-            card => card.FontScale, (card, scale) => card.FontScale = scale,
-            Math.Clamp(value, 0.01, 1));
-    }
-
-    public bool CardBold
-    {
-        get => Card?.Bold == true;
-        set => EditCard("bold", card => card.Bold, (card, on) => card.Bold = on, value);
-    }
-
-    public bool CardItalic
-    {
-        get => Card?.Italic == true;
-        set => EditCard("italic", card => card.Italic, (card, on) => card.Italic = on, value);
-    }
-
-    public string CardInk
-    {
-        get => Card?.Foreground ?? "#FFFFFF";
-        set => EditCard("foreground",
-            card => card.Foreground, (card, hex) => card.Foreground = hex, Hex(value, "#FFFFFF"));
-    }
-
-    /// <summary>The ground, or empty for a transparent card that sits over whatever is underneath.</summary>
-    public string CardGround
-    {
-        get => Card?.Background ?? "";
-        set => EditCard("background",
-            card => card.Background, (card, hex) => card.Background = hex, Hex(value, ""));
-    }
-
-    public IReadOnlyList<string> CardAligns { get; } = ["left", "centre", "right"];
-
-    public int CardAlignIndex
-    {
-        get => Card is { } card ? (int)card.Align : -1;
-        set
-        {
-            if (value >= 0)
-                EditCard("align", card => card.Align, (card, align) => card.Align = align,
-                    (TextAlign)value);
-        }
-    }
-
-    public IReadOnlyList<string> CardAnchors { get; } = ["top", "middle", "bottom"];
-
-    public int CardAnchorIndex
-    {
-        get => Card is { } card ? (int)card.Anchor : -1;
-        set
-        {
-            if (value >= 0)
-                EditCard("anchor", card => card.Anchor, (card, anchor) => card.Anchor = anchor,
-                    (TextAnchor)value);
-        }
-    }
-
-    /// <summary>An outline behind the ink - what makes a caption readable over picture.</summary>
-    public double CardOutline
-    {
-        get => Card?.OutlineWidth ?? 0;
-        set => EditCard("outlineWidth",
-            card => card.OutlineWidth, (card, width) => card.OutlineWidth = width,
-            Math.Clamp(value, 0, 0.1));
-    }
-
-    public string CardOutlineInk
-    {
-        get => Card?.Outline ?? "#000000";
-        set => EditCard("outline",
-            card => card.Outline, (card, hex) => card.Outline = hex, Hex(value, "#000000"));
-    }
-
-    /// <summary>How long the card is held. Zero holds it until something stops it.</summary>
-    public int CardDuration
-    {
-        get => Card?.DurationMs ?? 0;
-        set => EditCard("duration",
-            card => card.DurationMs, (card, ms) => card.DurationMs = ms,
-            Math.Clamp(value, 0, 3_600_000));
-    }
-
-    public int CardFadeIn
-    {
-        get => Card?.FadeInMs ?? 0;
-        set => EditCard("fadeIn", card => card.FadeInMs, (card, ms) => card.FadeInMs = ms,
-            Math.Clamp(value, 0, 60_000));
-    }
-
-    public int CardFadeOut
-    {
-        get => Card?.FadeOutMs ?? 0;
-        set => EditCard("fadeOut", card => card.FadeOutMs, (card, ms) => card.FadeOutMs = ms,
-            Math.Clamp(value, 0, 60_000));
-    }
-
-    /// <summary>What the card will do, said on the pane rather than discovered on stage.</summary>
-    public string CardHint => Card is not { } card
-        ? ""
-        : card.Text.Trim().Length == 0
-            ? "no words yet - the cue will fire and show nothing"
-            : card.Placements.Count == 0
-                ? "not on any canvas yet - add a placement on the Video tab"
-                : card.DurationMs > 0
-                    ? $"held for {card.DurationMs / 1000d:0.##} s, then ends on its own"
-                    : "held on screen until something stops it";
-
-    /// <summary>
-    /// A typed colour as "#RRGGBB", or the fallback when it is not one.
-    /// </summary>
-    /// <remarks>
-    /// The DIGITS are checked, not just the length. Anything seven characters long used to be accepted,
-    /// so "#ZZZZZZ" was stored and shown back as though it were a colour - while the compiler quietly
-    /// fell back to white, and the card came up a colour the inspector never displayed.
-    /// </remarks>
-    private static string Hex(string? value, string fallback)
-    {
-        var text = (value ?? "").Trim().TrimStart('#');
-
-        return text.Length == 6 && text.All(char.IsAsciiHexDigit)
-            ? '#' + text.ToUpperInvariant()
-            : fallback;
-    }
-
-    // Every control on the TEXT pane goes through here, so making this one method selection-aware is
-    // what makes "select three cards, set the font" work - it used to change the first one only.
-    private void EditCard<T>(
-        string property, Func<TextCueNode, T> read, Action<TextCueNode, T> write, T value)
-    {
-        if (Card is not { } card)
-            return;
-
-        EditEach(card, property, "cues", read, write, value, "edit text cue");
-    }
-
-    private VisualizerCueNode? Visualizer => Cue as VisualizerCueNode;
-
-    // ── FADE ──────────────────────────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// The logical outputs this fade acts on, each with its own checkbox.
-    /// </summary>
-    /// <remarks>
-    /// A live list rather than a picker dialog: choosing which outputs a fade covers is something an
-    /// operator does WHILE looking at the patch, and a modal that hides the rest of the pane to ask
-    /// one question is the wrong shape for it.
-    /// </remarks>
-    public IReadOnlyList<TargetToggle> FadeTargets =>
-        Fade is not { } fade
-            ? []
-            : [.. Project.AudioPatch.LogicalChannels
-                .OrderBy(channel => channel.SortOrder)
-                .Select(channel => new TargetToggle(
-                    channel.Name,
-                    fade.TargetChannelIds.Contains(channel.Id),
-                    on => ToggleFadeTarget(fade, channel.Id, on)))];
-
-    private void ToggleFadeTarget(FadeCueNode fade, Guid channelId, bool on)
-    {
-        if (on == fade.TargetChannelIds.Contains(channelId))
-            return;
-
-        // Computed PER CUE. Ticking "Main L" on a five-fade selection adds that one channel to each of
-        // them; copying the lead's finished list across would replace every other cue's own targets
-        // with the lead's, which is a different edit and not the one that was asked for.
-        EditEach(fade, "fadeTargets", "cues",
-            cue => cue.TargetChannelIds,
-            (cue, ids) => cue.TargetChannelIds = ids,
-            cue =>
-            {
-                var next = new List<Guid>(cue.TargetChannelIds);
-
-                if (on)
-                {
-                    if (!next.Contains(channelId))
-                        next.Add(channelId);
-                }
-                else
-                {
-                    next.Remove(channelId);
-                }
-
-                return next;
-            },
-            on ? "add fade target" : "remove fade target");
-    }
-
-    public string FadeToLevelValue
-    {
-        get => Fade is { } fade
-            ? fade.ToLevelDb <= GainRange.SilenceFloorDb ? "−inf" : CuePresentation.Db(fade.ToLevelDb)
-            : "-";
-        set
-        {
-            if (Fade is not { } fade)
-                return;
-
-            // "−inf", "-inf" and "off" all mean the silence floor. An operator typing the word is the
-            // commonest way to author a fade-out, and refusing it would send them to look up a number.
-            var level = value.Trim().Replace('−', '-');
-
-            var db = level.Equals("-inf", StringComparison.OrdinalIgnoreCase)
-                     || level.Equals("inf", StringComparison.OrdinalIgnoreCase)
-                     || level.Equals("off", StringComparison.OrdinalIgnoreCase)
-                ? GainRange.SilenceFloorDb
-                : TryParseDb(value, out var parsed) ? parsed : double.NaN;
-
-            if (double.IsNaN(db))
-                return;
-
-            var target = fade;
-            EditEach(target, "fadeLevel", "cues",
-                cue => cue.ToLevelDb, (cue, set) => cue.ToLevelDb = set, Math.Clamp(db, GainRange.SilenceFloorDb, 12), "set fade level");
-        }
-    }
-
-    public string FadeDurationValue
-    {
-        get => Fade is { } fade ? CuePresentation.Seconds(fade.DurationMs) : "-";
-        set
-        {
-            if (Fade is { } fade && TryParseSeconds(value, out var ms))
-            {
-                var target = fade;
-                EditEach(target, "fadeDuration", "cues",
-                cue => cue.DurationMs, (cue, set) => cue.DurationMs = set, ms, "set fade duration");
-            }
-        }
-    }
-
-    public bool FadeEverythingValue
-    {
-        get => Fade is { FadeEverythingSounding: true };
-        set
-        {
-            if (Fade is not { } fade || value == fade.FadeEverythingSounding)
-                return;
-
-            var target = fade;
-            EditEach(target, "fadeEverything", "cues",
-                cue => cue.FadeEverythingSounding, (cue, on) => cue.FadeEverythingSounding = on, value,
-                value ? "fade everything sounding" : "fade only the targets");
-        }
-    }
-
-    public bool FadeStopsTargetsValue
-    {
-        get => Fade is not { StopTargetsWhenComplete: false };
-        set
-        {
-            if (Fade is not { } fade || value == fade.StopTargetsWhenComplete)
-                return;
-
-            var target = fade;
-            EditEach(target, "fadeStops", "cues",
-                cue => cue.StopTargetsWhenComplete, (cue, on) => cue.StopTargetsWhenComplete = on, value,
-                value ? "stop targets when complete" : "leave targets running");
-        }
-    }
-
-    /// <summary>Whether the fade covers anything. A fade with no target is a cue that does nothing.</summary>
-    public string FadeTargetHint => Fade is not { } fade
-        ? ""
-        : fade.FadeEverythingSounding
-            ? "everything sounding - the per-output list below is ignored"
-            : fade.TargetChannelIds.Count + fade.TargetCueIds.Count == 0
-                ? "no target - this cue will do nothing"
-                : $"{fade.TargetChannelIds.Count + fade.TargetCueIds.Count} target(s)";
-
-    // ── JUMP ──────────────────────────────────────────────────────────────────────────────────
-
-    /// <summary>Every cue in the show, as jump destinations. A jump may legitimately cross lists.</summary>
-    public IReadOnlyList<string> JumpTargets =>
-        Jump is null
-            ? []
-            : ["- none -", .. Project.AllCues()
-                .Where(cue => cue.Id != Jump.Id)
-                .Select(cue => $"Q{CuePresentation.Number(cue.Number)} · {cue.Label}")];
-
-    public int JumpTargetIndex
-    {
-        get
-        {
-            if (Jump is not { TargetCueIds.Count: > 0 } jump)
-                return 0;
-
-            var candidates = Candidates(jump);
-            var at = candidates.FindIndex(cue => cue.Id == jump.TargetCueIds[0]);
-
-            // A target that has been deleted reads as "none" rather than pointing at whatever now
-            // occupies that position - Project status reports the dangling reference separately.
-            return at < 0 ? 0 : at + 1;
-        }
-        set
-        {
-            if (Jump is not { } jump || value < 0)
-                return;
-
-            var candidates = Candidates(jump);
-            var chosen = value == 0 || value > candidates.Count
-                ? new List<Guid>()
-                : [candidates[value - 1].Id];
-
-            if (chosen.SequenceEqual(jump.TargetCueIds))
-                return;
-
-            // A fresh list per cue: one shared instance would alias every selected jump onto the same
-            // object, so editing one afterwards would silently edit the others.
-            EditEach(jump, "jumpTarget", "cues",
-                cue => cue.TargetCueIds, (cue, ids) => cue.TargetCueIds = ids,
-                _ => new List<Guid>(chosen),
-                chosen.Count == 0 ? "clear jump target" : "set jump target");
-        }
-    }
-
-    private List<CueNode> Candidates(JumpCueNode jump) =>
-        [.. Project.AllCues().Where(cue => cue.Id != jump.Id)];
-
-    public IReadOnlyList<string> JumpConditions { get; } =
-        ["always", "while the trigger is held", "n times, then continue"];
-
-    public int JumpConditionIndex
-    {
-        get => Jump is { } jump ? (int)jump.Condition : -1;
-        set
-        {
-            if (Jump is not { } jump || value < 0 || (JumpCondition)value == jump.Condition)
-                return;
-
-            var target = jump;
-            EditEach(target, "jumpCondition", "cues",
-                cue => cue.Condition, (cue, condition) => cue.Condition = condition, (JumpCondition)value,
-                $"jump {JumpConditions[value]}");
-            OnPropertyChanged(nameof(IsCountedJump));
-        }
-    }
-
-    public bool IsCountedJump => Jump?.Condition == JumpCondition.CountThenContinue;
-
-    public string JumpCountValue
-    {
-        get => Jump?.JumpCount.ToString(CultureInfo.CurrentCulture) ?? "1";
-        set
-        {
-            if (Jump is not { } jump
-                || !int.TryParse(value, NumberStyles.Integer, CultureInfo.CurrentCulture, out var count))
-                return;
-
-            count = Math.Clamp(count, 1, 10_000);
-            EditEach(jump, "jumpCount", "cues",
-                cue => cue.JumpCount, (cue, number) => cue.JumpCount = number, count,
-                $"jump {count} times, then continue");
-        }
-    }
-
-    public bool JumpPickAtRandomValue
-    {
-        get => Jump is { PickAtRandom: true };
-        set
-        {
-            if (Jump is not { } jump || value == jump.PickAtRandom)
-                return;
-
-            var target = jump;
-            EditEach(target, "jumpRandom", "cues",
-                cue => cue.PickAtRandom, (cue, on) => cue.PickAtRandom = on, value,
-                value ? "pick at random" : "always the first target");
-        }
-    }
-
-    public bool JumpFiresOnArrivalValue
-    {
-        get => Jump is not { FireOnArrival: false };
-        set
-        {
-            if (Jump is not { } jump || value == jump.FireOnArrival)
-                return;
-
-            var target = jump;
-            EditEach(target, "jumpFires", "cues",
-                cue => cue.FireOnArrival, (cue, on) => cue.FireOnArrival = on, value,
-                value ? "fire on arrival" : "move standby only");
-        }
-    }
-
-    /// <summary>Said in the editor rather than left for Project status to find at a get-in.</summary>
-    public string JumpHint => Jump is not { } jump
-        ? ""
-        : jump.TargetCueIds.Count == 0
-            ? "no target - a jump with nowhere to go is an error on Project status, not a silent no-op"
-            : jump.TargetCueIds.Any(id => Project.FindCue(id) is null)
-                ? "a target no longer exists in this show"
-                : "";
-
-    // ── ACTION ────────────────────────────────────────────────────────────────────────────────
-
-    public IReadOnlyList<string> ActionEndpoints =>
-        Action is null
-            ? []
-            : ["- none -", .. Project.ActionEndpoints.Select(
-                endpoint => $"{endpoint.Name} · {Describe(endpoint.Kind)}")];
-
-    public int ActionEndpointIndex
-    {
-        get
-        {
-            if (Action?.EndpointId is not { } id)
-                return 0;
-
-            var at = Project.ActionEndpoints.FindIndex(endpoint => endpoint.Id == id);
-            return at < 0 ? 0 : at + 1;
-        }
-        set
-        {
-            if (Action is not { } action || value < 0)
-                return;
-
-            var chosen = value == 0 || value > Project.ActionEndpoints.Count
-                ? (Guid?)null
-                : Project.ActionEndpoints[value - 1].Id;
-
-            if (chosen == action.EndpointId)
-                return;
-
-            var target = action;
-            EditEach(target, "actionEndpoint", "cues",
-                cue => cue.EndpointId, (cue, id) => cue.EndpointId = id, chosen, "set action endpoint");
-        }
-    }
-
-    public string ActionAddressValue
-    {
-        get => Action?.Address ?? "";
-        set
-        {
-            if (Action is not { } action)
-                return;
-
-            var target = action;
-            EditEach(target, "actionAddress", "cues",
-                cue => cue.Address, (cue, address) => cue.Address = address, value, "set action address");
-        }
-    }
-
-    public string ActionArgumentsValue
-    {
-        get => Action?.Arguments ?? "";
-        set
-        {
-            if (Action is not { } action)
-                return;
-
-            var target = action;
-            EditEach(target, "actionArguments", "cues",
-                cue => cue.Arguments, (cue, args) => cue.Arguments = args, value, "set action arguments");
-        }
-    }
-
-    /// <summary>
-    /// What this action will actually do - or what is wrong with it.
-    /// </summary>
-    /// <remarks>
-    /// For a MIDI endpoint this is the PARSER's own verdict, and the same check runs in the status
-    /// pass, so the hint and "will this show run" can never disagree. Saying it HERE means the operator
-    /// finds out while authoring rather than when the desk fails to respond.
-    /// </remarks>
-    public string ActionHint
-    {
-        get
-        {
-            if (Action is not { } action)
-                return "";
-
-            if (action.EndpointId is not { } id
-                || Project.ActionEndpoints.FirstOrDefault(endpoint => endpoint.Id == id) is not { } endpoint)
-                return "no endpoint - this cue will do nothing";
-
-            if (endpoint.Kind == EndpointKind.MidiOut)
-            {
-                // The parser's own verdict rather than a description of the syntax: an operator who has
-                // typed something wrong wants to know WHAT is wrong, and the same check runs in the
-                // status pass, so the two can never disagree about whether this cue will send.
-                return MidiActions.TryParse(action.Address, action.Arguments, out var message) is { } wrong
-                    ? wrong
-                    : $"sends {Describe(message)} · channels are 1–16, values 0–127";
-            }
-
-            return action.Address.Length == 0
-                ? "no address - this cue will do nothing"
-                : "arguments are whitespace-separated and typed by shape: 3 is an int, 3.0 a float";
-        }
-    }
-
-    private static string Describe(EndpointKind kind) =>
-        kind == EndpointKind.MidiOut ? "MIDI out" : "OSC out";
-
-    /// <summary>A parsed MIDI message in the words a desk's manual uses.</summary>
-    private static string Describe(MidiAction message) => message.Kind switch
-    {
-        MidiActionKind.ControlChange =>
-            $"CC {message.Number} = {message.Value} on ch {message.Channel}",
-        MidiActionKind.ProgramChange =>
-            $"program {message.Number} on ch {message.Channel}",
-        MidiActionKind.NoteOff =>
-            $"note {message.Number} off on ch {message.Channel}",
-        _ => $"note {message.Number} on ch {message.Channel} at velocity {message.Value}",
-    };
-
-    // ── PATCH ─────────────────────────────────────────────────────────────────────────────────
-
-    public IReadOnlyList<string> PatchSnapshots =>
-        Patch is null
-            ? []
-            : ["- none -", .. Project.PatchSnapshots.Select(
-                snapshot => $"snapshot “{snapshot.Name}”")];
-
-    public int PatchSnapshotIndex
-    {
-        get
-        {
-            if (Patch?.SnapshotId is not { } id)
-                return 0;
-
-            var at = Project.PatchSnapshots.FindIndex(snapshot => snapshot.Id == id);
-            return at < 0 ? 0 : at + 1;
-        }
-        set
-        {
-            if (Patch is not { } patch || value < 0)
-                return;
-
-            var chosen = value == 0 || value > Project.PatchSnapshots.Count
-                ? (Guid?)null
-                : Project.PatchSnapshots[value - 1].Id;
-
-            if (chosen == patch.SnapshotId)
-                return;
-
-            var target = patch;
-            EditEach(target, "patchSnapshot", "cues",
-                cue => cue.SnapshotId, (cue, id) => cue.SnapshotId = id, chosen, "set patch snapshot");
-        }
-    }
-
-    public string PatchFadeValue
-    {
-        get => Patch is { } patch ? CuePresentation.Seconds(patch.FadeMs) : "-";
-        set
-        {
-            if (Patch is { } patch && TryParseSeconds(value, out var ms))
-            {
-                var target = patch;
-                EditEach(target, "patchFade", "cues",
-                cue => cue.FadeMs, (cue, set) => cue.FadeMs = set, ms, "set patch fade");
-            }
-        }
-    }
-
-    /// <summary>The cue's inline level changes, as the pane lists them.</summary>
-    /// <remarks>
-    /// Read from the document rather than authored: the pane used to show two fixed rows ("Fold L/R",
-    /// "Sub") whatever the cue actually carried, so a patch cue with three changes showed two and one
-    /// with none still showed two.
-    /// </remarks>
-    public IReadOnlyList<string> PatchLevelChanges =>
-        Patch is null
-            ? []
-            : [.. Patch.Levels.Select(change =>
-                $"{Project.FindChannel(change.LogicalChannelId)?.Name ?? "(deleted output)"} → "
-                + (change.Muted ? "mute" : CuePresentation.Db(change.GainDb)))];
-
-    public bool HasPatchLevelChanges => PatchLevelChanges.Count > 0;
-
-    public string PatchHint => Patch is not { } patch
-        ? ""
-        : patch.SnapshotId is null && patch.Levels.Count == 0
-            ? "nothing to recall - this cue will do nothing"
-            : "";
-
-    // ── VISUALIZER ────────────────────────────────────────────────────────────────────────────
-
-    public string VisualizerPresetPackValue
-    {
-        get => Visualizer?.PresetPack ?? "";
-        set
-        {
-            if (Visualizer is not { } visualizer)
-                return;
-
-            var target = visualizer;
-            EditEach(target, "presetPack", "cues",
-                cue => cue.PresetPack, (cue, pack) => cue.PresetPack = pack, value, "set preset pack");
-        }
-    }
-
-    public string VisualizerHoldValue
-    {
-        get => Visualizer is { } visualizer ? CuePresentation.Seconds(visualizer.HoldMs) : "-";
-        set
-        {
-            if (Visualizer is { } visualizer && TryParseSeconds(value, out var ms))
-            {
-                var target = visualizer;
-                EditEach(target, "visualizerHold", "cues",
-                cue => cue.HoldMs, (cue, set) => cue.HoldMs = set, ms, "set preset hold");
-            }
-        }
-    }
-
-    public string VisualizerBlendValue
-    {
-        get => Visualizer is { } visualizer ? CuePresentation.Seconds(visualizer.BlendMs) : "-";
-        set
-        {
-            if (Visualizer is { } visualizer && TryParseSeconds(value, out var ms))
-            {
-                var target = visualizer;
-                EditEach(target, "visualizerBlend", "cues",
-                cue => cue.BlendMs, (cue, set) => cue.BlendMs = set, ms, "set preset blend");
-            }
-        }
-    }
-
-    public bool VisualizerLocksPresetValue
-    {
-        get => Visualizer is { LockPreset: true };
-        set
-        {
-            if (Visualizer is not { } visualizer || value == visualizer.LockPreset)
-                return;
-
-            var target = visualizer;
-            EditEach(target, "visualizerLock", "cues",
-                cue => cue.LockPreset, (cue, on) => cue.LockPreset = on, value,
-                value ? "lock the preset" : "auto-advance presets");
-        }
-    }
-
-    public bool VisualizerFeedAllValue
-    {
-        get => Visualizer is not { FeedAll: false };
-        set
-        {
-            if (Visualizer is not { } visualizer || value == visualizer.FeedAll)
-                return;
-            EditEach(visualizer, "visualizerFeedAll", "cues",
-                cue => cue.FeedAll, (cue, on) => cue.FeedAll = on, value,
-                value ? "feed all sounding media to the visualizer" : "use a selective visualizer feed");
-        }
-    }
-
-    public string VisualizerFeedCueNumbers
-    {
-        get => Visualizer is not { } visualizer
-            ? ""
-            : string.Join(", ", visualizer.FeedCueIds
-                .Select(Project.FindCue)
-                .OfType<MediaCueNode>()
-                .Select(cue => CuePresentation.Number(cue.Number)));
-        set
-        {
-            if (Visualizer is not { } visualizer)
-                return;
-
-            var tokens = value.Split([',', ';', ' ', '\t', '\r', '\n'],
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var wanted = Project.AllCues().OfType<MediaCueNode>()
-                .Where(cue => tokens.Contains(CuePresentation.Number(cue.Number), StringComparer.OrdinalIgnoreCase))
-                .Select(cue => cue.Id)
-                .Distinct()
-                .ToList();
-            if (wanted.SequenceEqual(visualizer.FeedCueIds))
-                return;
-            EditEach(visualizer, "visualizerFeedCues", "cues",
-                cue => cue.FeedCueIds, (cue, ids) => cue.FeedCueIds = ids,
-                _ => new List<Guid>(wanted), "set visualizer audio feed cues");
-        }
-    }
-
-    public string VisualizerFeedHint => Visualizer is not { } visualizer
-        ? ""
-        : visualizer.FeedAll
-            ? "program bus · every sounding cue"
-            : $"{visualizer.FeedCueIds.Count} explicit cue(s) plus every media cue marked “send to visualizer”";
-
-    /// <summary>
-    /// What a visualizer cue will actually do on THIS machine.
-    /// </summary>
-    /// <remarks>
-    /// projectM is a native library a booth box may not have, and the settings above are perfectly
-    /// editable without it - so the honest hint is the machine's answer, not a fixed sentence. A cue
-    /// authored on a laptop with no library still travels and still runs at the venue.
-    /// </remarks>
-    public string VisualizerHint =>
-        HaCue2.Engine.ProjectVisualizers.IsAvailable
-            ? "renders onto every composition this cue is placed on · fires and stops like any other cue"
-            : "projectM is not available on this machine - "
-              + (HaCue2.Engine.ProjectVisualizers.UnavailableReason ?? "the library was not found")
-              + " · the settings still travel with the show";
 
     // ── media tracks ──────────────────────────────────────────────────────────────────────────
     // The options are a MACHINE fact and the choice is a DOCUMENT one, so the picker takes both: the
@@ -3528,19 +2484,6 @@ public partial class InspectorViewModel : ObservableObject, IInspectorEditorCont
         new(cue.Id, property, "cues", () => read(cue), parsed => write(cue, parsed), value,
             $"set {property} on Q{CuePresentation.Number(cue.Number)}");
 
-    /// <summary>
-    /// Parses a level, accepting the U+2212 MINUS SIGN the app renders as well as a plain hyphen.
-    /// </summary>
-    /// <remarks>
-    /// The display uses a true minus because it aligns in a tabular column; a parser that only knew
-    /// hyphens would refuse to read back the value it had just written.
-    /// </remarks>
-    private static bool TryParseDb(string text, out double value) =>
-        double.TryParse(
-            text.Replace('−', '-').Replace("dB", "", StringComparison.OrdinalIgnoreCase).Trim(),
-            NumberStyles.Float,
-            CultureInfo.InvariantCulture,
-            out value);
 }
 
 /// <summary>

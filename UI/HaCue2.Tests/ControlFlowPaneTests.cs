@@ -48,8 +48,8 @@ public class ControlFlowPaneTests
     {
         var fade = Select<FadeCueNode>(shell);
 
-        shell.Cues.Inspector.FadeDurationValue = "5.5";
-        shell.Cues.Inspector.FadeToLevelValue = "-6";
+        shell.Cues.Inspector.FadePane.FadeDurationValue = "5.5";
+        shell.Cues.Inspector.FadePane.FadeToLevelValue = "-6";
 
         Assert.Equal(5_500, fade.DurationMs);
         Assert.Equal(-6, fade.ToLevelDb, 3);
@@ -62,19 +62,19 @@ public class ControlFlowPaneTests
         fade.ToLevelDb = 0;
         shell.Cues.Inspector.Reload();
 
-        shell.Cues.Inspector.FadeToLevelValue = "-inf";
+        shell.Cues.Inspector.FadePane.FadeToLevelValue = "-inf";
 
         // Typing the word is the commonest way to author a fade-out; refusing it would send the
         // operator to look up a number.
         Assert.Equal(GainRange.SilenceFloorDb, fade.ToLevelDb, 3);
-        Assert.Equal("−inf", shell.Cues.Inspector.FadeToLevelValue);
+        Assert.Equal("−inf", shell.Cues.Inspector.FadePane.FadeToLevelValue);
     });
 
     [Fact]
     public Task FadeTargetsToggleThroughTheJournal() => ShellFixture.WithShell(shell =>
     {
         var fade = Select<FadeCueNode>(shell);
-        var targets = shell.Cues.Inspector.FadeTargets;
+        var targets = shell.Cues.Inspector.FadePane.FadeTargets;
 
         Assert.NotEmpty(targets);
         Assert.All(targets, toggle => Assert.False(toggle.IsSelected));
@@ -93,7 +93,7 @@ public class ControlFlowPaneTests
         fade.FadeEverythingSounding = false;
         shell.Cues.Inspector.Reload();
 
-        Assert.Contains("do nothing", shell.Cues.Inspector.FadeTargetHint, StringComparison.Ordinal);
+        Assert.Contains("do nothing", shell.Cues.Inspector.FadePane.FadeTargetHint, StringComparison.Ordinal);
     });
 
     [Fact]
@@ -101,10 +101,10 @@ public class ControlFlowPaneTests
     {
         var fade = Select<FadeCueNode>(shell);
 
-        shell.Cues.Inspector.FadeStopsTargetsValue = false;
+        shell.Cues.Inspector.FadePane.FadeStopsTargetsValue = false;
         Assert.False(fade.StopTargetsWhenComplete);
 
-        shell.Cues.Inspector.FadeEverythingValue = false;
+        shell.Cues.Inspector.FadePane.FadeEverythingValue = false;
         Assert.False(fade.FadeEverythingSounding);
     });
 
@@ -116,13 +116,13 @@ public class ControlFlowPaneTests
         var jump = Select<JumpCueNode>(shell);
 
         // The seeded jump already points somewhere; move it, then clear it.
-        shell.Cues.Inspector.JumpTargetIndex = 2;
+        shell.Cues.Inspector.JumpPane.JumpTargetIndex = 2;
         Assert.Single(jump.TargetCueIds);
 
         var chosen = jump.TargetCueIds[0];
         Assert.NotNull(shell.Project.FindCue(chosen));
 
-        shell.Cues.Inspector.JumpTargetIndex = 0;
+        shell.Cues.Inspector.JumpPane.JumpTargetIndex = 0;
         Assert.Empty(jump.TargetCueIds);
     });
 
@@ -134,7 +134,7 @@ public class ControlFlowPaneTests
         // A cue that jumps to itself is an infinite loop the chain bound would catch at run time; not
         // offering it is better than reporting it afterwards.
         var label = $"Q{jump.Number.Text} · {jump.Label}";
-        Assert.DoesNotContain(label, shell.Cues.Inspector.JumpTargets);
+        Assert.DoesNotContain(label, shell.Cues.Inspector.JumpPane.JumpTargets);
     });
 
     [Fact]
@@ -145,8 +145,8 @@ public class ControlFlowPaneTests
         shell.Cues.Inspector.Reload();
 
         // Pointing at whatever now occupies that position would silently retarget the jump.
-        Assert.Equal(0, shell.Cues.Inspector.JumpTargetIndex);
-        Assert.Contains("no longer exists", shell.Cues.Inspector.JumpHint, StringComparison.Ordinal);
+        Assert.Equal(0, shell.Cues.Inspector.JumpPane.JumpTargetIndex);
+        Assert.Contains("no longer exists", shell.Cues.Inspector.JumpPane.JumpHint, StringComparison.Ordinal);
     });
 
     [Fact]
@@ -154,9 +154,9 @@ public class ControlFlowPaneTests
     {
         var jump = Select<JumpCueNode>(shell);
 
-        shell.Cues.Inspector.JumpPickAtRandomValue = true;
-        shell.Cues.Inspector.JumpFiresOnArrivalValue = true;
-        shell.Cues.Inspector.JumpConditionIndex = (int)JumpCondition.WhileTriggerHeld;
+        shell.Cues.Inspector.JumpPane.JumpPickAtRandomValue = true;
+        shell.Cues.Inspector.JumpPane.JumpFiresOnArrivalValue = true;
+        shell.Cues.Inspector.JumpPane.JumpConditionIndex = (int)JumpCondition.WhileTriggerHeld;
 
         Assert.True(jump.PickAtRandom);
         Assert.True(jump.FireOnArrival);
@@ -170,13 +170,13 @@ public class ControlFlowPaneTests
     {
         var patch = Select<PatchCueNode>(shell);
 
-        shell.Cues.Inspector.PatchFadeValue = "2.5";
+        shell.Cues.Inspector.PatchPane.PatchFadeValue = "2.5";
         Assert.Equal(2_500, patch.FadeMs);
 
-        shell.Cues.Inspector.PatchSnapshotIndex = 0;
+        shell.Cues.Inspector.PatchPane.PatchSnapshotIndex = 0;
         Assert.Null(patch.SnapshotId);
 
-        shell.Cues.Inspector.PatchSnapshotIndex = 1;
+        shell.Cues.Inspector.PatchPane.PatchSnapshotIndex = 1;
         Assert.Equal(shell.Project.PatchSnapshots[0].Id, patch.SnapshotId);
     });
 
@@ -188,21 +188,21 @@ public class ControlFlowPaneTests
         patch.Levels.Clear();
         shell.Cues.Inspector.Reload();
 
-        Assert.Contains("do nothing", shell.Cues.Inspector.PatchHint, StringComparison.Ordinal);
+        Assert.Contains("do nothing", shell.Cues.Inspector.PatchPane.PatchHint, StringComparison.Ordinal);
     });
 
     [Fact]
     public Task PatchLevelChangesAreListedFromTheCueRatherThanAuthored() => ShellFixture.WithShell(shell =>
     {
         var patch = Select<PatchCueNode>(shell);
-        Assert.False(shell.Cues.Inspector.HasPatchLevelChanges);
+        Assert.False(shell.Cues.Inspector.PatchPane.HasPatchLevelChanges);
 
         var channel = shell.Project.AudioPatch.LogicalChannels[0];
         patch.Levels.Add(new PatchLevelChange { LogicalChannelId = channel.Id, GainDb = -6 });
         shell.Cues.Inspector.Reload();
 
         // The pane showed two fixed rows whatever the cue carried; now it shows what is there.
-        var row = Assert.Single(shell.Cues.Inspector.PatchLevelChanges);
+        var row = Assert.Single(shell.Cues.Inspector.PatchPane.PatchLevelChanges);
         Assert.Contains(channel.Name, row, StringComparison.Ordinal);
     });
 
@@ -213,8 +213,8 @@ public class ControlFlowPaneTests
     {
         var action = Add(shell, new ActionCueNode { Number = new CueNumber("99"), Label = "Cue lights" });
 
-        shell.Cues.Inspector.ActionAddressValue = "/eos/cue/7.2/fire";
-        shell.Cues.Inspector.ActionArgumentsValue = "1 2.5 go";
+        shell.Cues.Inspector.ActionPane.ActionAddressValue = "/eos/cue/7.2/fire";
+        shell.Cues.Inspector.ActionPane.ActionArgumentsValue = "1 2.5 go";
 
         Assert.Equal("/eos/cue/7.2/fire", action.Address);
         Assert.Equal("1 2.5 go", action.Arguments);
@@ -225,7 +225,7 @@ public class ControlFlowPaneTests
     {
         Add(shell, new ActionCueNode { Number = new CueNumber("99"), Label = "Cue lights" });
 
-        Assert.Contains("no endpoint", shell.Cues.Inspector.ActionHint, StringComparison.Ordinal);
+        Assert.Contains("no endpoint", shell.Cues.Inspector.ActionPane.ActionHint, StringComparison.Ordinal);
     });
 
     [Fact]
@@ -245,7 +245,7 @@ public class ControlFlowPaneTests
         // MIDI output exists now, so the hint is the PARSER's verdict rather than a refusal of the
         // whole protocol: "/note" is an OSC address and not a MIDI message, and saying which is what
         // lets the operator fix it while authoring instead of when the desk fails to respond.
-        Assert.Contains("“/note” is not a MIDI message", shell.Cues.Inspector.ActionHint, StringComparison.Ordinal);
+        Assert.Contains("“/note” is not a MIDI message", shell.Cues.Inspector.ActionPane.ActionHint, StringComparison.Ordinal);
     });
 
     [Fact]
@@ -265,7 +265,7 @@ public class ControlFlowPaneTests
 
         // Read back in the words a desk's manual uses, so the operator can check it against the desk
         // rather than against the syntax they just typed.
-        Assert.Contains("CC 7 = 100 on ch 1", shell.Cues.Inspector.ActionHint, StringComparison.Ordinal);
+        Assert.Contains("CC 7 = 100 on ch 1", shell.Cues.Inspector.ActionPane.ActionHint, StringComparison.Ordinal);
     });
 
     // ── visualizer ────────────────────────────────────────────────────────────────────────────
@@ -275,10 +275,10 @@ public class ControlFlowPaneTests
     {
         var visualizer = Add(shell, new VisualizerCueNode { Number = new CueNumber("98"), Label = "Viz" });
 
-        shell.Cues.Inspector.VisualizerPresetPackValue = "packs/slow";
-        shell.Cues.Inspector.VisualizerHoldValue = "30";
-        shell.Cues.Inspector.VisualizerBlendValue = "4";
-        shell.Cues.Inspector.VisualizerLocksPresetValue = true;
+        shell.Cues.Inspector.VisualizerPane.VisualizerPresetPackValue = "packs/slow";
+        shell.Cues.Inspector.VisualizerPane.VisualizerHoldValue = "30";
+        shell.Cues.Inspector.VisualizerPane.VisualizerBlendValue = "4";
+        shell.Cues.Inspector.VisualizerPane.VisualizerLocksPresetValue = true;
 
         Assert.Equal("packs/slow", visualizer.PresetPack);
         Assert.Equal(30_000, visualizer.HoldMs);
@@ -292,7 +292,7 @@ public class ControlFlowPaneTests
         var fade = Select<FadeCueNode>(shell);
         var before = fade.DurationMs;
 
-        shell.Cues.Inspector.FadeDurationValue = "9";
+        shell.Cues.Inspector.FadePane.FadeDurationValue = "9";
         Assert.Equal(9_000, fade.DurationMs);
 
         shell.Undo();
