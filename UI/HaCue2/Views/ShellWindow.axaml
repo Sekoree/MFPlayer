@@ -3,6 +3,7 @@
         xmlns:c="using:HaCue2.Controls"
         xmlns:v="using:HaCue2.Views"
         xmlns:vm="using:HaCue2.ViewModels"
+        xmlns:res="using:HaCue2.Resources"
         x:Class="HaCue2.Views.ShellWindow"
         x:DataType="vm:ShellViewModel"
         x:CompileBindings="True"
@@ -33,13 +34,13 @@
         <!-- FILE, first and leftmost, where every application on every desktop puts it. It exists as
              much for the answer to "where is this saved" - the menu names the path - as for the verbs:
              a save that only ever happened via a hotkey gave an operator nothing to look at. -->
-        <Button Grid.Column="0" Classes="tight" Content="FILE ▾" Margin="0,0,6,0"
-                AutomationProperties.Name="File menu">
+        <Button Grid.Column="0" Classes="tight" Content="{x:Static res:Strings.ShellFileMenu}" Margin="0,0,6,0"
+                AutomationProperties.Name="{x:Static res:Strings.ShellFileMenuName}">
           <Button.Flyout>
             <MenuFlyout>
-              <MenuItem Header="New project…" Click="OnFileNew" InputGesture="Ctrl+N" />
-              <MenuItem Header="Open project…" Click="OnFileOpen" InputGesture="Ctrl+O" />
-              <MenuItem Header="Open recent" ItemsSource="{Binding Recents}">
+              <MenuItem Header="{x:Static res:Strings.ShellFileNewProject}" Click="OnFileNew" InputGesture="Ctrl+N" />
+              <MenuItem Header="{x:Static res:Strings.ShellFileOpenProject}" Click="OnFileOpen" InputGesture="Ctrl+O" />
+              <MenuItem Header="{x:Static res:Strings.ShellFileOpenRecent}" ItemsSource="{Binding Recents}">
                 <MenuItem.ItemTemplate>
                   <DataTemplate x:DataType="vm:RecentProjectRow">
                     <TextBlock Text="{Binding Name}" />
@@ -55,13 +56,13 @@
               </MenuItem>
               <Separator />
               <MenuItem Header="{Binding SaveLabel}" Click="OnFileSave" InputGesture="Ctrl+S" />
-              <MenuItem Header="Save as…" Click="OnFileSaveAs" InputGesture="Ctrl+Shift+S" />
+              <MenuItem Header="{x:Static res:Strings.ShellFileSaveAs}" Click="OnFileSaveAs" InputGesture="Ctrl+Shift+S" />
               <Separator />
               <!-- A second PROCESS, not a second window: two shells in one process would open the
                    same audio devices and fight over them. -->
-              <MenuItem Header="New window" Click="OnFileNewWindow" />
+              <MenuItem Header="{x:Static res:Strings.ShellFileNewWindow}" Click="OnFileNewWindow" />
               <Separator />
-              <MenuItem Header="Close project" Click="OnFileClose" />
+              <MenuItem Header="{x:Static res:Strings.ShellFileCloseProject}" Click="OnFileClose" />
             </MenuFlyout>
           </Button.Flyout>
         </Button>
@@ -78,7 +79,7 @@
                  Theme="{StaticResource ViewTabs}"
                  ItemsSource="{Binding Views}"
                  SelectedItem="{Binding SelectedView}"
-                 AutomationProperties.Name="Main view" />
+                 AutomationProperties.Name="{x:Static res:Strings.ShellMainViewName}" />
 
         <!-- The mode chip is a readout, not a control: it says which mode you are in, and Lock beside
              it is the only way to change that. -->
@@ -91,24 +92,24 @@
              The copy says exactly what the journal enforces: notes stay editable under lock (the one
              deliberate exception), so "read-only document" was a promise the app did not keep. -->
         <ToggleButton Grid.Column="5" Theme="{StaticResource ChipToggle}" Classes="latch-warn"
-                      IsChecked="{Binding IsLocked}" Content="LOCK"
-                      ToolTip.Tip="Authoring locked: cue structure and show settings cannot change. Notes stay editable. GO, preview and audition are untouched." />
+                      IsChecked="{Binding IsLocked}" Content="{x:Static res:Strings.ShellLock}"
+                      ToolTip.Tip="{x:Static res:Strings.ShellLockTooltip}" />
 
         <Button Grid.Column="6" x:Name="SettingsButton"
-                Theme="{StaticResource ChipButton}" Content="SETTINGS" Click="OnSettings" />
+                Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.ShellSettings}" Click="OnSettings" />
         <!-- Exactly one Diagnostics button in the whole app, and it is here. -->
         <Button Grid.Column="7" x:Name="DiagnosticsButton"
-                Theme="{StaticResource ChipButton}" Content="DIAGNOSTICS" Click="OnDiagnostics" />
+                Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.ShellDiagnostics}" Click="OnDiagnostics" />
         <!-- F-09 compact overflow: below the width threshold the two lower-priority chips fold in
              here, so mode/LOCK/view switching keep their room. Never holds Lock or the mode chip -
              safety state stays directly visible at every supported size. -->
         <Button Grid.Column="8" x:Name="TitleOverflowButton" IsVisible="False"
-                Theme="{StaticResource ChipButton}" Content="MORE ▾"
-                AutomationProperties.Name="More title bar actions">
+                Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.ShellMore}"
+                AutomationProperties.Name="{x:Static res:Strings.ShellMoreName}">
           <Button.Flyout>
             <MenuFlyout>
-              <MenuItem Header="Settings…" Click="OnSettings" />
-              <MenuItem Header="Diagnostics…" Click="OnDiagnostics" />
+              <MenuItem Header="{x:Static res:Strings.ShellMoreSettings}" Click="OnSettings" />
+              <MenuItem Header="{x:Static res:Strings.ShellMoreDiagnostics}" Click="OnDiagnostics" />
             </MenuFlyout>
           </Button.Flyout>
         </Button>
@@ -120,8 +121,8 @@
       <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="15">
         <ToggleButton Grid.Column="0" Theme="{StaticResource ChipToggle}"
                       IsChecked="{Binding IsOutputInfoOpen}"
-                      Content="▸ OUTPUT INFO"
-                      ToolTip.Tip="F9 - program meters, line chips and bay counters, over the content" />
+                      Content="{x:Static res:Strings.ShellOutputInfo}"
+                      ToolTip.Tip="{x:Static res:Strings.ShellOutputInfoTooltip}" />
         <TextBlock Grid.Column="1" Classes="mono ok small" VerticalAlignment="Center"
                    Text="{Binding OutputSummary}" />
         <!-- The issue count is the doorway to Project status; it is the only red thing on the bar. -->
@@ -160,7 +161,7 @@
           <Border Grid.Column="0" BorderBrush="{DynamicResource BoothRule}" BorderThickness="0,0,1,0"
                   Padding="11,6">
             <StackPanel Orientation="Horizontal" Spacing="8">
-              <TextBlock Classes="caps" Text="PROGRAM" VerticalAlignment="Center">
+              <TextBlock Classes="caps" Text="{x:Static res:Strings.ShellProgramCaption}" VerticalAlignment="Center">
                 <TextBlock.RenderTransform>
                   <RotateTransform Angle="-90" />
                 </TextBlock.RenderTransform>

@@ -131,7 +131,9 @@
                     <TextBlock Grid.Column="3" Classes="num" Text="{Binding Late.Text}"
                                Classes.warn="{Binding Late.IsWarn}" />
                     <TextBlock Grid.Column="4" Classes="num" Text="{Binding Dropped}" />
-                    <TextBlock Grid.Column="5" Classes="num dim3" Text="{Binding Gpu}" />
+                    <TextBlock Grid.Column="5" Classes="num dim3" Text="{Binding Gpu.Text}"
+                               Classes.warn="{Binding Gpu.IsWarn}"
+                               ToolTip.Tip="{Binding Gpu.Text}" />
                   </Grid>
                 </DataTemplate>
               </ListBox.ItemTemplate>

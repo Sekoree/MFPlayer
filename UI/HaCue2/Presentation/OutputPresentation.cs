@@ -163,7 +163,13 @@ public static class OutputPresentation
                     ? new Status("0")
                     : new Status(item.MissedCompositionDeadlines.ToString(CultureInfo.InvariantCulture), Gel.Amber),
                 Dropped = Dropped(item),
-                Gpu = item.CompositorBackend,
+                // F-14 capability truth: a backend silently skipping GPU-only effects is exactly
+                // the degraded state an operator is already mid-diagnosing - name the effects.
+                Gpu = item.UnsupportedEffectIds.Count == 0
+                    ? new Status(item.CompositorBackend)
+                    : new Status(
+                        $"{item.CompositorBackend} · pass-through: {string.Join(", ", item.UnsupportedEffectIds)}",
+                        Gel.Amber),
             }),
         ];
     }

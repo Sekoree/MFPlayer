@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- N-11 (2026-08-14 review): device-touching suites do not tolerate parallel test HOSTS - a
+     full-solution `dotnet test` once produced one clock-timing flake and one test host crashed
+     under ALSA contention. This pins per-invocation parallelism; the CROSS-PROJECT half needs
+     MSBuild's -m:1 as well, which only a command line can supply - use scripts/test-all.sh (or the
+     CI invocation it mirrors) for full-solution runs. Wired to every test project via
+     Directory.Build.props' RunSettingsFilePath. -->
+<RunSettings>
+  <RunConfiguration>
+    <MaxCpuCount>1</MaxCpuCount>
+  </RunConfiguration>
+</RunSettings>

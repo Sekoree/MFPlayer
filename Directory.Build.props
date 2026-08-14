@@ -21,6 +21,11 @@
     <IsAotCompatible>true</IsAotCompatible>
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
+
+    <!-- N-11: every `dotnet test` invocation picks up the repo .runsettings (per-invocation
+         MaxCpuCount=1) without anyone remembering a flag. Full-solution runs additionally need
+         MSBuild -m:1 to serialize the test HOSTS - use scripts/test-all.sh. -->
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory).runsettings</RunSettingsFilePath>
   </PropertyGroup>
 
   <!-- DOCS-02: per-project NuGet packaging (the chosen distribution model). Common metadata for the

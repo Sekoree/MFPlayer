@@ -11,7 +11,9 @@ updates:
       # Repo-built binding served from the local ./packages feed (see nuget.config) - there is no
       # public 9.x for Dependabot to bump to, and a downgrade PR to public 8.1 would break the ABI.
       - dependency-name: "FFmpeg.AutoGen"
-      # Major native/rendering transition - planned migration program (review F-24), not a bump.
+      # SkiaSharp follows Avalonia (owner decision closing review F-24): Avalonia's Skia backend
+      # depends on SkiaSharp 3.x, so a standalone major bump would fight the UI framework. Move it
+      # only alongside an Avalonia release that moves itself.
       - dependency-name: "SkiaSharp*"
         update-types: ["version-update:semver-major"]
 

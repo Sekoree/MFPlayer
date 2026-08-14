@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "F-18 (2026-08-14 review): the authority manifest for the git-ignored Reference/ cache.",
+    "Reference/ holds ~22 GB of source snapshots, SDKs and test corpora that drift silently from the",
+    "authoritative pins - comments in code have occasionally cited a stale snapshot as truth. This",
+    "manifest names every EXPECTED entry, what kind of thing it is, and which tracked pin (if any)",
+    "is authoritative for it; scripts/check-reference-drift.sh compares the on-disk snapshot",
+    "versions against those pins and reports STALE / NO-IDENTITY / UNKNOWN entries.",
+    "Rules: Directory.Packages.props and .github/native-manifest/ffmpeg.lock are the truth -",
+    "NEVER a Reference/ folder name. Prefer versioned snapshot directories over '-master'/'-main'",
+    "clones (a name like SDL3-CS-master carries no identity at all). An entry that is absent on",
+    "disk is fine (fetch on demand); an on-disk directory not listed here should be added or removed."
+  ],
+  "entries": {
+    "Avalonia-*": { "kind": "source-snapshot", "package": "Avalonia", "reason": "UI framework internals while debugging binding/layout behavior" },
+    "AvaloniaEdit-master": { "kind": "source-snapshot", "package": "Avalonia.AvaloniaEdit", "reason": "editor control reference; NO IDENTITY - re-clone as a versioned snapshot when next needed" },
+    "FFmpeg.AutoGen-main": { "kind": "source-snapshot", "package": null, "reason": "upstream generator reference; the AUTHORITATIVE fork is vendored at External/FFmpeg.AutoGen (see nuget.config)" },
+    "jack2-*": { "kind": "source-snapshot", "package": null, "reason": "JACK client API reference for the miniaudio backend's graph-thread notes" },
+    "libass": { "kind": "source-snapshot", "package": null, "reason": "subtitle renderer reference; the shipped build is pinned by URL+SHA-256 in build.yml (0.17.5)" },
+    "miniaudio-*": { "kind": "source-snapshot", "package": null, "reason": "MALib hand-mirrors this exact ABI; pinned at 0.11.25 in build.yml and Native-Dependencies.md" },
+    "Mond-*": { "kind": "source-snapshot", "package": "Mond", "reason": "scripting runtime internals (AOT paths)" },
+    "NDI SDK for Android": { "kind": "sdk", "package": null, "reason": "licensed NDI SDK - deliberately untracked (NDI license); required only for HaViz.Android packaging" },
+    "NDI SDK for Linux": { "kind": "sdk", "package": null, "reason": "licensed NDI SDK - deliberately untracked (NDI license)" },
+    "MIDI_Controllers": { "kind": "corpus", "package": null, "reason": "device profile notes/captures for S.Control device matching" },
+    "MMDTest": { "kind": "corpus", "package": null, "reason": "~21 GB real MMD model/motion corpus; environment-gated tests only - never a CI dependency" },
+    "OSC_Endpoints": { "kind": "corpus", "package": null, "reason": "mixer OSC command references (X32 etc.)" },
+    "portaudio-*": { "kind": "source-snapshot", "package": null, "reason": "PALib binding reference; shipped build pinned at v19.7.0 in build.yml" },
+    "portmidi-*": { "kind": "source-snapshot", "package": null, "reason": "PMLib binding reference; shipped build pinned at v2.0.7 in build.yml (snapshot may track a newer tag - the build pin is the truth)" },
+    "projectm-*": { "kind": "source-snapshot", "package": null, "reason": "authoritative build source when present - scripts/build-projectm.sh uses it, else downloads the SHA-256-pinned 4.1.6 archive" },
+    "SDL3-CS-*": { "kind": "source-snapshot", "package": "SDL3-CS", "reason": "binding internals for the present layer" },
+    "Silk.NET-*": { "kind": "source-snapshot", "package": "Silk.NET.OpenGL", "reason": "GL binding internals" },
+    "TestSubs": { "kind": "corpus", "package": null, "reason": "real-world subtitle corpus; environment-gated tests only (CI uses the committed TestAssets fixtures)" },
+    "TreeDataGrid-*": { "kind": "source-snapshot", "package": "TreeDataGrid.Avalonia", "reason": "cue-tree control internals" },
+    "Vortice.Windows-*": { "kind": "source-snapshot", "package": "Vortice.Direct3D11", "reason": "D3D11 interop reference; KNOWN far behind the pin - refresh or delete when next touched" },
+    "Xaml.Behaviors-master": { "kind": "source-snapshot", "package": "Xaml.Behaviors.Avalonia", "reason": "behaviors reference; NO IDENTITY - re-clone as a versioned snapshot when next needed" },
+    "YoutubeExplode-*": { "kind": "source-snapshot", "package": "YoutubeExplode", "reason": "YouTube source module reference" },
+    "YT_DLP": { "kind": "corpus", "package": null, "reason": "yt-dlp behavior notes for the YouTube source" }
+  }
+}

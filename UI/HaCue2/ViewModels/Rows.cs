@@ -735,8 +735,10 @@ public sealed record CompositionStatsRow
     public string Layers { get; init; } = "0";
     public required Status Late { get; init; }
     public string Dropped { get; init; } = "0";
-    /// <summary>The compositor actually selected by the production session, never an assumed GPU.</summary>
-    public string Gpu { get; init; } = "Unknown";
+    /// <summary>The compositor actually selected by the production session, never an assumed GPU -
+    /// AMBER when the backend is degrading active effects to pass-through (F-14: a CPU fallback
+    /// rendering a GPU-only effect chain differently must be visible next to the backend name).</summary>
+    public Status Gpu { get; init; } = new("Unknown");
 }
 
 /// <summary>One line of the log tail (screen 15) or a wire monitor (screen 11).</summary>

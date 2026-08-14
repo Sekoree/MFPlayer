@@ -47,6 +47,11 @@
     <PackageVersion Include="SDL3-CS.Windows" Version="3.4.14.1" />
     <PackageVersion Include="Silk.NET.OpenGL" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Core" Version="2.23.0" />
+    <!-- SkiaSharp FOLLOWS AVALONIA (owner decision, 2026-08-14, closing review F-24): Avalonia's
+         Skia backend depends on SkiaSharp 3.x, so a standalone Skia 4 migration here would fight
+         the UI framework's own native pairing for no benefit. Bump only in step with an Avalonia
+         release that itself moves to SkiaSharp 4; dependabot.yml ignores SkiaSharp majors for the
+         same reason. -->
     <PackageVersion Include="SkiaSharp" Version="3.119.4" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Linux" Version="3.119.4" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Win32" Version="3.119.4" />

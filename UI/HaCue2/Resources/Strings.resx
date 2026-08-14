@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <!-- F-21 (2026-08-14 review): HaCue2's typed operator copy, mirroring HaPlay's Strings pattern.
+       ShellWindow is the migrated exemplar; other screens move here over time, driven downward by
+       the RawStringLiteralLintTests ratchet. Terminology (fire/go/standby/lock/audition) should be
+       defined ONCE here as screens migrate. -->
+  <data name="ShellFileMenu" xml:space="preserve">
+    <value>FILE ▾</value>
+  </data>
+  <data name="ShellFileMenuName" xml:space="preserve">
+    <value>File menu</value>
+  </data>
+  <data name="ShellFileNewProject" xml:space="preserve">
+    <value>New project…</value>
+  </data>
+  <data name="ShellFileOpenProject" xml:space="preserve">
+    <value>Open project…</value>
+  </data>
+  <data name="ShellFileOpenRecent" xml:space="preserve">
+    <value>Open recent</value>
+  </data>
+  <data name="ShellFileSaveAs" xml:space="preserve">
+    <value>Save as…</value>
+  </data>
+  <data name="ShellFileNewWindow" xml:space="preserve">
+    <value>New window</value>
+  </data>
+  <data name="ShellFileCloseProject" xml:space="preserve">
+    <value>Close project</value>
+  </data>
+  <data name="ShellMainViewName" xml:space="preserve">
+    <value>Main view</value>
+  </data>
+  <data name="ShellLock" xml:space="preserve">
+    <value>LOCK</value>
+  </data>
+  <data name="ShellLockTooltip" xml:space="preserve">
+    <value>Authoring locked: cue structure and show settings cannot change. Notes stay editable. GO, preview and audition are untouched.</value>
+  </data>
+  <data name="ShellSettings" xml:space="preserve">
+    <value>SETTINGS</value>
+  </data>
+  <data name="ShellDiagnostics" xml:space="preserve">
+    <value>DIAGNOSTICS</value>
+  </data>
+  <data name="ShellMore" xml:space="preserve">
+    <value>MORE ▾</value>
+  </data>
+  <data name="ShellMoreName" xml:space="preserve">
+    <value>More title bar actions</value>
+  </data>
+  <data name="ShellMoreSettings" xml:space="preserve">
+    <value>Settings…</value>
+  </data>
+  <data name="ShellMoreDiagnostics" xml:space="preserve">
+    <value>Diagnostics…</value>
+  </data>
+  <data name="ShellOutputInfo" xml:space="preserve">
+    <value>▸ OUTPUT INFO</value>
+  </data>
+  <data name="ShellOutputInfoTooltip" xml:space="preserve">
+    <value>F9 - program meters, line chips and bay counters, over the content</value>
+  </data>
+  <data name="ShellProgramCaption" xml:space="preserve">
+    <value>PROGRAM</value>
+  </data>
+</root>

@@ -9,6 +9,7 @@
 | [Packages](Doc/Packages.md) | The NuGet surface: entry packages vs feature modules vs low-level bindings |
 | [Native dependencies](Doc/Native-Dependencies.md) | Which natives each feature needs, pins, and acceptance policies |
 | [Release tiers](Doc/Release-Tiers.md) | What full/core/minimal artifacts promise and the gates that enforce it |
+| [Release acceptance](Doc/Release-Acceptance.md) | The automated matrix per push + the hardware checklist per release candidate |
 | [NativeAOT](Doc/NativeAOT.md) | AOT rules, what CI enforces, publishing the C ABI |
 | [Control guides](Doc/HaPlay-Control-Getting-Started.md) | HaPlay show control setup, scripting reference, X32/BCF2000/X-Touch layouts |
 

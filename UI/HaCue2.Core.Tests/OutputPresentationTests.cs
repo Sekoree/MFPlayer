@@ -133,7 +133,8 @@ public class OutputPresentationTests
         long composited = 0,
         long behind = 0,
         int layers = 0,
-        string backend = "OpenGL") =>
+        string backend = "OpenGL",
+        IReadOnlyList<string>? unsupportedEffects = null) =>
         new(
             compositionId.ToString(),
             FramesComposited: composited,
@@ -147,7 +148,8 @@ public class OutputPresentationTests
             LayerCount: layers,
             CanvasPeriod: TimeSpan.FromSeconds(1d / 30),
             CompositorBackend: backend,
-            MissedCompositionDeadlines: behind);
+            MissedCompositionDeadlines: behind,
+            UnsupportedEffects: unsupportedEffects);
 
     [Fact]
     public void ACompositionNobodyHasTimedYetShowsADashRatherThanZero()
@@ -165,7 +167,7 @@ public class OutputPresentationTests
         // same, or the column is noise for the first quarter-second of every show.
         Assert.Equal("- / 30", row.Fps.Text);
         Assert.Equal("3", row.Layers);
-        Assert.Equal("OpenGL", row.Gpu);
+        Assert.Equal("OpenGL", row.Gpu.Text);
     }
 
     [Fact]
@@ -178,7 +180,25 @@ public class OutputPresentationTests
             [Stats(show.Cyc.Id, backend: "CPU")],
             new Dictionary<string, double>()));
 
-        Assert.Equal("CPU", row.Gpu);
+        Assert.Equal("CPU", row.Gpu.Text);
+        Assert.Equal(Gel.Neutral, row.Gpu.Gel);
+    }
+
+    [Fact]
+    public void EffectsTheBackendCannotRenderTurnTheBackendCellAmberAndAreNamed()
+    {
+        // F-14 capability truth: the CPU fallback degrading a GPU-only effect to pass-through is a
+        // materially different render - the operator must see WHICH effect, next to the backend.
+        var show = new TestProject();
+
+        var row = Assert.Single(OutputPresentation.Compositions(
+            show.Project,
+            [Stats(show.Cyc.Id, backend: "CPU", unsupportedEffects: ["plugin.glow.v2"])],
+            new Dictionary<string, double>()));
+
+        Assert.Equal(Gel.Amber, row.Gpu.Gel);
+        Assert.Contains("plugin.glow.v2", row.Gpu.Text);
+        Assert.Contains("CPU", row.Gpu.Text);
     }
 
     [Fact]
