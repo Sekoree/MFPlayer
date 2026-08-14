@@ -47,7 +47,13 @@ internal static unsafe partial class Native
     public static PaError Pa_Initialize()
     {
         if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pa_Initialize));
-        return Pa_Initialize_Import();
+        // F-12: Pa_Initialize probes every ALSA device and libasound prints each failure to stderr -
+        // dozens to hundreds of repeated lines on a desktop. Route them into one summary instead
+        // (best-effort, Linux-only; MFP_ALSA_VERBOSE=1 restores the raw stream).
+        S.Media.NativeInterop.AlsaDiagnosticsSilencer.Install();
+        var result = Pa_Initialize_Import();
+        S.Media.NativeInterop.AlsaDiagnosticsSilencer.LogSummary(Logger, "PortAudio initialization");
+        return result;
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pa_Terminate")]

@@ -47,27 +47,31 @@
          standalone buttons here - the duplication just widened an already busy row). The flyout is
          a Button like its neighbours, not a Menu - a menu bar item has its own chrome and its
          label never lined up with the buttons beside it. -->
-    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,160,*,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
-      <TextBlock Grid.Column="0" Text="{x:Static res:Strings.CueListLabel}" VerticalAlignment="Center" />
-      <ComboBox Grid.Column="1"
-                ItemsSource="{Binding CueLists}"
+    <!-- F-10 (2026-08-14 review): a WRAP panel like the transport row below, not Auto grid columns.
+         As a Grid the row needed ~740 px while the supported minimum workspace (720 px window with
+         the expanded sidebar) leaves ~540 - Output setup and Settings were simply clipped off with
+         no overflow affordance. Wrapping keeps the one-line look wherever it fits and folds the
+         right-hand commands onto a second line instead of hiding them. -->
+    <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+      <WrapPanel ItemSpacing="6" LineSpacing="4">
+      <TextBlock Text="{x:Static res:Strings.CueListLabel}" VerticalAlignment="Center" />
+      <ComboBox ItemsSource="{Binding CueLists}"
                 SelectedItem="{Binding SelectedCueList, Mode=TwoWay}"
-                MinWidth="140">
+                Width="160" MinWidth="140">
         <ComboBox.ItemTemplate>
           <DataTemplate DataType="vm:CueListEditorViewModel">
             <TextBlock Text="{Binding Name}" />
           </DataTemplate>
         </ComboBox.ItemTemplate>
       </ComboBox>
-      <TextBox Grid.Column="2"
-               MinWidth="120"
+      <TextBox Width="180" MinWidth="120"
                Text="{Binding SelectedCueList.Name, Mode=TwoWay}"
                PlaceholderText="{x:Static res:Strings.CueListNameWatermark}"
                ToolTip.Tip="{x:Static res:Strings.CueListNameTooltip}"
                IsEnabled="{Binding SelectedCueList, Converter={x:Static ObjectConverters.IsNotNull}}" />
-      <Button Grid.Column="3" Content="{x:Static res:Strings.AddListButton}" Command="{Binding AddCueListCommand}" />
-      <Button Grid.Column="4" Content="{x:Static res:Strings.RemoveListButton}" Command="{Binding RemoveCueListCommand}" />
-      <Button Grid.Column="5" ToolTip.Tip="{x:Static res:Strings.CueListFilesMenuTooltip}">
+      <Button Content="{x:Static res:Strings.AddListButton}" Command="{Binding AddCueListCommand}" />
+      <Button Content="{x:Static res:Strings.RemoveListButton}" Command="{Binding RemoveCueListCommand}" />
+      <Button ToolTip.Tip="{x:Static res:Strings.CueListFilesMenuTooltip}">
         <StackPanel Orientation="Horizontal" Spacing="6">
           <TextBlock Text="{x:Static res:Strings.FilesMenuLabel}" VerticalAlignment="Center" />
           <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" VerticalAlignment="Center" />
@@ -94,22 +98,21 @@
       </Button>
       <!-- List-level output routing - lives here with the other list-scoped controls (it needs a
            selected list), not in the cue-authoring row below. -->
-      <Button Grid.Column="6"
-              Content="{x:Static res:Strings.CueOutputSetupButton}"
+      <Button Content="{x:Static res:Strings.CueOutputSetupButton}"
               Command="{Binding OpenCueOutputSetupCommand}" />
-      <Button Grid.Column="7"
-              ToolTip.Tip="{x:Static res:Strings.CueListSettingsTooltip}"
+      <Button ToolTip.Tip="{x:Static res:Strings.CueListSettingsTooltip}"
               AutomationProperties.Name="{x:Static res:Strings.CueListSettingsTooltip}"
               Command="{Binding OpenCueListSettingsCommand}">
         <PathIcon Data="{x:Static views:AppIcons.Gear}" Width="13" Height="13" />
       </Button>
-      <TextBlock Grid.Column="8"
-                 Text="{Binding DisplayedCueFilePath}"
+      <TextBlock Text="{Binding DisplayedCueFilePath}"
                  VerticalAlignment="Center"
+                 MaxWidth="360"
                  Foreground="{DynamicResource TextSecondary}"
                  TextTrimming="CharacterEllipsis"
                  ToolTip.Tip="{Binding DisplayedCueFilePath}"
                  IsVisible="{Binding DisplayedCueFilePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      </WrapPanel>
     </Grid>
 
     <!-- Cue-authoring row: everything that EDITS the list, with the edit-mode gate on the same

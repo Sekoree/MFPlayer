@@ -27,7 +27,27 @@ public partial class ShellWindow : Window
     /// </summary>
     internal Task StartupTask { get; set; } = Task.CompletedTask;
 
-    public ShellWindow() => InitializeComponent();
+    /// <summary>Below this window width the title bar folds SETTINGS/DIAGNOSTICS into the MORE
+    /// overflow (F-09), so mode, LOCK and view switching keep their room down to the 900 px
+    /// minimum. Internal so the responsive test asserts against the same number.</summary>
+    internal const double CompactTitleBarWidth = 1080;
+
+    public ShellWindow()
+    {
+        InitializeComponent();
+        SizeChanged += (_, e) => UpdateTitleBarDensity(e.NewSize.Width);
+    }
+
+    private void UpdateTitleBarDensity(double width)
+    {
+        var compact = width < CompactTitleBarWidth;
+        if (this.FindControl<Button>("SettingsButton") is { } settings)
+            settings.IsVisible = !compact;
+        if (this.FindControl<Button>("DiagnosticsButton") is { } diagnostics)
+            diagnostics.IsVisible = !compact;
+        if (this.FindControl<Button>("TitleOverflowButton") is { } overflow)
+            overflow.IsVisible = compact;
+    }
 
     /// <summary>
     /// Hands the view-model the one thing it cannot do itself: open another project.

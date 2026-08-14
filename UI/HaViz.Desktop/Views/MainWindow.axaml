@@ -4,7 +4,7 @@
         x:Class="HaViz.Desktop.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         Title="HaViz - visualizer → NDI"
-        Width="600" Height="760" CanResize="True">
+        Width="600" Height="760" MinWidth="480" MinHeight="520" CanResize="True">
     <ScrollViewer>
         <StackPanel Margin="14" Spacing="10">
             <TextBlock Text="NDI output" FontWeight="Bold" />
@@ -55,12 +55,16 @@
                 <TextBlock Text="{Binding PlaylistSummary}" VerticalAlignment="Center" Opacity="0.75" />
             </StackPanel>
             <TextBlock Text="{Binding CurrentTrackName}" TextWrapping="Wrap" />
+            <!-- F-23: icon-only transport glyphs carry explicit accessible names + tooltips. -->
             <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="⏮" Command="{Binding PreviousTrackCommand}" />
+                <Button Content="⏮" Command="{Binding PreviousTrackCommand}"
+                        ToolTip.Tip="Previous track" AutomationProperties.Name="Previous track" />
                 <Button Content="Play / Pause" Command="{Binding PlayPauseCommand}" />
-                <Button Content="⏭" Command="{Binding NextTrackCommand}" />
+                <Button Content="⏭" Command="{Binding NextTrackCommand}"
+                        ToolTip.Tip="Next track" AutomationProperties.Name="Next track" />
                 <Button Content="Stop" Command="{Binding StopPlaybackCommand}" />
-                <Button Content="{Binding LoopModeLabel}" Command="{Binding CycleLoopModeCommand}" />
+                <Button Content="{Binding LoopModeLabel}" Command="{Binding CycleLoopModeCommand}"
+                        ToolTip.Tip="Cycle loop mode" AutomationProperties.Name="Loop mode" />
             </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <TextBlock Text="Output" VerticalAlignment="Center" />

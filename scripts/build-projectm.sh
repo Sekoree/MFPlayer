@@ -15,8 +15,9 @@
 #
 # Usage: scripts/build-projectm.sh [android-arm64]
 #   (no argument)  build for the host (desktop GL), installs to External/projectm/<host-rid>/
-#   android-arm64  cross-compile a GLES build with the Android NDK (ANDROID_NDK_ROOT, falling back
-#                  to /home/seko/Android/Sdk/ndk/android-ndk-r27c), installs to
+#   android-arm64  cross-compile a GLES build with the Android NDK - discovered from
+#                  ANDROID_NDK_ROOT, or the newest NDK under ANDROID_HOME/ANDROID_SDK_ROOT's ndk/
+#                  directory (F-16: never a machine-specific path). Installs to
 #                  External/projectm/android-arm64/
 set -euo pipefail
 
@@ -56,13 +57,25 @@ case "$target" in
         ;;
     android-arm64)
         rid="android-arm64"
-        ndk_root="${ANDROID_NDK_ROOT:-/home/seko/Android/Sdk/ndk/android-ndk-r27c}"
-        ndk_toolchain="$ndk_root/build/cmake/android.toolchain.cmake"
-        if [[ ! -f "$ndk_toolchain" ]]; then
-            echo "error: Android NDK toolchain file not found: $ndk_toolchain" >&2
-            echo "       set ANDROID_NDK_ROOT to an NDK install (r27c known good)" >&2
+        # F-16: discover the NDK only from the standard environment - ANDROID_NDK_ROOT first, then
+        # the newest NDK under the SDK's ndk/ directory. A personal fallback path here once made the
+        # cross-build silently work on exactly one machine.
+        ndk_root="${ANDROID_NDK_ROOT:-}"
+        if [[ -z "$ndk_root" ]]; then
+            for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
+                [[ -n "$sdk" && -d "$sdk/ndk" ]] || continue
+                ndk_root="$(find "$sdk/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+                [[ -n "$ndk_root" ]] && break
+            done
+        fi
+        ndk_toolchain="${ndk_root:+$ndk_root/build/cmake/android.toolchain.cmake}"
+        if [[ -z "$ndk_root" || ! -f "$ndk_toolchain" ]]; then
+            echo "error: no Android NDK found." >&2
+            echo "       Set ANDROID_NDK_ROOT to an NDK install (r27c known good), or point" >&2
+            echo "       ANDROID_HOME/ANDROID_SDK_ROOT at an SDK with an ndk/ directory." >&2
             exit 1
         fi
+        echo "==> Android NDK: $ndk_root"
         ;;
     *)
         echo "usage: $0 [android-arm64]" >&2

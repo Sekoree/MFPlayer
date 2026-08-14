@@ -479,6 +479,13 @@
                   <CheckBox Content="{x:Static res:Strings.RemoteApiAllowLanLabel}"
                             IsChecked="{Binding RestApiAllowLan, Mode=TwoWay}" />
                 </StackPanel>
+                <!-- F-15: LAN is authenticated by default; tokenless LAN is an EXPLICIT exception
+                     (Companion compatibility), never the silent state a cleared token leaves behind. -->
+                <CheckBox Content="{x:Static res:Strings.RemoteApiAllowTokenlessLanLabel}"
+                          IsChecked="{Binding RestApiAllowTokenlessLan, Mode=TwoWay}"
+                          IsVisible="{Binding RestApiAllowLan}"
+                          ToolTip.Tip="{x:Static res:Strings.RemoteApiAllowTokenlessLanHint}"
+                          AutomationProperties.Name="{x:Static res:Strings.RemoteApiAllowTokenlessLanLabel}" />
                 <SelectableTextBlock Text="{Binding RestApiBaseUrlDisplay}" FontFamily="monospace" FontSize="12" />
                 <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
                   <TextBlock Grid.Column="0" Text="{x:Static res:Strings.RemoteApiTokenLabel}"
@@ -512,6 +519,20 @@
                               Foreground="{DynamicResource StatusWarnFg}" VerticalAlignment="Top"
                               Margin="0,2,0,0" />
                     <TextBlock Text="{x:Static res:Strings.RemoteApiOpenLanWarning}"
+                               Foreground="{DynamicResource StatusWarnFg}" FontSize="12"
+                               FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="560" />
+                  </StackPanel>
+                </Border>
+                <!-- F-15 fail-closed state: LAN requested with no token and no exception - the
+                     binding paused to loopback rather than serving the network open. -->
+                <Border Background="{DynamicResource SurfaceRaised}"
+                        BorderBrush="{DynamicResource AccentWarn}" BorderThickness="1"
+                        Padding="8,6" IsVisible="{Binding RestApiLanPausedForMissingToken}">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <PathIcon Data="{x:Static views:AppIcons.Warning}" Width="14" Height="14"
+                              Foreground="{DynamicResource StatusWarnFg}" VerticalAlignment="Top"
+                              Margin="0,2,0,0" />
+                    <TextBlock Text="{x:Static res:Strings.RemoteApiLanPausedNoToken}"
                                Foreground="{DynamicResource StatusWarnFg}" FontSize="12"
                                FontWeight="SemiBold" TextWrapping="Wrap" MaxWidth="560" />
                   </StackPanel>

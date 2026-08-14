@@ -1,0 +1,36 @@
+name: CodeQL
+
+# F-17 (2026-08-14 review): static security analysis for the managed code. `build-mode: none`
+# analyzes the C# sources without compiling, so this job needs neither the Android workload nor the
+# native toolchains the main build stages - it stays fast and cannot flake on native downloads.
+# Actions are pinned to reviewed commit SHAs (the `# vN` trailer is the human label), same policy
+# as build.yml; Dependabot proposes bumps.
+
+on:
+  push:
+    branches: [master, 'next-*', 'cue-*']
+  pull_request:
+  schedule:
+    - cron: '30 4 * * 1' # weekly sweep so newly-published queries run against unchanged code too
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze C#
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload SARIF results to code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        with:
+          languages: csharp
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        with:
+          category: "/language:csharp"

@@ -29,7 +29,7 @@
 
     <!-- ── title bar ──────────────────────────────────────────────────────────────────────── -->
     <Border Classes="titlebar" DockPanel.Dock="Top">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
         <!-- FILE, first and leftmost, where every application on every desktop puts it. It exists as
              much for the answer to "where is this saved" - the menu names the path - as for the verbs:
              a save that only ever happened via a hotkey gave an operator nothing to look at. -->
@@ -65,8 +65,13 @@
             </MenuFlyout>
           </Button.Flyout>
         </Button>
-        <TextBlock Grid.Column="1" Classes="mono dim2" FontSize="11" VerticalAlignment="Center"
+        <!-- F-09: the project identity is BOUNDED - a long filename must never push the safety
+             controls (mode, LOCK, view switching) out of a 900 px window. The full path stays one
+             hover away in the tooltip. -->
+        <TextBlock Grid.Column="1" x:Name="ProjectIdentity"
+                   Classes="mono dim2" FontSize="11" VerticalAlignment="Center"
                    Text="{Binding ProjectFile}" Margin="0,0,6,0"
+                   MaxWidth="220" TextTrimming="CharacterEllipsis"
                    ToolTip.Tip="{Binding ProjectLocation}" />
 
         <ListBox Grid.Column="2"
@@ -89,9 +94,24 @@
                       IsChecked="{Binding IsLocked}" Content="LOCK"
                       ToolTip.Tip="Authoring locked: cue structure and show settings cannot change. Notes stay editable. GO, preview and audition are untouched." />
 
-        <Button Grid.Column="6" Theme="{StaticResource ChipButton}" Content="SETTINGS" Click="OnSettings" />
+        <Button Grid.Column="6" x:Name="SettingsButton"
+                Theme="{StaticResource ChipButton}" Content="SETTINGS" Click="OnSettings" />
         <!-- Exactly one Diagnostics button in the whole app, and it is here. -->
-        <Button Grid.Column="7" Theme="{StaticResource ChipButton}" Content="DIAGNOSTICS" Click="OnDiagnostics" />
+        <Button Grid.Column="7" x:Name="DiagnosticsButton"
+                Theme="{StaticResource ChipButton}" Content="DIAGNOSTICS" Click="OnDiagnostics" />
+        <!-- F-09 compact overflow: below the width threshold the two lower-priority chips fold in
+             here, so mode/LOCK/view switching keep their room. Never holds Lock or the mode chip -
+             safety state stays directly visible at every supported size. -->
+        <Button Grid.Column="8" x:Name="TitleOverflowButton" IsVisible="False"
+                Theme="{StaticResource ChipButton}" Content="MORE ▾"
+                AutomationProperties.Name="More title bar actions">
+          <Button.Flyout>
+            <MenuFlyout>
+              <MenuItem Header="Settings…" Click="OnSettings" />
+              <MenuItem Header="Diagnostics…" Click="OnDiagnostics" />
+            </MenuFlyout>
+          </Button.Flyout>
+        </Button>
       </Grid>
     </Border>
 

@@ -148,7 +148,16 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
         for (var i = _lifetimes.Count - 1; i >= 0; i--)
         {
             try { _lifetimes[i].Dispose(); }
-            catch { /* a lifetime release must never throw out of registry disposal */ }
+            catch (Exception failure) when (failure is not OutOfMemoryException)
+            {
+                // A lifetime release must never throw out of registry disposal - but a leaked
+                // native runtime must not vanish silently either (2026-08-14 review, F-13): the
+                // failure lands in diagnostics so a wedged teardown is attributable.
+                Diagnostics.MediaDiagnostics.LogError(
+                    failure,
+                    $"MediaRegistry: releasing native lifetime {_lifetimes[i].GetType().Name} (index {i}) "
+                    + "failed - its runtime may be leaked until process exit");
+            }
         }
     }
 
@@ -175,7 +184,15 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
             for (var i = builder.Lifetimes.Count - 1; i >= 0; i--)
             {
                 try { builder.Lifetimes[i].Dispose(); }
-                catch { /* a rollback release must never mask the original build failure */ }
+                catch (Exception rollbackFailure) when (rollbackFailure is not OutOfMemoryException)
+                {
+                    // Must never mask the original build failure - but do say which rollback
+                    // release also failed (F-13), or a doubly-broken module reads as singly broken.
+                    Diagnostics.MediaDiagnostics.LogError(
+                        rollbackFailure,
+                        $"MediaRegistry: build rollback failed to release native lifetime "
+                        + $"{builder.Lifetimes[i].GetType().Name} (index {i})");
+                }
             }
 
             throw;

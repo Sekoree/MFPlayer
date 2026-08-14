@@ -241,11 +241,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             : "";
         // Ring overflow = the SDK sender stalled past the ring depth; receivers hear a gap.
         var audioBacklog = engine.DroppedNdiAudioFrames > 0
-            ? $" · audio drop {engine.DroppedNdiAudioFrames}"
+            ? $" · {engine.DroppedNdiAudioFrames} audio frame(s) dropped (sender backlog)"
             : "";
+        // F-23: spelled out rather than "f… tx…ms y…" - an operator mid-fault should not have to
+        // decode abbreviations, and a BLACK visualizer must read differently from zero receivers.
+        var receivers = engine.ConnectionCount == 1 ? "1 receiver" : $"{engine.ConnectionCount} receivers";
+        var black = engine.LastFrameLuma <= 0 ? " · output is BLACK (frame luma 0)" : "";
         PresetText = engine.VisualizerFailed
             ? "visualizer unavailable (GL/projectM failed)"
-            : $"{engine.ConnectionCount} rx · f{engine.FramesSent} tx{engine.AverageSubmitMs}ms y{engine.LastFrameLuma} · {engine.CurrentPresetName ?? "(loading)"}{audioBacklog}{droppedAudio}";
+            : $"{receivers} · {engine.FramesSent} frames sent · submit {engine.AverageSubmitMs} ms{black}"
+              + $" · {engine.CurrentPresetName ?? "(loading)"}{audioBacklog}{droppedAudio}";
     }
 
     [RelayCommand]

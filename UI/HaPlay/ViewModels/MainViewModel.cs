@@ -169,9 +169,20 @@ public partial class MainViewModel : ViewModelBase
         _restApiEnabled = _appSettings.RestApiEnabled;
         _restApiPort = _appSettings.RestApiPort is >= 1 and <= 65535 ? _appSettings.RestApiPort : 8990;
         _restApiAllowLan = _appSettings.RestApiAllowLan;
-        // Optional token (API-01): no token by default - the remote API targets closed-LAN automation
-        // (e.g. Bitfocus Companion). A token is only required when the operator sets one.
+        _restApiAllowTokenlessLan = _appSettings.RestApiAllowTokenlessLan;
         _restApiAccessToken = _appSettings.RestApiAccessToken ?? string.Empty;
+        // F-15: LAN is authenticated by default. An older settings file that relied on
+        // LAN-without-token (once the silent default) gets a token minted HERE rather than serving
+        // the network open through an upgrade - tokenless LAN survives only via the explicit
+        // RestApiAllowTokenlessLan exception. The minted token is immediately visible (masked) in
+        // the Project card for the operator to copy into their controller.
+        if (_restApiAllowLan && string.IsNullOrEmpty(_restApiAccessToken) && !_restApiAllowTokenlessLan)
+        {
+            _restApiAccessToken = MintRestApiToken();
+            _appSettings.RestApiAccessToken = _restApiAccessToken;
+            AppSettings.Update(s => s.RestApiAccessToken = _appSettings.RestApiAccessToken);
+        }
+
         RestartRestApi();
 
         // Cue transport fade defaults (per-machine) - same seed-via-backing-field pattern.
@@ -302,12 +313,23 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RestApiBaseUrlDisplay))]
     [NotifyPropertyChangedFor(nameof(RestApiSecurityStatus))]
+    [NotifyPropertyChangedFor(nameof(RestApiLanPausedForMissingToken))]
     private bool _restApiAllowLan;
+
+    /// <summary>F-15: the explicit "Open LAN" exception - serve LAN requests with NO token
+    /// (Companion compatibility). Never the default: without it, enabling LAN mints a token, and
+    /// clearing the token pauses the LAN binding to loopback instead of serving the network open.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RestApiSecurityStatus))]
+    [NotifyPropertyChangedFor(nameof(RestApiOpenLanActive))]
+    [NotifyPropertyChangedFor(nameof(RestApiLanPausedForMissingToken))]
+    private bool _restApiAllowTokenlessLan;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RestApiSecurityStatus))]
     [NotifyPropertyChangedFor(nameof(RestApiAccessTokenDisplay))]
     [NotifyPropertyChangedFor(nameof(HasRestApiAccessToken))]
+    [NotifyPropertyChangedFor(nameof(RestApiLanPausedForMissingToken))]
     private string _restApiAccessToken = string.Empty;
 
     /// <summary>When false (default) the token is shown masked; the Reveal toggle flips it (API-01), so the
@@ -329,10 +351,27 @@ public partial class MainViewModel : ViewModelBase
     public string? RestApiStatusNote => _remoteApi.StatusNote;
 
     /// <summary>True when the API is reachable from the network with NO token - the deliberate
-    /// zero-friction Companion mode. It stays supported, but the state must be unmistakable in the
-    /// UI (review P2-7): this drives the prominent trusted-network warning in the Project card.</summary>
+    /// zero-friction Companion mode, now only reachable through the explicit
+    /// <see cref="RestApiAllowTokenlessLan"/> exception (F-15). It stays supported, but the state
+    /// must be unmistakable in the UI (review P2-7): this drives the prominent trusted-network
+    /// warning in the Project card.</summary>
     public bool RestApiOpenLanActive =>
-        RestApiEnabled && RestApiAllowLan && string.IsNullOrEmpty(RestApiAccessToken);
+        RestApiEnabled && RestApiAllowLan && RestApiAllowTokenlessLan
+        && string.IsNullOrEmpty(RestApiAccessToken);
+
+    /// <summary>F-15 fail-closed state: LAN is requested but there is no token and no tokenless
+    /// exception (only reachable by clearing the token by hand), so the listener is bound to
+    /// loopback instead of serving the network open. Drives its own warning line.</summary>
+    public bool RestApiLanPausedForMissingToken =>
+        RestApiEnabled && RestApiAllowLan && !RestApiAllowTokenlessLan
+        && string.IsNullOrEmpty(RestApiAccessToken);
+
+    /// <summary>Whether the listener may actually bind the LAN: the operator's LAN choice AND
+    /// either a token or the explicit tokenless exception (F-15). This - not the raw checkbox - is
+    /// what <see cref="RestartRestApi"/> hands the server, so "open on the network without a
+    /// credential" cannot happen by accident.</summary>
+    private bool RestApiLanPermitted =>
+        RestApiAllowLan && (!string.IsNullOrEmpty(RestApiAccessToken) || RestApiAllowTokenlessLan);
 
     public string RestApiSecurityStatus =>
         (RestApiAllowLan ? Strings.RemoteApiSecurityLan : Strings.RemoteApiSecurityLoopback)
@@ -385,6 +424,31 @@ public partial class MainViewModel : ViewModelBase
     {
         _appSettings.RestApiAllowLan = value;
         SaveOwnedAppSettings();
+
+        // F-15: fresh LAN enablement is AUTHENTICATED - mint a token unless the operator has taken
+        // the explicit tokenless exception. The token setter persists and restarts the listener.
+        if (value && string.IsNullOrEmpty(RestApiAccessToken) && !RestApiAllowTokenlessLan)
+        {
+            RestApiAccessToken = MintRestApiToken();
+            return;
+        }
+
+        RestartRestApi();
+    }
+
+    partial void OnRestApiAllowTokenlessLanChanged(bool value)
+    {
+        _appSettings.RestApiAllowTokenlessLan = value;
+        SaveOwnedAppSettings();
+
+        // Withdrawing the exception while LAN runs tokenless: restore authenticated LAN by minting
+        // a token, rather than silently pausing the binding the operator's controllers rely on.
+        if (!value && RestApiAllowLan && string.IsNullOrEmpty(RestApiAccessToken))
+        {
+            RestApiAccessToken = MintRestApiToken();
+            return;
+        }
+
         RestartRestApi();
     }
 
@@ -408,6 +472,7 @@ public partial class MainViewModel : ViewModelBase
         s.RestApiEnabled = _appSettings.RestApiEnabled;
         s.RestApiPort = _appSettings.RestApiPort;
         s.RestApiAllowLan = _appSettings.RestApiAllowLan;
+        s.RestApiAllowTokenlessLan = _appSettings.RestApiAllowTokenlessLan;
         s.RestApiAccessToken = _appSettings.RestApiAccessToken;
         s.SidebarCollapsed = _appSettings.SidebarCollapsed;
         s.LastSelectedWorkspace = _appSettings.LastSelectedWorkspace;
@@ -422,22 +487,26 @@ public partial class MainViewModel : ViewModelBase
 
     private void RestartRestApi()
     {
+        // F-15: the LISTENER binding follows RestApiLanPermitted, not the raw LAN checkbox - LAN
+        // with neither a token nor the explicit tokenless exception binds loopback only.
+        var lanPermitted = RestApiLanPermitted;
         _remoteApi.Restart(
-            RestApiEnabled, RestApiPort, RestApiAccessToken, RestApiAllowLan,
+            RestApiEnabled, RestApiPort, RestApiAccessToken, lanPermitted,
             () => new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control)
             {
-                LanBindingEnabled = RestApiAllowLan,
+                LanBindingEnabled = lanPermitted,
                 TokenConfigured = !string.IsNullOrEmpty(RestApiAccessToken),
             });
 
         // Copy-API-URL menus keep working while the listener is off - the copied URL targets the
         // configured port and becomes live the moment the API is enabled. The token is never embedded in
         // copied URLs (API-01); a token-protected server expects the X-HaPlay-Api-Key header instead.
-        Remote.RemoteApi.BaseUrl = _remoteApi.AdvertisedBaseUrl(RestApiPort, RestApiAllowLan);
+        Remote.RemoteApi.BaseUrl = _remoteApi.AdvertisedBaseUrl(RestApiPort, lanPermitted);
         OnPropertyChanged(nameof(RestApiBaseUrlDisplay));
         OnPropertyChanged(nameof(RestApiStatusNote));
         OnPropertyChanged(nameof(RestApiSecurityStatus));
         OnPropertyChanged(nameof(RestApiOpenLanActive));
+        OnPropertyChanged(nameof(RestApiLanPausedForMissingToken));
     }
 
     partial void OnRestApiAccessTokenChanged(string value)
@@ -447,12 +516,15 @@ public partial class MainViewModel : ViewModelBase
         RestartRestApi();
     }
 
-    /// <summary>Opt in to auth by generating a random token (the remote API is token-less by default).</summary>
-    [RelayCommand]
-    private void RegenerateRestApiToken() =>
-        RestApiAccessToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+    private static string MintRestApiToken() =>
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
 
-    /// <summary>Remove the token so the remote API accepts unauthenticated requests again.</summary>
+    /// <summary>Generate (or rotate) the access token.</summary>
+    [RelayCommand]
+    private void RegenerateRestApiToken() => RestApiAccessToken = MintRestApiToken();
+
+    /// <summary>Remove the token. Loopback then accepts unauthenticated requests; a LAN binding
+    /// without the explicit tokenless exception PAUSES to loopback instead (F-15).</summary>
     [RelayCommand]
     private void ClearRestApiToken()
     {

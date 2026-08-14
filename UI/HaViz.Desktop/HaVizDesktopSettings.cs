@@ -28,34 +28,58 @@ public sealed record HaVizDesktopSettings
     private static string SettingsPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HaViz", "desktop.json");
 
-    /// <summary>Best-effort load; a missing or unreadable file is a fresh default (never throws).</summary>
+    /// <summary>Best-effort load; a missing or unreadable file is a fresh default (never throws).
+    /// F-23: an unreadable MAIN file first falls back to the one-deep <c>.bak</c> the atomic save
+    /// keeps, so a write torn by power loss costs one save, not the box's device picks.</summary>
     public static HaVizDesktopSettings Load()
     {
-        try
+        return TryRead(SettingsPath) ?? TryRead(SettingsPath + ".bak") ?? new HaVizDesktopSettings();
+
+        static HaVizDesktopSettings? TryRead(string path)
         {
-            using var stream = File.OpenRead(SettingsPath);
-            return JsonSerializer.Deserialize(stream, HaVizDesktopSettingsJsonContext.Default.HaVizDesktopSettings)
-                   ?? new HaVizDesktopSettings();
-        }
-        catch (Exception)
-        {
-            return new HaVizDesktopSettings();
+            try
+            {
+                using var stream = File.OpenRead(path);
+                return JsonSerializer.Deserialize(stream, HaVizDesktopSettingsJsonContext.Default.HaVizDesktopSettings);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
     }
 
-    /// <summary>Best-effort save; settings persistence must never take the app down (never throws).</summary>
+    /// <summary>Best-effort save; settings persistence must never take the app down (never throws).
+    /// F-23: writes through a unique flushed temp file and an atomic replace that keeps the previous
+    /// good file as <c>.bak</c> - the old bare <c>File.Create</c> could tear the ONLY copy.</summary>
     public void Save()
     {
+        var temp = (string?)null;
         try
         {
             var path = SettingsPath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            using var stream = File.Create(path);
-            JsonSerializer.Serialize(stream, this, HaVizDesktopSettingsJsonContext.Default.HaVizDesktopSettings);
+            temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(stream, this, HaVizDesktopSettingsJsonContext.Default.HaVizDesktopSettings);
+                stream.Flush(flushToDisk: true);
+            }
+
+            if (File.Exists(path))
+                File.Replace(temp, path, path + ".bak");
+            else
+                File.Move(temp, path);
+            temp = null;
         }
         catch (Exception)
         {
             // Read-only home / full disk - the box just falls back to defaults next start.
+            if (temp is not null)
+            {
+                try { File.Delete(temp); }
+                catch (Exception) { }
+            }
         }
     }
 }

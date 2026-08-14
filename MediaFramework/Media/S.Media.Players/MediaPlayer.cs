@@ -508,15 +508,32 @@ public sealed class MediaPlayer : IDisposable
         MediaDiagnostics.SwallowDisposeErrors(dispose, debugLabel);
     }
 
-    /// <summary>Registers <see cref="Console.CancelKeyPress"/> to cancel <paramref name="cts"/> while swallowing process exit.</summary>
-    public static void AttachConsoleCancelKeyPress(CancellationTokenSource cts)
+    /// <summary>Registers <see cref="Console.CancelKeyPress"/> to cancel <paramref name="cts"/> while
+    /// swallowing process exit. Dispose the returned handle to unsubscribe (F-13: the old void shape
+    /// left a static event capturing the CTS forever - a host that created players repeatedly leaked
+    /// every one of them through the event's invocation list).</summary>
+    public static IDisposable AttachConsoleCancelKeyPress(CancellationTokenSource cts)
     {
         ArgumentNullException.ThrowIfNull(cts);
-        Console.CancelKeyPress += (_, e) =>
+        ConsoleCancelEventHandler handler = (_, e) =>
         {
             e.Cancel = true;
-            cts.Cancel();
+            try { cts.Cancel(); }
+            catch (ObjectDisposedException) { /* the host already tore its CTS down */ }
         };
+        Console.CancelKeyPress += handler;
+        return new ConsoleCancelSubscription(handler);
+    }
+
+    private sealed class ConsoleCancelSubscription(ConsoleCancelEventHandler handler) : IDisposable
+    {
+        private ConsoleCancelEventHandler? _handler = handler;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _handler, null) is { } detach)
+                Console.CancelKeyPress -= detach;
+        }
     }
 
     // --- registry-driven open (P2 - opens through IMediaRegistry, no globals) -------------------------

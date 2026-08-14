@@ -15,6 +15,8 @@ name: Build
 # declare `runs.using: node24`. GitHub already FORCES every node20 action onto Node 24 and warns loudly
 # about it on each run; these declare it instead. They require runner >= 2.327.1 (hosted runners are far
 # past that) — the one thing to check if this repo ever grows a self-hosted runner.
+# F-17: every action is pinned to a reviewed COMMIT SHA (the `# vN` trailer is the human label) so a
+# retagged major cannot inject unreviewed code; Dependabot (.github/dependabot.yml) proposes bumps.
 
 on:
   push:
@@ -25,6 +27,11 @@ on:
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
+
+# F-17: least-privilege by default - this workflow only reads the repo and uploads build artifacts
+# (artifact upload needs no extra scope). Any future job needing more must declare it per-job.
+permissions:
+  contents: read
 
 jobs:
   build-test:
@@ -46,9 +53,9 @@ jobs:
       # explicitly), so skip the auto-build here. MSBuild picks the property up from the env.
       SkipProjectMNativeBuild: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           global-json-file: global.json
 
@@ -199,7 +206,7 @@ jobs:
       # retry, so the flaky/hanging test's evidence survives the runner being torn down.
       - name: Upload test hang diagnostics
         if: ${{ (failure() && steps.tests.outcome == 'failure') || steps.tests.outputs.flaky == 'true' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: test-diagnostics-${{ matrix.rid }}
           path: '**/TestResults/**'
@@ -405,9 +412,9 @@ jobs:
       DOTNET_NOLOGO: true
       DOTNET_CLI_TELEMETRY_OPTOUT: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           global-json-file: global.json
 
@@ -811,7 +818,7 @@ jobs:
       # Linux uploads the three dependency tiers; the full bundle is the one the gates above validated.
       - name: Upload HaPlay.Desktop artifact (linux full)
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: HaPlay.Desktop-${{ matrix.rid }}-full
           path: haplay-publish
@@ -820,7 +827,7 @@ jobs:
 
       - name: Upload HaPlay.Desktop artifact (linux core)
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: HaPlay.Desktop-${{ matrix.rid }}-core
           path: bundle-core
@@ -829,7 +836,7 @@ jobs:
 
       - name: Upload HaPlay.Desktop artifact (linux minimal)
         if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: HaPlay.Desktop-${{ matrix.rid }}-minimal
           path: bundle-minimal
@@ -839,7 +846,7 @@ jobs:
       # Windows stays a single (full) artifact — no distro-package story, and its NuGet natives don't duplicate.
       - name: Upload HaPlay.Desktop artifact (windows)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: HaPlay.Desktop-${{ matrix.rid }}
           path: haplay-publish
@@ -850,7 +857,7 @@ jobs:
       # same window as the app artifacts so a retained build always has retrievable symbols. `warn` (not `error`)
       # because symbols are advisory: a build with none should not fail over it.
       - name: Upload debug symbols artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: HaPlay.Desktop-${{ matrix.rid }}-debug-symbols
           path: debug-symbols
@@ -958,7 +965,7 @@ jobs:
           if ($output -notmatch 'HACUE2_SMOKE: first frame rendered') { throw 'first-frame smoke was not reached' }
 
       - name: Upload HaCue2.Desktop artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: HaCue2.Desktop-${{ matrix.rid }}
           path: hacue2-publish
@@ -967,7 +974,7 @@ jobs:
 
       # `warn` (not `error`): symbols are advisory, a build with none should not fail over it.
       - name: Upload HaCue2 debug symbols artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: HaCue2.Desktop-${{ matrix.rid }}-debug-symbols
           path: hacue2-debug-symbols

@@ -237,6 +237,22 @@ public static unsafe partial class MiniAudioNative
     /// </remarks>
     public static int ContextCreate(out nint context, out MiniAudioFallbackBackend fallback)
     {
+        // F-12: context init probes ALSA devices and libasound prints every failure to stderr;
+        // coalesce them into one summary (best-effort; MFP_ALSA_VERBOSE=1 restores the raw stream).
+        S.Media.NativeInterop.AlsaDiagnosticsSilencer.Install();
+        try
+        {
+            return ContextCreateCore(out context, out fallback);
+        }
+        finally
+        {
+            S.Media.NativeInterop.AlsaDiagnosticsSilencer.LogSummary(
+                MALibDiagnostics.Logger, "miniaudio context init");
+        }
+    }
+
+    private static int ContextCreateCore(out nint context, out MiniAudioFallbackBackend fallback)
+    {
         context = nint.Zero;
         fallback = MiniAudioFallbackBackend.None;
         var size = (int)ma_context_sizeof();

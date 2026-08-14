@@ -14,6 +14,16 @@
 
 Platform policy: **Linux first, Windows supported, macOS currently unsupported** (best-effort code paths only).
 
+## Building
+
+Day-to-day desktop/framework work does not need the Android workload — use the solution filters:
+
+```
+dotnet build MFPlayer.NoAndroid.slnf     # everything except HaViz.Android (no Android workload needed)
+dotnet build MFPlayer.Framework.slnf     # MediaFramework libraries + tests/tools only
+dotnet build MFPlayer.sln                # full solution (requires: dotnet workload install android)
+```
+
 ## Testing
 Test builds for Windows and Linux are on the Releases page (the newest release may lag the
 current source version — check the tag against `Directory.Version.props`):<br>

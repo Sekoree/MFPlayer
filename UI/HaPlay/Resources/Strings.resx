@@ -3274,6 +3274,15 @@
   <data name="RemoteApiOpenLanWarning" xml:space="preserve">
     <value>Open LAN control: any device on this network can fire cues and change playback (LAN access enabled, no token). Use this only on an isolated, trusted show-control network - or set a token.</value>
   </data>
+  <data name="RemoteApiAllowTokenlessLanLabel" xml:space="preserve">
+    <value>Allow tokenless LAN (Companion compatibility)</value>
+  </data>
+  <data name="RemoteApiAllowTokenlessLanHint" xml:space="preserve">
+    <value>LAN access requires a token by default; this explicit exception serves the network with no authentication for controllers that cannot send one.</value>
+  </data>
+  <data name="RemoteApiLanPausedNoToken" xml:space="preserve">
+    <value>LAN access is paused (bound to this machine only): no token is set and the tokenless exception is off. Generate a token or enable the exception to serve the network.</value>
+  </data>
   <data name="RemoteApiTokenOptional" xml:space="preserve">
     <value>No token: any client that can reach the port can control HaPlay. Set a token to require authentication.</value>
   </data>

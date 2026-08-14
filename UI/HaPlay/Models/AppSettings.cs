@@ -65,11 +65,13 @@ public sealed class AppSettings
     /// <summary>Visualizer target FPS (default 60; 0 in an older file resolves to 60).</summary>
     public int VisualizerFps { get; set; } = 60;
 
-    /// <summary>HTTP remote API listener (per-machine, off by default). The
-    /// <see cref="RestApiAccessToken"/> is OPTIONAL: with no token configured every request is
-    /// authorized - the intended contract for closed-LAN show-control automation (e.g. Bitfocus
-    /// Companion). LAN binding is opt-in via <see cref="RestApiAllowLan"/>; that combination assumes
-    /// an isolated/trusted show network and the UI warns about it prominently (review P2-7).</summary>
+    /// <summary>HTTP remote API listener (per-machine, off by default). LAN binding is opt-in via
+    /// <see cref="RestApiAllowLan"/> and AUTHENTICATED BY DEFAULT (2026-08-14 review, F-15):
+    /// enabling LAN mints a high-entropy <see cref="RestApiAccessToken"/> when none is set. Tokenless
+    /// LAN operation (zero-friction Bitfocus Companion automation on an isolated show network)
+    /// remains supported, but only through the explicit <see cref="RestApiAllowTokenlessLan"/>
+    /// exception - it is never the silent default, and an older settings file that relied on
+    /// LAN-without-token gets a token minted on first load rather than staying open.</summary>
     public bool RestApiEnabled { get; set; }
 
     public int RestApiPort { get; set; } = 8990;
@@ -77,6 +79,11 @@ public sealed class AppSettings
     public bool RestApiAllowLan { get; set; }
 
     public string? RestApiAccessToken { get; set; }
+
+    /// <summary>The explicit "Open LAN" exception: serve LAN requests with NO token (Companion
+    /// compatibility). Default false - without it, LAN binding requires a token, and a missing one
+    /// pauses the LAN binding to loopback rather than serving the network open.</summary>
+    public bool RestApiAllowTokenlessLan { get; set; }
 
     /// <summary>Configurable cue-player transport and visualizer shortcuts.</summary>
     public CueHotkeyProfile CueHotkeys { get; set; } = new();
