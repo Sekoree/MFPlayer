@@ -280,10 +280,10 @@ public class EditorRegressionTests
         list.Cues.AddRange([left, right]);
 
         shell.Cues.Inspector.Show([left.Id, right.Id]);
-        shell.Cues.Inspector.ApplySendGesture(
+        shell.Cues.Inspector.Audio.ApplySendGesture(
             new HaCue2.Controls.MatrixGesture(0, 0, HaCue2.Controls.MatrixGestureKind.Toggle, 0));
 
-        var channel = shell.Cues.Inspector.SendColumns[0].ChannelId;
+        var channel = shell.Cues.Inspector.Audio.SendColumns[0].ChannelId;
         Assert.Contains(left.Sends, send => send.LogicalChannelId == channel);
         Assert.Contains(right.Sends, send => send.LogicalChannelId == channel);
     });
@@ -300,9 +300,9 @@ public class EditorRegressionTests
             list.Cues.AddRange([first, second]);
 
             shell.Cues.Inspector.Show([first.Id, second.Id]);
-            Assert.True(shell.Cues.Inspector.HasSendPresetTarget);
+            Assert.True(shell.Cues.Inspector.Audio.HasSendPresetTarget);
 
-            shell.Cues.Inspector.ApplySendPreset("stereo");
+            shell.Cues.Inspector.Audio.ApplySendPreset("stereo");
 
             foreach (var cue in new[] { first, second })
             {
@@ -326,7 +326,7 @@ public class EditorRegressionTests
         list.Cues.Add(cue);
 
         shell.Cues.Inspector.Show([cue.Id]);
-        shell.Cues.Inspector.ApplySendPreset("monoL");
+        shell.Cues.Inspector.Audio.ApplySendPreset("monoL");
 
         Assert.Equal(2, cue.Sends.Count);
         Assert.All(cue.Sends, send => Assert.Equal(0, send.SourceChannel));
@@ -341,14 +341,14 @@ public class EditorRegressionTests
         list.Cues.Add(cue);
 
         shell.Cues.Inspector.Show([cue.Id]);
-        shell.Cues.Inspector.ApplySendPreset("stereo");
+        shell.Cues.Inspector.Audio.ApplySendPreset("stereo");
         var straight = cue.Sends
             .ToDictionary(send => send.SourceChannel, send => send.LogicalChannelId);
 
         // Re-stated because an applied edit restores the inspector's selection from the cue tree,
         // which this test never touched.
         shell.Cues.Inspector.Show([cue.Id]);
-        shell.Cues.Inspector.ApplySendPreset("swap");
+        shell.Cues.Inspector.Audio.ApplySendPreset("swap");
         var swapped = cue.Sends
             .ToDictionary(send => send.SourceChannel, send => send.LogicalChannelId);
 
@@ -364,11 +364,11 @@ public class EditorRegressionTests
         list.Cues.Add(cue);
 
         shell.Cues.Inspector.Show([cue.Id]);
-        shell.Cues.Inspector.ApplySendPreset("stereo");
+        shell.Cues.Inspector.Audio.ApplySendPreset("stereo");
         Assert.NotEmpty(cue.Sends);
 
         shell.Cues.Inspector.Show([cue.Id]);
-        shell.Cues.Inspector.ApplySendPreset("clear");
+        shell.Cues.Inspector.Audio.ApplySendPreset("clear");
 
         Assert.Empty(cue.Sends);
     });
@@ -381,7 +381,7 @@ public class EditorRegressionTests
         list.Cues.Add(cue);
 
         shell.Cues.Inspector.Show([cue.Id]);
-        shell.Cues.Inspector.ApplySendPreset("stereo");
+        shell.Cues.Inspector.Audio.ApplySendPreset("stereo");
 
         Assert.True(shell.Journal.Undo());
         Assert.Empty(cue.Sends);

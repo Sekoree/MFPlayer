@@ -47,9 +47,9 @@ public sealed class YouTubeLiveIntegrationTests
             // RESOLVED selection - this is what the UI persists after a prepare.
             var registry = MediaRegistry.Build(b => b.Use(new YouTubeSourceModule(preparer)));
             var uri = YouTubeSourceUri.Build(VideoId, prepared.ResolvedSelection);
-            Assert.True(registry.TryOpenAudio(uri, options: null, out var audio), "prepared audio must open");
+            Assert.True(registry.SelectAndOpenAudio(uri, options: null, out var audio), "prepared audio must open");
             (audio as IDisposable)?.Dispose();
-            Assert.True(registry.TryOpenVideo(uri, options: null, out var video), "prepared video must open");
+            Assert.True(registry.SelectAndOpenVideo(uri, options: null, out var video), "prepared video must open");
             (video as IDisposable)?.Dispose();
         }
         finally
@@ -76,7 +76,7 @@ public sealed class YouTubeLiveIntegrationTests
 
             var registry = MediaRegistry.Build(b => b.Use(new YouTubeSourceModule(preparer)));
             var uri = YouTubeSourceUri.Build(VideoId, prepared.ResolvedSelection);
-            Assert.True(registry.TryOpenAudio(uri, options: null, out var audio), "prepared audio must open");
+            Assert.True(registry.SelectAndOpenAudio(uri, options: null, out var audio), "prepared audio must open");
             try
             {
                 var seekable = Assert.IsAssignableFrom<ISeekableSource>(audio);

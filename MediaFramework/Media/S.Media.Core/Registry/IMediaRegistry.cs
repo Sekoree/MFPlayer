@@ -35,22 +35,22 @@ public interface IMediaRegistry
     /// provider claims the URI, and <c>true</c> once a provider is chosen. A provider that claims the URI but
     /// then cannot open it (e.g. the container has no video stream) <strong>throws</strong> - that is a genuine
     /// open failure, distinct from "nothing here can play this".</summary>
-    bool TryOpenVideo(string uri, VideoSourceOpenOptions? options, [MaybeNullWhen(false)] out IVideoSource source);
+    bool SelectAndOpenVideo(string uri, VideoSourceOpenOptions? options, [MaybeNullWhen(false)] out IVideoSource source);
 
     /// <summary>Opens an audio track of <paramref name="uri"/> via the highest-confidence decoder (D3). As with
-    /// <see cref="TryOpenVideo(string, VideoSourceOpenOptions?, IVideoSource)"/>, <c>false</c> means no provider
+    /// <see cref="SelectAndOpenVideo(string, VideoSourceOpenOptions?, IVideoSource)"/>, <c>false</c> means no provider
     /// claims the URI; a claimed source that cannot be opened (e.g. no audio stream) throws.</summary>
-    bool TryOpenAudio(string uri, AudioSourceOpenOptions? options, [MaybeNullWhen(false)] out IAudioSource source);
+    bool SelectAndOpenAudio(string uri, AudioSourceOpenOptions? options, [MaybeNullWhen(false)] out IAudioSource source);
 
     /// <summary>The decoder provider registered under <paramref name="name"/> (case-insensitive), or <c>null</c>.</summary>
     IMediaDecoderProvider? FindDecoder(string name);
 
     /// <summary>Opens video via an explicitly <strong>pinned</strong> provider (D3 - bypasses confidence
     /// selection). Returns <c>false</c> if no provider named <paramref name="providerName"/> is registered.</summary>
-    bool TryOpenVideo(string uri, VideoSourceOpenOptions? options, string providerName, [MaybeNullWhen(false)] out IVideoSource source);
+    bool SelectAndOpenVideo(string uri, VideoSourceOpenOptions? options, string providerName, [MaybeNullWhen(false)] out IVideoSource source);
 
     /// <summary>Opens audio via an explicitly <strong>pinned</strong> provider (D3 - bypasses confidence selection).</summary>
-    bool TryOpenAudio(string uri, AudioSourceOpenOptions? options, string providerName, [MaybeNullWhen(false)] out IAudioSource source);
+    bool SelectAndOpenAudio(string uri, AudioSourceOpenOptions? options, string providerName, [MaybeNullWhen(false)] out IAudioSource source);
 
     /// <summary>Opens a still image by file extension (an image source registered by a module).</summary>
     bool TryOpenImage(string path, [MaybeNullWhen(false)] out IVideoSource source);

@@ -47,6 +47,7 @@
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Core\S.Media.Core.csproj" />
         <!-- The shared bounded HTTP control host (F-05): the REST API's transport lifecycle. -->
         <ProjectReference Include="..\HaRemote\HaRemote.csproj" />
+        <Compile Include="../Shared/PseudoLocalization.cs" Link="Resources/PseudoLocalization.cs" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Time\S.Media.Time.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Routing\S.Media.Routing.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Players\S.Media.Players.csproj" />

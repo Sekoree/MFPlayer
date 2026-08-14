@@ -219,7 +219,7 @@
               <Border Name="CueSendMatrixContent" Padding="0,0,20,40">
                 <!-- The same gesture vocabulary as the patch: an operator who learns it on one matrix
                      must find it true on the other. -->
-                <c:MatrixView Columns="{Binding SendColumns}" Rows="{Binding SendRows}"
+                <c:MatrixView Columns="{Binding Audio.SendColumns}" Rows="{Binding Audio.SendRows}"
                               AutomationProperties.Name="Cue audio send matrix"
                               RowHeaderWidth="44"
                               Gesture="OnSendGesture"
@@ -236,21 +236,21 @@
                 <Border Classes="badge"><TextBlock Text="{x:Static res:Strings.AudPresets}" /></Border>
                 <Button Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.InspStereoMain}"
                         Click="OnSendPreset" Tag="stereo"
-                        IsEnabled="{Binding HasSendPresetTarget}"
+                        IsEnabled="{Binding Audio.HasSendPresetTarget}"
                         ToolTip.Tip="{x:Static res:Strings.InspSource1And2To}" />
                 <Button Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.InspMonoFromL}"
                         Click="OnSendPreset" Tag="monoL"
-                        IsEnabled="{Binding HasSendPresetTarget}"
+                        IsEnabled="{Binding Audio.HasSendPresetTarget}"
                         ToolTip.Tip="{x:Static res:Strings.InspSource1ToBothSides}" />
                 <Button Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.InspSwap}"
                         Click="OnSendPreset" Tag="swap"
-                        IsEnabled="{Binding HasSendPresetTarget}"
+                        IsEnabled="{Binding Audio.HasSendPresetTarget}"
                         ToolTip.Tip="{x:Static res:Strings.InspExchangeTheTwoSourceChannels}" />
                 <Button Theme="{StaticResource ChipButton}" Content="{x:Static res:Strings.InspClear}"
                         Click="OnSendPreset" Tag="clear"
                         ToolTip.Tip="{x:Static res:Strings.InspRemoveEverySendOnThis}" />
                 <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
-                           Text="{Binding SendPresetTarget}" />
+                           Text="{Binding Audio.SendPresetTarget}" />
               </StackPanel>
             </Border>
 
@@ -258,9 +258,9 @@
                  "why is this silent" and to "why is it coming out twice". -->
             <Border Classes="chain">
               <StackPanel Spacing="4">
-                <TextBlock Classes="mono dim3 small" IsVisible="{Binding !HasRoute}"
+                <TextBlock Classes="mono dim3 small" IsVisible="{Binding !Audio.HasRoute}"
                            Text="{x:Static res:Strings.InspThisChannelReachesNothingNo}" />
-                <ItemsControl ItemsSource="{Binding RouteChain}">
+                <ItemsControl ItemsSource="{Binding Audio.RouteChain}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:RouteHop">
                       <WrapPanel Orientation="Horizontal" ItemSpacing="7" LineSpacing="4" Margin="0,2">

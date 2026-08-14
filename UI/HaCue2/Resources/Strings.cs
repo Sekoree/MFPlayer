@@ -15,7 +15,8 @@ public static class Strings
         new("HaCue2.Resources.Strings", typeof(Strings).Assembly);
 
     private static string Get(string key) =>
-        ResourceManager.GetString(key, CultureInfo.CurrentUICulture) ?? key;
+        HaApps.Localization.PseudoLocalization.Apply(
+            ResourceManager.GetString(key, CultureInfo.CurrentUICulture) ?? key);
 
     public static string Format(string key, params object?[] args) =>
         string.Format(CultureInfo.CurrentUICulture, Get(key), args);

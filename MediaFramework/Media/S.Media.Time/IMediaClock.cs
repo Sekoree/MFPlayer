@@ -15,8 +15,12 @@ public interface IMediaClock : IPlayhead
     /// attachment; it does not mean "media time advanced by one frame".</summary>
     public event EventHandler? VideoTick;
 
+    // No Stop(): it was exactly Pause() with a "may diverge later" note - a semantic trap beside a
+    // separate Reset() (2026-08-14 review F-13; removed per owner decision while the API has no
+    // external consumers). A transport-stop is Pause() then Reset(), composed by the caller; an
+    // atomic form can be designed if a consumer ever needs one, with its notification semantics
+    // chosen deliberately rather than inherited.
     public void Start();
-    public void Stop(CancellationToken cancellationToken = default);
     public void Reset();
 
     /// <param name="cancellationToken">Thrown through while blocking on the timing driver shutdown.</param>

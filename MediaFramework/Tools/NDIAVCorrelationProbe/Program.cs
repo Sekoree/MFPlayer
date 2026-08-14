@@ -1,6 +1,6 @@
 // Phase 5 NDI A/V-correlation probe. Quantifies the divergence between the two ways an NDI source can be
 // opened:
-//   • TWO connections - what MediaPlayer's `ndi://` open does today: registry.TryOpenVideo then TryOpenAudio,
+//   • TWO connections - what MediaPlayer's `ndi://` open does today: registry.SelectAndOpenVideo then SelectAndOpenAudio,
 //     each opening a SEPARATE NDISource (video-only / audio-only). They connect and start receiving
 //     independently, so their A and V timelines anchor at different moments.
 //   • ONE connection - the SourceSyncGroup fix: a single receiver delivers both A and V, anchored together.
@@ -45,7 +45,7 @@ long firstVideoMs = 0; // set-once, 0 = not yet
 long firstAudioMs = 0;
 
 // --- TWO-connection model: open video-only then audio-only back-to-back, exactly as MediaPlayer's
-//     registry.TryOpenVideo then TryOpenAudio would. A shared stopwatch starts at the first open. ----------
+//     registry.SelectAndOpenVideo then SelectAndOpenAudio would. A shared stopwatch starts at the first open. ----------
 var wall = Stopwatch.StartNew();
 using var videoOnly = NDISource.Open(chosen, new NDISourceOptions { ReceiveVideo = true, ReceiveAudio = false });
 using var audioOnly = NDISource.Open(chosen, new NDISourceOptions { ReceiveVideo = false, ReceiveAudio = true });
@@ -99,14 +99,14 @@ var combinedReady = SpinWait.SpinUntil(() => combined.IngestClock.IsAdvancing, T
 var hasVideo = combined.TryGetVideoFormat(out var vf);
 var hasAudio = combined.TryGetAudioFormat(out var af);
 
-// --- THE FIX: open ndi:// through the registry exactly as MediaPlayer does (TryOpenVideo then TryOpenAudio).
+// --- THE FIX: open ndi:// through the registry exactly as MediaPlayer does (SelectAndOpenVideo then SelectAndOpenAudio).
 //     With the shared cache, both must land on ONE receiver - LiveConnectionCount rises by 1, not 2 - and
 //     releasing both leases tears it down. -----------------------------------------------------------------
 var registry = MediaRegistry.Build(b => b.Use(new NDIModule()));
 var ndiUri = "ndi://" + Uri.EscapeDataString(chosen.Name);
 var connectionsBefore = NDISource.LiveConnectionCount;
-registry.TryOpenVideo(ndiUri, null, out var regVideo);
-registry.TryOpenAudio(ndiUri, null, out var regAudio);
+registry.SelectAndOpenVideo(ndiUri, null, out var regVideo);
+registry.SelectAndOpenAudio(ndiUri, null, out var regAudio);
 var registryOpened = NDISource.LiveConnectionCount - connectionsBefore;
 (regVideo as IDisposable)?.Dispose();
 (regAudio as IDisposable)?.Dispose();

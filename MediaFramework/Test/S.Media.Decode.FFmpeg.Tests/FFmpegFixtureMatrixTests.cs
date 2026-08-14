@@ -92,7 +92,7 @@ public sealed class FFmpegFixtureMatrixTests : IDisposable
         var path = AvFixture();
         var registry = Registry();
 
-        Assert.True(registry.TryOpenVideo(path, options: null, out var video), "A+V: video track did not open");
+        Assert.True(registry.SelectAndOpenVideo(path, options: null, out var video), "A+V: video track did not open");
         int videoFrames;
         try
         {
@@ -104,7 +104,7 @@ public sealed class FFmpegFixtureMatrixTests : IDisposable
         // testsrc2 at 30 fps for ~2 s → ~60 frames; allow slack for encoder/container rounding.
         Assert.InRange(videoFrames, 45, 75);
 
-        Assert.True(registry.TryOpenAudio(path, options: null, out var audio), "A+V: audio track did not open");
+        Assert.True(registry.SelectAndOpenAudio(path, options: null, out var audio), "A+V: audio track did not open");
         int audioFrames;
         try { audioFrames = DecodeAllAudio(audio); }
         finally { (audio as IDisposable)?.Dispose(); }
@@ -117,13 +117,13 @@ public sealed class FFmpegFixtureMatrixTests : IDisposable
         var path = Generate("-f lavfi -i testsrc2=duration=1:size=128x72:rate=30 -c:v libx264 -pix_fmt yuv420p -an", "v.mp4");
         var registry = Registry();
 
-        Assert.True(registry.TryOpenVideo(path, options: null, out var video), "V-only: video did not open");
+        Assert.True(registry.SelectAndOpenVideo(path, options: null, out var video), "V-only: video did not open");
         try { Assert.True(DecodeAllVideo(video) > 0, "V-only: no video frames"); }
         finally { (video as IDisposable)?.Dispose(); }
 
-        // Contract: TryOpenAudio's "Try" is provider-selection (a provider claims the URI); a claimed container
+        // Contract: SelectAndOpenAudio's "Try" is provider-selection (a provider claims the URI); a claimed container
         // with no audio stream surfaces a controlled FFmpegException, not a crash and not a silent success.
-        Assert.Throws<FFmpegException>(() => registry.TryOpenAudio(path, options: null, out _));
+        Assert.Throws<FFmpegException>(() => registry.SelectAndOpenAudio(path, options: null, out _));
     }
 
     [RemuxFact]
@@ -132,11 +132,11 @@ public sealed class FFmpegFixtureMatrixTests : IDisposable
         var path = Generate("-f lavfi -i sine=frequency=330:duration=1 -c:a aac -vn", "a.m4a");
         var registry = Registry();
 
-        Assert.True(registry.TryOpenAudio(path, options: null, out var audio), "A-only: audio did not open");
+        Assert.True(registry.SelectAndOpenAudio(path, options: null, out var audio), "A-only: audio did not open");
         try { Assert.True(DecodeAllAudio(audio) > 0, "A-only: no audio frames"); }
         finally { (audio as IDisposable)?.Dispose(); }
 
-        Assert.Throws<FFmpegException>(() => registry.TryOpenVideo(path, options: null, out _));
+        Assert.Throws<FFmpegException>(() => registry.SelectAndOpenVideo(path, options: null, out _));
     }
 
     [RemuxFact]
@@ -148,11 +148,11 @@ public sealed class FFmpegFixtureMatrixTests : IDisposable
             "-map 0:v -map 1:a -map 2:a -c:v libx264 -pix_fmt yuv420p -c:a aac", "multi.mkv");
         var registry = Registry();
 
-        Assert.True(registry.TryOpenVideo(path, options: null, out var video), "multi-track: video did not open");
+        Assert.True(registry.SelectAndOpenVideo(path, options: null, out var video), "multi-track: video did not open");
         try { Assert.True(DecodeAllVideo(video) > 0); }
         finally { (video as IDisposable)?.Dispose(); }
 
-        Assert.True(registry.TryOpenAudio(path, options: null, out var audio), "multi-track: default audio did not open");
+        Assert.True(registry.SelectAndOpenAudio(path, options: null, out var audio), "multi-track: default audio did not open");
         try { Assert.True(DecodeAllAudio(audio) > 0); }
         finally { (audio as IDisposable)?.Dispose(); }
     }
@@ -169,7 +169,7 @@ public sealed class FFmpegFixtureMatrixTests : IDisposable
 
         // A mid-stream truncation must not crash: opening either fails cleanly, or succeeds and the decode
         // reaches a bounded EOF (false) rather than throwing or looping forever.
-        if (registry.TryOpenVideo(truncated, options: null, out var video))
+        if (registry.SelectAndOpenVideo(truncated, options: null, out var video))
         {
             try
             {
@@ -198,7 +198,7 @@ public sealed class FFmpegFixtureMatrixTests : IDisposable
         int? baseline = null;
         for (var i = 0; i < 20; i++)
         {
-            Assert.True(registry.TryOpenVideo(path, options: null, out var video), $"loop {i}: open failed");
+            Assert.True(registry.SelectAndOpenVideo(path, options: null, out var video), $"loop {i}: open failed");
             try
             {
                 var frames = DecodeAllVideo(video);
@@ -215,7 +215,7 @@ public sealed class FFmpegFixtureMatrixTests : IDisposable
         var path = AvFixture("seek.mkv", durationSec: 10);
         var registry = Registry();
 
-        Assert.True(registry.TryOpenVideo(path, options: null, out var video), "seek: open failed");
+        Assert.True(registry.SelectAndOpenVideo(path, options: null, out var video), "seek: open failed");
         try
         {
             var seekable = Assert.IsAssignableFrom<ISeekableSource>(video);

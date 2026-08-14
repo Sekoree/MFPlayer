@@ -54,7 +54,7 @@ public sealed class YouTubeDecoderProvider(YouTubePreparer preparer) : IMediaDec
     public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options)
     {
         var path = ResolvePreparedAsset(uri);
-        if (!LocalFFmpeg.Value.TryOpenVideo(path, options, out var source))
+        if (!LocalFFmpeg.Value.SelectAndOpenVideo(path, options, out var source))
             throw new InvalidOperationException($"prepared YouTube asset '{path}' has no playable video track");
         return source;
     }
@@ -62,7 +62,7 @@ public sealed class YouTubeDecoderProvider(YouTubePreparer preparer) : IMediaDec
     public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options)
     {
         var path = ResolvePreparedAsset(uri);
-        if (!LocalFFmpeg.Value.TryOpenAudio(path, options, out var source))
+        if (!LocalFFmpeg.Value.SelectAndOpenAudio(path, options, out var source))
             throw new InvalidOperationException($"prepared YouTube asset '{path}' has no playable audio track");
         return source;
     }

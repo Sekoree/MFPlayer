@@ -11,7 +11,7 @@ public class MediaRegistryTests
         Assert.Empty(r.AudioBackends);
         Assert.Empty(r.Decoders);
         Assert.False(r.CanOpen("file:///x.mp4", MediaKind.Video));
-        Assert.False(r.TryOpenVideo("file:///x.mp4", null, out _));
+        Assert.False(r.SelectAndOpenVideo("file:///x.mp4", null, out _));
         Assert.Null(r.CreateCpuConverter());
         Assert.Null(r.CreateResampler(new FakeAudioSource(), 48000));
         Assert.Null(r.CreateResamplingOutput(new NullAudioOutput(), new AudioFormat(44_100, 2)));
@@ -62,7 +62,7 @@ public class MediaRegistryTests
     {
         // CORE-01: concurrent disposal releases each lifetime EXACTLY once (interlocked transition), and
         // capability ops issued after disposal throw ObjectDisposedException instead of touching released
-        // native runtime. Stress: race repeated Dispose() against many TryOpenVideo() calls.
+        // native runtime. Stress: race repeated Dispose() against many SelectAndOpenVideo() calls.
         var disposeCount = 0;
         var registry = MediaRegistry.Build(b =>
         {
@@ -79,7 +79,7 @@ public class MediaRegistryTests
                 {
                     try
                     {
-                        if (registry.TryOpenVideo("file:///x.mp4", null, out var s))
+                        if (registry.SelectAndOpenVideo("file:///x.mp4", null, out var s))
                             (s as IDisposable)?.Dispose();
                     }
                     catch (ObjectDisposedException) { /* expected once disposal wins the race */ }
@@ -99,8 +99,8 @@ public class MediaRegistryTests
 
         // Steady state after disposal: every capability op rejects.
         Assert.Throws<ObjectDisposedException>(() => registry.CanOpen("file:///x.mp4", MediaKind.Video));
-        Assert.Throws<ObjectDisposedException>(() => registry.TryOpenVideo("file:///x.mp4", null, out _));
-        Assert.Throws<ObjectDisposedException>(() => registry.TryOpenAudio("file:///x.mp4", null, out _));
+        Assert.Throws<ObjectDisposedException>(() => registry.SelectAndOpenVideo("file:///x.mp4", null, out _));
+        Assert.Throws<ObjectDisposedException>(() => registry.SelectAndOpenAudio("file:///x.mp4", null, out _));
         Assert.Throws<ObjectDisposedException>(() => registry.TryOpenImage("x.png", out _));
         Assert.Throws<ObjectDisposedException>(() => registry.CreateCpuConverter());
         Assert.Throws<ObjectDisposedException>(() => registry.FindDecoder("fake"));
@@ -192,7 +192,7 @@ public class MediaRegistryTests
             .AddDecoder(new FakeDecoderProvider("B", 0.9)));
 
         Assert.True(r.CanOpen("file:///x.mp4", MediaKind.Video));
-        Assert.True(r.TryOpenVideo("file:///x.mp4", null, out var source));
+        Assert.True(r.SelectAndOpenVideo("file:///x.mp4", null, out var source));
         Assert.Equal("B", ((FakeVideoSource)source).Tag);
     }
 
@@ -203,7 +203,7 @@ public class MediaRegistryTests
             .AddDecoder(new FakeDecoderProvider("A", 0.5))
             .AddDecoder(new FakeDecoderProvider("B", 0.5)));
 
-        Assert.True(r.TryOpenAudio("file:///x.mp4", null, out var source));
+        Assert.True(r.SelectAndOpenAudio("file:///x.mp4", null, out var source));
         Assert.Equal("A", ((FakeAudioSource)source).Tag);   // earliest-registered wins the tie (D3)
     }
 
@@ -212,7 +212,7 @@ public class MediaRegistryTests
     {
         var r = MediaRegistry.Build(b => b.AddDecoder(new FakeDecoderProvider("A", 0.0)));
         Assert.False(r.CanOpen("ndi://cam", MediaKind.Video));
-        Assert.False(r.TryOpenVideo("ndi://cam", null, out _));
+        Assert.False(r.SelectAndOpenVideo("ndi://cam", null, out _));
     }
 
     [Fact]
@@ -238,10 +238,10 @@ public class MediaRegistryTests
             .AddDecoder(new FakeDecoderProvider("A", 0.9))    // would win on confidence
             .AddDecoder(new FakeDecoderProvider("B", 0.1)));  // pinned anyway (D3)
 
-        Assert.True(r.TryOpenVideo("file:///x.mp4", null, "B", out var source));
+        Assert.True(r.SelectAndOpenVideo("file:///x.mp4", null, "B", out var source));
         Assert.Equal("B", ((FakeVideoSource)source).Tag);
         Assert.NotNull(r.FindDecoder("a"));                   // case-insensitive lookup
-        Assert.False(r.TryOpenVideo("file:///x.mp4", null, "missing", out _));
+        Assert.False(r.SelectAndOpenVideo("file:///x.mp4", null, "missing", out _));
     }
 }
 

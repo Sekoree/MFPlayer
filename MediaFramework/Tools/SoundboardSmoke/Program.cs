@@ -31,7 +31,7 @@ var device = devices.FirstOrDefault(x => x.IsDefault) ?? devices.FirstOrDefault(
 var rate = device is { DefaultSampleRate: > 0 } ? (int)device.DefaultSampleRate : 48_000;
 
 // Decode the file into a resident PCM clip at the output rate (registry source + resampler - no globals).
-if (!registry.TryOpenAudio(path, null, out var src))
+if (!registry.SelectAndOpenAudio(path, null, out var src))
 {
     Console.Error.WriteLine($"FAIL: no decoder opened '{path}'");
     return 1;

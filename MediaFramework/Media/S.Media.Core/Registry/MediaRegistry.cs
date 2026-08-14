@@ -205,7 +205,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     // order and replacing only on a strictly-greater score yields exactly that.
     private IMediaDecoderProvider? PickDecoder(string uri, MediaKind kind)
     {
-        ThrowIfDisposed(); // covers CanOpen + the confidence-selected TryOpenVideo/Audio
+        ThrowIfDisposed(); // covers CanOpen + the confidence-selected SelectAndOpenVideo/Audio
         IMediaDecoderProvider? best = null;
         var bestScore = 0.0;
         foreach (var d in _decoders)
@@ -227,7 +227,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
         return PickDecoder(uri, kind) is not null;
     }
 
-    public bool TryOpenVideo(string uri, VideoSourceOpenOptions? options, [MaybeNullWhen(false)] out IVideoSource source)
+    public bool SelectAndOpenVideo(string uri, VideoSourceOpenOptions? options, [MaybeNullWhen(false)] out IVideoSource source)
     {
         ArgumentException.ThrowIfNullOrEmpty(uri);
         var provider = PickDecoder(uri, MediaKind.Video);
@@ -241,7 +241,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
         return true;
     }
 
-    public bool TryOpenAudio(string uri, AudioSourceOpenOptions? options, [MaybeNullWhen(false)] out IAudioSource source)
+    public bool SelectAndOpenAudio(string uri, AudioSourceOpenOptions? options, [MaybeNullWhen(false)] out IAudioSource source)
     {
         ArgumentException.ThrowIfNullOrEmpty(uri);
         var provider = PickDecoder(uri, MediaKind.Audio);
@@ -258,14 +258,14 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
     public IMediaDecoderProvider? FindDecoder(string name)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
-        ThrowIfDisposed(); // covers the pinned-provider TryOpenVideo/Audio too
+        ThrowIfDisposed(); // covers the pinned-provider SelectAndOpenVideo/Audio too
         foreach (var d in _decoders)
             if (string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase))
                 return d;
         return null;
     }
 
-    public bool TryOpenVideo(string uri, VideoSourceOpenOptions? options, string providerName, [MaybeNullWhen(false)] out IVideoSource source)
+    public bool SelectAndOpenVideo(string uri, VideoSourceOpenOptions? options, string providerName, [MaybeNullWhen(false)] out IVideoSource source)
     {
         ArgumentException.ThrowIfNullOrEmpty(uri);
         var provider = FindDecoder(providerName);
@@ -279,7 +279,7 @@ public sealed class MediaRegistry : IMediaRegistry, IDisposable
         return true;
     }
 
-    public bool TryOpenAudio(string uri, AudioSourceOpenOptions? options, string providerName, [MaybeNullWhen(false)] out IAudioSource source)
+    public bool SelectAndOpenAudio(string uri, AudioSourceOpenOptions? options, string providerName, [MaybeNullWhen(false)] out IAudioSource source)
     {
         ArgumentException.ThrowIfNullOrEmpty(uri);
         var provider = FindDecoder(providerName);

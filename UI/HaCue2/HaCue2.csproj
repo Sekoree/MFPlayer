@@ -59,6 +59,7 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="HaCue2.Tests" />
+        <Compile Include="../Shared/PseudoLocalization.cs" Link="Resources/PseudoLocalization.cs" />
     </ItemGroup>
 
 </Project>

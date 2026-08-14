@@ -51,7 +51,7 @@ public sealed class StreamCopyRemuxerTests : IDisposable
             "-c:v libx264 -g 30 -pix_fmt yuv420p -c:a aac", "seek.mkv");
 
         var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
-        Assert.True(registry.TryOpenVideo(av, options: null, out var video));
+        Assert.True(registry.SelectAndOpenVideo(av, options: null, out var video));
         try
         {
             var seekable = Assert.IsAssignableFrom<ISeekableSource>(video);
@@ -96,7 +96,7 @@ public sealed class StreamCopyRemuxerTests : IDisposable
 
         // The result must open through the NORMAL playback path with both tracks intact.
         var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
-        Assert.True(registry.TryOpenVideo(output, options: null, out var v), "video track lost in remux");
+        Assert.True(registry.SelectAndOpenVideo(output, options: null, out var v), "video track lost in remux");
         try
         {
             Assert.True(v.Format.Width == 192 && v.Format.Height == 108, "video geometry lost in remux");
@@ -106,7 +106,7 @@ public sealed class StreamCopyRemuxerTests : IDisposable
             (v as IDisposable)?.Dispose();
         }
 
-        Assert.True(registry.TryOpenAudio(output, options: null, out var a), "audio track lost in remux");
+        Assert.True(registry.SelectAndOpenAudio(output, options: null, out var a), "audio track lost in remux");
         try
         {
             Assert.True(a.Format.SampleRate > 0);
@@ -126,7 +126,7 @@ public sealed class StreamCopyRemuxerTests : IDisposable
         FFmpegStreamCopyRemuxer.Remux(videoPath: null, audioPath: audio, output);
 
         var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
-        Assert.True(registry.TryOpenAudio(output, options: null, out var a));
+        Assert.True(registry.SelectAndOpenAudio(output, options: null, out var a));
         try
         {
             Assert.True(a.Format.SampleRate > 0);
@@ -162,7 +162,7 @@ public sealed class StreamCopyRemuxerTests : IDisposable
 
         // Automatic election must keep playing the REAL video, exactly like MP3 cover art is skipped.
         var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
-        Assert.True(registry.TryOpenVideo(output, options: null, out var v));
+        Assert.True(registry.SelectAndOpenVideo(output, options: null, out var v));
         try
         {
             Assert.True(v.Format.Width == 192 && v.Format.Height == 108,
@@ -175,7 +175,7 @@ public sealed class StreamCopyRemuxerTests : IDisposable
 
         // Explicit selection of the attached-picture stream shows the thumbnail (cue video-tab picker).
         var thumbIndex = videoStreams.Single(s => s.IsAttachedPicture).Index;
-        Assert.True(registry.TryOpenVideo(
+        Assert.True(registry.SelectAndOpenVideo(
             output, new VideoSourceOpenOptions { VideoStreamIndex = thumbIndex }, out var cover));
         try
         {
@@ -200,10 +200,10 @@ public sealed class StreamCopyRemuxerTests : IDisposable
         FFmpegStreamCopyRemuxer.Remux(videoPath: null, audioPath: audio, output, stillImagePath: thumb);
 
         var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
-        Assert.True(registry.TryOpenAudio(output, options: null, out var a), "audio track lost");
+        Assert.True(registry.SelectAndOpenAudio(output, options: null, out var a), "audio track lost");
         (a as IDisposable)?.Dispose();
 
-        Assert.True(registry.TryOpenVideo(output, options: null, out var cover), "cover stream not openable");
+        Assert.True(registry.SelectAndOpenVideo(output, options: null, out var cover), "cover stream not openable");
         try
         {
             Assert.True(cover.Format.Width == 64 && cover.Format.Height == 36);

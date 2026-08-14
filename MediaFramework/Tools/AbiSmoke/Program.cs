@@ -69,7 +69,7 @@ if (boundSampleCount != 8 || boundSamples[0] != 0.25f)
 // (b) Register the plugin into a LIVE IMediaRegistry, route the URI through it, and read the frame - proves the
 // end-to-end live path + the frame-union marshalling (pixels must match what the plugin wrote).
 var registry = MediaRegistry.Build(b => AbiPluginHost.RegisterInto(plugin, media: b));
-if (!registry.TryOpenVideo("testsrc://demo", null, out var source) || !source.TryReadNextFrame(out var vframe) || vframe is null)
+if (!registry.SelectAndOpenVideo("testsrc://demo", null, out var source) || !source.TryReadNextFrame(out var vframe) || vframe is null)
 {
     Console.Error.WriteLine("FAIL: IMediaRegistry did not route + open + read the plugin's source.");
     return 6;
@@ -84,7 +84,7 @@ if (vframe.Format.Width != 4 || vframe.Format.Height != 4 || vframe.Format.Pixel
     return 7;
 }
 (source as IDisposable)?.Dispose();
-if (!registry.TryOpenAudio("testsrc://demo", null, out var registryAudio))
+if (!registry.SelectAndOpenAudio("testsrc://demo", null, out var registryAudio))
 {
     Console.Error.WriteLine("FAIL: IMediaRegistry did not route the plugin's audio source.");
     return 8;

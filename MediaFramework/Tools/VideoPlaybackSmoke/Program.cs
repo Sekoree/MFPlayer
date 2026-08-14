@@ -19,7 +19,7 @@ var uri = args[0];
 var seconds = args.Length > 1 && double.TryParse(args[1], out var s) ? s : 4.0;
 
 var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
-if (!registry.TryOpenVideo(uri, null, out var source))
+if (!registry.SelectAndOpenVideo(uri, null, out var source))
 {
     Console.Error.WriteLine($"FAIL: no decoder opened '{uri}' (registered: {string.Join(", ", registry.Decoders.Select(d => d.Name))}).");
     return 1;

@@ -348,9 +348,6 @@ public sealed class MediaClock : IMediaClock, IDisposable
         JoinDriver(toJoin, toDispose, cancellationToken);
     }
 
-    /// <summary>Same as <see cref="Pause"/> for now - semantics may diverge later.</summary>
-    public void Stop(CancellationToken cancellationToken = default) => Pause(cancellationToken);
-
     public void Reset()
     {
         lock (_gate)

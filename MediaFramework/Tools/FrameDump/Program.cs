@@ -13,7 +13,7 @@ if (args.Length < 1)
 
 var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()));
 
-if (!registry.TryOpenVideo(args[0], null, out var video))
+if (!registry.SelectAndOpenVideo(args[0], null, out var video))
 {
     Console.Error.WriteLine($"no decoder/video track for '{args[0]}'");
     return 3;

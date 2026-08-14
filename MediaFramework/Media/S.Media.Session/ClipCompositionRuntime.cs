@@ -1863,7 +1863,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (slaveClock is { } sc)
         {
             try { sc.VideoTick -= OnSlaveVideoTick; } catch { /* best effort */ }
-            try { sc.Stop(); } catch { /* best effort */ }
+            // Pause, not a transport-stop: this is teardown - the position is irrelevant and a
+            // reset would raise PositionChanged(Zero) into listeners mid-unwind. (The old Stop()
+            // was exactly Pause(); the alias was removed - F-13.)
+            try { sc.Pause(); } catch { /* best effort */ }
             try { sc.Dispose(); } catch { /* best effort */ }
             lock (_gate)
                 _slaveClock = null;
