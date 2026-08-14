@@ -12,18 +12,18 @@
        all instances bind to the inspector's selected placement, and only the open one is realised. -->
   <StackPanel Margin="0,4,0,2">
     <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceComposition}">
-      <ComboBox ItemsSource="{Binding PlacementCompositions}"
-                SelectedIndex="{Binding PlacementCompositionIndex}" />
+      <ComboBox ItemsSource="{Binding Video.PlacementCompositions}"
+                SelectedIndex="{Binding Video.PlacementCompositionIndex}" />
     </HeaderedContentControl>
     <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceLayer}">
-      <TextBox Classes="short" Text="{Binding LayerValue}" LostFocus="OnFieldCommitted" />
+      <TextBox Classes="short" Text="{Binding Video.LayerValue}" LostFocus="OnFieldCommitted" />
     </HeaderedContentControl>
     <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceFit}">
-      <ComboBox ItemsSource="{Binding FitModes}" SelectedIndex="{Binding FitIndex}" />
+      <ComboBox ItemsSource="{Binding Video.FitModes}" SelectedIndex="{Binding Video.FitIndex}" />
     </HeaderedContentControl>
     <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TlLaneOpacity}">
       <NumericUpDown Minimum="0" Maximum="1" Increment="0.05" FormatString="0.##"
-                     Value="{Binding PlacementOpacity}" />
+                     Value="{Binding Video.PlacementOpacity}" />
     </HeaderedContentControl>
 
     <!-- The destination rectangle as NUMBERS. A drag cannot hit exactly half, and half is what a
@@ -31,22 +31,22 @@
     <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceDestXY}">
       <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
         <NumericUpDown Grid.Column="0" Minimum="-1" Maximum="2" Increment="0.01"
-                       FormatString="0.###" Value="{Binding PlacementX}" />
+                       FormatString="0.###" Value="{Binding Video.PlacementX}" />
         <NumericUpDown Grid.Column="1" Minimum="-1" Maximum="2" Increment="0.01"
-                       FormatString="0.###" Value="{Binding PlacementY}" />
+                       FormatString="0.###" Value="{Binding Video.PlacementY}" />
       </Grid>
     </HeaderedContentControl>
     <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceDestWH}">
       <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
         <NumericUpDown Grid.Column="0" Minimum="0.001" Maximum="2" Increment="0.01"
-                       FormatString="0.###" Value="{Binding PlacementWidth}" />
+                       FormatString="0.###" Value="{Binding Video.PlacementWidth}" />
         <NumericUpDown Grid.Column="1" Minimum="0.001" Maximum="2" Increment="0.01"
-                       FormatString="0.###" Value="{Binding PlacementHeight}" />
+                       FormatString="0.###" Value="{Binding Video.PlacementHeight}" />
       </Grid>
     </HeaderedContentControl>
     <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.TlLaneRotation}">
       <NumericUpDown Minimum="-360" Maximum="360" Increment="1" FormatString="0.##"
-                     Value="{Binding PlacementRotation}"
+                     Value="{Binding Video.PlacementRotation}"
                      ToolTip.Tip="{x:Static res:Strings.PlaceClockwiseAboutTheRectangleS}" />
     </HeaderedContentControl>
 
@@ -66,8 +66,8 @@
 
     <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceResize}">
       <WrapPanel ItemSpacing="12" LineSpacing="4">
-        <CheckBox Content="{x:Static res:Strings.PlacePreserveAspect}" IsChecked="{Binding PreservePlacementAspect}" />
-        <CheckBox Content="{x:Static res:Strings.PlaceSnapGuides}" IsChecked="{Binding SnapPlacement}" />
+        <CheckBox Content="{x:Static res:Strings.PlacePreserveAspect}" IsChecked="{Binding Video.PreservePlacementAspect}" />
+        <CheckBox Content="{x:Static res:Strings.PlaceSnapGuides}" IsChecked="{Binding Video.SnapPlacement}" />
       </WrapPanel>
     </HeaderedContentControl>
 
@@ -76,17 +76,17 @@
     <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceLeftTop}">
       <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
         <NumericUpDown Grid.Column="0" Minimum="0" Maximum="0.49" Increment="0.01"
-                       FormatString="0.###" Value="{Binding CropLeft}" />
+                       FormatString="0.###" Value="{Binding Video.CropLeft}" />
         <NumericUpDown Grid.Column="1" Minimum="0" Maximum="0.49" Increment="0.01"
-                       FormatString="0.###" Value="{Binding CropTop}" />
+                       FormatString="0.###" Value="{Binding Video.CropTop}" />
       </Grid>
     </HeaderedContentControl>
     <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceRightBottom}">
       <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
         <NumericUpDown Grid.Column="0" Minimum="0" Maximum="0.49" Increment="0.01"
-                       FormatString="0.###" Value="{Binding CropRight}" />
+                       FormatString="0.###" Value="{Binding Video.CropRight}" />
         <NumericUpDown Grid.Column="1" Minimum="0" Maximum="0.49" Increment="0.01"
-                       FormatString="0.###" Value="{Binding CropBottom}" />
+                       FormatString="0.###" Value="{Binding Video.CropBottom}" />
       </Grid>
     </HeaderedContentControl>
     <ContentControl Theme="{StaticResource FieldWide}">
@@ -100,7 +100,7 @@
 
     <!-- Ordered rack: identity and order live here; focused built-in editors follow below. -->
     <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.PlaceEffectRack}" />
-    <ItemsControl ItemsSource="{Binding EffectRackRows}">
+    <ItemsControl ItemsSource="{Binding Video.EffectRackRows}">
       <ItemsControl.ItemTemplate>
         <DataTemplate x:DataType="vm:LayerEffectRackRow">
           <Grid Margin="10,2" ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="4">
@@ -134,34 +134,34 @@
     <!-- OFF IS NOT DELETE: effect settings survive their toggles. -->
     <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.TlLaneChromaKey}" />
     <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceKey}">
-      <CheckBox IsChecked="{Binding ChromaKeyOn}" Content="{x:Static res:Strings.PlaceKeyThisLayer}" />
+      <CheckBox IsChecked="{Binding Video.ChromaKeyOn}" Content="{x:Static res:Strings.PlaceKeyThisLayer}" />
     </HeaderedContentControl>
-    <StackPanel IsVisible="{Binding HasChromaKey}">
+    <StackPanel IsVisible="{Binding Video.HasChromaKey}">
       <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspColour}">
-        <TextBox Text="{Binding ChromaColour}" PlaceholderText="{x:Static res:Strings.PlaceN00ff00}" />
+        <TextBox Text="{Binding Video.ChromaColour}" PlaceholderText="{x:Static res:Strings.PlaceN00ff00}" />
       </HeaderedContentControl>
       <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceSimilarSoft}">
         <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
           <NumericUpDown Grid.Column="0" Minimum="0" Maximum="1" Increment="0.02"
-                         FormatString="0.##" Value="{Binding ChromaSimilarity}" />
+                         FormatString="0.##" Value="{Binding Video.ChromaSimilarity}" />
           <NumericUpDown Grid.Column="1" Minimum="0" Maximum="1" Increment="0.02"
-                         FormatString="0.##" Value="{Binding ChromaSmoothness}" />
+                         FormatString="0.##" Value="{Binding Video.ChromaSmoothness}" />
         </Grid>
       </HeaderedContentControl>
       <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceSpill}">
         <NumericUpDown Minimum="0" Maximum="1" Increment="0.02" FormatString="0.##"
-                       Value="{Binding ChromaSpill}"
+                       Value="{Binding Video.ChromaSpill}"
                        ToolTip.Tip="{x:Static res:Strings.PlaceHowMuchOfTheKey}" />
       </HeaderedContentControl>
       <Button Classes="block" Content="{x:Static res:Strings.PlaceAutomateChroma}">
         <Button.Flyout>
           <MenuFlyout>
             <MenuItem Header="{x:Static res:Strings.TlLaneSimilarity}" Click="OnAddAutomation" Tag="video.effect.chroma-key.similarity"
-                      IsEnabled="{Binding CanAddChromaSimilarityLane}" />
+                      IsEnabled="{Binding Video.CanAddChromaSimilarityLane}" />
             <MenuItem Header="{x:Static res:Strings.TlLaneSmoothness}" Click="OnAddAutomation" Tag="video.effect.chroma-key.smoothness"
-                      IsEnabled="{Binding CanAddChromaSmoothnessLane}" />
+                      IsEnabled="{Binding Video.CanAddChromaSmoothnessLane}" />
             <MenuItem Header="{x:Static res:Strings.TlLaneSpillReduction}" Click="OnAddAutomation" Tag="video.effect.chroma-key.spill-reduction"
-                      IsEnabled="{Binding CanAddChromaSpillLane}" />
+                      IsEnabled="{Binding Video.CanAddChromaSpillLane}" />
           </MenuFlyout>
         </Button.Flyout>
       </Button>
@@ -169,37 +169,37 @@
 
     <ContentControl Theme="{StaticResource Subhead}" Content="{x:Static res:Strings.InspColour}" />
     <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.PlaceAdjust}">
-      <CheckBox IsChecked="{Binding ColorAdjustOn}" Content="{x:Static res:Strings.PlaceBrightnessAndContrast}" />
+      <CheckBox IsChecked="{Binding Video.ColorAdjustOn}" Content="{x:Static res:Strings.PlaceBrightnessAndContrast}" />
     </HeaderedContentControl>
     <HeaderedContentControl Theme="{StaticResource FieldTight}" Header="{x:Static res:Strings.PlaceBrightContrast}"
-                            IsVisible="{Binding ColorAdjustOn}">
+                            IsVisible="{Binding Video.ColorAdjustOn}">
       <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
         <NumericUpDown Grid.Column="0" Minimum="-1" Maximum="1" Increment="0.05"
-                       FormatString="0.##" Value="{Binding LayerBrightness}" />
+                       FormatString="0.##" Value="{Binding Video.LayerBrightness}" />
         <NumericUpDown Grid.Column="1" Minimum="0" Maximum="4" Increment="0.05"
-                       FormatString="0.##" Value="{Binding LayerContrast}" />
+                       FormatString="0.##" Value="{Binding Video.LayerContrast}" />
       </Grid>
     </HeaderedContentControl>
-    <Button Classes="block" Content="{x:Static res:Strings.PlaceAutomateColour}" IsVisible="{Binding HasColorAdjust}">
+    <Button Classes="block" Content="{x:Static res:Strings.PlaceAutomateColour}" IsVisible="{Binding Video.HasColorAdjust}">
       <Button.Flyout>
         <MenuFlyout>
           <MenuItem Header="{x:Static res:Strings.TlLaneBrightness}" Click="OnAddAutomation" Tag="video.effect.color-adjust.brightness"
-                    IsEnabled="{Binding CanAddColorBrightnessLane}" />
+                    IsEnabled="{Binding Video.CanAddColorBrightnessLane}" />
           <MenuItem Header="{x:Static res:Strings.TlLaneContrast}" Click="OnAddAutomation" Tag="video.effect.color-adjust.contrast"
-                    IsEnabled="{Binding CanAddColorContrastLane}" />
+                    IsEnabled="{Binding Video.CanAddColorContrastLane}" />
         </MenuFlyout>
       </Button.Flyout>
     </Button>
 
     <!-- The guides are seams between the screens dividing this placement's canvas. -->
-    <c:AspectBox Margin="10,6" VerticalAlignment="Top" Ratio="{Binding PlacementAspect}">
-      <c:PlacementCanvas Boxes="{Binding Placements}"
+    <c:AspectBox Margin="10,6" VerticalAlignment="Top" Ratio="{Binding Video.PlacementAspect}">
+      <c:PlacementCanvas Boxes="{Binding Video.Placements}"
                          AutomationProperties.Name="Video placement canvas"
                          AutomationProperties.HelpText="{x:Static res:Strings.PlaceDragOrResizeThisPlacement}"
-                         GuidesX="{Binding PlacementGuidesX}"
-                         GuidesY="{Binding PlacementGuidesY}"
-                         PreserveAspect="{Binding PreservePlacementAspect}"
-                         SnapEnabled="{Binding SnapPlacement}"
+                         GuidesX="{Binding Video.PlacementGuidesX}"
+                         GuidesY="{Binding Video.PlacementGuidesY}"
+                         PreserveAspect="{Binding Video.PreservePlacementAspect}"
+                         SnapEnabled="{Binding Video.SnapPlacement}"
                          AllowOutside="True"
                          Gesture="OnPlacementGesture"
                          GestureCompleted="OnPlacementGestureCompleted" />

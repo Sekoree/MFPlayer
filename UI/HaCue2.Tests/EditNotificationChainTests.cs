@@ -76,11 +76,11 @@ public class EditNotificationChainTests
             ShellFixture.Select(shell.Cues, cue.Id);
 
             var composition = shell.Project.Compositions[0];
-            shell.Cues.Inspector.PlacementTarget =
+            shell.Cues.Inspector.Video.PlacementTarget =
                 shell.Project.Compositions.IndexOf(composition);
 
             var before = reached;
-            shell.Cues.Inspector.PlaceOnComposition();
+            shell.Cues.Inspector.Video.PlaceOnComposition();
 
             // The gesture that produced the original crash report. It must land the placement AND keep
             // the notification chain intact, because the engine learns about the placement through it.

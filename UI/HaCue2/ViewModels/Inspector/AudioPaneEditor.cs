@@ -4,6 +4,7 @@ using HaCue2.Core.Compile;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Model;
 using HaCue2.Engine;
+using HaCue2.Machine;
 using HaCue2.Presentation;
 using HaCue2.Session;
 using S.Media.Session;
@@ -29,6 +30,28 @@ public interface IInspectorEditorContext
 
     /// <summary>The inspector-wide refresh (tab set, titles, every pane's projections).</summary>
     void Reload();
+
+    // ── machine media facts, for the placement/automation editor ─────────────────────────────
+    // Shell-injected on the inspector; editors read them through the context so the injection
+    // point stays single.
+
+    /// <summary>What the LEAD cue's file turned out to contain, when probed.</summary>
+    MediaFacts? LeadFacts { get; }
+
+    /// <summary>Machine media facts for any cue (the shell's probe cache).</summary>
+    Func<MediaCueNode, MediaFacts?>? MediaFactsFor { get; }
+
+    /// <summary>The lead media cue's effective clip duration (probe, else authored).</summary>
+    TimeSpan? LeadClipDuration { get; }
+
+    /// <summary>Resolves a media cue's playable local path (prepared sources included).</summary>
+    string? ClipPathFor(MediaCueNode media);
+
+    /// <summary>Where derived files (waveforms) live.</summary>
+    string CacheRoot { get; }
+
+    /// <summary>The machine's waveform-cache cap; null keeps it unbounded.</summary>
+    long? WaveformCacheBytes { get; }
 }
 
 /// <summary>

@@ -42,7 +42,7 @@ public class PlacementRowTests
     {
         WithPlacements(shell, 3);
 
-        var headers = shell.Cues.Inspector.PlacementHeaders;
+        var headers = shell.Cues.Inspector.Video.PlacementHeaders;
 
         Assert.Equal(3, headers.Count);
         Assert.Equal(["L0", "L1", "L2"], headers.Select(row => row.Layer));
@@ -55,7 +55,7 @@ public class PlacementRowTests
         WithPlacements(shell, 3);
 
         // One open row, because there is one editor below it to show.
-        Assert.Single(shell.Cues.Inspector.PlacementHeaders, row => row.IsOpen);
+        Assert.Single(shell.Cues.Inspector.Video.PlacementHeaders, row => row.IsOpen);
     });
 
     [Fact]
@@ -64,11 +64,11 @@ public class PlacementRowTests
         WithPlacements(shell, 3);
         var inspector = shell.Cues.Inspector;
 
-        inspector.ExpandPlacement(2);
+        inspector.Video.ExpandPlacement(2);
 
-        Assert.Equal(2, inspector.SelectedPlacement);
-        Assert.True(inspector.PlacementHeaders[2].IsOpen);
-        Assert.False(inspector.PlacementHeaders[0].IsOpen);
+        Assert.Equal(2, inspector.Video.SelectedPlacement);
+        Assert.True(inspector.Video.PlacementHeaders[2].IsOpen);
+        Assert.False(inspector.Video.PlacementHeaders[0].IsOpen);
     });
 
     [Fact]
@@ -81,7 +81,7 @@ public class PlacementRowTests
         cue.Placements[1].ChromaKey = new ChromaKeySpec();
         shell.Cues.Refresh();
 
-        var headers = shell.Cues.Inspector.PlacementHeaders;
+        var headers = shell.Cues.Inspector.Video.PlacementHeaders;
 
         // The default placement reads as what it is rather than as four numbers.
         Assert.Equal("full frame", headers[0].Summary);
@@ -97,7 +97,7 @@ public class PlacementRowTests
     {
         WithPlacements(shell, 1);
 
-        Assert.Single(shell.Cues.Inspector.PlacementHeaders);
+        Assert.Single(shell.Cues.Inspector.Video.PlacementHeaders);
     });
 
     [Fact]
@@ -123,7 +123,7 @@ public class PlacementRowTests
         rows.Single(row => (int)row.Tag! == 2).IsExpanded = true;
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Equal(2, shell.Cues.Inspector.SelectedPlacement);
+        Assert.Equal(2, shell.Cues.Inspector.Video.SelectedPlacement);
         rows = pane.GetVisualDescendants()
             .OfType<Expander>()
             .Where(row => row.Tag is int)

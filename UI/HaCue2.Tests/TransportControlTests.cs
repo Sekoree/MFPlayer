@@ -181,7 +181,7 @@ public class TransportControlTests
     [Fact]
     public Task TheActiveGroupExpanderDrawsTheTreesChevron() => ShellFixture.WithShell(shell =>
     {
-        shell.Cues.ActivePanelRows.Add(new ActiveGroupRow
+        shell.Cues.ActivePanel.Rows.Add(new ActiveGroupRow
         {
             GroupId = Guid.NewGuid(),
             Number = "12",

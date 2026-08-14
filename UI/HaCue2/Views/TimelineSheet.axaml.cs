@@ -376,7 +376,7 @@ public partial class TimelineSheet : UserControl
 
         // The menu already disables what the selection cannot carry, so reaching here with a refusal
         // means no cue is selected at all - which the menu has no way to grey out.
-        if (!inspector.CanAddLane(propertyId))
+        if (!inspector.Video.CanAddLane(propertyId))
         {
             timeline.TransportProblem =
                 "select a cue that can carry that lane (and does not have one yet)";
@@ -384,7 +384,7 @@ public partial class TimelineSheet : UserControl
         }
 
         timeline.TransportProblem = "";
-        inspector.AddLane(propertyId);
+        inspector.Video.AddLane(propertyId);
         timeline.Refresh();
     }
 

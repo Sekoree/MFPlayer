@@ -123,7 +123,7 @@ public class CuesViewModelTests
         // It used to show five invented rows for any project, and nothing at all for a real one. Empty
         // with no engine is the truthful answer.
         shell.Cues.Tick();
-        Assert.Empty(shell.Cues.ActiveCues);
+        Assert.Empty(shell.Cues.ActivePanel.ActiveCues);
     });
 
     [Fact]

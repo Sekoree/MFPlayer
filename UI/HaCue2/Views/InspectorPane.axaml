@@ -287,7 +287,7 @@
                       Margin="0,6,0,8">
             <!-- A cue with no placement is not on any canvas. Saying so beats four fields and an
                  empty frame, which read as a layer sized to nothing. -->
-            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding !HasPlacement}">
+            <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding !Video.HasPlacement}">
               <Border Classes="chain">
                 <StackPanel Orientation="Horizontal" Spacing="7">
                   <Border Classes="badge"><TextBlock Text="{x:Static res:Strings.InspNotPlaced}" /></Border>
@@ -297,10 +297,10 @@
               </Border>
             </ContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspPlaceOn}"
-                                    IsVisible="{Binding !HasPlacement}">
+                                    IsVisible="{Binding !Video.HasPlacement}">
               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                <ComboBox Grid.Column="0" ItemsSource="{Binding PlacementCompositions}"
-                          SelectedIndex="{Binding PlacementTarget}" />
+                <ComboBox Grid.Column="0" ItemsSource="{Binding Video.PlacementCompositions}"
+                          SelectedIndex="{Binding Video.PlacementTarget}" />
                 <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.InspPlace}" Click="OnPlace" />
               </Grid>
             </HeaderedContentControl>
@@ -348,8 +348,8 @@
 
             <!-- Every placement is a real expander. Its closed header still identifies the canvas,
                  layer and geometry; opening it selects that placement and reveals its complete editor. -->
-            <ItemsControl ItemsSource="{Binding PlacementHeaders}" Margin="10,2,10,4"
-                          IsVisible="{Binding HasPlacement}">
+            <ItemsControl ItemsSource="{Binding Video.PlacementHeaders}" Margin="10,2,10,4"
+                          IsVisible="{Binding Video.HasPlacement}">
               <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate><StackPanel Spacing="4" /></ItemsPanelTemplate>
               </ItemsControl.ItemsPanel>
@@ -380,10 +380,10 @@
             <!-- Adding is separate from any one row: the target is explicit and remains reachable
                  even when every placement is collapsed. -->
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspAnotherPlacement}"
-                                    IsVisible="{Binding HasPlacement}">
+                                    IsVisible="{Binding Video.HasPlacement}">
               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-                <ComboBox Grid.Column="0" ItemsSource="{Binding PlacementCompositions}"
-                          SelectedIndex="{Binding PlacementTarget}" />
+                <ComboBox Grid.Column="0" ItemsSource="{Binding Video.PlacementCompositions}"
+                          SelectedIndex="{Binding Video.PlacementTarget}" />
                 <Button Grid.Column="1" Classes="tight" Content="{x:Static res:Strings.InspAdd}" Click="OnPlace"
                         ToolTip.Tip="{x:Static res:Strings.InspShowThisCueOnAnother}" />
               </Grid>
@@ -393,31 +393,31 @@
           <!-- ══ AUTOMATION - property tracks, hidden until added (register item 18) ═══════ -->
           <StackPanel IsVisible="{Binding IsEffectsPane}" IsEnabled="{Binding CanAuthor}"
                       Margin="0,6,0,8">
-            <Grid ColumnDefinitions="*,*" ColumnSpacing="6" IsVisible="{Binding IsAutomationCue}">
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="6" IsVisible="{Binding Video.IsAutomationCue}">
               <HeaderedContentControl Grid.Column="0" Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspDurationS}">
-                <TextBox Text="{Binding AutomationDuration}" />
+                <TextBox Text="{Binding Video.AutomationDuration}" />
               </HeaderedContentControl>
               <HeaderedContentControl Grid.Column="1" Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspAtCompletion}">
                 <CheckBox Margin="10,7" Content="{x:Static res:Strings.InspRestoreAuthoredValues}"
-                          IsChecked="{Binding AutomationRestoreBase, Mode=TwoWay}" />
+                          IsChecked="{Binding Video.AutomationRestoreBase, Mode=TwoWay}" />
               </HeaderedContentControl>
             </Grid>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspTargetCue}"
-                                    IsVisible="{Binding IsAutomationCue}">
-              <ComboBox ItemsSource="{Binding AutomationTargetCues}"
-                        SelectedIndex="{Binding AutomationTargetCueIndex, Mode=TwoWay}" />
+                                    IsVisible="{Binding Video.IsAutomationCue}">
+              <ComboBox ItemsSource="{Binding Video.AutomationTargetCues}"
+                        SelectedIndex="{Binding Video.AutomationTargetCueIndex, Mode=TwoWay}" />
             </HeaderedContentControl>
             <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspTargetPlacement}"
-                                    IsVisible="{Binding HasMultipleAutomationTargetPlacements}">
-              <ComboBox ItemsSource="{Binding AutomationTargetPlacements}"
-                        SelectedIndex="{Binding AutomationTargetPlacementIndex, Mode=TwoWay}" />
+                                    IsVisible="{Binding Video.HasMultipleAutomationTargetPlacements}">
+              <ComboBox ItemsSource="{Binding Video.AutomationTargetPlacements}"
+                        SelectedIndex="{Binding Video.AutomationTargetPlacementIndex, Mode=TwoWay}" />
             </HeaderedContentControl>
             <!-- Hidden until added (register item 18): a cue with no automation shows none, rather
                  than four empty lanes implying it has some. -->
-            <TextBlock Margin="10,4" Classes="mono dim3 small" IsVisible="{Binding !HasEffectLanes}"
+            <TextBlock Margin="10,4" Classes="mono dim3 small" IsVisible="{Binding !Video.HasEffectLanes}"
                        Text="{x:Static res:Strings.InspNoAutomationTracksOnThis}" />
 
-            <ItemsControl ItemsSource="{Binding EffectLanes}">
+            <ItemsControl ItemsSource="{Binding Video.EffectLanes}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate x:DataType="vm:EffectLaneRow">
                   <Border Padding="10,5" BorderBrush="{DynamicResource BoothRuleSoft}" BorderThickness="0,0,0,1">
@@ -440,48 +440,48 @@
             </ItemsControl>
 
             <ContentControl Theme="{StaticResource FieldWide}" Margin="0,6,0,0">
-              <Button Classes="block" Content="{x:Static res:Strings.InspAddAutomation}" IsEnabled="{Binding CanCarryLanes}">
+              <Button Classes="block" Content="{x:Static res:Strings.InspAddAutomation}" IsEnabled="{Binding Video.CanCarryLanes}">
                 <Button.Flyout>
                   <MenuFlyout>
                     <!-- Only what this cue can carry. A volume lane over a visualizer and an opacity
                          lane over a WAV both compile to automation the engine has nowhere to apply. -->
-                    <MenuItem Header="{Binding VolumeLaneLabel}" Click="OnAddLane" Tag="cue.audio.volume"
-                              IsVisible="{Binding CanAddVolumeLane}" />
+                    <MenuItem Header="{Binding Video.VolumeLaneLabel}" Click="OnAddLane" Tag="cue.audio.volume"
+                              IsVisible="{Binding Video.CanAddVolumeLane}" />
                     <MenuItem Header="{x:Static res:Strings.TlLaneGainInsert}" Click="OnAddLane"
                               Tag="audio.effect.parameter.gain.v1.gainDb"
-                              IsVisible="{Binding HasAutomationAudioGain}"
+                              IsVisible="{Binding Video.HasAutomationAudioGain}"
                               IsEnabled="{Binding CanAddAudioGainLane}" />
-                    <MenuItem Header="{Binding OpacityLaneLabel}" Click="OnAddLane" Tag="video.placement.opacity"
-                              IsVisible="{Binding CanAddOpacityLane}" />
+                    <MenuItem Header="{Binding Video.OpacityLaneLabel}" Click="OnAddLane" Tag="video.placement.opacity"
+                              IsVisible="{Binding Video.CanAddOpacityLane}" />
                     <MenuItem Header="{x:Static res:Strings.TlLanePositionX}" Click="OnAddLane" Tag="video.placement.x"
-                              IsVisible="{Binding CanAddPlacementXLane}" />
+                              IsVisible="{Binding Video.CanAddPlacementXLane}" />
                     <MenuItem Header="{x:Static res:Strings.TlLanePositionY}" Click="OnAddLane" Tag="video.placement.y"
-                              IsVisible="{Binding CanAddPlacementYLane}" />
+                              IsVisible="{Binding Video.CanAddPlacementYLane}" />
                     <MenuItem Header="{x:Static res:Strings.TlLaneWidth}" Click="OnAddLane" Tag="video.placement.width"
-                              IsVisible="{Binding CanAddPlacementWidthLane}" />
+                              IsVisible="{Binding Video.CanAddPlacementWidthLane}" />
                     <MenuItem Header="{x:Static res:Strings.TlLaneHeight}" Click="OnAddLane" Tag="video.placement.height"
-                              IsVisible="{Binding CanAddPlacementHeightLane}" />
+                              IsVisible="{Binding Video.CanAddPlacementHeightLane}" />
                     <MenuItem Header="{x:Static res:Strings.TlLaneRotation}" Click="OnAddLane" Tag="video.placement.rotation"
-                              IsVisible="{Binding CanAddPlacementRotationLane}" />
-                    <MenuItem Header="{x:Static res:Strings.TlLaneChromaKey}" IsVisible="{Binding HasAutomationChromaKey}">
+                              IsVisible="{Binding Video.CanAddPlacementRotationLane}" />
+                    <MenuItem Header="{x:Static res:Strings.TlLaneChromaKey}" IsVisible="{Binding Video.HasAutomationChromaKey}">
                       <MenuItem Header="{x:Static res:Strings.TlLaneSimilarity}" Click="OnAddLane" Tag="video.effect.chroma-key.similarity"
-                                IsVisible="{Binding CanAddChromaSimilarityLane}" />
+                                IsVisible="{Binding Video.CanAddChromaSimilarityLane}" />
                       <MenuItem Header="{x:Static res:Strings.TlLaneSmoothness}" Click="OnAddLane" Tag="video.effect.chroma-key.smoothness"
-                                IsVisible="{Binding CanAddChromaSmoothnessLane}" />
+                                IsVisible="{Binding Video.CanAddChromaSmoothnessLane}" />
                       <MenuItem Header="{x:Static res:Strings.TlLaneSpillReduction}" Click="OnAddLane" Tag="video.effect.chroma-key.spill-reduction"
-                                IsVisible="{Binding CanAddChromaSpillLane}" />
+                                IsVisible="{Binding Video.CanAddChromaSpillLane}" />
                     </MenuItem>
-                    <MenuItem Header="{x:Static res:Strings.TlLaneColourAdjust}" IsVisible="{Binding HasAutomationColorAdjust}">
+                    <MenuItem Header="{x:Static res:Strings.TlLaneColourAdjust}" IsVisible="{Binding Video.HasAutomationColorAdjust}">
                       <MenuItem Header="{x:Static res:Strings.TlLaneBrightness}" Click="OnAddLane" Tag="video.effect.color-adjust.brightness"
-                                IsVisible="{Binding CanAddColorBrightnessLane}" />
+                                IsVisible="{Binding Video.CanAddColorBrightnessLane}" />
                       <MenuItem Header="{x:Static res:Strings.TlLaneContrast}" Click="OnAddLane" Tag="video.effect.color-adjust.contrast"
-                                IsVisible="{Binding CanAddColorContrastLane}" />
+                                IsVisible="{Binding Video.CanAddColorContrastLane}" />
                     </MenuItem>
-                    <Separator IsVisible="{Binding CanAddOutboundLane}" />
+                    <Separator IsVisible="{Binding Video.CanAddOutboundLane}" />
                     <MenuItem Header="{x:Static res:Strings.TlLaneOscValue}" Click="OnAddLane" Tag="external.osc.value"
-                              IsVisible="{Binding CanAddOutboundLane}" />
+                              IsVisible="{Binding Video.CanAddOutboundLane}" />
                     <MenuItem Header="{x:Static res:Strings.TlLaneMidiControl}" Click="OnAddLane" Tag="external.midi.control-value"
-                              IsVisible="{Binding CanAddOutboundLane}" />
+                              IsVisible="{Binding Video.CanAddOutboundLane}" />
                   </MenuFlyout>
                 </Button.Flyout>
               </Button>

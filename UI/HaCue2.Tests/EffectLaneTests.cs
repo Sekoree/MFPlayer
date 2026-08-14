@@ -34,8 +34,8 @@ public class EffectLaneTests
         SelectBed(shell);
 
         // Hidden until added: a cue showing four empty lanes would imply it has automation it does not.
-        Assert.Empty(shell.Cues.Inspector.EffectLanes);
-        Assert.False(shell.Cues.Inspector.HasEffectLanes);
+        Assert.Empty(shell.Cues.Inspector.Video.EffectLanes);
+        Assert.False(shell.Cues.Inspector.Video.HasEffectLanes);
     });
 
     [Fact]
@@ -43,7 +43,7 @@ public class EffectLaneTests
     {
         var bed = SelectBed(shell);
 
-        shell.Cues.Inspector.AddLane(Volume);
+        shell.Cues.Inspector.Video.AddLane(Volume);
 
         var lane = Assert.Single(bed.AutomationTracks);
         Assert.Equal(AutomationPropertyIds.CueVolume, lane.Target.PropertyId);
@@ -57,7 +57,7 @@ public class EffectLaneTests
     {
         var bed = SelectBed(shell);
 
-        shell.Cues.Inspector.AddLane(Volume);
+        shell.Cues.Inspector.Video.AddLane(Volume);
 
         // Two absolute-time keys at the authored dB value: the editor has handles immediately and
         // adding the track does not change playback until a key is moved.
@@ -73,14 +73,14 @@ public class EffectLaneTests
     {
         var bed = SelectBed(shell);
 
-        shell.Cues.Inspector.AddLane(Volume);
-        shell.Cues.Inspector.AddLane(Volume);
+        shell.Cues.Inspector.Video.AddLane(Volume);
+        shell.Cues.Inspector.Video.AddLane(Volume);
 
         // A cue with two volume lanes has no defined level, and the compiler takes the first - so the
         // second would be invisible rather than additive.
         Assert.Single(bed.AutomationTracks);
-        Assert.False(shell.Cues.Inspector.CanAddLane(Volume));
-        Assert.True(shell.Cues.Inspector.CanAddLane(Osc));
+        Assert.False(shell.Cues.Inspector.Video.CanAddLane(Volume));
+        Assert.True(shell.Cues.Inspector.Video.CanAddLane(Osc));
     });
 
     [Fact]
@@ -88,8 +88,8 @@ public class EffectLaneTests
     {
         var bed = SelectBed(shell);
 
-        shell.Cues.Inspector.AddLane(Volume);
-        shell.Cues.Inspector.AddLane(Osc);
+        shell.Cues.Inspector.Video.AddLane(Volume);
+        shell.Cues.Inspector.Video.AddLane(Osc);
 
         Assert.Equal(2, bed.AutomationTracks.Count);
     });
@@ -98,9 +98,9 @@ public class EffectLaneTests
     public Task ALaneCanBeRemoved() => ShellFixture.WithShell(shell =>
     {
         var bed = SelectBed(shell);
-        shell.Cues.Inspector.AddLane(Volume);
+        shell.Cues.Inspector.Video.AddLane(Volume);
 
-        shell.Cues.Inspector.RemoveLane(0);
+        shell.Cues.Inspector.Video.RemoveLane(0);
 
         Assert.Empty(bed.AutomationTracks);
     });
@@ -109,9 +109,9 @@ public class EffectLaneTests
     public Task TheLaneEditorTargetsTheLanesOwnPoints() => ShellFixture.WithShell(shell =>
     {
         var bed = SelectBed(shell);
-        shell.Cues.Inspector.AddLane(Volume);
+        shell.Cues.Inspector.Video.AddLane(Volume);
 
-        var editor = shell.Cues.Inspector.LaneEditor(0);
+        var editor = shell.Cues.Inspector.Video.LaneEditor(0);
         Assert.NotNull(editor);
 
         // Drag the second key in the dedicated absolute-time editor. Canvas Y is projected through
@@ -128,9 +128,9 @@ public class EffectLaneTests
     public Task EditingALaneIsUndoable() => ShellFixture.WithShell(shell =>
     {
         var bed = SelectBed(shell);
-        shell.Cues.Inspector.AddLane(Volume);
+        shell.Cues.Inspector.Video.AddLane(Volume);
 
-        var editor = shell.Cues.Inspector.LaneEditor(0)!;
+        var editor = shell.Cues.Inspector.Video.LaneEditor(0)!;
         editor.Apply(new HaCue2.Controls.CurveGesture(
             HaCue2.Controls.CurveGestureKind.Move, 1, 1, 0.75));
         editor.EndGesture();
@@ -145,22 +145,22 @@ public class EffectLaneTests
     public Task AOneKeyTrackIsAValidConstantValue() => ShellFixture.WithShell(shell =>
     {
         var bed = SelectBed(shell);
-        shell.Cues.Inspector.AddLane(Volume);
+        shell.Cues.Inspector.Video.AddLane(Volume);
         bed.AutomationTracks[0].Keyframes = [new AutomationKeyframe { TimeMs = 0, Value = -12 }];
         shell.Cues.Inspector.Reload();
 
-        Assert.Contains("1 keyframe", shell.Cues.Inspector.EffectLanes[0].Detail, StringComparison.Ordinal);
+        Assert.Contains("1 keyframe", shell.Cues.Inspector.Video.EffectLanes[0].Detail, StringComparison.Ordinal);
     });
 
     [Fact]
     public Task AnOutboundLaneWithNoEndpointSaysNothingIsSent() => ShellFixture.WithShell(shell =>
     {
         SelectBed(shell);
-        shell.Cues.Inspector.AddLane(Osc);
+        shell.Cues.Inspector.Video.AddLane(Osc);
 
         Assert.Contains(
             "no endpoint",
-            shell.Cues.Inspector.EffectLanes[0].Detail,
+            shell.Cues.Inspector.Video.EffectLanes[0].Detail,
             StringComparison.Ordinal);
     });
 
@@ -169,9 +169,9 @@ public class EffectLaneTests
     {
         var group = shell.Project.AllCues().OfType<GroupCueNode>().First();
         ShellFixture.Select(shell.Cues, group.Id);
-        Assert.True(shell.Cues.Inspector.CanCarryLanes);
+        Assert.True(shell.Cues.Inspector.Video.CanCarryLanes);
 
-        shell.Cues.Inspector.AddLane(Osc);
+        shell.Cues.Inspector.Video.AddLane(Osc);
         Assert.Single(group.AutomationTracks);
 
         var comment = shell.Project.AllCues().OfType<CommentCueNode>().First();
@@ -179,7 +179,7 @@ public class EffectLaneTests
 
         // Nothing to automate on a marker. The button is disabled rather than adding a lane the
         // compiler would ignore.
-        Assert.False(shell.Cues.Inspector.CanCarryLanes);
+        Assert.False(shell.Cues.Inspector.Video.CanCarryLanes);
     });
 
     [Fact]
@@ -192,17 +192,17 @@ public class EffectLaneTests
         shell.Cues.Refresh();
         ShellFixture.Select(shell.Cues, automation.Id);
 
-        shell.Cues.Inspector.AutomationTargetCueIndex = shell.Cues.Inspector.AutomationTargetCues
+        shell.Cues.Inspector.Video.AutomationTargetCueIndex = shell.Cues.Inspector.Video.AutomationTargetCues
             .Select((label, index) => (label, index))
             .Single(item => item.label.Contains(group.Label, StringComparison.Ordinal)).index;
 
-        Assert.Equal("Group audio trim", shell.Cues.Inspector.VolumeLaneLabel);
-        Assert.Equal("Group video opacity", shell.Cues.Inspector.OpacityLaneLabel);
-        Assert.True(shell.Cues.Inspector.CanAddVolumeLane);
-        Assert.True(shell.Cues.Inspector.CanAddOpacityLane);
+        Assert.Equal("Group audio trim", shell.Cues.Inspector.Video.VolumeLaneLabel);
+        Assert.Equal("Group video opacity", shell.Cues.Inspector.Video.OpacityLaneLabel);
+        Assert.True(shell.Cues.Inspector.Video.CanAddVolumeLane);
+        Assert.True(shell.Cues.Inspector.Video.CanAddOpacityLane);
 
-        shell.Cues.Inspector.AddLane(Volume);
-        shell.Cues.Inspector.AddLane(Opacity);
+        shell.Cues.Inspector.Video.AddLane(Volume);
+        shell.Cues.Inspector.Video.AddLane(Opacity);
 
         Assert.Collection(
             automation.AutomationTracks,
@@ -242,14 +242,14 @@ public class EffectLaneTests
         shell.Project.CueLists[0].Cues.AddRange([card, automation]);
         shell.Cues.Refresh();
         ShellFixture.Select(shell.Cues, automation.Id);
-        shell.Cues.Inspector.AutomationTargetCueIndex = shell.Cues.Inspector.AutomationTargetCues
+        shell.Cues.Inspector.Video.AutomationTargetCueIndex = shell.Cues.Inspector.Video.AutomationTargetCues
             .Select((label, index) => (label, index))
             .Single(item => item.label.Contains(card.Label, StringComparison.Ordinal)).index;
 
-        Assert.True(shell.Cues.Inspector.HasMultipleAutomationTargetPlacements);
-        Assert.Equal(2, shell.Cues.Inspector.AutomationTargetPlacements.Count);
-        shell.Cues.Inspector.AutomationTargetPlacementIndex = 1;
-        shell.Cues.Inspector.AddLane(Opacity);
+        Assert.True(shell.Cues.Inspector.Video.HasMultipleAutomationTargetPlacements);
+        Assert.Equal(2, shell.Cues.Inspector.Video.AutomationTargetPlacements.Count);
+        shell.Cues.Inspector.Video.AutomationTargetPlacementIndex = 1;
+        shell.Cues.Inspector.Video.AddLane(Opacity);
 
         var track = Assert.Single(automation.AutomationTracks);
         Assert.Equal(card.Id, track.Target.CueId);
@@ -279,10 +279,10 @@ public class EffectLaneTests
             shell.Cues.Refresh();
             ShellFixture.Select(shell.Cues, card.Id);
 
-            Assert.True(shell.Cues.Inspector.CanAddPlacementXLane);
-            Assert.True(shell.Cues.Inspector.CanAddPlacementRotationLane);
-            shell.Cues.Inspector.AddLane(PositionX);
-            shell.Cues.Inspector.AddLane(Rotation);
+            Assert.True(shell.Cues.Inspector.Video.CanAddPlacementXLane);
+            Assert.True(shell.Cues.Inspector.Video.CanAddPlacementRotationLane);
+            shell.Cues.Inspector.Video.AddLane(PositionX);
+            shell.Cues.Inspector.Video.AddLane(Rotation);
 
             Assert.Collection(
                 card.AutomationTracks,
@@ -323,10 +323,10 @@ public class EffectLaneTests
             shell.Cues.Refresh();
             ShellFixture.Select(shell.Cues, card.Id);
 
-            Assert.True(shell.Cues.Inspector.HasAutomationChromaKey);
-            Assert.True(shell.Cues.Inspector.HasAutomationColorAdjust);
-            shell.Cues.Inspector.AddLane(ChromaSimilarity);
-            shell.Cues.Inspector.AddLane(ColorContrast);
+            Assert.True(shell.Cues.Inspector.Video.HasAutomationChromaKey);
+            Assert.True(shell.Cues.Inspector.Video.HasAutomationColorAdjust);
+            shell.Cues.Inspector.Video.AddLane(ChromaSimilarity);
+            shell.Cues.Inspector.Video.AddLane(ColorContrast);
 
             Assert.Equal(chroma.Id, card.AutomationTracks[0].Target.ObjectId);
             Assert.Equal(AutomationPropertyIds.ChromaSimilarity, card.AutomationTracks[0].Target.PropertyId);

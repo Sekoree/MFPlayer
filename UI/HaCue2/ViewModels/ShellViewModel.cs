@@ -83,7 +83,7 @@ public partial class ShellViewModel : ObservableObject
         // and a method group captured here would keep the disposed old one for the rest of the project.
         Cues.Inspector.PreparedMediaPath = source => YouTubeRuntime.Downloads.PreparedAssetPath(source);
         Cues.Inspector.RememberTabs = Settings.RememberInspectorTab;
-        Cues.FlatActiveList = Settings.FlatActiveList;
+        Cues.ActivePanel.FlatList = Settings.FlatActiveList;
         Cues.Inspector.ProjectPath = () => ProjectPath;
         Cues.DoubleGoGuard = TimeSpan.FromMilliseconds(ParseDurationMilliseconds(Settings.DoubleGoGuard, 250));
         Cues.ConfirmStopAllThreshold = ParseCount(Settings.ConfirmStopAll, 3);
@@ -657,7 +657,7 @@ public partial class ShellViewModel : ObservableObject
         Cues.DoubleGoGuard = TimeSpan.FromMilliseconds(ParseDurationMilliseconds(Settings.DoubleGoGuard, 250));
         Cues.ConfirmStopAllThreshold = ParseCount(Settings.ConfirmStopAll, 3);
         Cues.Inspector.RememberTabs = Settings.RememberInspectorTab;
-        Cues.FlatActiveList = Settings.FlatActiveList;
+        Cues.ActivePanel.FlatList = Settings.FlatActiveList;
         Cues.Tick();
         if (Host is { } host)
             host.MachinePanicFadeMs = Settings.PanicFadeMs;

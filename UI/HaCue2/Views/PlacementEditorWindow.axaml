@@ -11,13 +11,13 @@
         WindowStartupLocation="CenterOwner">
   <Grid RowDefinitions="*,Auto">
     <c:AspectBox Grid.Row="0" Margin="18" HorizontalAlignment="Stretch"
-                 VerticalAlignment="Center" Ratio="{Binding PlacementAspect}">
-      <c:PlacementCanvas Boxes="{Binding Placements}"
+                 VerticalAlignment="Center" Ratio="{Binding Video.PlacementAspect}">
+      <c:PlacementCanvas Boxes="{Binding Video.Placements}"
                          AutomationProperties.Name="Precise video placement canvas"
-                         GuidesX="{Binding PlacementGuidesX}"
-                         GuidesY="{Binding PlacementGuidesY}"
-                         PreserveAspect="{Binding PreservePlacementAspect}"
-                         SnapEnabled="{Binding SnapPlacement}"
+                         GuidesX="{Binding Video.PlacementGuidesX}"
+                         GuidesY="{Binding Video.PlacementGuidesY}"
+                         PreserveAspect="{Binding Video.PreservePlacementAspect}"
+                         SnapEnabled="{Binding Video.SnapPlacement}"
                          AllowOutside="True"
                          Gesture="OnPlacementGesture"
                          GestureCompleted="OnPlacementGestureCompleted" />
@@ -26,8 +26,8 @@
     <Border Grid.Row="1" Classes="chain" Margin="18,0,18,14">
       <DockPanel LastChildFill="True">
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="14">
-          <CheckBox Content="{x:Static res:Strings.PlacePreserveAspect}" IsChecked="{Binding PreservePlacementAspect}" />
-          <CheckBox Content="{x:Static res:Strings.PlaceSnapGuides}" IsChecked="{Binding SnapPlacement}" />
+          <CheckBox Content="{x:Static res:Strings.PlacePreserveAspect}" IsChecked="{Binding Video.PreservePlacementAspect}" />
+          <CheckBox Content="{x:Static res:Strings.PlaceSnapGuides}" IsChecked="{Binding Video.SnapPlacement}" />
         </StackPanel>
         <TextBlock Classes="mono dim3 small" VerticalAlignment="Center"
                    Text="{x:Static res:Strings.PlaceWinDragInsideToMoveEdges}" />

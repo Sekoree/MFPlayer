@@ -15,68 +15,68 @@ public partial class PlacementEditorPane : UserControl
     private void OnRemovePlacement(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector)
-            inspector.RemovePlacement();
+            inspector.Video.RemovePlacement();
     }
 
     private void OnLayout(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is string preset)
-            inspector.ApplyLayout(preset);
+            inspector.Video.ApplyLayout(preset);
     }
 
     private void OnCrop(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is string preset)
-            inspector.ApplyCrop(preset);
+            inspector.Video.ApplyCrop(preset);
     }
 
     private void OnAddAutomation(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector
             && (sender as Control)?.Tag is string propertyId)
-            inspector.AddLane(propertyId);
+            inspector.Video.AddLane(propertyId);
     }
 
     private void OnAddEffect(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is string typeId)
-            inspector.AddLayerEffect(typeId);
+            inspector.Video.AddLayerEffect(typeId);
     }
 
     private void OnToggleEffect(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is Guid effectId)
-            inspector.ToggleLayerEffect(effectId);
+            inspector.Video.ToggleLayerEffect(effectId);
     }
 
     private void OnMoveEffectUp(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is Guid effectId)
-            inspector.MoveLayerEffect(effectId, -1);
+            inspector.Video.MoveLayerEffect(effectId, -1);
     }
 
     private void OnMoveEffectDown(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is Guid effectId)
-            inspector.MoveLayerEffect(effectId, 1);
+            inspector.Video.MoveLayerEffect(effectId, 1);
     }
 
     private void OnRemoveEffect(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector && (sender as Control)?.Tag is Guid effectId)
-            inspector.RemoveLayerEffect(effectId);
+            inspector.Video.RemoveLayerEffect(effectId);
     }
 
     private void OnPlacementGesture(object? sender, Controls.PlacementGesture gesture)
     {
         if (DataContext is InspectorViewModel inspector)
-            inspector.ApplyPlacementGesture(gesture);
+            inspector.Video.ApplyPlacementGesture(gesture);
     }
 
     private void OnPlacementGestureCompleted(object? sender, EventArgs e)
     {
         if (DataContext is InspectorViewModel inspector)
-            inspector.EndPlacementGesture();
+            inspector.Video.EndPlacementGesture();
     }
 
     private void OnFieldCommitted(object? sender, RoutedEventArgs e)

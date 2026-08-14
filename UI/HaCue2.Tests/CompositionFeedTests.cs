@@ -303,7 +303,7 @@ public class CompositionFeedTests
         // The whole point of dividing a canvas: a cue can be dropped exactly onto ONE screen of a wall
         // without anybody working out what fraction that is. The pane built these seams from the start
         // and nothing consumed them - the canvas an operator drags a picture on never saw them.
-        Assert.Contains(0.5, shell.Cues.Inspector.PlacementGuidesX);
+        Assert.Contains(0.5, shell.Cues.Inspector.Video.PlacementGuidesX);
     });
 
     [Fact]
@@ -314,13 +314,13 @@ public class CompositionFeedTests
         var changes = 0;
         shell.Journal.Changed += () => changes++;
 
-        inspector.ApplyPlacementGesture(
+        inspector.Video.ApplyPlacementGesture(
             new PlacementGesture(0, cue.Id, 0, new NormalizedRect(0.1, 0.1, 0.8, 0.8)));
-        inspector.ApplyPlacementGesture(
+        inspector.Video.ApplyPlacementGesture(
             new PlacementGesture(0, cue.Id, 0, new NormalizedRect(0.2, 0.1, 0.8, 0.8)));
 
         Assert.Equal(0, changes);
-        inspector.EndPlacementGesture();
+        inspector.Video.EndPlacementGesture();
         Assert.Equal(1, changes);
     });
 
@@ -335,14 +335,14 @@ public class CompositionFeedTests
         shell.Cues.Refresh();
 
         var inspector = shell.Cues.Inspector;
-        inspector.ExpandPlacement(0);
-        Assert.Contains(0.5, inspector.PlacementGuidesX);
+        inspector.Video.ExpandPlacement(0);
+        Assert.Contains(0.5, inspector.Video.PlacementGuidesX);
 
-        inspector.ExpandPlacement(1);
+        inspector.Video.ExpandPlacement(1);
 
         // A cue can be on several canvases at once. Offering the wall's seam while editing the lobby
         // placement would snap it to a join that is not on that screen - worse than no guide at all.
-        Assert.DoesNotContain(0.5, inspector.PlacementGuidesX);
+        Assert.DoesNotContain(0.5, inspector.Video.PlacementGuidesX);
     });
 
     [Fact]
@@ -356,7 +356,7 @@ public class CompositionFeedTests
 
         // It takes the WHOLE canvas, so its edges are the canvas's own - already snap targets. Counting
         // it would only add duplicates, which is what the view-model's own copy of this used to do.
-        Assert.Equal([0, 0.5, 1], shell.Cues.Inspector.PlacementGuidesX);
+        Assert.Equal([0, 0.5, 1], shell.Cues.Inspector.Video.PlacementGuidesX);
     });
 
     [Fact]

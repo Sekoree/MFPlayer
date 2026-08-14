@@ -193,7 +193,7 @@ public sealed partial class ShowSession
                 claim.Dispose();
             await Clip.ReleaseAsync().ConfigureAwait(false);
             foreach (var output in Outputs)
-                ReleaseClipAudioOutput(output);
+                OutputLeaseCoordinator.Release(output);
 
             Subtitles.Clear();
             Layers.Clear();

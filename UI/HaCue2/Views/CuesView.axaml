@@ -309,7 +309,7 @@
              Nothing about the current scope can hide a sounding cue: groups aggregate their sounding
              children and cues from another list carry that list's name. -->
         <c:PanelBox Grid.Row="2" MinHeight="120"
-                    Header="{x:Static res:Strings.CuesActive}" Subhead="{Binding ActiveCues.Count}"
+                    Header="{x:Static res:Strings.CuesActive}" Subhead="{Binding ActivePanel.ActiveCues.Count}"
                     Hint="{Binding ActivePanelHint}">
           <!-- Editing mode makes the bars live, like the rest of the cue editor. Locked/performance
                mode keeps an explicit latch: a drag is instantly audible and has no undo. -->
@@ -339,7 +339,7 @@
           <!-- Two row shapes, templated by TYPE: a lone sounding cue, and a GROUP that owns the ones
                inside it. A playlist of twelve used to fill this panel with twelve equal rows and
                nothing saying they were one thing. -->
-          <ListBox ItemsSource="{Binding ActivePanelRows}"
+          <ListBox ItemsSource="{Binding ActivePanel.Rows}"
                    ItemContainerTheme="{StaticResource ReadonlyRowItem}">
             <ListBox.DataTemplates>
 

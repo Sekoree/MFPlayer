@@ -133,10 +133,10 @@ public class EditorRegressionTests
 
         shell.Cues.Inspector.Show([stem.Id]);
 
-        Assert.True(shell.Cues.Inspector.CanAddVolumeLane);
-        Assert.False(shell.Cues.Inspector.CanAddOpacityLane);
+        Assert.True(shell.Cues.Inspector.Video.CanAddVolumeLane);
+        Assert.False(shell.Cues.Inspector.Video.CanAddOpacityLane);
         // Outbound ramps need nothing from the media - they send over the cue's length.
-        Assert.True(shell.Cues.Inspector.CanAddOutboundLane);
+        Assert.True(shell.Cues.Inspector.Video.CanAddOutboundLane);
     });
 
     [Fact]
@@ -148,8 +148,8 @@ public class EditorRegressionTests
 
         shell.Cues.Inspector.Show([visualizer.Id]);
 
-        Assert.False(shell.Cues.Inspector.CanAddVolumeLane);
-        Assert.False(shell.Cues.Inspector.CanAddOpacityLane);
+        Assert.False(shell.Cues.Inspector.Video.CanAddVolumeLane);
+        Assert.False(shell.Cues.Inspector.Video.CanAddOpacityLane);
 
         visualizer.Placements.Add(new LayerPlacement
         {
@@ -157,7 +157,7 @@ public class EditorRegressionTests
             LayerIndex = 2,
         });
         shell.Cues.Inspector.Reload();
-        Assert.True(shell.Cues.Inspector.CanAddOpacityLane);
+        Assert.True(shell.Cues.Inspector.Video.CanAddOpacityLane);
     });
 
     [Fact]
@@ -183,7 +183,7 @@ public class EditorRegressionTests
             shell.Cues.Inspector.Show([visualizer.Id]);
 
             // The command index is a UI property slot, not a position in the filtered list.
-            shell.Cues.Inspector.AddLane(AutomationPropertyIds.PlacementOpacity);
+            shell.Cues.Inspector.Video.AddLane(AutomationPropertyIds.PlacementOpacity);
 
             Assert.Equal(
                 [AutomationPropertyIds.PlacementOpacity],
@@ -191,7 +191,7 @@ public class EditorRegressionTests
 
             // And the kind that does not apply is refused outright rather than silently added.
             shell.Cues.Inspector.Show([visualizer.Id]);
-            shell.Cues.Inspector.AddLane(AutomationPropertyIds.CueVolume);
+            shell.Cues.Inspector.Video.AddLane(AutomationPropertyIds.CueVolume);
             Assert.Single(visualizer.AutomationTracks);
         });
 
@@ -206,7 +206,7 @@ public class EditorRegressionTests
 
         // TextCueNode has EffectLanes and is given the EFFECTS tab; the lane lookup simply omitted it,
         // so the pane read "this kind cannot carry automation" over a cue that could.
-        Assert.True(shell.Cues.Inspector.CanCarryLanes);
+        Assert.True(shell.Cues.Inspector.Video.CanCarryLanes);
     });
 
     // ── multi-selection ───────────────────────────────────────────────────────────────────────

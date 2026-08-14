@@ -32,7 +32,7 @@ public sealed class SettingsRuntimeTests
         var shell = new ShellViewModel(ShellFixture.Project(), MachineFacts.Nothing, settings: app);
 
         Assert.True(shell.IsOutputInfoOpen);
-        Assert.True(shell.Cues.FlatActiveList);
+        Assert.True(shell.Cues.ActivePanel.FlatList);
         Assert.False(shell.Cues.Inspector.RememberTabs);
     });
 

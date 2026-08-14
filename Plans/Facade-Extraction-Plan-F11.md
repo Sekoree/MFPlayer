@@ -28,6 +28,18 @@ metadata is `ShowSessionMetadataPublisher`. Remaining owners worth a boundary:
   acquire, per-lease mapping stage, retirement on live mapping updates — is one lifecycle that
   several partials touch. Extract an `OutputLeaseCoordinator` owned by the session, driven from
   the dispatcher, contract-tested against the existing live-reconfiguration tests.
+
+  > **Status 2026-08-14: DONE.** `OutputLeaseCoordinator` (S.Media.Session, internal) now owns the
+  > audio-output lifecycle the three call sites shared: `ResolveAudioOutput` (host lease first,
+  > else backend-owned), `ApplyAudioEffects` staging, `TryAttachRouteOutput` /
+  > `TryAttachProgramInput` with their per-route error isolation, and `Release` with the
+  > borrowed-vs-owned rule. The `ClipAudioOutput`/`AudioRouteTarget`/`AudioEffectControl` records
+  > moved with it. The session constructs it from its own factories and drives it from the
+  > dispatcher; fire path, hot rebuild and voice teardown all call through it now.
+  > `OutputLeaseCoordinatorTests` pin the ownership contracts directly;
+  > `TheOutputLeaseLifecycleHasOneOwner` in `ArchitectureTests` guards both directions of the seam
+  > (coordinator stays a leaf; no session partial re-grows `.CreateOutput(`/`.AcquireInput(`).
+  > Session suite 423, arch 36, HaPlay.Tests 1034 — all green.
 - **Live edits / control ownership** (`LiveEdits` partial): the arbitration of who may write a
   live parameter (operator vs automation vs controller) is a policy, not session plumbing.
   Extract when the next controller feature opens the file.
@@ -53,10 +65,19 @@ verb sets that already have one owner each; a facade would only add indirection.
 > coupled cluster - a video field notifies `PlacementHeaders` (automation region), and every
 > automation-lane projection (`CanAdd*Lane`, `EffectLanes`, target placements) derives from the
 > video pane's `SelectedPlacement`. Extracting Video alone would need cross-object notification
-> plumbing and still leave the coupling. The right next unit is **Video + media tracks + curve
-> pickers + automation as one `PlacementAndAutomationEditor` (~1,500 lines)**, done as its own
-> focused pass. What then remains on the inspector is exactly the plan's target: the General
-> fields, the tab router, and the editor construction.
+> plumbing and still leave the coupling. So it went out as one unit:
+>
+> **DONE, same day:** `PlacementAndAutomationEditor` (1,438 lines, `Inspector/`) now owns the
+> video pane (placements, guides, dest rect, crop, effect rack, live-placement publisher and
+> gesture protocol) AND the whole automation block (lanes, effect lanes, `CanAdd*Lane`, targets,
+> `LaneEditor`), exposed as `Inspector.Video`. It takes the same `(journal,
+> IInspectorEditorContext)` seam — the context grew media-facts accessors (`LeadFacts`,
+> `MediaFactsFor`, `LeadClipDuration`, `ClipPathFor`, `CacheRoot`, `WaveformCacheBytes`) so the
+> editor never reaches back into the inspector class. Views/code-behind/TimelineViewModel bind
+> `Video.*`; TimelineSheet's own footer forwards through it. The inspector is now **1,253 lines**
+> (from 3,935): the General fields, the tab router, the edit plumbing seam, and editor
+> construction — exactly the plan's target. Full suites green (HaCue2.Tests 460, Core.Tests 799)
+> plus a HACUE2_SMOKE first-frame launch.
 
 Its own region comments are the seams, and they are per-editor, exactly what the review proposed
 ("split inspector behavior by feature editor session/tab"):
@@ -64,9 +85,9 @@ Its own region comments are the seams, and they are per-editor, exactly what the
 | Region today | Becomes | Owner lifetime |
 |---|---|---|
 | Audio pane + send presets | `AudioPaneEditor` | selected cue |
-| Video pane + dest rect + crop + effect rack | `VideoPaneEditor` | selected cue |
+| Video pane + dest rect + crop + effect rack | `PlacementAndAutomationEditor` (merged, see finding above) | selected cue |
 | Per-kind panes (text / FADE / JUMP / ACTION / PATCH / VISUALIZER) | one small editor class each | selected cue |
-| Media tracks + curve pickers + automation properties | `AutomationPaneEditor` | selected cue |
+| Media tracks + curve pickers + automation properties | `PlacementAndAutomationEditor` (merged) | selected cue |
 | Editable fields + edit plumbing | stays: the router + the journal seam | inspector |
 
 `InspectorViewModel` shrinks to a router: it resolves the selection, constructs the right editor
@@ -83,6 +104,15 @@ Two owners are extractable without disturbing the transport surface:
 - **Tree projection** (document → rows, badges, scope filters): a pure projection today computed
   in-place; extracting it makes the "cue tree shows X" tests direct instead of via the whole VM.
 GO/fire/panic stay on the view model — they are THE surface, not an implementation detail.
+
+> **Status 2026-08-14: DONE.** `ActivePanelTicker` (ViewModels/) owns `ActiveCues`, the grouped
+> `Rows` projection, `FlatList`, the in-place poll reconciliation and the 50 ms smooth clock —
+> with an injected timestamp source, so `ActivePanelTickerTests` drive the extrapolation and
+> pause-hold rules from a fake clock, and a source-text rule pins the seam (the view model may
+> not mention `StructurallySame` or `PolledAtTicks`). The document→rows half was already pure in
+> `CuePresentation`; what was still in-place — the scope roots, the scope filter, the breadcrumb's
+> list lookup — is now `ScopeProjection` (Presentation/), tested directly in
+> `ScopeProjectionTests`. `CuesViewModel`: 3,509 → 3,193 lines; GO/fire/panic untouched.
 
 ### HaPlay `MediaPlayerViewModel` (2.4k + feature partials) — leave it
 

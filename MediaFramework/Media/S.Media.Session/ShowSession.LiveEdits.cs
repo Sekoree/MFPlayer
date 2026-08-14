@@ -690,7 +690,7 @@ public sealed partial class ShowSession
                 {
                     var route = routes[i];
                     var outputId = $"clip{i}";
-                    if (!TryAttachRouteOutput(
+                    if (!_outputLeases.TryAttachRouteOutput(
                             voice.Player, outputId, route.DeviceId, route.ToChannelMap(), rate,
                             gain: route.Gain * level, newOutputs, route, voice.Binding.AudioEffects))
                         continue;
@@ -701,7 +701,7 @@ public sealed partial class ShowSession
 
                 // 3) Swap the voice's tracked set, release the OLD one per ownership, refresh route targets + pumps.
                 foreach (var o in voice.SwapAudioOutputs(newOutputs))
-                    ReleaseClipAudioOutput(o);
+                    OutputLeaseCoordinator.Release(o);
                 voice.ReapplyAudioEffectAutomation();
                 voice.SetRouteTargets(routeTargets);
                 // 4) One level-composition pass over the rebuilt targets - the same thing the fire path does

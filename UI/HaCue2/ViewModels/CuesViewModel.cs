@@ -58,7 +58,7 @@ public partial class CuesViewModel : ObservableObject
             OnPropertyChanged(nameof(RightPanelHint));
         };
 
-        _scopes = BuildScopes();
+        _scopes = ScopeProjection.Scopes(Project);
         // The first list, not a group: the app opens showing everything in it, and scoping is
         // something the operator does on purpose (register item 7).
         _selectedScope = _scopes.FirstOrDefault(scope => scope.IsList);
@@ -74,14 +74,8 @@ public partial class CuesViewModel : ObservableObject
         };
 
         Cues = [];
-        ActiveCues = [.. runtime.ActiveCues];
-
-        // The smooth clock: the engine is polled at 4 Hz, but the Active panel's millisecond digits
-        // tick at UI rate by extrapolating each row from its poll stamp. Corrections land with every
-        // poll rebuild, so the readout can never drift more than one poll interval from the truth.
-        _smoothClock = new DispatcherTimer(
-            TimeSpan.FromMilliseconds(50), DispatcherPriority.Background, (_, _) => TickSmoothClock());
-        _smoothClock.Start();
+        ActivePanel = new ActivePanelTicker(runtime, () => Project);
+        ActivePanel.Start();
 
         // The source exists BEFORE the first Rebuild: Rebuild clears the tree selection before it
         // touches the rows, and it cannot do that against a source that has not been built yet. The
@@ -1759,12 +1753,7 @@ public partial class CuesViewModel : ObservableObject
     /// </remarks>
     public void Tick()
     {
-        // In place, like the panel rows below: Clear-and-refill raised one CollectionChanged per row
-        // four times a second (and bounced the Active subhead's count through zero on every tick) for
-        // a list whose membership usually has not changed at all.
-        SyncActiveCues(_runtime.ActiveCues);
-
-        RebuildActivePanel();
+        ActivePanel.Poll(_runtime.ActiveCues);
 
         OnPropertyChanged(nameof(ActivePanelHint));
         OnPropertyChanged(nameof(IsPaused));
@@ -1862,14 +1851,7 @@ public partial class CuesViewModel : ObservableObject
         CueSource.RowSelection!.Clear();
         Cues.Clear();
 
-        var rows = SelectedScope switch
-        {
-            { IsList: true } scope when Project.CueLists.FirstOrDefault(l => l.Id == scope.Id) is { } list =>
-                CuePresentation.Rows(list, Project, _runtime),
-            { IsList: false } scope when Project.FindCue(scope.Id) is { } cue =>
-                CuePresentation.Subtree(cue, Project, _runtime),
-            _ => [],
-        };
+        var rows = ScopeProjection.Rows(SelectedScope, Project, _runtime);
 
         foreach (var row in rows)
             Cues.Add(row);
@@ -1882,7 +1864,7 @@ public partial class CuesViewModel : ObservableObject
     public string Breadcrumb => SelectedScope is null
         ? "no list"
         : IsScoped
-            ? $"{ListNameOf(SelectedScope.Id)}  ›  {SelectedScope.Name}"
+            ? $"{ScopeProjection.ListNameOf(Project, SelectedScope.Id)}  ›  {SelectedScope.Name}"
             : $"{SelectedScope.Name}  ›  all cues";
 
     public string TreeHint
@@ -1934,7 +1916,7 @@ public partial class CuesViewModel : ObservableObject
     private void RebuildScopes()
     {
         var wanted = SelectedScope?.Id;
-        _scopes = BuildScopes();
+        _scopes = ScopeProjection.Scopes(Project);
 
         OnPropertyChanged(nameof(Scopes));
         OnPropertyChanged(nameof(CueLists));
@@ -1966,313 +1948,15 @@ public partial class CuesViewModel : ObservableObject
         OnPropertyChanged(nameof(IsEmpty));
     }
 
-    /// <summary>
-    /// Every list and every group, as scope roots.
-    /// </summary>
-    /// <remarks>
-    /// The tallies are counts of the real subtree, so a group that gains a cue gains a number here
-    /// without anyone updating a string. Groups are indented by depth for the same reason the tree is.
-    /// </remarks>
-    private IReadOnlyList<ScopeEntry> BuildScopes()
-    {
-        var entries = new List<ScopeEntry>();
+    // ── the Active panel ──────────────────────────────────────────────────────────────────────────
 
-        foreach (var list in Project.CueLists)
-        {
-            entries.Add(new ScopeEntry(list.Id, list.Name, list.Flatten().Count(), IsList: true, 0));
-
-            foreach (var (group, depth) in GroupsIn(list.Cues, 0))
-                entries.Add(new ScopeEntry(
-                    group.Id,
-                    $"{CuePresentation.Number(group.Number)} · {group.Label}",
-                    CountIn(group),
-                    IsList: false,
-                    depth));
-        }
-
-        return entries;
-    }
-
-    private static IEnumerable<(GroupCueNode Group, int Depth)> GroupsIn(
-        IEnumerable<CueNode> cues, int depth)
-    {
-        foreach (var cue in cues)
-        {
-            if (cue is not GroupCueNode group)
-                continue;
-
-            yield return (group, depth);
-            foreach (var nested in GroupsIn(group.Children, depth + 1))
-                yield return nested;
-        }
-    }
-
-    private static int CountIn(GroupCueNode group) =>
-        group.Children.Count + group.Children.OfType<GroupCueNode>().Sum(CountIn);
-
-    private string ListNameOf(Guid groupId) =>
-        Project.CueLists.FirstOrDefault(list => list.Flatten().Any(cue => cue.Id == groupId))?.Name
-        ?? "show";
-
-    // ── the Active panel ──────────────────────────────────────────────────────────────────────
-    // Scope is a view filter, never a transport boundary: this list always shows everything sounding.
-    public ObservableCollection<ActiveCueRow> ActiveCues { get; }
-
-    /// <summary>
-    /// The same cues, with a group's sounding children gathered under one header.
-    /// </summary>
-    /// <remarks>
-    /// A separate collection from <see cref="ActiveCues"/>, which stays flat because the transport
-    /// reads it - bare STOP wants "the one running longest" and the seek wants a cue by id, and
-    /// neither should have to walk a tree to find one.
-    /// </remarks>
-    public ObservableCollection<object> ActivePanelRows { get; } = [];
-
-    private readonly DispatcherTimer _smoothClock;
-
-    /// <summary>
-    /// One UI-rate tick of the Active panel's clocks - see the timer's construction for the design.
-    /// </summary>
-    /// <remarks>
-    /// Extrapolation is gated on the transport actually running: a paused show's clocks must hold
-    /// still rather than creep a poll interval ahead and snap back. A fading cue still advances - its
-    /// playhead genuinely runs through the ramp. Upcoming countdowns are STAGED: they stay on their
-    /// calm whole-second poll text until the start is inside <see cref="CuePresentation.UpcomingPreciseWindow"/>,
-    /// then tick their milliseconds here.
-    /// </remarks>
-    private void TickSmoothClock()
-    {
-        if (ActivePanelRows.Count == 0 || _runtime.IsPaused)
-            return;
-
-        var now = Stopwatch.GetTimestamp();
-
-        foreach (var item in ActivePanelRows)
-        {
-            switch (item)
-            {
-                case ActiveCueRow row:
-                    TickActiveRow(row, now);
-                    break;
-                case ActiveGroupRow group:
-                {
-                    foreach (var child in group.Children)
-                        TickActiveRow(child, now);
-
-                    if (group.TotalValue > TimeSpan.Zero)
-                    {
-                        var remaining = group.RemainingAtPoll - Stopwatch.GetElapsedTime(group.PolledAtTicks, now);
-                        if (remaining < TimeSpan.Zero)
-                            remaining = TimeSpan.Zero;
-                        group.Clock =
-                            $"−{CuePresentation.PreciseClock(remaining)} / {CuePresentation.PreciseClock(group.TotalValue)}";
-                        group.Progress = Math.Clamp(1 - (remaining / group.TotalValue), 0, 1);
-                    }
-
-                    foreach (var upcoming in group.Upcoming)
-                    {
-                        var starts = upcoming.StartsInAtPoll - Stopwatch.GetElapsedTime(upcoming.PolledAtTicks, now);
-                        if (starts < TimeSpan.Zero)
-                            starts = TimeSpan.Zero;
-                        if (starts <= CuePresentation.UpcomingPreciseWindow)
-                            upcoming.Countdown = CuePresentation.UpcomingCountdown(starts);
-                    }
-
-                    break;
-                }
-            }
-        }
-    }
-
-    private static void TickActiveRow(ActiveCueRow row, long now)
-    {
-        var elapsed = row.Position + Stopwatch.GetElapsedTime(row.PolledAtTicks, now);
-        row.Clock = CuePresentation.PreciseClock(elapsed);
-        if (row.Duration is { TotalMilliseconds: > 0 } length)
-        {
-            var remaining = length - elapsed;
-            if (remaining < TimeSpan.Zero)
-                remaining = TimeSpan.Zero;
-            row.Remaining = $"−{CuePresentation.PreciseClock(remaining)}";
-            row.Progress = Math.Clamp(elapsed / length, 0, 1);
-        }
-
-        // The ramps inside the cue run off the SAME extrapolated playhead, so a fade's countdown moves
-        // exactly as smoothly as the cue's own and the two can never disagree about where it is.
-        foreach (var lane in row.Lanes)
-            lane.Tick(elapsed);
-    }
-
-    /// <summary>Shows sounding cues without group headers when the operator prefers a flat run list.</summary>
-    public bool FlatActiveList { get; set; }
-
-    /// <summary>
-    /// Reconciles the panel against one poll's rows IN PLACE.
-    /// </summary>
-    /// <remarks>
-    /// The poll lands four times a second, and replacing the rows wholesale replaced the CONTROLS
-    /// four times a second: the seek bar died mid-drag, the expander and stop buttons lost their
-    /// hover the instant the pointer settled on them, and the group header's open/shut state had to
-    /// be smuggled across each rebuild. Rows persist now - matched by cue/group identity, their
-    /// observable measurements updated, and only genuinely new/gone/reshaped rows change objects.
-    /// </remarks>
-    private void RebuildActivePanel()
-    {
-        IReadOnlyList<object> fresh = FlatActiveList
-            ? [.. ActiveCues.Cast<object>()]
-            : CuePresentation.ActivePanel(Project, [.. ActiveCues], _runtime.MediaDurations);
-
-        for (var i = 0; i < fresh.Count; i++)
-        {
-            var incoming = fresh[i];
-            var existingIndex = FindRow(ActivePanelRows, incoming, i);
-            if (existingIndex < 0)
-            {
-                ActivePanelRows.Insert(i, incoming);
-                continue;
-            }
-
-            if (existingIndex != i)
-                ActivePanelRows.Move(existingIndex, i);
-
-            switch (ActivePanelRows[i], incoming)
-            {
-                case (ActiveCueRow current, ActiveCueRow freshRow):
-                    current.UpdateFrom(freshRow);
-                    break;
-                case (ActiveGroupRow current, ActiveGroupRow freshGroup):
-                    current.UpdateAggregatesFrom(freshGroup);
-                    SyncChildren(current.Children, freshGroup.Children);
-                    SyncUpcoming(current.Upcoming, freshGroup.Upcoming);
-                    current.HasUpcoming = current.Upcoming.Count > 0;
-                    break;
-            }
-        }
-
-        while (ActivePanelRows.Count > fresh.Count)
-            ActivePanelRows.RemoveAt(ActivePanelRows.Count - 1);
-    }
-
-    /// <summary>Reconciles the raw sounding list against one poll, by the same identity-and-shape
-    /// rules the panel's children use. A row already present keeps its object and adopts the fresh
-    /// measurements; membership changes insert, move or trim.</summary>
-    private void SyncActiveCues(IReadOnlyList<ActiveCueRow> fresh)
-    {
-        for (var i = 0; i < fresh.Count; i++)
-        {
-            var found = -1;
-            for (var j = i; j < ActiveCues.Count; j++)
-            {
-                if (ActiveCues[j].StructurallySame(fresh[i]))
-                {
-                    found = j;
-                    break;
-                }
-            }
-
-            if (found < 0)
-            {
-                ActiveCues.Insert(i, fresh[i]);
-                continue;
-            }
-
-            if (found != i)
-                ActiveCues.Move(found, i);
-
-            // The flat panel holds these same objects, so a row can meet itself here; adopting from
-            // itself would be a harmless no-op, but there is nothing to adopt.
-            if (!ReferenceEquals(ActiveCues[i], fresh[i]))
-                ActiveCues[i].UpdateFrom(fresh[i]);
-        }
-
-        while (ActiveCues.Count > fresh.Count)
-            ActiveCues.RemoveAt(ActiveCues.Count - 1);
-    }
-
-    /// <summary>An existing row matching <paramref name="incoming"/>'s identity and shape, at or
-    /// after <paramref name="from"/>, or −1 when the row is genuinely new (or reshaped - a changed
-    /// shape replaces the object, since indentation and labels are deliberately not observable).</summary>
-    private static int FindRow(ObservableCollection<object> rows, object incoming, int from)
-    {
-        for (var i = from; i < rows.Count; i++)
-        {
-            switch (rows[i], incoming)
-            {
-                case (ActiveCueRow current, ActiveCueRow fresh) when current.StructurallySame(fresh):
-                    return i;
-                case (ActiveGroupRow current, ActiveGroupRow fresh)
-                    when current.GroupId == fresh.GroupId
-                         && current.Number == fresh.Number
-                         && current.Label == fresh.Label
-                         && current.Mode == fresh.Mode:
-                    return i;
-            }
-        }
-
-        return -1;
-    }
-
-    private static void SyncChildren(
-        ObservableCollection<ActiveCueRow> current, ObservableCollection<ActiveCueRow> fresh)
-    {
-        for (var i = 0; i < fresh.Count; i++)
-        {
-            var found = -1;
-            for (var j = i; j < current.Count; j++)
-            {
-                if (current[j].StructurallySame(fresh[i]))
-                {
-                    found = j;
-                    break;
-                }
-            }
-
-            if (found < 0)
-                current.Insert(i, fresh[i]);
-            else
-            {
-                if (found != i)
-                    current.Move(found, i);
-                current[i].UpdateFrom(fresh[i]);
-            }
-        }
-
-        while (current.Count > fresh.Count)
-            current.RemoveAt(current.Count - 1);
-    }
-
-    private static void SyncUpcoming(
-        ObservableCollection<UpcomingCueRow> current, ObservableCollection<UpcomingCueRow> fresh)
-    {
-        for (var i = 0; i < fresh.Count; i++)
-        {
-            var found = -1;
-            for (var j = i; j < current.Count; j++)
-            {
-                if (current[j].Number == fresh[i].Number && current[j].Label == fresh[i].Label)
-                {
-                    found = j;
-                    break;
-                }
-            }
-
-            if (found < 0)
-                current.Insert(i, fresh[i]);
-            else
-            {
-                if (found != i)
-                    current.Move(found, i);
-                current[i].UpdateFrom(fresh[i]);
-            }
-        }
-
-        while (current.Count > fresh.Count)
-            current.RemoveAt(current.Count - 1);
-    }
+    /// <summary>The Active panel's state: the sounding rows, their grouped projection, and the
+    /// smooth clock - see <see cref="ActivePanelTicker"/>. Polled by <see cref="Tick"/>.</summary>
+    public ActivePanelTicker ActivePanel { get; }
 
     public string ActivePanelHint => IsScoped
         ? "includes cues outside the scope"
-        : $"{ActiveCues.Count} sounding · scope never hides these";
+        : $"{ActivePanel.ActiveCues.Count} sounding · scope never hides these";
 
     // ── the right column ──────────────────────────────────────────────────────────────────────
     public IReadOnlyList<string> RightTabs { get; } = [PropertiesTab, ListsTab];
@@ -2513,11 +2197,11 @@ public sealed partial class TimelineViewModel : ObservableObject
     public bool CanAddColorContrastLane => CanAddLane(AutomationPropertyIds.ColorContrast);
     public bool CanAddAudioGainLane => CanAddLane(AudioEffectCatalog.PropertyId(
         S.Media.Routing.GainAudioEffect.EffectId, S.Media.Routing.GainAudioEffect.GainParameterId));
-    public bool HasAutomationChromaKey => Owner?.Inspector.HasAutomationChromaKey ?? false;
-    public bool HasAutomationColorAdjust => Owner?.Inspector.HasAutomationColorAdjust ?? false;
-    public bool HasAutomationAudioGain => Owner?.Inspector.HasAutomationAudioGain ?? false;
+    public bool HasAutomationChromaKey => Owner?.Inspector.Video.HasAutomationChromaKey ?? false;
+    public bool HasAutomationColorAdjust => Owner?.Inspector.Video.HasAutomationColorAdjust ?? false;
+    public bool HasAutomationAudioGain => Owner?.Inspector.Video.HasAutomationAudioGain ?? false;
 
-    private bool CanAddLane(string propertyId) => Owner?.Inspector.CanAddLane(propertyId) ?? false;
+    private bool CanAddLane(string propertyId) => Owner?.Inspector.Video.CanAddLane(propertyId) ?? false;
 
     /// <summary>The grid picker in the transport row: how fine a drag steps, or free.</summary>
     public IReadOnlyList<string> SnapModes { get; } = ["1 s", "0.5 s", "0.1 s", "free"];

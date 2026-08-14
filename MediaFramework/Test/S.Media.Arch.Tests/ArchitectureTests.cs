@@ -362,6 +362,42 @@ public sealed class ArchitectureTests
             "CueRunner must reach the engine only through ICueRunnerHost, never ShowSession directly.");
     }
 
+    /// <summary>
+    /// The acquired-audio-output lifecycle has ONE owner (review F-11): the coordinator is a leaf the
+    /// session drives, and the session does not keep private copies of the acquire/attach machinery.
+    /// </summary>
+    /// <remarks>
+    /// Both directions of the seam. The coordinator reaching back into <c>ShowSession</c> would let the
+    /// lifecycle depend on transport state it must not know; the session opening backend outputs or
+    /// program-input leases itself is how the three call sites (fire, hot rebuild, teardown) grew
+    /// diverging halves of the same ownership rules before the seam existed.
+    /// </remarks>
+    [Fact]
+    public void TheOutputLeaseLifecycleHasOneOwner()
+    {
+        var coordinator = Path.Combine(
+            RepoRoot(), "MediaFramework", "Media", "S.Media.Session", "OutputLeaseCoordinator.cs");
+        Assert.True(File.Exists(coordinator), $"expected the coordinator at {coordinator}");
+        // Strings stripped too: the moved diagnostics keep their historical "ShowSession:" log prefix
+        // (field logs are grepped by it), and a log label is not a dependency.
+        var coordinatorCode = System.Text.RegularExpressions.Regex.Replace(
+            StripComments(File.ReadAllText(coordinator)), "\"[^\"]*\"", "\"\"");
+        Assert.False(
+            coordinatorCode.Contains("ShowSession", StringComparison.Ordinal),
+            "OutputLeaseCoordinator is a leaf: the session drives it, never the other way around.");
+
+        var sessionDir = Path.Combine(RepoRoot(), "MediaFramework", "Media", "S.Media.Session");
+        foreach (var partial in Directory.EnumerateFiles(sessionDir, "ShowSession*.cs"))
+        {
+            var code = StripComments(File.ReadAllText(partial));
+            Assert.False(
+                code.Contains(".CreateOutput(", StringComparison.Ordinal)
+                || code.Contains(".AcquireInput(", StringComparison.Ordinal),
+                $"{Path.GetFileName(partial)} must acquire audio outputs/program inputs through "
+                + "OutputLeaseCoordinator, never open them itself.");
+        }
+    }
+
     /// <summary>Drops <c>//</c> comments so a source rule is about code, not prose. A file may legitimately
     /// NAME the type it is decoupled from when explaining the decoupling.</summary>
     private static string StripComments(string source) =>

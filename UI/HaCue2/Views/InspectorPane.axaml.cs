@@ -51,21 +51,21 @@ public partial class InspectorPane : UserControl
     {
         if (DataContext is InspectorViewModel inspector
             && (sender as Control)?.Tag is string propertyId)
-            inspector.AddLane(propertyId);
+            inspector.Video.AddLane(propertyId);
     }
 
     private void OnRemoveLane(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector
             && (sender as Control)?.Tag is int index)
-            inspector.RemoveLane(index);
+            inspector.Video.RemoveLane(index);
     }
 
     private void OnConfigureLane(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector
             && (sender as Control)?.Tag is int index)
-            PromptWindow.Show(this, inspector.ConfigureLane(index), inspector.Reload);
+            PromptWindow.Show(this, inspector.Video.ConfigureLane(index), inspector.Reload);
     }
 
     /// <summary>Opens the shared curve editor over one lane's points.</summary>
@@ -73,7 +73,7 @@ public partial class InspectorPane : UserControl
     {
         if (DataContext is not InspectorViewModel inspector
             || (sender as Control)?.Tag is not int index
-            || inspector.LaneEditor(index) is not { } editor)
+            || inspector.Video.LaneEditor(index) is not { } editor)
             return;
 
         if (this.FindAncestorOfType<Window>() is not { } owner)
@@ -125,7 +125,7 @@ public partial class InspectorPane : UserControl
     private void OnPlace(object? sender, RoutedEventArgs e)
     {
         if (DataContext is InspectorViewModel inspector)
-            inspector.PlaceOnComposition();
+            inspector.Video.PlaceOnComposition();
     }
 
     /// <summary>Opening a placement's expander selects the placement its nested editor projects.</summary>
@@ -133,7 +133,7 @@ public partial class InspectorPane : UserControl
     {
         if (DataContext is InspectorViewModel inspector
             && sender is Expander { Tag: int index })
-            inspector.ExpandPlacement(index);
+            inspector.Video.ExpandPlacement(index);
     }
 
     private void OnSendGesture(object? sender, Controls.MatrixGesture gesture)
