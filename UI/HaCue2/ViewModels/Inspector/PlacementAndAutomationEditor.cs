@@ -115,10 +115,22 @@ public sealed partial class PlacementAndAutomationEditor(
 
             var composition = Project.Compositions
                 .FirstOrDefault(item => item.Id == placement.CompositionId);
+            if (composition is null)
+                return [];
 
-            return composition is null
-                ? []
-                : VideoPresentation.Layers(Project, composition, Cue?.Id, MediaFacts);
+            // Only the SELECTED cue(s): this is the cue's placement editor, not the composition's.
+            // Every placement of every cue on the canvas drew here once, and editing one cue's
+            // corner meant hunting for it under the whole show's boxes. A multi-selection shows
+            // each selected cue's placements; the composition-wide picture belongs to the Video
+            // screen's canvas editor.
+            var selected = context.Selected.Select(cue => cue.Id).ToHashSet();
+            if (Cue is { } lead)
+                selected.Add(lead.Id);
+            return
+            [
+                .. VideoPresentation.Layers(Project, composition, Cue?.Id, MediaFacts)
+                    .Where(box => selected.Contains(box.SubjectId)),
+            ];
         }
     }
 

@@ -65,6 +65,7 @@
                 <Button Classes="tight" Content="{x:Static res:Strings.VidNdi}" Click="OnDialog" Tag="out:ndi" />
                 <Button Classes="tight" Content="{x:Static res:Strings.AudRecord}" Click="OnDialog" Tag="out:record" />
                 <Button Classes="tight" Content="{x:Static res:Strings.AudStream}" Click="OnDialog" Tag="out:stream" />
+                <Button Classes="tight" Content="{x:Static res:Strings.VidEditOutput}" Click="OnDialog" Tag="out:edit" />
                 <Button Classes="tight" Content="{x:Static res:Strings.VidRename}" Click="OnDialog" Tag="out:rename" />
                 <Button Classes="tight" Content="{x:Static res:Strings.AudRemove}" Click="OnDialog" Tag="out:remove" />
               </StackPanel>
@@ -90,6 +91,7 @@
                      PointerPressed="OnRowRightPressed">
               <ListBox.ContextMenu>
                 <ContextMenu>
+                  <MenuItem Header="{x:Static res:Strings.VidEditOutputMenu}" Click="OnDialog" Tag="out:edit" />
                   <MenuItem Header="{x:Static res:Strings.AudRename2}" Click="OnDialog" Tag="out:rename" />
                   <MenuItem Header="{x:Static res:Strings.VidEditMapping}" Click="OnEditMapping" />
                   <Separator />

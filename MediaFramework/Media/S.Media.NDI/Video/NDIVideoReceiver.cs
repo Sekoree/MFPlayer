@@ -88,7 +88,13 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     public void RebaseToLatest(TimeSpan nextPresentationTime = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (nextPresentationTime < TimeSpan.Zero)
+        // NEGATIVE anchors are legitimate and load-bearing: a session's audio-mastered clock counts
+        // up from -(output ring depth) so that position 0 is the first AUDIBLE sample, and the
+        // start-edge rebase hands that position in. Clamping it to zero anchored every live frame
+        // one ring-depth AHEAD of the playhead - a permanent lead the shallow live queue cannot
+        // hold, so the reader blocked, the receiver dropped in bursts, and the picture froze and
+        // caught up on a ~1 s cycle. Only the sentinel-ish extremes are refused.
+        if (nextPresentationTime < TimeSpan.FromHours(-1))
             nextPresentationTime = TimeSpan.Zero;
         lock (_ptsLock)
         {

@@ -414,6 +414,15 @@ public static class Strings
     public static string InspAllSoundingMedia => Get(nameof(InspAllSoundingMedia));
     public static string InspCueNumbersEG12 => Get(nameof(InspCueNumbersEG12));
     public static string InspLockToThisPresetNo => Get(nameof(InspLockToThisPresetNo));
+    public static string InspShufflePresets => Get(nameof(InspShufflePresets));
+    public static string InspBeatSensitivity => Get(nameof(InspBeatSensitivity));
+    public static string InspRenderSize => Get(nameof(InspRenderSize));
+    public static string InspRenderAuto => Get(nameof(InspRenderAuto));
+    public static string InspRenderRate => Get(nameof(InspRenderRate));
+    public static string InspNextPreset => Get(nameof(InspNextPreset));
+    public static string InspNextPresetHint => Get(nameof(InspNextPresetHint));
+    public static string VidEditOutput => Get(nameof(VidEditOutput));
+    public static string VidEditOutputMenu => Get(nameof(VidEditOutputMenu));
     public static string InspPlacementLivesOnTheVideo => Get(nameof(InspPlacementLivesOnTheVideo));
     public static string InspEndpoint => Get(nameof(InspEndpoint));
     public static string InspAddress => Get(nameof(InspAddress));

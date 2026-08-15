@@ -434,6 +434,21 @@ public sealed record VisualizerCueNode : CueNode
     public int BlendMs { get; set; } = 3_000;
     public bool LockPreset { get; set; }
 
+    /// <summary>Random order when a preset advances; false rotates alphabetically (HaPlay parity).</summary>
+    public bool ShufflePresets { get; set; } = true;
+
+    /// <summary>projectM beat sensitivity, 0–5; the library default is 1.</summary>
+    public double BeatSensitivity { get; set; } = 1;
+
+    /// <summary>projectM's internal render resolution (its own FBO). 0 = follow the composition -
+    /// set it to render crisp visuals independent of a small canvas, exactly as HaPlay does.</summary>
+    public int RenderWidth { get; set; }
+
+    public int RenderHeight { get; set; }
+
+    /// <summary>projectM's animation FPS. 0 = follow the composition's rate.</summary>
+    public int RenderFps { get; set; }
+
     /// <summary>Listen to every sounding cue. False uses <see cref="FeedCueIds"/> plus media opt-ins.</summary>
     public bool FeedAll { get; set; } = true;
 

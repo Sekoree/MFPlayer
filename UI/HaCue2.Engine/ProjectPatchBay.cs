@@ -32,8 +32,10 @@ public sealed class ProjectPatchBay : IDisposable
 
     private readonly List<IAudioOutput> _outputs = [];
 
-    /// <summary>NDI senders this bay opened, disposed after the terminals that submit to them.</summary>
-    private readonly List<NDIOutput> _senders = [];
+    /// <summary>Leases on the shared NDI carriers this bay's lines joined, released after the
+    /// terminals that submit to them. The sender itself dies with its LAST holder - a linked A/V
+    /// carrier's video half may outlive an audio restart (see <see cref="NdiSenderHub"/>).</summary>
+    private readonly List<NdiSenderHub.Lease> _senders = [];
 
     /// <summary>The lines that actually opened, and how wide each one turned out to be.</summary>
     /// <remarks>
@@ -47,6 +49,8 @@ public sealed class ProjectPatchBay : IDisposable
     private readonly List<(Guid LineId, int Channels)> _open = [];
 
     private readonly Lock _openGate = new();
+
+    private NdiSenderHub? _ownedNdiHub;
 
     private ProjectPatchBay(AudioPatchBay bay, IReadOnlyList<string> channelIds, string? monitor)
     {
@@ -75,9 +79,11 @@ public sealed class ProjectPatchBay : IDisposable
     /// missing interface.
     /// </remarks>
     public static ProjectPatchBay Open(
-        HaCueProject project, IAudioBackend? backend, IMediaRegistry? registry = null)
+        HaCueProject project, IAudioBackend? backend, IMediaRegistry? registry = null,
+        NdiSenderHub? ndiSenders = null)
     {
         ArgumentNullException.ThrowIfNull(project);
+        var ndiHub = ndiSenders;
 
         var patch = project.AudioPatch;
         var channels = patch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
@@ -107,7 +113,9 @@ public sealed class ProjectPatchBay : IDisposable
         // the name straight through made every configured line refuse to open.
         var catalog = Catalog(backend);
         var opened = new List<IAudioOutput>();
-        var senders = new List<NDIOutput>();
+        var senders = new List<NdiSenderHub.Lease>();
+        var ownedHub = ndiHub is null ? new NdiSenderHub() : null;
+        ndiHub ??= ownedHub;
         var openLines = new List<(Guid, int)>();
         string? monitor = null;
         string? automaticMaster = null;
@@ -134,7 +142,7 @@ public sealed class ProjectPatchBay : IDisposable
                 // one by name would look for a sound card called "HACUE-PROG" and report the show's own
                 // NDI feed as a missing interface.
                 var output = line.Kind == AudioLineKind.Ndi
-                    ? OpenNdi(line, format, senders)
+                    ? OpenNdi(ndiHub!, line, format, senders)
                     : backend.CreateOutput(AudioDevices.DeviceIdFor(catalog, line.DeviceHint), format);
 
                 // The clock master paces the whole bay, so it must be a line that natively runs at the
@@ -208,6 +216,7 @@ public sealed class ProjectPatchBay : IDisposable
         result._outputs.AddRange(opened);
         result._open.AddRange(openLines);
         result._senders.AddRange(senders);
+        result._ownedNdiHub = ownedHub;
         return result;
     }
 
@@ -232,19 +241,23 @@ public sealed class ProjectPatchBay : IDisposable
 
     /// <summary>Opens an NDI sender's audio side as an ordinary bay terminal.</summary>
     private static IAudioOutput OpenNdi(
-        AudioLineDefinition line, AudioFormat format, List<NDIOutput> senders)
+        NdiSenderHub hub, AudioLineDefinition line, AudioFormat format, List<NdiSenderHub.Lease> senders)
     {
-        var sender = new NDIOutput(line.DeviceHint.Length > 0 ? line.DeviceHint : line.Name);
+        // Through the shared hub: a linked A/V line joins the SAME sender the video side opened for
+        // this name, so receivers see one source carrying both halves on one egress timeline. A
+        // format conflict (the sender already carries audio at another shape) is thrown and lands in
+        // the bay's per-line failure report - re-opening the show adopts the new shape.
+        var lease = hub.Acquire(line.DeviceHint.Length > 0 ? line.DeviceHint : line.Name);
 
         try
         {
-            var audio = sender.EnableAudio(format);
-            senders.Add(sender);
+            var audio = lease.EnableAudio(format);
+            senders.Add(lease);
             return audio;
         }
         catch
         {
-            sender.Dispose();
+            lease.Dispose();
             throw;
         }
     }
@@ -529,7 +542,8 @@ public sealed class ProjectPatchBay : IDisposable
 
         _outputs.Clear();
 
-        // After the terminals, which are the senders' own audio sides.
+        // After the terminals, which are the senders' own audio sides. These are LEASES: the
+        // carrier itself closes only when the video side is not still holding it.
         foreach (var sender in _senders)
         {
             try
@@ -543,5 +557,6 @@ public sealed class ProjectPatchBay : IDisposable
         }
 
         _senders.Clear();
+        _ownedNdiHub?.Dispose();
     }
 }

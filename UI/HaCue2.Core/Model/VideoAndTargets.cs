@@ -176,6 +176,46 @@ public sealed record VideoOutputDefinition
     /// <see cref="VideoOutputKind.Stream"/> output pushes. Null on the kinds that address a screen.
     /// </summary>
     public RecordTarget? Record { get; set; }
+
+    /// <summary>
+    /// NDI: the sent feed's raster. Zero follows the composition (auto). Distinct from
+    /// <see cref="MappingWidth"/> for the same reason a window size is: this is what goes on the
+    /// WIRE, and a mapped NDI feed still resolves its sections against it.
+    /// </summary>
+    public int NdiWidth { get; set; }
+
+    public int NdiHeight { get; set; }
+
+    /// <summary>NDI: sent frame-rate cap. Zero follows the composition's rate (auto).</summary>
+    public double NdiFrameRate { get; set; }
+
+    /// <summary>NDI: the wire pixel format. Auto sends the composition's frames as they are.</summary>
+    public NdiWireFormat NdiPixelFormat { get; set; } = NdiWireFormat.Auto;
+
+    /// <summary>NDI: whether this sender also carries the show's audio (register: linked A/V).</summary>
+    public bool NdiCarriesAudio { get; set; }
+
+    /// <summary>NDI: the audio channel count the sender declares when it carries audio.</summary>
+    public int NdiAudioChannels { get; set; } = 2;
+
+    /// <summary>
+    /// The audio line that is this output's audio half, when the carrier has one - the row the
+    /// AUDIO tab shows for the same sender. One NDI source on the network, two tabs describing it.
+    /// </summary>
+    public Guid? LinkedAudioLineId { get; set; }
+}
+
+/// <summary>The pixel format an NDI sender puts on the wire.</summary>
+public enum NdiWireFormat
+{
+    /// <summary>Whatever the composition renders (BGRA today) - zero conversion cost.</summary>
+    Auto,
+
+    /// <summary>Explicit full-quality BGRA.</summary>
+    Bgra,
+
+    /// <summary>UYVY 4:2:2 - roughly half the network bandwidth, converted on the way out.</summary>
+    Uyvy,
 }
 
 public enum VideoOutputKind

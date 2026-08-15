@@ -369,7 +369,11 @@ public sealed class MediaPlayer : IDisposable
 
         // Live video: re-anchor the source's synthesized PTS to the master so prebuffered + subsequent frames
         // present Scheduled against the session clock (Doc 03 §2), not master-less. No-op for file sources.
-        _liveVideoSource?.RebaseToLatest(_liveClock?.CurrentPosition ?? TimeSpan.Zero);
+        // THE PLAY CLOCK, whichever it is: on the audio-clocked path the clock is _liveAudioClock and
+        // _liveClock is null - falling back to Zero here anchored live frames one output-ring depth
+        // AHEAD of the (negative-starting) audible playhead, a permanent lead the shallow live queue
+        // turned into a freeze/catch-up judder cycle.
+        _liveVideoSource?.RebaseToLatest(LivePlayClockPosition());
         // An explicit caller-supplied master always wins; otherwise supply the owned PTS master when the
         // video-only opt-in is on (null for every other open, so the coordinator's else-branch is unchanged).
         var startClocks = _liveSession!.PreparePlay(
@@ -379,6 +383,15 @@ public sealed class MediaPlayer : IDisposable
             verifyPrebufferAfterPrefill);
         return () =>
         {
+            // Re-anchor AGAIN at the start edge. The rebase above ran at PREPARE time, and a session
+            // fire holds prepared voices behind barriers (media open, pre-roll, sync present) for
+            // hundreds of milliseconds before releasing the clocks - every live frame captured in
+            // that window maps ahead of the still-frozen playhead by exactly that gap, and the lead
+            // is PERMANENT: the presentation gate then holds each frame until due, the shallow live
+            // queue blocks the reader, the receiver drops bursts, and the picture freezes and
+            // catches up in a cycle. Anchoring at the edge is what "present live against the
+            // session clock" actually means; it also serves the newest frame after a pause/resume.
+            _liveVideoSource?.RebaseToLatest(LivePlayClockPosition());
             startClocks();
             // Record the timebase epoch this run plays under - the natural-EOF Duration clamp in Position is
             // only valid while the epoch is unchanged (i.e. no seek since this Play). Stamped at the START
@@ -386,6 +399,12 @@ public sealed class MediaPlayer : IDisposable
             Volatile.Write(ref _playPositionEpoch, _liveAudioClock?.PositionEpoch ?? PlaybackEpoch.Single);
         };
     }
+
+    /// <summary>The live play clock's position - the audio master when there is one, else the
+    /// freerun clock. What a live-source rebase must anchor to; both can legitimately read negative
+    /// during the output-ring prefill (position 0 is the first AUDIBLE sample).</summary>
+    private TimeSpan LivePlayClockPosition() =>
+        _liveAudioClock?.CurrentPosition ?? _liveClock?.CurrentPosition ?? TimeSpan.Zero;
 
     public void Pause(CancellationToken cancellationToken = default)
     {
@@ -942,11 +961,54 @@ public sealed class MediaPlayer : IDisposable
         string? audioSourceId = null;
         MediaClock? freerun = null;
         IMediaClock playClock;
-        // Derive the presentation polling cadence from the declared source rate to bound handoff
-        // latency. VideoPlayer forwards every due timestamp, so correctness no longer depends on this
-        // estimate being accurate (important for VFR/mis-tagged media). Live sources publish their
-        // format only after this clock exists and therefore keep the fixed fallback.
-        var videoTickInterval = videoSource is not null and not ILiveVideoSource
+        // A live video source (NDI/capture) publishes its format only with its first frame, so wait
+        // for that frame FIRST (it is discarded; the player re-anchors the source to the master at
+        // Play - Doc 03 §2). Waiting up front is what lets the tick interval below be derived from
+        // the REAL source rate: live sources used to keep the fixed ~60 Hz fallback, and a 60 fps
+        // NDI stream polled at exactly 60 Hz beats against its own arrival phase - each time the
+        // grids drift past each other a frame misses its poll, shows for two glass ticks, and the
+        // picture judders on a slow cycle. Oversampling the poll (like every file open already
+        // does) bounds that hand-off error to a fraction of a frame, which DeliveryLead absorbs.
+        // The wait is bounded and honours the open's cancellation token (NXT-26): a live receiver's
+        // read blocks until a frame arrives, so a connected-but-silent sender must not hang the
+        // open forever - or past a ShowSession STOP.
+        var earlyLiveVideo = videoSource as ILiveVideoSource;
+        if (earlyLiveVideo is not null)
+        {
+            bool gotFirstFrame;
+            try
+            {
+                gotFirstFrame = TryWaitLiveFirstFrame(videoSource!, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                DisposeSourcesAfterFailedWait();
+                throw;
+            }
+
+            if (!gotFirstFrame)
+            {
+                errorMessage = $"live video source delivered no frame within {LiveFirstFrameTimeout.TotalSeconds:0}s.";
+                Trace.LogError("TryOpenLive failed - {Error}", errorMessage);
+                DisposeSourcesAfterFailedWait();
+                return false;
+            }
+        }
+
+        // The wait now runs before anything else is built, so ITS failure path owns the sources the
+        // later CleanupPartialOpen would have (a leaked live receiver is a leaked capture thread).
+        void DisposeSourcesAfterFailedWait()
+        {
+            if (!disposeSourcesOnDispose)
+                return;
+            TryDispose(() => (videoSource as IDisposable)?.Dispose(), "MediaPlayer.TryOpenLive: live video source");
+            TryDispose(() => (audioSource as IDisposable)?.Dispose(), "MediaPlayer.TryOpenLive: live audio source");
+        }
+
+        // Derive the presentation polling cadence from the source rate to bound handoff latency.
+        // VideoPlayer forwards every due timestamp, so correctness no longer depends on this
+        // estimate being accurate (important for VFR/mis-tagged media).
+        var videoTickInterval = videoSource is not null
             ? VideoFormatPacing.PresentationTickInterval(videoSource.Format.FrameRate, options.VideoTickOversample)
             : TimeSpan.Zero;
         if (videoTickInterval <= TimeSpan.Zero)
@@ -1007,15 +1069,10 @@ public sealed class MediaPlayer : IDisposable
             if (disposeSourcesOnDispose && videoSource is IDisposable videoDisposable)
                 ownedDisposables.Add(videoDisposable);
 
-            // A live video source (NDI/capture) publishes its NativePixelFormats only after its first frame,
-            // which VideoPlayer's up-front negotiation needs. Wait for that first frame (it is discarded); the
-            // player re-anchors the source to the master at Play (Doc 03 §2). The wait is bounded and honours
-            // the open's cancellation token (NXT-26): a live receiver's read blocks until a frame arrives, so a
-            // connected-but-silent sender must not hang the open forever - or past a ShowSession STOP.
-            var liveVideo = videoSource as ILiveVideoSource;
-            if (liveVideo is not null && !TryWaitLiveFirstFrame(videoSource!, cancellationToken))
-                throw new TimeoutException(
-                    $"live video source delivered no frame within {LiveFirstFrameTimeout.TotalSeconds:0}s.");
+            // The live first-frame wait happened before the clocks were built (it is what made the
+            // tick interval real); by here the format and NativePixelFormats are published, which
+            // VideoPlayer's up-front negotiation needs.
+            var liveVideo = earlyLiveVideo;
 
             // WITH the registry's converter behind it. Without one the router's can-convert probe
             // answers "no" for every pair, so every fan-out branch that needs a pixel conversion - which

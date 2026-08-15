@@ -152,9 +152,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         {
             var presets = await Task.Run(() =>
             {
-                var match = NDISource.Find(TimeSpan.FromSeconds(3))
-                    .FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.Ordinal));
-                if (match.Name is null)
+                if (!NDISource.TryFindByName(name, TimeSpan.FromSeconds(3), out var match))
                     return (NDIAudioBufferPresets?)null;
 
                 return NDIAudioBufferProbe.Probe(

@@ -24,6 +24,12 @@ public enum PromptFieldKind
     File,
 
     /// <summary>
+    /// A button that runs a caller-supplied action - a probe, a test, a scan. The field's Value is
+    /// the button's label; results land in the Hint (and in other fields the caller fills).
+    /// </summary>
+    Action,
+
+    /// <summary>
     /// Free text with a list of suggestions beside it - an editable combo box.
     /// </summary>
     /// <remarks>
@@ -90,6 +96,14 @@ public sealed partial class PromptField : ObservableObject
     private bool _isEnabled = true;
 
     public bool IsText => Kind is PromptFieldKind.Text or PromptFieldKind.Number;
+
+    /// <summary>A button field - see <see cref="PromptFieldKind.Action"/>.</summary>
+    public bool IsAction => Kind == PromptFieldKind.Action;
+
+    /// <summary>Raised when an <see cref="PromptFieldKind.Action"/> field's button is pressed.</summary>
+    public event Action<PromptField>? Invoked;
+
+    public void Invoke() => Invoked?.Invoke(this);
 
     /// <summary>Free text with a preset list beside it.</summary>
     public bool IsSuggestion => Kind == PromptFieldKind.Suggestion;

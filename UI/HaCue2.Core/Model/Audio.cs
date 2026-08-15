@@ -105,6 +105,12 @@ public sealed record AudioLineDefinition
     public bool Required { get; set; }
 
     /// <summary>
+    /// The video output that is this line's video half, when it is one side of a linked A/V
+    /// carrier (an NDI sender carrying both) - the row the VIDEO tab shows for the same sender.
+    /// </summary>
+    public Guid? LinkedVideoOutputId { get; set; }
+
+    /// <summary>
     /// Where a <see cref="AudioLineKind.FileRecord"/> line writes, or a
     /// <see cref="AudioLineKind.Stream"/> line pushes. Null on the kinds that address a device.
     /// </summary>

@@ -125,9 +125,18 @@
                       ToolTip.Tip="{x:Static res:Strings.ShellOutputInfoTooltip}" />
         <TextBlock Grid.Column="1" Classes="mono ok small" VerticalAlignment="Center"
                    Text="{Binding OutputSummary}" />
-        <!-- The issue count is the doorway to Project status; it is the only red thing on the bar. -->
-        <Button Grid.Column="2" Theme="{StaticResource LinkButton}" Foreground="{DynamicResource GelRed}"
-                Content="{Binding IssueSummary}" Click="OnProjectStatus" />
+        <!-- The issue count is the doorway to Project status. Red is reserved for ERRORS; a
+             warnings-only show wears amber, and a clean one sits quiet. -->
+        <Button Grid.Column="2" Theme="{StaticResource LinkButton}"
+                Classes.warnOnly="{Binding IssuesAreWarningsOnly}"
+                Classes.allQuiet="{Binding !HasIssues}"
+                Content="{Binding IssueSummary}" Click="OnProjectStatus">
+          <Button.Styles>
+            <Style Selector="Button"><Setter Property="Foreground" Value="{DynamicResource GelRed}" /></Style>
+            <Style Selector="Button.warnOnly"><Setter Property="Foreground" Value="{DynamicResource GelAmber}" /></Style>
+            <Style Selector="Button.allQuiet"><Setter Property="Foreground" Value="{DynamicResource BoothInk3}" /></Style>
+          </Button.Styles>
+        </Button>
         <!-- The undo toast names the DOMAIN as well as the edit ("undo: patch - Fold L → Out 3 gain"):
              with one journal across every view, ⌘Z can otherwise change a screen nobody is looking at. -->
         <TextBlock Grid.Column="3" Classes="mono dim2 small" VerticalAlignment="Center"

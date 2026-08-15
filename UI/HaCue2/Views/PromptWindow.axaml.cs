@@ -37,6 +37,13 @@ public partial class PromptWindow : Window
     /// rather than from the home directory. A cancelled picker leaves what was typed alone - the one
     /// thing worse than no browse button is one that clears the box.
     /// </remarks>
+    /// <summary>Fires an Action field's caller-supplied verb (a probe, a test, a scan).</summary>
+    private void OnAction(object? sender, RoutedEventArgs e)
+    {
+        if ((sender as Control)?.Tag is PromptField field)
+            field.Invoke();
+    }
+
     private async void OnBrowse(object? sender, RoutedEventArgs e)
     {
         if ((sender as Control)?.Tag is not PromptField field

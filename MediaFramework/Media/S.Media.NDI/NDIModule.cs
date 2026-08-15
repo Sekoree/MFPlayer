@@ -167,9 +167,12 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
 
     private static NDIDiscoveredSource ResolveSource(string name)
     {
-        foreach (var s in NDISource.Find(DiscoveryTimeout))
-            if (string.Equals(s.Name, name, StringComparison.Ordinal))
-                return s;
+        // BY NAME, waiting the whole budget for it: a plain Find returns on the first list change,
+        // and once this process publishes a sender of its own that first change is the local source
+        // in milliseconds - which made every re-fire of a remote camera "not found" the moment the
+        // show had an NDI output. TryFindByName also returns the instant the name shows up.
+        if (NDISource.TryFindByName(name, DiscoveryTimeout, out var source))
+            return source;
         throw new InvalidOperationException(
             $"NDI source '{name}' was not found on the network within {DiscoveryTimeout.TotalSeconds:0}s.");
     }

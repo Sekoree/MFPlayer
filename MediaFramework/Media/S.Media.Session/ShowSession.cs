@@ -288,13 +288,28 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     /// low-rate source needs only a few ms of margin, not half its period). An unknown rate still
     /// gets a small margin - the race exists regardless.
     /// </summary>
-    internal static TimeSpan VideoDeliveryLead(Rational frameRate)
+    internal static TimeSpan VideoDeliveryLead(Rational frameRate, bool live = false)
     {
         if (frameRate.Numerator <= 0 || frameRate.Denominator <= 0)
-            return TimeSpan.FromMilliseconds(8);
-        var halfPeriodTicks = TimeSpan.TicksPerSecond * frameRate.Denominator / (frameRate.Numerator * 2L);
-        return TimeSpan.FromTicks(Math.Min(halfPeriodTicks, TimeSpan.FromMilliseconds(20).Ticks));
+            return TimeSpan.FromMilliseconds(live ? 16 : 8);
+        // A LIVE source gets a FULL period rather than half: a file clip's decode runs ahead of the
+        // playhead so half a period of lead already clears the slot's selection grid in every phase,
+        // but live frames are only forwarded once due on a quantized tick - the real margin at the
+        // slot shrinks to single milliseconds, and whether the canvas's own 60 Hz sampling phase
+        // lands inside it is a per-run coin toss that reads as a light repeat/jump shimmer. One
+        // extra half-period of lead (≤ a frame of latency) clears every phase alignment.
+        var divisor = live ? 1L : 2L;
+        var leadTicks = TimeSpan.TicksPerSecond * frameRate.Denominator / (frameRate.Numerator * divisor);
+        var cap = live ? TimeSpan.FromMilliseconds(40) : TimeSpan.FromMilliseconds(20);
+        return TimeSpan.FromTicks(Math.Min(leadTicks, cap.Ticks));
     }
+
+    /// <summary>One source frame's duration, for the live selection lag; a sane default when the
+    /// rate is unknown (a live source has published its format by commit, so this is rare).</summary>
+    internal static TimeSpan SourceFramePeriod(Rational frameRate) =>
+        frameRate.Numerator > 0 && frameRate.Denominator > 0
+            ? TimeSpan.FromSeconds(frameRate.Denominator / (double)frameRate.Numerator)
+            : TimeSpan.FromMilliseconds(17);
 
     /// <summary>A composition layer the active clip's video is fanned to, tagged by its composition + layer index
     /// so a live placement edit can target the right one when a clip is placed onto more than one layer.</summary>
@@ -1101,7 +1116,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             // clears the ±EarlyTolerance arrival band completely; capped so a low-rate source
             // (a slideshow's 1 fps) does not lead by half a second for a race that any few-ms
             // margin already wins.
-            player.Video.DeliveryLead = VideoDeliveryLead(player.Video.Format.FrameRate);
+            player.Video.DeliveryLead = VideoDeliveryLead(player.Video.Format.FrameRate, player.IsLive);
         }
         // The incoming VOICE exists from here on and owns everything wired below, so the failure path is
         // one teardown (its own) whether the fault lands before or after the commit - instead of a catch
@@ -1188,7 +1203,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                             BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement));
                         layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, surfaceSlot));
                         timelineClaims.Add(surfaceComp.AcquireTransportTimeline(group.Timeline));
-                        surfaceSlot.TimeSelectionOffset = -VideoPlayheadOffset;
+                        surfaceSlot.TimeSelectionOffset = player.IsLive && player.HasVideo
+                            ? -VideoPlayheadOffset
+                              - TimeSpan.FromTicks(SourceFramePeriod(player.Video.Format.FrameRate).Ticks * 2)
+                            : -VideoPlayheadOffset;
                         if (opacityEnvelopes.FirstOrDefault(candidate =>
                                 string.Equals(candidate.CompositionId, placement.CompositionId, StringComparison.Ordinal)
                                 && candidate.LayerIndex == placement.LayerIndex) is { } surfaceLane)
@@ -1240,8 +1258,23 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             // PlayheadOffset is subtracted by VideoPlayer. Apply the inverse at the composition's own
             // PTS selection/render boundary as well, otherwise the player queues look-ahead frames that
             // a per-layer alignment clock deliberately refuses to select.
+            //
+            // A LIVE layer additionally samples ONE SOURCE PERIOD back. A file clip's decode runs
+            // ahead, so the frame for canvas time T is always in the slot before T; a live frame
+            // only EXISTS at T and lands in the slot a few milliseconds after it - whether the
+            // canvas's own sampling phase falls inside that gap is a per-run coin toss that reads
+            // as a light repeat/jump shimmer. Selecting T-period costs one frame of latency and is
+            // phase-proof: by the time the canvas asks for it, it has always arrived.
+            // TWO periods, not one: with the latency trim holding live delivery at "fresh as it
+            // arrives", a frame reaches the slot up to a tick+pump AFTER its PTS - one period of
+            // lag left ~6 ms of sampling margin and a per-run phase coin toss of repeats. Two
+            // periods (33 ms at 60 fps) clears every phase and is still two hundred milliseconds
+            // fresher than the pre-trim pipeline.
+            var liveSelectionLag = player.IsLive && player.HasVideo
+                ? TimeSpan.FromTicks(SourceFramePeriod(player.Video.Format.FrameRate).Ticks * 2)
+                : TimeSpan.Zero;
             foreach (var placed in layers)
-                placed.Slot.TimeSelectionOffset = -VideoPlayheadOffset;
+                placed.Slot.TimeSelectionOffset = -VideoPlayheadOffset - liveSelectionLag;
 
             // Video half of a fade-in (and of a crossfade's incoming voice): like the audio routes attach
             // silent (gain 0) below, the layers attach BLACK (fade 0) so no full-opacity frame can composite

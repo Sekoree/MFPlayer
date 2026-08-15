@@ -217,12 +217,26 @@ public partial class CuesViewModel : ObservableObject
         OnPropertyChanged(nameof(CanModifySelection));
         OnPropertyChanged(nameof(ToggleEnabledLabel));
 
+        if (movesStandby && CueSource.RowSelection.SelectedItem is not null)
+            _operatorMovedSelectionSinceGo = true;
+
         if (movesStandby
             && Project.Settings.ClickMovesStandby
             && CueSource.RowSelection.SelectedItem is { } selected
             && ScopedList is { } list)
             SetStandby(list, selected.Id);
     }
+
+    /// <summary>
+    /// Whether the operator has moved the tree selection since the last GO.
+    /// </summary>
+    /// <remarks>
+    /// What lets GO honor the HIGHLIGHTED cue without breaking GO-GO-GO: a selection the operator
+    /// just made is an intent ("fire this one"), while a selection still parked on the cue a
+    /// previous GO fired is leftover state - re-firing it on the next GO would stop the list from
+    /// walking. Cleared by every GO; a rebuild's selection restore does not set it.
+    /// </remarks>
+    private bool _operatorMovedSelectionSinceGo;
 
     /// <summary>
     /// The lead selected row. Setting it drives the TREE's selection, which then reports back.
@@ -394,10 +408,27 @@ public partial class CuesViewModel : ObservableObject
             return;
         _lastGoTicks = now;
 
+        // GO fires what the operator is LOOKING at: when click-arms-standby is on and the
+        // highlighted cue differs from the armed one, the selection wins - it is re-armed first
+        // (AWAITED, which also closes the race where a click's fire-and-forget standby move had
+        // not landed on the session before the GO read the cursor). Only a selection the operator
+        // made since the last GO counts, so consecutive GOs still walk the list instead of
+        // re-firing the cue the selection is still parked on.
+        var redirect = Project.Settings.ClickMovesStandby
+                       && _operatorMovedSelectionSinceGo
+                       && SelectedCue is { } row
+                       && list.StandbyCueId != row.Id
+                       && Project.FindCue(row.Id) is { Enabled: true }
+            ? row.Id
+            : (Guid?)null;
+        _operatorMovedSelectionSinceGo = false;
+
         // With a session, GO is the session's: it fires standby, advances its own cursor and reports
         // back through the poll. Moving the cursor here as well would fight it.
         if (Engine is { } host)
         {
+            if (redirect is { } armFirst)
+                await host.StandbyAsync(list, armFirst).ConfigureAwait(true);
             if (await host.GoAsync(list).ConfigureAwait(true) is not null
                 && AfterGo is { } afterGo)
                 await afterGo().ConfigureAwait(true);
@@ -406,7 +437,7 @@ public partial class CuesViewModel : ObservableObject
 
         // The same rule the running transport uses, from the same place: a cursor that behaved one way
         // with a session and another way without one is a rehearsal that does not match the show.
-        SetStandby(list, CueOrder.NextEnabled(list, list.StandbyCueId)?.Id);
+        SetStandby(list, CueOrder.NextEnabled(list, redirect ?? list.StandbyCueId)?.Id);
         if (AfterGo is { } afterCursorGo)
             await afterCursorGo().ConfigureAwait(true);
     }
@@ -1444,6 +1475,12 @@ public partial class CuesViewModel : ObservableObject
             return false;
 
         var (destination, at) = DropPoint(list, target, placement);
+
+        // The cue must be visible in its new home the moment the refresh lands - rebuilt rows used
+        // to start expanded, which guaranteed that; now that folded groups stay folded, opening the
+        // drop target is this verb's job.
+        if (placement == CueDrop.Inside && target is GroupCueNode)
+            _pendingGroupExpansions.Add(target.Id);
         var moved = 0;
         CueNode? previous = null;
 
@@ -1476,8 +1513,6 @@ public partial class CuesViewModel : ObservableObject
         if (moved == 0)
             return false;
 
-        // Nothing has to re-open the group a cue was dropped into: rebuilt rows start expanded, so the
-        // cue is visible in its new home the moment the refresh lands.
         Refresh();
         return true;
     }
@@ -1769,6 +1804,9 @@ public partial class CuesViewModel : ObservableObject
         Inspector.LiveAutomatedVolumeDb = SelectedCue?.Id is { } selectedId
             ? _runtime.ActiveCues.FirstOrDefault(row => row.CueId == selectedId)?.AutomatedVolumeDb
             : null;
+
+        // The visualizer pane's skip button follows the RUNNING set, which only the poll sees.
+        Inspector.VisualizerPane.RaiseLive();
     }
 
     /// <summary>Called when the document changes under us - an undo, or an edit from another view.</summary>
@@ -1837,6 +1875,34 @@ public partial class CuesViewModel : ObservableObject
         OnPropertyChanged(nameof(ToggleEnabledLabel));
     }
 
+    /// <summary>
+    /// Collapsed groups, by cue id - operator state that must survive the row replacement every
+    /// edit or save refresh performs. Rows default to EXPANDED, so only the exceptions are stored;
+    /// a group deleted from the show simply stops matching. Persisting across scope switches is
+    /// deliberate: scoping away and back must not reopen what the operator folded shut.
+    /// </summary>
+    private readonly HashSet<Guid> _collapsedGroups = [];
+
+    /// <summary>Groups a verb wants OPEN on the next rebuild (a drop into a folded group), applied
+    /// after the capture - removing from <see cref="_collapsedGroups"/> up front would just be
+    /// re-recorded from the still-folded live row when the refresh reads it back.</summary>
+    private readonly HashSet<Guid> _pendingGroupExpansions = [];
+
+    /// <summary>Reads the live rows' expander state into <see cref="_collapsedGroups"/> - called
+    /// immediately before the rows are replaced, while they still hold what the operator did.</summary>
+    private void CaptureCollapsedGroups()
+    {
+        foreach (var row in AllRows)
+        {
+            if (!row.HasChildren)
+                continue;
+            if (row.IsExpanded)
+                _collapsedGroups.Remove(row.Id);
+            else
+                _collapsedGroups.Add(row.Id);
+        }
+    }
+
     private void Rebuild()
     {
         // The selection model addresses rows by INDEX PATH into this collection, and it does not learn
@@ -1848,10 +1914,19 @@ public partial class CuesViewModel : ObservableObject
         // surfaced inside a binding setter - where Avalonia turns it into a validation error and the
         // rest of the refresh silently never ran. Clearing first is safe because the paths are still
         // valid at this point.
+        CaptureCollapsedGroups();
+        _collapsedGroups.ExceptWith(_pendingGroupExpansions);
+        _pendingGroupExpansions.Clear();
         CueSource.RowSelection!.Clear();
         Cues.Clear();
 
         var rows = ScopeProjection.Rows(SelectedScope, Project, _runtime);
+
+        // Restore BEFORE the rows meet the source: the expander column reads IsExpanded as each row
+        // materializes, so a later write would not close an already-presented group.
+        foreach (var row in CuePresentation.Flatten(rows))
+            if (row.HasChildren && _collapsedGroups.Contains(row.Id))
+                row.IsExpanded = false;
 
         foreach (var row in rows)
             Cues.Add(row);

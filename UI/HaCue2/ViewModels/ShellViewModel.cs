@@ -798,10 +798,15 @@ public partial class ShellViewModel : ObservableObject
         // failure this seam exists to avoid.
         if (Machine.Environment is { } environment)
         {
+            // A line the RUNNING bay reports open cannot be absent, whatever the enumeration
+            // says: an exclusively-held ALSA device routinely vanishes from a re-enumeration the
+            // moment the show opens it, and the strongest possible evidence of presence is that
+            // audio is coming out of it right now.
             Runtime.AbsentLines =
             [
                 .. Project.AudioLines
-                    .Where(line => environment.AudioLine(line) == DeviceAvailability.Absent)
+                    .Where(line => environment.AudioLine(line) == DeviceAvailability.Absent
+                                   && Runtime.OpenLines?.Contains(line.Id) != true)
                     .Select(line => line.Id),
             ];
         }
@@ -1069,6 +1074,7 @@ public partial class ShellViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(OutputSummary))]
     [NotifyPropertyChangedFor(nameof(IssueSummary))]
     [NotifyPropertyChangedFor(nameof(HasIssues))]
+    [NotifyPropertyChangedFor(nameof(IssuesAreWarningsOnly))]
     private ProjectStatusReport _status;
 
     public object CurrentPane => SelectedView switch
@@ -1100,14 +1106,25 @@ public partial class ShellViewModel : ObservableObject
 
     public bool HasIssues => Status.Errors + Status.Warnings > 0;
 
+    /// <summary>Whether the status chip's findings are all warnings - amber, not red. A show that
+    /// merely carries advisories must not wear the same colour as one that cannot play.</summary>
+    public bool IssuesAreWarningsOnly => Status.Errors == 0;
+
     public string IssueSummary
     {
         get
         {
-            var count = Status.Errors + Status.Warnings;
-            return count == 0
-                ? "no issues"
-                : $"▲ {count} issue{(count == 1 ? "" : "s")} · Project status";
+            // Named by severity: "2 issues" in red over two warnings read as a failing show.
+            var errors = Status.Errors;
+            var warnings = Status.Warnings;
+            return (errors, warnings) switch
+            {
+                (0, 0) => "no issues",
+                (0, _) => $"▲ {warnings} warning{(warnings == 1 ? "" : "s")} · Project status",
+                (_, 0) => $"▲ {errors} error{(errors == 1 ? "" : "s")} · Project status",
+                _ => $"▲ {errors} error{(errors == 1 ? "" : "s")} + {warnings} warning{(warnings == 1 ? "" : "s")}"
+                     + " · Project status",
+            };
         }
     }
 

@@ -152,7 +152,7 @@ public class CompositionFeedTests
     });
 
     [Fact]
-    public Task ASenderIsCountedEvenThoughItDrawsNoBox() => ShellFixture.WithShell(shell =>
+    public Task ASenderDrawsABoxAndIsSliceableLikeAScreen() => ShellFixture.WithShell(shell =>
     {
         var (video, canvas, _) = Unassigned(shell, VideoOutputKind.Ndi);
 
@@ -160,13 +160,12 @@ public class CompositionFeedTests
 
         var pane = PaneOf(video, canvas);
 
-        // An NDI sender takes the WHOLE canvas, so drawing it would put a box over everything and hide
-        // the overlaps and gaps the layout exists to show. It still has to be counted: telling somebody
-        // who has just assigned one that no output shows this canvas reads as an assignment that failed.
-        Assert.Empty(pane.OutputBoxes);
+        // 2026-08-14: an NDI feed is placeable on the canvas exactly like a projector - it draws its
+        // slice box (whole canvas until sliced) and can be selected to show one part of a wall.
+        // Recorders and streams still take the whole canvas and stay boxless.
+        Assert.Single(pane.OutputBoxes);
         Assert.Single(pane.Feeds);
         Assert.DoesNotContain("no output shows this canvas", pane.LayoutSummary, StringComparison.Ordinal);
-        Assert.Contains("whole canvas", pane.LayoutSummary, StringComparison.Ordinal);
     });
 
     [Fact]

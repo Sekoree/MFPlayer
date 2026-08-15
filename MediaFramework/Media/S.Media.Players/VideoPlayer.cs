@@ -252,6 +252,17 @@ public sealed class VideoPlayer : IDisposable
     /// </remarks>
     public TimeSpan DeliveryLead { get; set; }
 
+    /// <summary>Wall time (TickCount64) at which a live source's queue head first sat further
+    /// ahead of the playhead than the pipeline can drain, or -1 while healthy. See the live
+    /// self-heal in OnVideoTick.</summary>
+    private long _liveLeadSinceMs = -1;
+
+    /// <summary>The smallest queue occupancy observed in the current latency-trim window, and the
+    /// window's start (TickCount64). A live queue that never drains is a standing delay; see the
+    /// trim in OnVideoTick.</summary>
+    private int _liveTrimMinQueued = int.MaxValue;
+    private long _liveTrimWindowStartMs;
+
     /// <summary>
     /// A/V-sync compensation subtracted from the clock before scheduling video (Scheduled mode only).
     /// The audio output buffers some samples ahead of the speakers (e.g. a PortAudio ring), so audio is
@@ -678,6 +689,91 @@ public sealed class VideoPlayer : IDisposable
 
         var early = playhead + EarlyTolerance + DeliveryLead;
         var lateCutoff = playhead - LateThreshold;
+
+        // LIVE SELF-HEAL. A live timeline that has run ahead of the playhead can never drain on
+        // its own: the full queue blocks the reader, the receiver drops its oldest frames, and
+        // every drop jumps the incoming PTS further ahead - a LATCHED loop that settles at a
+        // fraction of the source rate and presents as a freeze/catch-up judder cycle. It latches
+        // whenever the playhead falls behind real time for a moment: the audio ring prefill at a
+        // fire (the clock steps back to -ringDepth), a pause, a device stall.
+        //
+        // Detected by the latch's one unambiguous signature - the queue PINNED at capacity at tick
+        // entry, tick after tick. The settled head-of-queue lead varies with delivery geometry
+        // (drops compress it toward whatever the gate refuses), so a lead threshold misses real
+        // latches; a healthy live flow, by contrast, drains what arrives and enters ticks 0-1
+        // deep. Cured the only way it can be: drop the stale queue and re-anchor at the playhead.
+        if (_source is ILiveVideoSource liveVideo && _presentationMode == VideoPresentationMode.Scheduled)
+        {
+            int liveQueued;
+            TimeSpan? liveHead = null;
+            lock (_queueGate)
+            {
+                liveQueued = _queue.Count;
+                if (_queue.TryPeek(out var probeHead))
+                    liveHead = probeHead.PresentationTime;
+            }
+
+            // Pinned full AND the head is not even due yet: a full queue of due frames is one
+            // burst from draining and needs no cure.
+            if (liveQueued >= _queueCapacity && liveHead is { } aheadPts && aheadPts > early)
+            {
+                if (_liveLeadSinceMs < 0)
+                {
+                    _liveLeadSinceMs = Environment.TickCount64;
+                }
+                else if (Environment.TickCount64 - _liveLeadSinceMs > 300)
+                {
+                    Trace.LogWarning(
+                        "OnVideoTick: live queue pinned full with the head {Lead:0}ms ahead of the playhead "
+                        + "for >300ms (a latched drop loop) - dropping the stale queue and re-anchoring the "
+                        + "source at {Playhead}",
+                        (aheadPts - playhead).TotalMilliseconds, playhead);
+                    DrainQueue();
+                    liveVideo.RebaseToLatest(playhead);
+                    _liveLeadSinceMs = -1;
+                    return; // fresh frames land next tick, anchored where the playhead is
+                }
+            }
+            else
+            {
+                _liveLeadSinceMs = -1;
+            }
+
+            // LIVE LATENCY TRIM. A backlogged-but-flowing live pipeline is not stutter - every
+            // frame still presents exactly on its own timeline - but the timeline itself sits a
+            // constant behind the wall: presentation wall-time = capture + K, where K was frozen
+            // by whatever anchor the run started from (the audio ring prefill dips the playhead
+            // right after the anchor, and K never decays because both clocks advance at 1 s/s).
+            // The head-of-queue lead cannot see K (the head is always "just due"); what CAN see it
+            // is OCCUPANCY: the backlog physically lives in the queues, so a live queue that never
+            // drains below full across a whole window is exactly K worth of standing delay. A
+            // healthy live flow enters ticks 0-1 deep. Trimming = drop the backlog and re-anchor;
+            // one visual skip of the trimmed span, and live video presents as fresh as it arrives.
+            if (_liveTrimWindowStartMs == 0)
+                _liveTrimWindowStartMs = Environment.TickCount64; // first observed tick opens the window
+            if (liveQueued < _liveTrimMinQueued)
+                _liveTrimMinQueued = liveQueued;
+
+            if (Environment.TickCount64 - _liveTrimWindowStartMs >= 2000)
+            {
+                if (_liveTrimMinQueued >= Math.Max(2, _queueCapacity - 1))
+                {
+                    Trace.LogInformation(
+                        "OnVideoTick: live queue never drained below {MinQueued} frames for 2s (a standing "
+                        + "presentation backlog) - re-anchoring the source at the playhead to trim the latency",
+                        _liveTrimMinQueued);
+                    DrainQueue();
+                    liveVideo.RebaseToLatest(playhead);
+                    _liveLeadSinceMs = -1;
+                    _liveTrimMinQueued = int.MaxValue;
+                    _liveTrimWindowStartMs = Environment.TickCount64;
+                    return;
+                }
+
+                _liveTrimMinQueued = int.MaxValue;
+                _liveTrimWindowStartMs = Environment.TickCount64;
+            }
+        }
 
         _dueFrames.Clear();
         // Anti-freeze / catch-up fallback. When the playhead has run past EVERY queued frame - decode

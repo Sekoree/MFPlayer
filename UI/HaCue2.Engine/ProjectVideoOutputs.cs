@@ -13,7 +13,8 @@ namespace HaCue2.Engine;
 /// window still opens, because an operator who has just added a projector needs to see WHERE it landed
 /// before they decide what to put on it.
 /// </param>
-internal sealed record OpenVideoOutput(Guid Id, Guid? CompositionId, IVideoOutput Output)
+internal sealed record OpenVideoOutput(
+    Guid Id, Guid? CompositionId, IVideoOutput Output, string? Signature = null)
 {
     /// <summary>The id the session addresses this output by, inside its composition.</summary>
     public string OutputId => Id.ToString("N");
@@ -50,7 +51,11 @@ public sealed class ProjectVideoOutputs : IDisposable
 {
     private readonly List<OpenVideoOutput> _open = [];
     private readonly Dictionary<Guid, RecordVideoOutput> _recorders = [];
-    private readonly List<NDIOutput> _senders = [];
+
+    // The shared NDI carrier registry: injected by the host so the audio bay can join the SAME
+    // sender (a linked A/V output is one source on the network); owned here only when nobody did.
+    private NdiSenderHub _ndiHub = null!;
+    private bool _ownsNdiHub;
 
     private ProjectVideoOutputs()
     {
@@ -103,11 +108,17 @@ public sealed class ProjectVideoOutputs : IDisposable
     /// display survive: nothing is opened, every output is reported as skipped, and the rest of the
     /// show still runs. It is not a mode the product exposes - it is what a CI box and a preview are.
     /// </remarks>
-    public static ProjectVideoOutputs OpenAll(HaCueProject project, bool headless = false)
+    public static ProjectVideoOutputs OpenAll(
+        HaCueProject project, bool headless = false, NdiSenderHub? ndiSenders = null)
     {
         ArgumentNullException.ThrowIfNull(project);
 
-        var result = new ProjectVideoOutputs { _headless = headless };
+        var result = new ProjectVideoOutputs
+        {
+            _headless = headless,
+            _ndiHub = ndiSenders ?? new NdiSenderHub(),
+            _ownsNdiHub = ndiSenders is null,
+        };
         result.Sync(project);
         return result;
     }
@@ -130,9 +141,14 @@ public sealed class ProjectVideoOutputs : IDisposable
 
         var wanted = project.VideoOutputs.Select(output => output.Id).ToHashSet();
 
-        // Gone from the document: close the window rather than leaving it on a screen with nothing in
-        // the show pointing at it.
-        foreach (var stale in _open.Where(open => !wanted.Contains(open.Id)).ToList())
+        // Gone from the document - or an NDI feed whose FORMAT options changed (name, raster, rate,
+        // wire format, audio carriage): close it so the loop below reopens it with the new shape.
+        // A window is left alone on any edit, exactly as before.
+        foreach (var stale in _open.Where(open =>
+                     !wanted.Contains(open.Id)
+                     || (open.Signature is not null
+                         && project.VideoOutputs.FirstOrDefault(item => item.Id == open.Id) is { } now
+                         && NdiSignature(now) != open.Signature)).ToList())
         {
             Close(stale);
             _open.Remove(stale);
@@ -143,7 +159,6 @@ public sealed class ProjectVideoOutputs : IDisposable
         var unopened = new HashSet<Guid>();
         var opened = new List<OpenVideoOutput>();
         var recorders = new Dictionary<Guid, RecordVideoOutput>();
-        var senders = new List<NDIOutput>();
         var headless = _headless;
 
         _retargeted.Clear();
@@ -228,15 +243,16 @@ public sealed class ProjectVideoOutputs : IDisposable
                 // to when they choose, so "armed" would be a switch with nothing behind it.
                 try
                 {
-                    var sender = new NDIOutput(
-                        output.TargetHint.Length > 0 ? output.TargetHint : output.Name,
-                        // The composition is already the cadence owner. SDK pacing here would add a
-                        // second clock and make its worker queue absorb their beat difference.
-                        clockVideo: false,
-                        videoTimecodeMode: NDIVideoTimecodeMode.PresentationRelativeTicks);
+                    // Through the shared hub: a linked A/V output is ONE sender on the network, whose
+                    // audio half the bay leases by the same name. The composition stays the cadence
+                    // owner (the hub never SDK-clocks video); the feed stage carries this output's own
+                    // rate cap and wire pixel format.
+                    var lease = _ndiHub.Acquire(
+                        output.TargetHint.Length > 0 ? output.TargetHint : output.Name);
+                    var feed = new NdiFeedVideoOutput(lease, output.NdiFrameRate, output.NdiPixelFormat);
 
-                    senders.Add(sender);
-                    opened.Add(new OpenVideoOutput(output.Id, compositionId, sender.Video));
+                    opened.Add(new OpenVideoOutput(
+                        output.Id, compositionId, feed, NdiSignature(output)));
                 }
                 catch (Exception failure) when (failure is not OutOfMemoryException)
                 {
@@ -272,7 +288,6 @@ public sealed class ProjectVideoOutputs : IDisposable
         }
 
         _open.AddRange(opened);
-        _senders.AddRange(senders);
 
         foreach (var (id, recorder) in recorders)
             _recorders[id] = recorder;
@@ -379,6 +394,15 @@ public sealed class ProjectVideoOutputs : IDisposable
     }
 
     /// <summary>Closes one output's own resources. A window that will not close must not stop the rest.</summary>
+    /// <summary>What has to match for an open NDI feed to be left alone on an edit. Everything in
+    /// here requires a re-open to change: the name IS the sender's network identity, and the rest is
+    /// baked into the feed stage.</summary>
+    private static string NdiSignature(VideoOutputDefinition output) =>
+        output.Kind != VideoOutputKind.Ndi
+            ? ""
+            : $"{(output.TargetHint.Length > 0 ? output.TargetHint : output.Name)}|{output.NdiWidth}x{output.NdiHeight}"
+              + $"|{output.NdiFrameRate:0.###}|{output.NdiPixelFormat}|{output.NdiCarriesAudio}|{output.NdiAudioChannels}";
+
     private void Close(OpenVideoOutput open)
     {
         try
@@ -439,21 +463,9 @@ public sealed class ProjectVideoOutputs : IDisposable
 
         _open.Clear();
 
-        // After the windows: a sender's own IVideoOutput is in the list above, so it must not be
-        // disposed until nothing is still submitting to it.
-        foreach (var sender in _senders)
-        {
-            try
-            {
-                sender.Dispose();
-            }
-            catch (Exception failure) when (failure is not OutOfMemoryException)
-            {
-                // One sender that will not close cleanly must not stop the others, and must not throw
-                // out of the show's own teardown.
-            }
-        }
-
-        _senders.Clear();
+        // Feed stages released their sender leases above; an owned hub (no host-shared carrier)
+        // sweeps whatever remains.
+        if (_ownsNdiHub)
+            _ndiHub.Dispose();
     }
 }

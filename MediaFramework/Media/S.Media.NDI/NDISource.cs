@@ -67,9 +67,42 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
     private long _videoFramesUnpacked;
     private volatile Exception? _faultEx;
 
-    /// <summary>Discovers NDI sources visible on the network.</summary>
-    public static IReadOnlyList<NDIDiscoveredSource> Find(TimeSpan timeout, NDIFindOptions? options = null)
+    /// <summary>
+    /// Discovers NDI sources visible on the network, spending the WHOLE timeout.
+    /// </summary>
+    /// <remarks>
+    /// <c>wait_for_sources</c> returns on the first LIST CHANGE, not on completeness - and a fresh
+    /// finder's first change is whatever answers fastest. The moment this process publishes a
+    /// sender of its own, that first change is the local source in single milliseconds, and a
+    /// single wait returned before any remote sender had answered: a show with an NDI output
+    /// could no longer discover the camera it wanted to receive. The wait therefore LOOPS until
+    /// the deadline, folding in every change; callers that only need one name should use
+    /// <see cref="TryFindByName"/>, which exits early on the match instead.
+    /// </remarks>
+    public static IReadOnlyList<NDIDiscoveredSource> Find(TimeSpan timeout, NDIFindOptions? options = null) =>
+        FindCore(timeout, options, matchName: null, out _);
+
+    /// <summary>Discovers one source BY NAME, returning as soon as it appears - or false at the
+    /// deadline. The resolve path every <c>ndi:</c> open uses.</summary>
+    public static bool TryFindByName(
+        string name, TimeSpan timeout, out NDIDiscoveredSource source, NDIFindOptions? options = null)
     {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        FindCore(timeout, options, name, out var found);
+        if (found is { } match)
+        {
+            source = match;
+            return true;
+        }
+
+        source = default;
+        return false;
+    }
+
+    private static IReadOnlyList<NDIDiscoveredSource> FindCore(
+        TimeSpan timeout, NDIFindOptions? options, string? matchName, out NDIDiscoveredSource? match)
+    {
+        match = null;
         options ??= NDIFindOptions.Default;
         var rc = NDIFinder.Create(out var finder, new NDIFinderSettings
         {
@@ -81,10 +114,31 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
             return Array.Empty<NDIDiscoveredSource>();
         try
         {
-            var waitMs = (int)Math.Clamp(timeout.TotalMilliseconds, 0, int.MaxValue);
-            if (waitMs > 0)
-                finder.WaitForSources((uint)waitMs);
-            return finder.GetCurrentSources();
+            var deadline = Stopwatch.GetTimestamp()
+                           + (long)(Math.Clamp(timeout.TotalSeconds, 0, 3600) * Stopwatch.Frequency);
+            var current = finder.GetCurrentSources();
+            while (true)
+            {
+                if (matchName is not null)
+                {
+                    foreach (var candidate in current)
+                    {
+                        if (string.Equals(candidate.Name, matchName, StringComparison.Ordinal))
+                        {
+                            match = candidate;
+                            return current;
+                        }
+                    }
+                }
+
+                var remainingMs = (Stopwatch.GetTimestamp() - deadline) / (double)Stopwatch.Frequency * -1000;
+                if (remainingMs <= 0)
+                    return current;
+
+                // Bounded slices so a change that lands right before the deadline is still folded in.
+                finder.WaitForSources((uint)Math.Clamp(remainingMs, 1, 500));
+                current = finder.GetCurrentSources();
+            }
         }
         finally
         {
@@ -375,7 +429,13 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
     public void RebaseVideoToLatest(TimeSpan nextPresentationTime = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (nextPresentationTime < TimeSpan.Zero)
+        // NEGATIVE anchors are legitimate and load-bearing: a session's audio-mastered clock counts
+        // up from -(output ring depth) so that position 0 is the first AUDIBLE sample, and the
+        // start-edge rebase hands that position in. Clamping it to zero anchored every live frame
+        // one ring-depth AHEAD of the playhead - a permanent lead the shallow live queue cannot
+        // hold, so the reader blocked, the receiver dropped in bursts, and the picture froze and
+        // caught up on a ~1 s cycle. Only the sentinel-ish extremes are refused.
+        if (nextPresentationTime < TimeSpan.FromHours(-1))
             nextPresentationTime = TimeSpan.Zero;
         lock (_videoPtsLock)
         {

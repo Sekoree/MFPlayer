@@ -353,6 +353,7 @@ public partial class VideoView : UserControl
             "out:ndi" => Dialogs.AddVideoOutput(journal, VideoOutputKind.Ndi, video.Screens),
             "out:record" => Dialogs.AddVideoOutput(journal, VideoOutputKind.Record, video.Screens),
             "out:stream" => Dialogs.AddVideoOutput(journal, VideoOutputKind.Stream, video.Screens),
+            "out:edit" => Dialogs.EditVideoOutput(journal, video.SelectedOutput?.Id, video.Screens),
             "out:rename" => video.SelectedOutput is { } output
                 ? Rename(journal, output.Id, output.Name)
                 : null,

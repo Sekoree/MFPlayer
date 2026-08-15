@@ -85,6 +85,24 @@ public sealed class ProjectVisualizers : IAsyncDisposable
     }
 
     /// <summary>
+    /// Skips a RUNNING visualizer cue to its next preset - the operator's "this one is ugly"
+    /// button (HaPlay parity). The request is consumed by the render thread at the next frame;
+    /// broken presets are already blocklisted and auto-skipped by the surface.
+    /// </summary>
+    /// <returns>False when the cue has no running renderer to skip.</returns>
+    public bool RequestNextPreset(Guid cueId)
+    {
+        lock (_gate)
+        {
+            if (!_running.TryGetValue(cueId, out var attachments) || attachments.Count == 0)
+                return false;
+            foreach (var attachment in attachments)
+                attachment.Source.RequestNextPreset();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Starts a visualizer cue, or explains why it could not.
     /// </summary>
     /// <returns>Null on success; the reason otherwise.</returns>
@@ -751,9 +769,10 @@ public sealed class ProjectVisualizers : IAsyncDisposable
     /// The renderer for one cue on one composition.
     /// </summary>
     /// <remarks>
-    /// Sized and paced to the COMPOSITION rather than to a fixed 1080p60: the canvas is what the
-    /// surface is composited onto, so rendering larger only costs GPU time and rendering smaller is
-    /// visible. The document deliberately carries no render size of its own for the same reason.
+    /// Sized and paced to the COMPOSITION by default: the canvas is what the surface is composited
+    /// onto, so rendering larger only costs GPU time and rendering smaller is visible. The cue MAY
+    /// override projectM's internal render size/rate (HaPlay parity) - crisp visuals on a small
+    /// canvas, or a cheaper render under a heavy show - and 0 keeps the follow-the-canvas default.
     /// </remarks>
     private static ProjectMVisualSource Renderer(VisualizerCueNode cue, CompositionDefinition composition)
     {
@@ -774,9 +793,11 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                 PresetDirectory = cue.PresetPack.Length > 0
                     ? cue.PresetPack
                     : DefaultPresetPack.Value,
-                RenderWidth = width,
-                RenderHeight = height,
-                Fps = Math.Max(1, (int)Math.Round(frameRate.ToDouble())),
+                RenderWidth = cue.RenderWidth > 0 ? cue.RenderWidth : width,
+                RenderHeight = cue.RenderHeight > 0 ? cue.RenderHeight : height,
+                Fps = cue.RenderFps > 0
+                    ? cue.RenderFps
+                    : Math.Max(1, (int)Math.Round(frameRate.ToDouble())),
                 // A locked preset is one that never advances. projectM has no lock of its own, so it is
                 // expressed as a hold longer than any show - which is also honest about what it is.
                 PresetDurationSeconds = cue.LockPreset
@@ -784,7 +805,8 @@ public sealed class ProjectVisualizers : IAsyncDisposable
                     : Math.Max(5, cue.HoldMs / 1000d),
                 // Shuffling a locked preset would pick a different one each time the cue fired, which
                 // is the opposite of what locking it means.
-                Shuffle = !cue.LockPreset,
+                Shuffle = !cue.LockPreset && cue.ShufflePresets,
+                BeatSensitivity = Math.Clamp(cue.BeatSensitivity, 0, 5),
                 TransitionSeconds = Math.Clamp(cue.BlendMs / 1000d, 0, 30),
             });
     }

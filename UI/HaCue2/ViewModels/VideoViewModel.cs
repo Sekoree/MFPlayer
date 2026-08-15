@@ -804,8 +804,8 @@ public partial class VideoViewModel : ObservableObject
 
         if (screens.Count == 0)
         {
-            // A sender and a recorder take the WHOLE canvas by definition, so they are not drawn here -
-            // but they ARE showing it, and saying "no output shows this canvas yet" to somebody who has
+            // A recorder or stream takes the WHOLE canvas by definition, so it is not drawn here -
+            // but it IS showing it, and saying "no output shows this canvas yet" to somebody who has
             // just assigned one reads as an assignment that did not take.
             var others = _project.VideoOutputs.Count(output => output.CompositionId == id);
 
@@ -1751,12 +1751,12 @@ public partial class VideoViewModel : ObservableObject
     // that now has one. The pane equivalents are OutputBoxes, Aspect and the FEEDS rail.
 
     /// <summary>
-    /// One box per screen showing this canvas, at the slice of it that screen covers.
+    /// One box per sliceable output showing this canvas, at the slice of it that output covers.
     /// </summary>
     /// <remarks>
-    /// Local screens only. An NDI sender and a recorder both take the WHOLE canvas by definition, so
-    /// drawing them would put a box over everything and hide the very overlaps and gaps the layout is
-    /// there to show. They are named under FEEDS instead, which is where "who receives this" belongs.
+    /// Local screens and NDI feeds - an NDI out is placeable on the canvas exactly like a
+    /// projector (register: NDI slice authoring). Recorders and streams still take the whole
+    /// canvas by definition and are named under FEEDS instead.
     /// </remarks>
     private IReadOnlyList<PlacementBox> OutputSlices(Guid compositionId, Guid? selectedOutputId) =>
     [
@@ -1870,6 +1870,10 @@ public partial class VideoViewModel : ObservableObject
         // layout claim the desktop window is a size/aspect it is not.
         if (!output.Fullscreen && output is { WindowWidth: > 0, WindowHeight: > 0 })
             return (output.WindowWidth, output.WindowHeight);
+
+        // An NDI feed's wire raster is its physical size - the same answer OutputMapping gives.
+        if (output.Kind == VideoOutputKind.Ndi && output is { NdiWidth: > 0, NdiHeight: > 0 })
+            return (output.NdiWidth, output.NdiHeight);
 
         if (output is { MappingWidth: > 0, MappingHeight: > 0 })
             return (output.MappingWidth, output.MappingHeight);

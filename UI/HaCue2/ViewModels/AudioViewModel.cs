@@ -170,7 +170,7 @@ public partial class AudioViewModel : ObservableObject
     /// for every line on it, and answering the same question five times is how an operator gives up
     /// halfway and leaves the show half-patched.
     /// </remarks>
-    public PromptViewModel? RelinkAbsentLines()
+    public PromptViewModel? RelinkAbsentLines(HaCue2.Machine.AudioDevices? devices = null)
     {
         var absent = _project.AudioLines
             .Where(line => _runtime.AbsentLines.Contains(line.Id))
@@ -179,26 +179,83 @@ public partial class AudioViewModel : ObservableObject
         if (absent.Count == 0)
             return null;
 
-        return new PromptViewModel(
-            "Relink absent lines",
-            $"{absent.Count} line(s) are not on this machine",
-            [
-                new PromptField
-                {
-                    Label = "Device",
-                    Value = "",
-                    Hint = "the new device name · matched the same way as before",
-                },
-            ],
-            prompt =>
+        // The same picker the ADD dialog gives (register: relink is not a textbox): the machine's
+        // real devices, narrowed by driver family - nobody types "HD-Audio Generic: HDMI 0 (hw:0,3)"
+        // from memory, and a typo here is a silent absence at the venue. With nothing to enumerate
+        // (headless, no backend) the free-text hint remains, which is also how a show is relinked
+        // for a rig this laptop has never seen.
+        var catalog = devices is { Enumerated: true } ? devices : null;
+        var fields = new List<PromptField>();
+        PromptField? host = null;
+        PromptField? device = null;
+        PromptField? typed = null;
+
+        if (catalog is not null)
+        {
+            var hostOptions = new List<string> { "any" };
+            hostOptions.AddRange(catalog.HostApis);
+            host = new PromptField
             {
-                var hint = prompt["Device"].Value.Trim();
+                Label = "Driver",
+                Kind = PromptFieldKind.Choice,
+                Options = hostOptions,
+                Hint = "narrows the list below",
+            };
+            device = new PromptField
+            {
+                Label = "Device",
+                Kind = PromptFieldKind.Choice,
+                Hint = "every absent line is repointed at it · matched by name, as before",
+            };
+
+            IReadOnlyList<S.Media.Core.Audio.AudioDeviceInfo> Found() =>
+                catalog.OutputsFor(host.Choice == "any" ? "" : host.Choice);
+
+            void Fill()
+            {
+                var found = Found();
+                device.Options = [.. found.Select(item =>
+                    $"{item.Name} · {item.MaxChannels}ch{(item.IsDefault ? " · default" : "")}")];
+                device.SelectedIndex = Math.Max(0, found.ToList().FindIndex(item => item.IsDefault));
+            }
+
+            Fill();
+            host.Picked += _ => Fill();
+            fields.AddRange([host, device]);
+
+            string PickedName()
+            {
+                var found = Found();
+                return device.SelectedIndex >= 0 && device.SelectedIndex < found.Count
+                    ? found[device.SelectedIndex].Name
+                    : "";
+            }
+
+            return Prompt(absent, PickedName);
+        }
+
+        typed = new PromptField
+        {
+            Label = "Device",
+            Value = "",
+            Hint = "the new device name · matched the same way as before",
+        };
+        fields.Add(typed);
+        return Prompt(absent, () => typed.Value.Trim());
+
+        PromptViewModel Prompt(List<AudioLineDefinition> lines, Func<string> hintOf) => new(
+            "Relink absent lines",
+            $"{lines.Count} line(s) are not on this machine",
+            fields,
+            _ =>
+            {
+                var hint = hintOf();
                 if (hint.Length == 0)
                     return;
 
                 using var scope = _journal.Composite("relink absent lines", "audio");
 
-                foreach (var line in absent)
+                foreach (var line in lines)
                 {
                     var target = line;
                     _journal.Do(new SetValueCommand<string>(

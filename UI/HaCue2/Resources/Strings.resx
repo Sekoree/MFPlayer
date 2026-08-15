@@ -2182,4 +2182,31 @@
   <data name="YtIncludeTheThumbnailAsA" xml:space="preserve">
     <value>Include the thumbnail as a still picture</value>
   </data>
+  <data name="InspShufflePresets" xml:space="preserve">
+    <value>Shuffle preset order (off = alphabetical)</value>
+  </data>
+  <data name="InspBeatSensitivity" xml:space="preserve">
+    <value>Beat sensitivity (0–5)</value>
+  </data>
+  <data name="InspRenderSize" xml:space="preserve">
+    <value>projectM render size</value>
+  </data>
+  <data name="InspRenderAuto" xml:space="preserve">
+    <value>auto · follows the composition</value>
+  </data>
+  <data name="InspRenderRate" xml:space="preserve">
+    <value>projectM render rate</value>
+  </data>
+  <data name="InspNextPreset" xml:space="preserve">
+    <value>NEXT PRESET ▸</value>
+  </data>
+  <data name="InspNextPresetHint" xml:space="preserve">
+    <value>skips the running visualizer to another preset · presets that fail to load are skipped automatically</value>
+  </data>
+  <data name="VidEditOutput" xml:space="preserve">
+    <value>EDIT…</value>
+  </data>
+  <data name="VidEditOutputMenu" xml:space="preserve">
+    <value>Edit output…</value>
+  </data>
 </root>

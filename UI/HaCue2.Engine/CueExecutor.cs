@@ -27,7 +27,15 @@ public sealed class CueExecutor(ICueExecutionHost host)
     /// Which pass through the list this is, one-based. Counted so <c>LoopCount</c> can end the run -
     /// "play this twice and then hold" needs a pass number, and there was nowhere to keep one.
     /// </param>
-    private sealed record PlaylistRun(Guid GroupId, IReadOnlyList<Guid> Order, int Index, int Pass = 1);
+    private sealed record PlaylistRun(
+        Guid GroupId,
+        IReadOnlyList<Guid> Order,
+        int Index,
+        int Pass = 1,
+        // The item that closed the previous pass while a WRAP crossfade carried it into this one.
+        // Its later natural-end edge belongs to the playlist but is already handled; the marker is
+        // consumed there so it cannot advance the new pass or fall to the ordinary Follow rule.
+        Guid? CrossfadedFrom = null);
     private sealed record ArmedRun(
         Guid GroupId,
         IReadOnlyList<Guid> Order,
@@ -983,6 +991,24 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         lock (_stateGate)
         {
+            PlaylistRun? wrapped = null;
+            foreach (var candidate in _playlistRuns.Values)
+            {
+                if (candidate.CrossfadedFrom == ended)
+                {
+                    wrapped = candidate;
+                    break;
+                }
+            }
+
+            if (wrapped is not null)
+            {
+                // The previous pass's closer, still sounding through the wrap crossfade.
+                if (!approaching)
+                    _playlistRuns[wrapped.GroupId] = wrapped with { CrossfadedFrom = null };
+                return true;
+            }
+
             foreach (var candidate in _playlistRuns.Values)
             {
                 for (var index = 0; index <= candidate.Index && index < candidate.Order.Count; index++)
@@ -1020,7 +1046,13 @@ public sealed class CueExecutor(ICueExecutionHost host)
         if (nextIndex >= run.Order.Count)
         {
             if (approaching)
-                return true; // the final item must reach natural end before its end policy runs
+            {
+                // The WRAP gets the same crossfade every interior seam has: with another pass still
+                // to come, the pre-end edge fires the next pass's opener overlapping this closer -
+                // a looping bed no longer butt-cuts once per pass. The FINAL pass's last item is
+                // left to reach natural end, where the end policy runs.
+                return await TryCrossfadeWrapAsync(group, run, ended).ConfigureAwait(false);
+            }
 
             return await FinishPlaylistAsync(group, run).ConfigureAwait(false);
         }
@@ -1033,6 +1065,36 @@ public sealed class CueExecutor(ICueExecutionHost host)
             advanced.Order[nextIndex],
             depth: 1,
             approaching ? TimeSpan.FromMilliseconds(group.CrossfadeMs) : null,
+            group.CrossfadeCurve.Resolve(Project)).ConfigureAwait(false);
+
+        if (!fired)
+        {
+            lock (_stateGate)
+                _playlistRuns[group.Id] = run;
+        }
+
+        return true;
+    }
+
+    private async Task<bool> TryCrossfadeWrapAsync(GroupCueNode group, PlaylistRun run, Guid ended)
+    {
+        var children = group.Children.Where(cue => cue.Enabled).ToList();
+        var hasAnotherPass = children.Count > 0
+                             && (group.LoopCount == 0 || run.Pass < group.LoopCount);
+        if (!hasAnotherPass)
+            return true; // the final item must reach natural end before its end policy runs
+
+        var order = PassOrder(group, children, run.Order.LastOrDefault());
+        var next = new PlaylistRun(group.Id, order, 0, run.Pass + 1, CrossfadedFrom: ended);
+        lock (_stateGate)
+            _playlistRuns[group.Id] = next;
+
+        // A one-item playlist wraps onto ITSELF - the session's loop crossfade overlaps the cue
+        // with its own next pass, exactly like a media cue's own loop seam.
+        var fired = await FireAsync(
+            order[0],
+            depth: 1,
+            TimeSpan.FromMilliseconds(group.CrossfadeMs),
             group.CrossfadeCurve.Resolve(Project)).ConfigureAwait(false);
 
         if (!fired)

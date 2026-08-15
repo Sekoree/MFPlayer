@@ -300,6 +300,10 @@ public sealed class CueGraph
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // The execution log keeps the record; the diagnostics stream is where an operator's
+            // "it just says did not fire" actually gets answered.
+            S.Media.Core.Diagnostics.MediaDiagnostics.LogWarning(
+                "CueGraph: cue '{0}' ({1}) failed - {2}", cue.Id, cue.Label, ex.Message);
             Log(cue, CueExecutionStatus.Failed, ex.Message);
             if (cue.FaultPolicy == CueFaultPolicy.StopShow)
                 throw;

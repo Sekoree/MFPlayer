@@ -599,8 +599,12 @@
                                     IsEnabled="{Binding CanAuthor}"
                                     IsVisible="{Binding GroupPane.IsSequencedGroup}">
               <ListBox Theme="{StaticResource Segment}" ItemsSource="{Binding GroupPane.AtEndOptions}"
+                       IsEnabled="{Binding GroupPane.AtEndEnabled}"
                        SelectedIndex="{Binding GroupPane.AtEndIndex}" />
             </HeaderedContentControl>
+            <TextBlock Margin="115,0,10,4" Classes="mono dim3 micro" TextWrapping="Wrap"
+                       IsVisible="{Binding GroupPane.IsSequencedGroup}"
+                       Text="{Binding GroupPane.AtEndHint}" />
             <TextBlock Margin="10,6" Classes="mono dim3 small"
                        Text="{x:Static res:Strings.InspPerItemFadeInOverrides}" />
           </StackPanel>
@@ -808,10 +812,37 @@
             </HeaderedContentControl>
             <CheckBox Margin="10,4" IsChecked="{Binding VisualizerPane.VisualizerLocksPresetValue}"
                       Content="{x:Static res:Strings.InspLockToThisPresetNo}" />
+            <CheckBox Margin="10,2" IsChecked="{Binding VisualizerPane.VisualizerShuffleValue}"
+                      IsEnabled="{Binding !VisualizerPane.VisualizerLocksPresetValue}"
+                      Content="{x:Static res:Strings.InspShufflePresets}" />
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspBeatSensitivity}">
+              <TextBox Classes="short" Text="{Binding VisualizerPane.VisualizerBeatSensitivityValue}"
+                       LostFocus="OnFieldCommitted" />
+            </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspRenderSize}">
+              <TextBox Classes="short" Text="{Binding VisualizerPane.VisualizerRenderSizeValue}"
+                       LostFocus="OnFieldCommitted"
+                       PlaceholderText="{x:Static res:Strings.InspRenderAuto}" />
+            </HeaderedContentControl>
+            <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.InspRenderRate}">
+              <TextBox Classes="short" Text="{Binding VisualizerPane.VisualizerRenderRateValue}"
+                       LostFocus="OnFieldCommitted"
+                       PlaceholderText="{x:Static res:Strings.InspRenderAuto}" />
+            </HeaderedContentControl>
             <TextBlock Margin="10,6" Classes="mono dim3 small" TextWrapping="Wrap"
                        Text="{x:Static res:Strings.InspPlacementLivesOnTheVideo}" />
             <TextBlock Margin="10,2,10,6" Classes="mono warn small" TextWrapping="Wrap"
                        Text="{Binding VisualizerPane.VisualizerHint}" />
+          </StackPanel>
+
+          <!-- The skip button is an OPERATOR verb, not an authoring one: it stays live while
+               the document is locked mid-show, which is exactly when somebody wants it. -->
+          <StackPanel IsVisible="{Binding IsVisualizerPane}" Margin="10,0,10,8" Spacing="4">
+            <Button Content="{x:Static res:Strings.InspNextPreset}"
+                    Command="{Binding VisualizerPane.NextPresetCommand}"
+                    IsEnabled="{Binding VisualizerPane.CanSkipPreset}" />
+            <TextBlock Classes="mono dim3 micro" TextWrapping="Wrap"
+                       Text="{x:Static res:Strings.InspNextPresetHint}" />
           </StackPanel>
 
           <!-- ══ ACTION - endpoint, address, arguments ═════════════════════════════════════ -->

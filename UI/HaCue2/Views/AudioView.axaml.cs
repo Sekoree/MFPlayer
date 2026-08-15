@@ -46,7 +46,7 @@ public partial class AudioView : UserControl
             "snapshot" => Dialogs.SaveSnapshot(journal),
             "snapshot:remove" => Dialogs.RemoveSnapshot(journal, audio.SelectedSnapshot?.Id),
             "patch" => audio.PatchSelectedToDevice(),
-            "relink" => audio.RelinkAbsentLines(),
+            "relink" => audio.RelinkAbsentLines(App.Machine.Devices),
             "line:rename" => RenameLine(journal, audio.SelectedLine?.Id),
             "line:remove" => Dialogs.RemoveAudioLine(journal, audio.SelectedLine?.Id),
             // The cascade register item 11 promises: patch cells, cue sends, snapshot cells, group

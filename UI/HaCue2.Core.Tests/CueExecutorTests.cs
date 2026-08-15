@@ -631,6 +631,105 @@ public class CueExecutorTests
         Assert.Equal(1, host.Played.Count(id => id == second.Id));
     }
 
+
+    // ── loop-wrap crossfades (2026-08-15 nit) ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ALoopingPlaylistCrossfadesTheWrapToo()
+    {
+        var first = Media("1.1");
+        var second = Media("1.2");
+        var group = new GroupCueNode
+        {
+            Number = new CueNumber("1"),
+            FireMode = GroupFireMode.Playlist,
+            LoopCount = 0, // forever
+            CrossfadeMs = 1_000,
+            Children = [first, second],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+        await executor.OnApproachingEndAsync(first.Id);
+        await executor.OnNaturalEndAsync(first.Id);
+
+        // The WRAP: the closing item's pre-end edge fires the next pass's opener as a crossfade,
+        // exactly like the interior seam did - a looping bed no longer butt-cuts once per pass.
+        await executor.OnApproachingEndAsync(second.Id);
+
+        var wrap = host.Transitions.Last();
+        Assert.Equal(first.Id, wrap.Cue);
+        Assert.Equal(TimeSpan.FromMilliseconds(1_000), wrap.Duration);
+        Assert.Equal(2, host.Played.Count(id => id == first.Id));
+
+        // The closer's later natural end is already handled - it must not advance the new pass or
+        // fall through to an ordinary Follow.
+        await executor.OnNaturalEndAsync(second.Id);
+        Assert.Equal(2, host.Played.Count(id => id == first.Id));
+        Assert.Equal(1, host.Played.Count(id => id == second.Id));
+
+        // ...and the new pass keeps walking normally.
+        await executor.OnApproachingEndAsync(first.Id);
+        Assert.Equal(2, host.Played.Count(id => id == second.Id));
+    }
+
+    [Fact]
+    public async Task TheFinalPassEndsWithoutAWrapCrossfade()
+    {
+        var first = Media("1.1");
+        var second = Media("1.2");
+        var group = new GroupCueNode
+        {
+            Number = new CueNumber("1"),
+            FireMode = GroupFireMode.Playlist,
+            LoopCount = 1,
+            CrossfadeMs = 1_000,
+            Children = [first, second],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+        await executor.OnApproachingEndAsync(first.Id);
+        await executor.OnNaturalEndAsync(first.Id);
+
+        // The FINAL item of the FINAL pass simply plays out; its end policy runs at natural end.
+        await executor.OnApproachingEndAsync(second.Id);
+        Assert.Equal(1, host.Played.Count(id => id == first.Id));
+
+        await executor.OnNaturalEndAsync(second.Id);
+        Assert.Equal([first.Id, second.Id], host.Played);
+    }
+
+    [Fact]
+    public async Task AOneItemLoopingPlaylistCrossfadesOntoItself()
+    {
+        var only = Media("1.1");
+        var group = new GroupCueNode
+        {
+            Number = new CueNumber("1"),
+            FireMode = GroupFireMode.Playlist,
+            LoopCount = 0,
+            CrossfadeMs = 500,
+            Children = [only],
+        };
+        var (executor, host, _) = Show(group);
+
+        await executor.FireAsync(group.Id);
+
+        // The wrap overlaps the cue with its own next pass - the session's loop-crossfade shape.
+        await executor.OnApproachingEndAsync(only.Id);
+        Assert.Equal(2, host.Played.Count(id => id == only.Id));
+        Assert.Equal(only.Id, host.Transitions.Last().Cue);
+
+        // The outgoing voice's natural end is consumed, not a third fire.
+        await executor.OnNaturalEndAsync(only.Id);
+        Assert.Equal(2, host.Played.Count(id => id == only.Id));
+
+        // And the loop keeps rolling on the NEW voice's own edge.
+        await executor.OnApproachingEndAsync(only.Id);
+        Assert.Equal(3, host.Played.Count(id => id == only.Id));
+    }
+
     [Fact]
     public async Task FirstCueOnlyNeverFiresTheOtherChildren()
     {

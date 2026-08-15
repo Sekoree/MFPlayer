@@ -39,6 +39,49 @@ public static class NdiSources
                 : $"{Names.Count} sender{(Names.Count == 1 ? "" : "s")} on the network";
     }
 
+    /// <summary>What the audio-buffer probe measured for one sender, in milliseconds.</summary>
+    /// <param name="Problem">Null when the probe ran; otherwise why it could not.</param>
+    public sealed record BufferProbe(
+        double LowestMs, double BalancedMs, double SafeMs, bool HasAudio, string? Problem = null)
+    {
+        public static BufferProbe Failed(string reason) => new(0, 0, 0, false, reason);
+    }
+
+    /// <summary>
+    /// Measures the smallest glitch-free audio jitter buffer for a sender on THIS network - the
+    /// dominant tunable latency between a live source's audio and its low-latency video (HaPlay's
+    /// probe, shared seam). Blocks for several seconds; run it off the UI thread.
+    /// </summary>
+    /// <param name="onStep">Progress per tested size: (milliseconds, underruns).</param>
+    public static BufferProbe ProbeAudioBuffer(
+        string senderName, Action<double, int>? onStep = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (!NDISource.TryFindByName(senderName, TimeSpan.FromSeconds(3), out var match))
+                return BufferProbe.Failed($"“{senderName}” is not on the network right now");
+
+            var presets = NDIAudioBufferProbe.Probe(
+                match,
+                onStep: (size, underruns) => onStep?.Invoke(size.TotalMilliseconds, underruns),
+                cancellationToken: cancellationToken);
+
+            return new BufferProbe(
+                Math.Round(presets.Lowest.TotalMilliseconds),
+                Math.Round(presets.Balanced.TotalMilliseconds),
+                Math.Round(presets.Safe.TotalMilliseconds),
+                presets.HasAudio);
+        }
+        catch (OperationCanceledException)
+        {
+            return BufferProbe.Failed("probe cancelled");
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            return BufferProbe.Failed(failure.Message);
+        }
+    }
+
     /// <summary>Scans the network. Blocks for at most <paramref name="timeout"/>.</summary>
     public static Scan Discover(TimeSpan? timeout = null)
     {

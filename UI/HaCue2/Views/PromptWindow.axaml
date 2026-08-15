@@ -47,6 +47,8 @@
                   <ComboBox IsVisible="{Binding IsChoice}" HorizontalAlignment="Stretch"
                             ItemsSource="{Binding Options}" SelectedIndex="{Binding SelectedIndex}" />
                   <CheckBox IsVisible="{Binding IsToggle}" IsChecked="{Binding IsOn}" />
+                  <Button IsVisible="{Binding IsAction}" Classes="tight" HorizontalAlignment="Left"
+                          Content="{Binding Value}" Click="OnAction" Tag="{Binding}" />
                   <!-- Nearly always one of a handful, occasionally none of them: the presets are a
                        shortcut and never a fence. -->
                   <Grid IsVisible="{Binding IsSuggestion}" ColumnDefinitions="*,Auto" ColumnSpacing="4">

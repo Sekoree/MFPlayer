@@ -33,10 +33,33 @@ public static class OutputMapping
     {
         ArgumentNullException.ThrowIfNull(output);
 
+        if (width <= 0 || height <= 0)
+            return null;
+
         // IsMapped, not Mapping.Count: an output switched to clean keeps its authored sections and
         // must still render unwarped, or "clean" would be a setting that changed nothing.
-        if (!output.IsMapped || width <= 0 || height <= 0)
+        if (!output.IsMapped)
+        {
+            // An NDI feed with its own raster still needs the mapping stage - it is what scales the
+            // canvas onto the wire size. One full-canvas section is "clean, at that resolution".
+            if (output.Kind == VideoOutputKind.Ndi && output is { NdiWidth: > 0, NdiHeight: > 0 })
+            {
+                return new ClipOutputMappingSpec(
+                    [
+                        new ClipOutputMappingSection(
+                            Id: "ndi-raster",
+                            Enabled: true,
+                            SrcX: 0, SrcY: 0, SrcWidth: 1, SrcHeight: 1,
+                            DestX: 0, DestY: 0,
+                            DestWidth: output.NdiWidth, DestHeight: output.NdiHeight,
+                            RotationDegrees: 0, Opacity: 1, Brightness: 1),
+                    ],
+                    output.NdiWidth,
+                    output.NdiHeight);
+            }
+
             return null;
+        }
 
         var (rasterWidth, rasterHeight) = Raster(output, width, height);
         var sections = output.Mapping
@@ -58,6 +81,11 @@ public static class OutputMapping
     public static (int Width, int Height) Raster(VideoOutputDefinition output, int width, int height)
     {
         ArgumentNullException.ThrowIfNull(output);
+
+        // An NDI feed's wire raster IS its physical raster; MappingWidth stays what the local
+        // kinds use, and the composition remains the honest fallback for both.
+        if (output.Kind == VideoOutputKind.Ndi && output is { NdiWidth: > 0, NdiHeight: > 0 })
+            return (output.NdiWidth, output.NdiHeight);
 
         return (
             output.MappingWidth > 0 ? output.MappingWidth : width,

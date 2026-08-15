@@ -283,7 +283,15 @@ public static class VideoPresentation
         ];
     }
 
-    /// <summary>The local screens showing a canvas, in document order - the boxes it is divided into.</summary>
+    /// <summary>
+    /// The sliceable outputs showing a canvas, in document order - the boxes it is divided into.
+    /// </summary>
+    /// <remarks>
+    /// Local screens AND NDI feeds: an NDI out sending one screen's portion of a wall is the same
+    /// authoring act as pointing a projector at it, and excluding it left the feed stuck on the
+    /// whole canvas with no way to say otherwise. Recorders and streams still take the whole
+    /// canvas - they archive the show, not a screen of it.
+    /// </remarks>
     public static IReadOnlyList<VideoOutputDefinition> Screens(HaCueProject project, Guid compositionId)
     {
         ArgumentNullException.ThrowIfNull(project);
@@ -291,7 +299,8 @@ public static class VideoPresentation
         return
         [
             .. project.VideoOutputs.Where(output =>
-                output.CompositionId == compositionId && output.Kind == VideoOutputKind.LocalScreen),
+                output.CompositionId == compositionId
+                && output.Kind is VideoOutputKind.LocalScreen or VideoOutputKind.Ndi),
         ];
     }
 

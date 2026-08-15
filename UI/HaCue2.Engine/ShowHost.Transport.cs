@@ -145,7 +145,18 @@ public sealed partial class ShowHost
     public async Task<bool> FireAsync(Guid cueId)
     {
         await FlushPendingEditAsync().ConfigureAwait(false);
-        return await Executor.FireAsync(cueId).ConfigureAwait(false);
+        try
+        {
+            return await Executor.FireAsync(cueId).ConfigureAwait(false);
+        }
+        catch (Exception failure) when (failure is not (OperationCanceledException or OutOfMemoryException))
+        {
+            // Belt and braces under the Continue fault policy: whatever still throws out of a fire
+            // (a StopShow-policy document driven directly, a fault in the executor itself) reaches
+            // the operator as a report, never as an unhandled exception behind a black output.
+            Report($"cue did not fire - {failure.Message}");
+            return false;
+        }
     }
 
     /// <summary>

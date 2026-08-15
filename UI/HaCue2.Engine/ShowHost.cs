@@ -104,6 +104,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
     private readonly MediaRegistry _registry;
     private readonly ProjectPatchBay _bay;
     private readonly ProjectVideoOutputs _screens;
+    private readonly NdiSenderHub _ndiSenders;
     private readonly HashSet<Guid> _calibrationOutputs = [];
     private readonly ShowSession _session;
 
@@ -151,11 +152,13 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         ProjectPatchBay bay,
         ProjectVideoOutputs screens,
         ShowSession session,
-        HaCueProject project)
+        HaCueProject project,
+        NdiSenderHub ndiSenders)
     {
         _registry = registry;
         _bay = bay;
         _screens = screens;
+        _ndiSenders = ndiSenders;
         _session = session;
         _project = project;
         _outbound = new OutboundEffects(_actions, () => _project, Report, _life.Token);
@@ -464,8 +467,11 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
 
         var runtimeProject = ProjectSnapshot.Copy(project);
         var registry = BuildRegistry(backend);
-        var bay = ProjectPatchBay.Open(runtimeProject, backend, registry);
-        var screens = ProjectVideoOutputs.OpenAll(runtimeProject, headless);
+        // ONE carrier registry for both sides: a linked A/V NDI output is a single sender on the
+        // network, whose audio half the bay leases by the same name the video side opened.
+        var ndiSenders = new NdiSenderHub();
+        var bay = ProjectPatchBay.Open(runtimeProject, backend, registry, ndiSenders);
+        var screens = ProjectVideoOutputs.OpenAll(runtimeProject, headless, ndiSenders);
 
         var target = new PatchBayShowProgramAudioTarget(
             bay.Bay,
@@ -484,7 +490,7 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
             programAudioTarget: target,
             compositorFactory: ShowSessionWiring.CreateCompositor,
             effectRegistry: BuildEffectRegistry());
-        var host = new ShowHost(registry, bay, screens, session, runtimeProject);
+        var host = new ShowHost(registry, bay, screens, session, runtimeProject, ndiSenders);
 
         try
         {
@@ -1158,6 +1164,8 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
         // After the session, because the leases declare DisposeOutputOnRuntimeDispose:false - the host
         // owns these windows and closes them itself, once the session has stopped submitting to them.
         _screens.Dispose();
+        // After both holders released their leases; sweeps any carrier a fault left behind.
+        _ndiSenders.Dispose();
         _registry.Dispose();
         _life.Dispose();
         _reloading.Dispose();

@@ -252,7 +252,12 @@ public static class ShowCompiler
             GroupId: groupId,
             // The application executor owns Continue and Follow for every cue kind; the framework
             // graph intentionally receives no second, media-only chain.
-            AutoContinue: false);
+            AutoContinue: false,
+            // A cue whose media cannot open (an NDI sender not on the network tonight, a file on an
+            // unmounted drive) is a REPORTED failure the operator plays on past - the same rule every
+            // device open in this app follows. The framework default (StopShow) rethrows out of the
+            // fire path, which in an app is a show-stopping exception for a missing camera.
+            FaultPolicy: CueFaultPolicy.Continue);
 
     /// <summary>
     /// How far before this cue's out-point the session should raise "approaching end" so a chained

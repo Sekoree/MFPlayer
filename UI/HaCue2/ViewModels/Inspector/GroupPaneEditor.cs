@@ -30,6 +30,8 @@ public sealed partial class GroupPaneEditor(CueEditPlumbing plumbing, IInspector
         OnPropertyChanged(nameof(PlayCountValue));
         OnPropertyChanged(nameof(CrossfadeValue));
         OnPropertyChanged(nameof(AtEndIndex));
+        OnPropertyChanged(nameof(AtEndEnabled));
+        OnPropertyChanged(nameof(AtEndHint));
     }
 
     public IReadOnlyList<string> FireModes { get; } =
@@ -151,19 +153,41 @@ public sealed partial class GroupPaneEditor(CueEditPlumbing plumbing, IInspector
         }
     }
 
-    public IReadOnlyList<string> AtEndOptions { get; } = ["hold last", "loop", "next list"];
+    /// <summary>
+    /// "loop" is deliberately NOT offered here: looping is the pass count's whole job (0 =
+    /// forever), and a group-level "loop" at-end did nothing - two controls claiming one behaviour,
+    /// one of them a lie. A legacy document carrying it displays (and behaves) as "hold last".
+    /// </summary>
+    public IReadOnlyList<string> AtEndOptions { get; } = ["hold last", "next list"];
 
     public int AtEndIndex
     {
-        get => Group is { } group ? (int)group.AtEnd : -1;
+        get => Group?.AtEnd switch
+        {
+            AtListEnd.NextList => 1,
+            null => -1,
+            _ => 0, // Hold, and legacy Loop which always behaved as Hold at group level
+        };
         set
         {
-            if (Group is not { } group || value < 0 || (AtListEnd)value == group.AtEnd)
+            if (Group is not { } group || value < 0)
+                return;
+
+            var wanted = value == 1 ? AtListEnd.NextList : AtListEnd.Hold;
+            if (wanted == group.AtEnd)
                 return;
 
             plumbing.EditEach(group, "atEnd", "cues",
-                cue => cue.AtEnd, (cue, at) => cue.AtEnd = at, (AtListEnd)value,
+                cue => cue.AtEnd, (cue, at) => cue.AtEnd = at, wanted,
                 $"at end: {AtEndOptions[value]}");
         }
     }
+
+    /// <summary>A forever-looping playlist has no end for a policy to run at; the field greys
+    /// rather than offering a choice that can never happen.</summary>
+    public bool AtEndEnabled => Group is { LoopCount: not 0 };
+
+    public string AtEndHint => Group is { LoopCount: 0 }
+        ? "looping forever - the end never comes; set a pass count to choose an ending"
+        : "";
 }

@@ -278,16 +278,41 @@ public static class Dialogs
             return null;
 
         var references = ProjectReferences.To(journal.Project, ProjectReferences.AudioLine, id);
+        var linkedOutput = line.LinkedVideoOutputId is { } videoId
+            ? journal.Project.VideoOutputs.FirstOrDefault(output => output.Id == videoId)
+            : null;
+
+        var consequences = references.Select(reference => reference.Description).ToList();
+        if (linkedOutput is not null)
+            consequences.Add($"its video half “{linkedOutput.Name}” (VIDEO · OUTPUTS) goes with it");
 
         return new PromptViewModel(
             $"Remove “{line.Name}”?",
-            references.Count == 0
+            consequences.Count == 0
                 ? "nothing in this show points at it"
-                : string.Join(" · ", references.Select(reference => reference.Description)),
+                : string.Join(" · ", consequences),
             // No fields: this is a question, not a form. The prompt shell renders title, consequences
             // and the two buttons, which is the whole of what a confirmation is.
             [],
-            _ => ProjectEdits.DeleteAudioLine(journal, id),
+            _ =>
+            {
+                if (linkedOutput is null)
+                {
+                    ProjectEdits.DeleteAudioLine(journal, id);
+                    return;
+                }
+
+                // The same carrier both ways: see RemoveVideoOutput.
+                using (journal.Composite($"delete line “{line.Name}”", "audio", quiet: true))
+                {
+                    ProjectEdits.DeleteAudioLine(journal, id);
+                    journal.Do(new RemoveItemCommand<VideoOutputDefinition>(
+                        journal.Project.VideoOutputs, linkedOutput, "video",
+                        $"delete output “{linkedOutput.Name}”"));
+                }
+
+                journal.CloseGroup();
+            },
             confirm: "REMOVE");
     }
 
@@ -806,6 +831,57 @@ public static class Dialogs
             },
         ];
 
+        PromptField? ndiFormat = null;
+        PromptField? ndiRate = null;
+        PromptField? ndiWire = null;
+        PromptField? ndiStreams = null;
+        PromptField? ndiAudioChannels = null;
+        if (kind == VideoOutputKind.Ndi)
+        {
+            // The feed's own wire format (HaPlay parity): what receivers get, decoupled from the
+            // canvas the show is authored against. Auto follows the composition on all three axes.
+            ndiFormat = new PromptField
+            {
+                Label = "Feed size",
+                Kind = PromptFieldKind.Suggestion,
+                Options = CommonWindowSizes,
+                Value = "",
+                Hint = "what goes on the wire · empty follows the composition",
+            };
+            ndiRate = new PromptField
+            {
+                Label = "Feed rate",
+                Kind = PromptFieldKind.Suggestion,
+                Options = ["24", "25", "30", "50", "59.94", "60"],
+                Value = "",
+                Hint = "fps cap · empty follows the composition",
+            };
+            ndiWire = new PromptField
+            {
+                Label = "Pixel format",
+                Kind = PromptFieldKind.Choice,
+                Options = ["auto (BGRA)", "BGRA", "UYVY · half the bandwidth"],
+            };
+            ndiStreams = new PromptField
+            {
+                Label = "Carries",
+                Kind = PromptFieldKind.Choice,
+                Options = ["video only", "video + audio"],
+                Hint = "video + audio adds the matching line under AUDIO · DEVICES - "
+                       + "one sender on the network carries both",
+            };
+            ndiAudioChannels = new PromptField
+            {
+                Label = "Audio channels",
+                Kind = PromptFieldKind.Number,
+                Value = "2",
+                IsEnabled = false,
+            };
+            ndiStreams.Picked += _ => ndiAudioChannels.IsEnabled = ndiStreams.SelectedIndex == 1;
+
+            fields.InsertRange(2, [ndiFormat, ndiRate, ndiWire, ndiStreams, ndiAudioChannels]);
+        }
+
         if (kind == VideoOutputKind.LocalScreen)
         {
             // Fullscreen ALREADY existed on the model and defaulted to true, with no way to reach it -
@@ -883,32 +959,268 @@ public static class Dialogs
                 var screenSize = local ? SizeInLabel(target.Choice) : (0, 0);
                 var raster = windowed ? windowSize : screenSize;
 
-                journal.Do(new AddItemCommand<VideoOutputDefinition>(
-                    project.VideoOutputs,
-                    new VideoOutputDefinition
-                    {
-                        Name = prompt["Name"].Value.Trim(),
-                        Kind = kind,
-                        // The chosen screen's NUMBER, which is what every reader of the hint expects,
-                        // and what the picker's label happens to start with.
-                        TargetHint = target.IsChoice
-                            ? ScreenHint(target)
-                            : target.Value.Trim(),
-                        Required = prompt["Required"].IsOn,
-                        Fullscreen = !local || !windowed,
-                        WindowWidth = local ? windowSize.Item1 : 0,
-                        WindowHeight = local ? windowSize.Item2 : 0,
-                        WindowAspectLocked = windowed && prompt["Lock aspect"].IsOn,
-                        WindowResolutionLocked = windowed && prompt["Lock resolution"].IsOn,
-                        // The output layout can now size a feed from the selected display/window
-                        // immediately. Zero remains the honest fallback when a label has no size.
-                        MappingWidth = local ? raster.Item1 : 0,
-                        MappingHeight = local ? raster.Item2 : 0,
-                    },
-                    project.VideoOutputs.Count,
-                    "video",
-                    $"add output “{prompt["Name"].Value.Trim()}”"));
+                var ndi = kind == VideoOutputKind.Ndi;
+                var ndiSize = ndi ? WindowSize(ndiFormat!.Value) : (0, 0);
+                var carriesAudio = ndi && ndiStreams!.SelectedIndex == 1;
+                var outputName = prompt["Name"].Value.Trim();
+
+                var definition = new VideoOutputDefinition
+                {
+                    Name = outputName,
+                    Kind = kind,
+                    // The chosen screen's NUMBER, which is what every reader of the hint expects,
+                    // and what the picker's label happens to start with.
+                    TargetHint = target.IsChoice
+                        ? ScreenHint(target)
+                        : target.Value.Trim(),
+                    Required = prompt["Required"].IsOn,
+                    Fullscreen = !local || !windowed,
+                    WindowWidth = local ? windowSize.Item1 : 0,
+                    WindowHeight = local ? windowSize.Item2 : 0,
+                    WindowAspectLocked = windowed && prompt["Lock aspect"].IsOn,
+                    WindowResolutionLocked = windowed && prompt["Lock resolution"].IsOn,
+                    // The output layout can now size a feed from the selected display/window
+                    // immediately. Zero remains the honest fallback when a label has no size.
+                    MappingWidth = local ? raster.Item1 : 0,
+                    MappingHeight = local ? raster.Item2 : 0,
+                    NdiWidth = ndiSize.Item1,
+                    NdiHeight = ndiSize.Item2,
+                    NdiFrameRate = ndi ? FrameRate(ndiRate!.Value) : 0,
+                    NdiPixelFormat = ndi
+                        ? ndiWire!.SelectedIndex switch
+                        {
+                            1 => NdiWireFormat.Bgra,
+                            2 => NdiWireFormat.Uyvy,
+                            _ => NdiWireFormat.Auto,
+                        }
+                        : NdiWireFormat.Auto,
+                    NdiCarriesAudio = carriesAudio,
+                    NdiAudioChannels = ndi ? Math.Clamp(ndiAudioChannels!.Number(2), 1, 64) : 2,
+                };
+
+                if (!carriesAudio)
+                {
+                    journal.Do(new AddItemCommand<VideoOutputDefinition>(
+                        project.VideoOutputs, definition, project.VideoOutputs.Count,
+                        "video", $"add output “{outputName}”"));
+                    return;
+                }
+
+                // One sender, two tabs: the audio half is a real line under AUDIO · DEVICES, linked
+                // both ways so either row can name (and remove) its twin. One undo step, because the
+                // operator added ONE output.
+                var line = new AudioLineDefinition
+                {
+                    Name = outputName,
+                    Kind = AudioLineKind.Ndi,
+                    DeviceHint = definition.TargetHint.Length > 0 ? definition.TargetHint : outputName,
+                    Channels = definition.NdiAudioChannels,
+                };
+                definition.LinkedAudioLineId = line.Id;
+                line.LinkedVideoOutputId = definition.Id;
+
+                using (journal.Composite($"add A/V output “{outputName}”", "video", quiet: true))
+                {
+                    journal.Do(new AddItemCommand<VideoOutputDefinition>(
+                        project.VideoOutputs, definition, project.VideoOutputs.Count,
+                        "video", $"add output “{outputName}”"));
+                    journal.Do(new AddItemCommand<AudioLineDefinition>(
+                        project.AudioLines, line, project.AudioLines.Count,
+                        "audio", $"add line “{outputName}”"));
+                }
             });
+    }
+
+    /// <summary>
+    /// Edits an existing video output with its OWN kind's fields (register: per-type edit dialogs) -
+    /// the add dialog's shape, prefilled, applied as one undoable step. The NDI form can also add or
+    /// drop the audio half; the linked line follows.
+    /// </summary>
+    public static PromptViewModel? EditVideoOutput(
+        ProjectJournal journal, Guid? outputId, IReadOnlyList<string> screens)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+        ArgumentNullException.ThrowIfNull(screens);
+
+        var project = journal.Project;
+        if (outputId is not { } id
+            || project.VideoOutputs.FirstOrDefault(item => item.Id == id) is not { } output)
+            return null;
+
+        var kind = output.Kind;
+        var local = kind == VideoOutputKind.LocalScreen;
+        var ndi = kind == VideoOutputKind.Ndi;
+
+        var name = new PromptField { Label = "Name", Value = output.Name };
+        var target = new PromptField
+        {
+            Label = "Target",
+            Kind = local ? PromptFieldKind.Choice : PromptFieldKind.Text,
+            Options = local ? screens : [],
+            Value = local ? "" : output.TargetHint,
+            Hint = Target(kind),
+        };
+        if (local && int.TryParse(output.TargetHint, out var screenNumber)
+            && screenNumber > 0 && screenNumber < screens.Count)
+            target.SelectedIndex = screenNumber;
+
+        var required = new PromptField
+        {
+            Label = "Required",
+            Kind = PromptFieldKind.Toggle,
+            IsOn = output.Required,
+            Hint = "absent on the night = an error, not a warning",
+        };
+
+        List<PromptField> fields = [name, target, required];
+
+        PromptField? ndiFormat = null, ndiRate = null, ndiWire = null, ndiStreams = null, ndiChannels = null;
+        if (ndi)
+        {
+            ndiFormat = new PromptField
+            {
+                Label = "Feed size",
+                Kind = PromptFieldKind.Suggestion,
+                Options = CommonWindowSizes,
+                Value = output is { NdiWidth: > 0, NdiHeight: > 0 } ? $"{output.NdiWidth}×{output.NdiHeight}" : "",
+                Hint = "what goes on the wire · empty follows the composition",
+            };
+            ndiRate = new PromptField
+            {
+                Label = "Feed rate",
+                Kind = PromptFieldKind.Suggestion,
+                Options = ["24", "25", "30", "50", "59.94", "60"],
+                Value = output.NdiFrameRate > 0
+                    ? output.NdiFrameRate.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+                    : "",
+                Hint = "fps cap · empty follows the composition",
+            };
+            ndiWire = new PromptField
+            {
+                Label = "Pixel format",
+                Kind = PromptFieldKind.Choice,
+                Options = ["auto (BGRA)", "BGRA", "UYVY · half the bandwidth"],
+                SelectedIndex = (int)output.NdiPixelFormat,
+            };
+            ndiStreams = new PromptField
+            {
+                Label = "Carries",
+                Kind = PromptFieldKind.Choice,
+                Options = ["video only", "video + audio"],
+                SelectedIndex = output.NdiCarriesAudio ? 1 : 0,
+                Hint = "video + audio keeps the matching line under AUDIO · DEVICES in step",
+            };
+            ndiChannels = new PromptField
+            {
+                Label = "Audio channels",
+                Kind = PromptFieldKind.Number,
+                Value = output.NdiAudioChannels.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                IsEnabled = output.NdiCarriesAudio,
+            };
+            ndiStreams.Picked += _ => ndiChannels.IsEnabled = ndiStreams.SelectedIndex == 1;
+            fields.AddRange([ndiFormat, ndiRate, ndiWire, ndiStreams, ndiChannels]);
+        }
+
+        return new PromptViewModel(
+            $"Edit “{output.Name}”",
+            $"{Describe(kind)} output",
+            fields,
+            _ =>
+            {
+                var editedName = name.Value.Trim();
+                var editedHint = local ? ScreenHint(target) : target.Value.Trim();
+                var wantsAudio = ndi && ndiStreams!.SelectedIndex == 1;
+                var ndiSize = ndi ? WindowSize(ndiFormat!.Value) : (0, 0);
+                var target2 = output;
+
+                using (journal.Composite($"edit output “{editedName}”", "video", quiet: true))
+                {
+                    Set("name", () => target2.Name, value => target2.Name = value, editedName);
+                    Set("targetHint", () => target2.TargetHint, value => target2.TargetHint = value, editedHint);
+                    Set("required", () => target2.Required, value => target2.Required = value, required.IsOn);
+
+                    if (ndi)
+                    {
+                        Set("ndiWidth", () => target2.NdiWidth, value => target2.NdiWidth = value, ndiSize.Item1);
+                        Set("ndiHeight", () => target2.NdiHeight, value => target2.NdiHeight = value, ndiSize.Item2);
+                        Set("ndiFrameRate", () => target2.NdiFrameRate, value => target2.NdiFrameRate = value,
+                            FrameRate(ndiRate!.Value));
+                        Set("ndiPixelFormat", () => target2.NdiPixelFormat,
+                            value => target2.NdiPixelFormat = value, (NdiWireFormat)ndiWire!.SelectedIndex);
+                        Set("ndiAudioChannels", () => target2.NdiAudioChannels,
+                            value => target2.NdiAudioChannels = value, Math.Clamp(ndiChannels!.Number(2), 1, 64));
+                        Set("ndiCarriesAudio", () => target2.NdiCarriesAudio,
+                            value => target2.NdiCarriesAudio = value, wantsAudio);
+
+                        var line = output.LinkedAudioLineId is { } lineId ? project.FindLine(lineId) : null;
+                        if (wantsAudio && line is null)
+                        {
+                            // The audio half arrives now: same carrier, new row under AUDIO · DEVICES.
+                            var added = new AudioLineDefinition
+                            {
+                                Name = editedName,
+                                Kind = AudioLineKind.Ndi,
+                                DeviceHint = editedHint.Length > 0 ? editedHint : editedName,
+                                Channels = Math.Clamp(ndiChannels!.Number(2), 1, 64),
+                                LinkedVideoOutputId = output.Id,
+                            };
+                            Set("linkedAudioLine", () => target2.LinkedAudioLineId,
+                                value => target2.LinkedAudioLineId = value, (Guid?)added.Id);
+                            journal.Do(new AddItemCommand<AudioLineDefinition>(
+                                project.AudioLines, added, project.AudioLines.Count,
+                                "audio", $"add line “{editedName}”"));
+                        }
+                        else if (!wantsAudio && line is not null)
+                        {
+                            Set("linkedAudioLine", () => target2.LinkedAudioLineId,
+                                value => target2.LinkedAudioLineId = value, null);
+                            ProjectEdits.DeleteAudioLine(journal, line.Id);
+                        }
+                        else if (line is not null)
+                        {
+                            // Keep the twin's identity in step with this side's edits.
+                            var lineTarget = line;
+                            Set2(line.Id, "name", () => lineTarget.Name, value => lineTarget.Name = value, editedName);
+                            Set2(line.Id, "deviceHint", () => lineTarget.DeviceHint,
+                                value => lineTarget.DeviceHint = value,
+                                editedHint.Length > 0 ? editedHint : editedName);
+                            Set2(line.Id, "channels", () => lineTarget.Channels,
+                                value => lineTarget.Channels = value, Math.Clamp(ndiChannels!.Number(2), 1, 64));
+                        }
+                    }
+                }
+
+                journal.CloseGroup();
+                return;
+
+                void Set<T>(string property, Func<T> read, Action<T> write, T value)
+                {
+                    if (!EqualityComparer<T>.Default.Equals(read(), value))
+                        journal.Do(new SetValueCommand<T>(
+                            output.Id, property, "video", read, write, value, $"edit {property}"));
+                }
+
+                void Set2<T>(Guid subject, string property, Func<T> read, Action<T> write, T value)
+                {
+                    if (!EqualityComparer<T>.Default.Equals(read(), value))
+                        journal.Do(new SetValueCommand<T>(
+                            subject, property, "audio", read, write, value, $"edit {property}"));
+                }
+            },
+            confirm: "SAVE");
+    }
+
+    /// <summary>An fps field's answer: 0 for empty/"auto"/unparseable (follow the composition).</summary>
+    private static double FrameRate(string text)
+    {
+        var cleaned = text.Trim();
+        if (cleaned.Length == 0 || cleaned.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            return 0;
+        return double.TryParse(cleaned, System.Globalization.NumberStyles.Float,
+                   System.Globalization.CultureInfo.InvariantCulture, out var fps)
+               && fps is > 0 and <= 240
+            ? fps
+            : 0;
     }
 
     /// <summary>
@@ -955,14 +1267,28 @@ public static class Dialogs
         if (output.Record is not null)
             consequences.Add("its recording settings go with it");
 
+        var linkedLine = output.LinkedAudioLineId is { } audioId
+            ? journal.Project.FindLine(audioId)
+            : null;
+        if (linkedLine is not null)
+            consequences.Add($"its audio half “{linkedLine.Name}” (AUDIO · DEVICES) goes with it");
+
         return new PromptViewModel(
             $"Remove “{output.Name}”?",
             consequences.Count == 0 ? "nothing else in this show points at it" : string.Join(" · ", consequences),
             [],
             _ =>
             {
-                journal.Do(new RemoveItemCommand<VideoOutputDefinition>(
-                    journal.Project.VideoOutputs, output, "video", $"delete output “{output.Name}”"));
+                // The linked audio line is the same SENDER: removing one side and leaving the other
+                // would keep the carrier alive under a row that no longer exists in this tab.
+                using (journal.Composite($"delete output “{output.Name}”", "video", quiet: true))
+                {
+                    if (linkedLine is not null)
+                        ProjectEdits.DeleteAudioLine(journal, linkedLine.Id);
+                    journal.Do(new RemoveItemCommand<VideoOutputDefinition>(
+                        journal.Project.VideoOutputs, output, "video", $"delete output “{output.Name}”"));
+                }
+
                 journal.CloseGroup();
             },
             confirm: "REMOVE");
@@ -1522,10 +1848,39 @@ public static class Dialogs
     {
         var existing = editing is null ? new NdiSourceOptions("") : SourceUri.ParseNdi(editing.MediaPath);
 
+        // The show's OWN senders go to the BOTTOM of the picker, never the top: an NDI sender is
+        // advertised as "HOST (Name)", our outputs sort early ("NDI program" < "OBS PGM"), and the
+        // prefilled first entry made one accidental Enter author a feedback loop - the cue
+        // receiving the very output it renders onto, which presents as a black screen. Still
+        // LISTED, because monitoring a second machine's HaCue2 program is legitimate.
+        var ownSenders = cues.Journal.Project.VideoOutputs
+            .Where(output => output.Kind == VideoOutputKind.Ndi)
+            .Select(output => output.TargetHint.Length > 0 ? output.TargetHint : output.Name)
+            .Concat(cues.Journal.Project.AudioLines
+                .Where(line => line.Kind == AudioLineKind.Ndi)
+                .Select(line => line.DeviceHint.Length > 0 ? line.DeviceHint : line.Name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        bool IsOwn(string advertised)
+        {
+            var open = advertised.IndexOf('(');
+            var inner = open >= 0 && advertised.EndsWith(')')
+                ? advertised[(open + 1)..^1]
+                : advertised;
+            return ownSenders.Contains(inner) || ownSenders.Contains(advertised);
+        }
+
+        scan = scan with
+        {
+            Names = [.. scan.Names.Where(item => !IsOwn(item)), .. scan.Names.Where(IsOwn)],
+        };
+
+        var preferred = scan.Names.FirstOrDefault(item => !IsOwn(item));
+
         var name = new PromptField
         {
             Label = "Name",
-            Value = editing?.Label ?? (scan.Names.Count > 0 ? scan.Names[0] : "NDI input"),
+            Value = editing?.Label ?? preferred ?? "NDI input",
         };
 
         var sender = new PromptField
@@ -1557,7 +1912,9 @@ public static class Dialogs
             };
 
             var at = scan.Names.ToList().IndexOf(existing.Name);
-            found.SelectedIndex = at >= 0 ? at : 0;
+            found.SelectedIndex = at >= 0
+                ? at
+                : Math.Max(0, scan.Names.ToList().FindIndex(item => !IsOwn(item)));
             if (sender.Value.Length == 0)
                 sender.Value = found.Choice;
 
@@ -1589,7 +1946,64 @@ public static class Dialogs
             Hint = "ms · empty takes the framework default · raise it if the line crackles",
         };
 
-        fields.AddRange([audio, video, proxy, buffer]);
+        var genlock = new PromptField
+        {
+            Label = "Sender clock", Kind = PromptFieldKind.Toggle, IsOn = existing.PaceFromIngestClock,
+            Hint = "paces playback from the sender's own clock instead of this machine's - "
+                   + "removes long-run drift skips · needs the audio stream on",
+        };
+
+        // HaPlay's latency probe, on the shared Machine seam: measures the smallest glitch-free
+        // buffer against the LIVE network and writes the floor into the field above. The buffer is
+        // the dominant tunable latency between a sender's audio and its low-latency video.
+        var probe = new PromptField
+        {
+            Label = "Latency",
+            Kind = PromptFieldKind.Action,
+            Value = "PROBE LOWEST…",
+            Hint = "plays the sender for a few seconds and finds the smallest buffer this network sustains",
+        };
+        probe.Invoked += pressed =>
+        {
+            _ = pressed;
+            var wanted = sender.Value.Trim();
+            if (wanted.Length == 0)
+            {
+                probe.Hint = "name a sender first - the probe needs something to listen to";
+                return;
+            }
+
+            probe.IsEnabled = false;
+            probe.Hint = "probing… ramping buffer sizes down to this network's floor";
+            _ = Task.Run(() =>
+            {
+                var measured = NdiSources.ProbeAudioBuffer(
+                    wanted,
+                    onStep: (ms, underruns) => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                        probe.Hint = $"{ms:0} ms → {(underruns == 0 ? "clean" : $"{underruns} underrun(s)")}"));
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    probe.IsEnabled = true;
+                    if (measured.Problem is { } problem)
+                    {
+                        probe.Hint = problem;
+                        return;
+                    }
+
+                    if (!measured.HasAudio)
+                    {
+                        probe.Hint = "the sender carries no audio - a buffer override is not needed";
+                        return;
+                    }
+
+                    buffer.Value = measured.LowestMs.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    probe.Hint = $"lowest {measured.LowestMs:0} ms · balanced {measured.BalancedMs:0} ms · "
+                                 + $"safe {measured.SafeMs:0} ms - set to lowest; raise it if you hear dropouts";
+                });
+            });
+        };
+
+        fields.AddRange([audio, video, proxy, buffer, probe, genlock]);
 
         return new PromptViewModel(
             editing is null ? "Add NDI input cue" : "Edit NDI input",
@@ -1607,6 +2021,10 @@ public static class Dialogs
                     AudioBufferMs = buffer.Value.Trim().Length == 0
                         ? null
                         : Math.Clamp(buffer.Number(0), 0, 2_000),
+                    // The ingest clock is audio-driven; asking for it without audio would author a
+                    // cue the framework refuses to open. Quietly requiring audio here matches the
+                    // both-off rule above - keep what was typed, correct the half that cannot be.
+                    PaceFromIngestClock = genlock.IsOn && (audio.IsOn || !video.IsOn),
                 };
 
                 Commit(cues, editing, SourceUri.Ndi(options), name.Value);
