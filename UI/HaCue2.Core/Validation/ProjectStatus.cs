@@ -383,15 +383,23 @@ public static class ProjectStatus
                 return new StatusCheck(
                     "Audio clock", CheckOutcome.Passed, $"mastered by {master.Name}", "", []);
 
+            // Two different mistakes with the same consequence: the named line is gone from the
+            // show, or it exists but its kind can never pace the bay (an NDI sender paces on the
+            // network's terms; record/stream lines are encode sessions). The bay falls back to
+            // electing the first local line that opens at the mix rate, so the show is not
+            // masterless - but it is being paced by a line nobody chose.
+            var named = project.FindLine(masterId);
             return new StatusCheck(
                 "Audio clock",
                 CheckOutcome.Warning,
-                "the clock master line is gone",
+                named is null ? "the clock master line is gone" : "the clock master cannot pace the bay",
                 "pick a device line as clock master on the Audio patch",
                 [
                     new ShowValidationIssue(
                         ShowValidationSeverity.Warning,
-                        "the clock master names a line that is no longer a device on this show - the bay free-runs on the wall clock and video can drift against audio",
+                        named is null
+                            ? "the clock master names a line that is no longer in this show - the bay elects a local line itself when one opens at the mix rate, and free-runs on the wall clock otherwise"
+                            : $"the clock master '{named.Name}' is a {named.Kind} line, which can never pace the bay - the bay elects a local line itself when one opens at the mix rate, and free-runs on the wall clock otherwise",
                         "audioPatch",
                         masterId.ToString()),
                 ]);

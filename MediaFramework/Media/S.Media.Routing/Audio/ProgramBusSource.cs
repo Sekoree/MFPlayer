@@ -22,8 +22,18 @@ namespace S.Media.Routing;
 /// settles.</para>
 /// </summary>
 public sealed record ProgramBusClockContext(
-    IPlaybackClock TerminalClock,
-    Func<long> DownstreamLeadTicks);
+    Func<IPlaybackClock?> TerminalClock,
+    Func<long> DownstreamLeadTicks)
+{
+    /// <summary>Fixed-terminal convenience: wraps the clock in an always-there provider. The provider
+    /// form exists for late-bound sources (the bay's clock master), where "no terminal right now" is
+    /// answered with null instead of a throwing proxy.</summary>
+    public ProgramBusClockContext(IPlaybackClock terminalClock, Func<long> downstreamLeadTicks)
+        : this(() => terminalClock, downstreamLeadTicks)
+    {
+        ArgumentNullException.ThrowIfNull(terminalClock);
+    }
+}
 
 /// <summary>
 /// An output that pre-GRANTS ring capacity to the router pacing from it (see

@@ -19,7 +19,11 @@ namespace S.Media.Routing;
 /// </remarks>
 internal sealed class AudibleClientClock : IPipelineLeadClock
 {
-    private readonly IPlaybackClock? _terminalClock;
+    /// <summary>Resolves the CURRENT terminal clock, null while none is attached. A provider rather
+    /// than a clock reference so a late-bound source (the bay's clock master, a monitor's terminal)
+    /// can say "nobody" without an exception: a masterless bay is a normal state every new show
+    /// starts in, not a fault, and this resolve runs on the clock hot path.</summary>
+    private readonly Func<IPlaybackClock?>? _terminalClock;
     private readonly Func<long> _measuredLeadTicks;
     private readonly System.Diagnostics.Stopwatch _fallbackElapsed = System.Diagnostics.Stopwatch.StartNew();
 
@@ -58,6 +62,11 @@ internal sealed class AudibleClientClock : IPipelineLeadClock
     private int _stopped;
 
     public AudibleClientClock(IPlaybackClock? terminalClock, Func<long> measuredLeadTicks)
+        : this(terminalClock is { } clock ? () => clock : null, measuredLeadTicks)
+    {
+    }
+
+    public AudibleClientClock(Func<IPlaybackClock?>? terminalClock, Func<long> measuredLeadTicks)
     {
         ArgumentNullException.ThrowIfNull(measuredLeadTicks);
         _terminalClock = terminalClock;
@@ -127,11 +136,11 @@ internal sealed class AudibleClientClock : IPipelineLeadClock
     /// </summary>
     private (TimeSpan elapsed, bool advancing) ReadRaw()
     {
-        if (_terminalClock is not null)
+        if (_terminalClock?.Invoke() is { } terminalClock)
         {
             try
             {
-                var terminal = _terminalClock.Read();
+                var terminal = terminalClock.Read();
                 var ticks = terminal.EpochId != Volatile.Read(ref _terminalEpochId)
                     ? RecoverFromTerminalReanchor(terminal)
                     : terminal.Elapsed.Ticks - Volatile.Read(ref _terminalEpochTicks);
@@ -309,11 +318,11 @@ internal sealed class AudibleClientClock : IPipelineLeadClock
         {
             if (Volatile.Read(ref _stopped) != 0)
                 return false;
-            if (_terminalClock is null)
+            if (_terminalClock?.Invoke() is not { } terminalClock)
                 return true;
             try
             {
-                return _terminalClock.IsAdvancing;
+                return terminalClock.IsAdvancing;
             }
             catch
             {
@@ -338,13 +347,13 @@ internal sealed class AudibleClientClock : IPipelineLeadClock
             // pre-flush queue depths say nothing about the segment that is about to start.
             _leadTicks = 0;
             _leadSampledAtRawTicks = -1;
-            if (_terminalClock is null)
+            if (_terminalClock?.Invoke() is not { } terminalClock)
                 return;
             try
             {
                 // Both halves from one reading: an epoch captured apart from its elapsed would make the
                 // very next read look like an unannounced re-anchor.
-                var terminal = _terminalClock.Read();
+                var terminal = terminalClock.Read();
                 Volatile.Write(ref _terminalEpochTicks, terminal.Elapsed.Ticks);
                 Volatile.Write(ref _terminalEpochId, terminal.EpochId);
             }

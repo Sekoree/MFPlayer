@@ -103,9 +103,16 @@ public sealed class NDIOutput : IDisposable
     /// <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> for an explicit timeline aligned with
     /// <see cref="NDIAudioOutput"/> when muxing file A/V.
     /// </param>
+    /// <param name="independentAvTimecodeDomains">
+    /// Only meaningful with <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/>: the audio and
+    /// video halves live in UNRELATED presentation-time domains (a linked A/V carrier fed by a video
+    /// composition and an audio bay), so the shared timeline maps each stream onto one wall-clock epoch
+    /// instead of assuming both report the same muxed PTS domain. Leave false for single-source A/V.
+    /// </param>
     public NDIOutput(string sourceName, string? groups = null, bool clockVideo = true, bool clockAudio = true,
         TimeSpan? minimumVideoSubmitSpacing = null,
-        NDIVideoTimecodeMode videoTimecodeMode = NDIVideoTimecodeMode.Synthesize)
+        NDIVideoTimecodeMode videoTimecodeMode = NDIVideoTimecodeMode.Synthesize,
+        bool independentAvTimecodeDomains = false)
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDIOutput.Open", slowWarningMs: 1000);
         ArgumentException.ThrowIfNullOrEmpty(sourceName);
@@ -116,7 +123,7 @@ public sealed class NDIOutput : IDisposable
         _minimumVideoSubmitSpacing = minimumVideoSubmitSpacing;
         _videoTimecodeMode = videoTimecodeMode;
         _egressPresentationTimeline = videoTimecodeMode == NDIVideoTimecodeMode.PresentationRelativeTicks
-            ? new NDIEgressPresentationTimeline()
+            ? new NDIEgressPresentationTimeline(independentAvTimecodeDomains)
             : null;
 
         var rc = NDIRuntime.Create(out var rt);
@@ -199,6 +206,19 @@ public sealed class NDIOutput : IDisposable
             _egressPresentationTimeline?.Reset();
             _videoOutput?.ResetPresentationTimecodeAnchor();
         }
+    }
+
+    /// <summary>
+    /// Re-maps the AUDIO stream onto the shared egress timeline at the current wall-clock elapsed -
+    /// for an independent-domain carrier whose audio half is re-opened (a bay restart) while the video
+    /// half keeps running: the audio sample counter did not advance during the gap, so without a
+    /// re-anchor its timecodes fall behind the video's by the restart duration. No effect when no
+    /// presentation timeline is wired.
+    /// </summary>
+    public void ResetAudioTimecodeAnchor()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _egressPresentationTimeline?.ResetStream(NDIEgressStream.Audio);
     }
 
     /// <summary>

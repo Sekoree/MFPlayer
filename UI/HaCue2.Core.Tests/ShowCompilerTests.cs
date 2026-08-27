@@ -303,6 +303,73 @@ public sealed class ShowCompilerTests
     private static ShowClipBinding Clip(ShowDocument document, CueNode cue) =>
         document.Clips.Single(clip => clip.ClipId == cue.Id.ToString());
 
+    private static (HaCueProject Project, MediaCueNode Child) PlaylistShow(int crossfadeMs)
+    {
+        var child = new MediaCueNode { Number = "1.1", Label = "Bed", MediaPath = "bed.wav" };
+        var group = new GroupCueNode
+        {
+            Number = "1",
+            FireMode = GroupFireMode.Playlist,
+            CrossfadeMs = crossfadeMs,
+            Children = [child],
+        };
+        return (new HaCueProject { CueLists = [new CueList { Name = "Main", Cues = [group] }] }, child);
+    }
+
+    [Fact]
+    public void APlaylistNotifyWindowIsClampedInsideAProbedItem()
+    {
+        // A 4 s window over a 3 s item would fire the new pass's own notification while the old
+        // closer still sounds - the edge reordering behind alternating butt-cut wraps. Half the
+        // span less the two-sweep margin: 1500 − 250.
+        var (project, child) = PlaylistShow(crossfadeMs: 4_000);
+        var document = ShowCompiler.Compile(
+            project, new Dictionary<Guid, TimeSpan> { [child.Id] = TimeSpan.FromSeconds(3) });
+
+        Assert.Equal(TimeSpan.FromMilliseconds(1_250), Clip(document, child).PreEndNotify);
+    }
+
+    [Fact]
+    public void AModestPlaylistWindowIsLeftAsAuthored()
+    {
+        var (project, child) = PlaylistShow(crossfadeMs: 500);
+        var document = ShowCompiler.Compile(
+            project, new Dictionary<Guid, TimeSpan> { [child.Id] = TimeSpan.FromSeconds(3) });
+
+        Assert.Equal(TimeSpan.FromMilliseconds(500), Clip(document, child).PreEndNotify);
+    }
+
+    [Fact]
+    public void AnUnprobedPlaylistItemKeepsItsAuthoredWindow()
+    {
+        // No length means no honest span to clamp against - same reasoning as EndOffset.
+        var (project, child) = PlaylistShow(crossfadeMs: 4_000);
+        Assert.Equal(TimeSpan.FromSeconds(4), Clip(ShowCompiler.Compile(project), child).PreEndNotify);
+    }
+
+    [Fact]
+    public void AnItemTooShortForAnyWindowFallsBackToButtSpliceWraps()
+    {
+        var (project, child) = PlaylistShow(crossfadeMs: 400);
+        var document = ShowCompiler.Compile(
+            project, new Dictionary<Guid, TimeSpan> { [child.Id] = TimeSpan.FromMilliseconds(400) });
+
+        Assert.Equal(TimeSpan.Zero, Clip(document, child).PreEndNotify);
+    }
+
+    [Fact]
+    public void ThePlaylistClampMeasuresTheTrimmedSpanNotTheFile()
+    {
+        // 10 s file trimmed to a 3 s window: the pass plays 3 s, so the clamp must too.
+        var (project, child) = PlaylistShow(crossfadeMs: 4_000);
+        child.TrimInMs = 2_000;
+        child.TrimOutMs = 5_000;
+        var document = ShowCompiler.Compile(
+            project, new Dictionary<Guid, TimeSpan> { [child.Id] = TimeSpan.FromSeconds(10) });
+
+        Assert.Equal(TimeSpan.FromMilliseconds(1_250), Clip(document, child).PreEndNotify);
+    }
+
     [Fact]
     public void EveryChildOfATimelineGroupGetsItsOwnTransportSoTheyLayer()
     {

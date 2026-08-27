@@ -30,9 +30,12 @@ public sealed record HaCueProject
     /// <remarks>
     /// Additive, nullable members do NOT bump it - an older build ignoring a field it never knew about
     /// is the correct outcome, and bumping for every addition would refuse documents that are perfectly
-    /// readable. Only a change in the meaning of an existing field earns a bump.
+    /// readable. Only a change in the meaning of an existing field earns a bump. Schema 4 is the NDI
+    /// carrier model: a schema-3 build reading a carrier file would see no links and no carries-audio
+    /// flag, open the two halves as two same-named senders, and race for the identity on the wire -
+    /// a misread, so it earns the bump.
     /// </remarks>
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     /// <summary>The oldest schema this build can still read.</summary>
     public const int MinimumSupportedSchemaVersion = 1;
@@ -73,6 +76,9 @@ public sealed record HaCueProject
 
     public List<CompositionDefinition> Compositions { get; set; } = [];
     public List<VideoOutputDefinition> VideoOutputs { get; set; } = [];
+
+    /// <summary>The NDI source names this show sends, each shared by its audio and/or video half.</summary>
+    public List<NdiCarrierDefinition> NdiCarriers { get; set; } = [];
     public List<ActionEndpoint> ActionEndpoints { get; set; } = [];
     public List<TriggerInputDefinition> TriggerInputs { get; set; } = [];
     public List<CueList> CueLists { get; set; } = [];
@@ -94,6 +100,44 @@ public sealed record HaCueProject
 
     public AudioLineDefinition? FindLine(Guid id) =>
         AudioLines.FirstOrDefault(line => line.Id == id);
+
+    public NdiCarrierDefinition? FindCarrier(Guid id) =>
+        NdiCarriers.FirstOrDefault(carrier => carrier.Id == id);
+
+    /// <summary>The audio half of a carrier, or null when it is video-only.</summary>
+    public AudioLineDefinition? AudioHalfOf(Guid carrierId) =>
+        AudioLines.FirstOrDefault(line => line.Kind == AudioLineKind.Ndi && line.CarrierId == carrierId);
+
+    /// <summary>The video half of a carrier, or null when it is audio-only.</summary>
+    public VideoOutputDefinition? VideoHalfOf(Guid carrierId) =>
+        VideoOutputs.FirstOrDefault(output =>
+            output.Kind == VideoOutputKind.Ndi && output.CarrierId == carrierId);
+
+    /// <summary>
+    /// The NDI source name an audio line actually sends under.
+    /// </summary>
+    /// <remarks>
+    /// The carrier's name when the line has one; the pre-carrier hint-or-name rule only as the
+    /// fallback for an in-memory document that never passed through
+    /// <see cref="CarrierMigration"/> - loaded files always have. Kept so the engine cannot
+    /// silently open nothing over a dangling reference; the validator reports the dangle.
+    /// </remarks>
+    public string CarrierNameOf(AudioLineDefinition line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        return line.CarrierId is { } id && FindCarrier(id) is { } carrier
+            ? carrier.Name
+            : line.DeviceHint.Length > 0 ? line.DeviceHint : line.Name;
+    }
+
+    /// <summary>The NDI source name a video output actually sends under; see the line overload.</summary>
+    public string CarrierNameOf(VideoOutputDefinition output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        return output.CarrierId is { } id && FindCarrier(id) is { } carrier
+            ? carrier.Name
+            : output.TargetHint.Length > 0 ? output.TargetHint : output.Name;
+    }
 }
 
 public sealed record AutomationMigrationSummary(

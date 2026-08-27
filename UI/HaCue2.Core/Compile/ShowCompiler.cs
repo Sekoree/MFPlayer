@@ -174,19 +174,18 @@ public static class ShowCompiler
                         // validator reports it by name instead.
                         if (media.MediaPath.Length > 0)
                         {
-                            // A playlist child's notify window is EXACTLY the crossfade: the playlist
-                            // gets first refusal on the one-shot notification and starts the next item
+                            var length = Duration(context.Durations, media);
+
+                            // A playlist child's notify window is the crossfade: the playlist gets
+                            // first refusal on the one-shot notification and starts the next item
                             // the moment it fires, so widening it with the follow lead would turn an
                             // authored 500 ms crossfade into a FollowLeadMs-long double-playback. The
                             // child's own Follow/end target is swallowed by the run and needs no lead.
-                            clips.Add(Clip(
-                                project,
-                                media,
-                                Duration(context.Durations, media),
-                                context) with
+                            // Clamped against the item itself - see WrapNotify.
+                            clips.Add(Clip(project, media, length, context) with
                             {
                                 PreEndNotify = playlistOwned
-                                    ? preEndNotify
+                                    ? WrapNotify(preEndNotify, media, length)
                                     : MaxNotify(preEndNotify, FollowLead(project, media)),
                             });
                         }
@@ -279,6 +278,37 @@ public static class ShowCompiler
     /// per-notification what to do with it.
     /// </summary>
     private static TimeSpan MaxNotify(TimeSpan a, TimeSpan b) => a >= b ? a : b;
+
+    /// <summary>
+    /// A margin of two end-monitor sweeps (the session polls clip ends at 100 ms), so the two edges
+    /// <see cref="WrapNotify"/> keeps apart can never land on the same sweep.
+    /// </summary>
+    private static readonly TimeSpan EdgeOrderMargin = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// A playlist child's notify window, kept strictly inside the item it plays over. The window is
+    /// the group's crossfade, but the wrap machinery needs each pass's edges in a fixed order - the
+    /// OUTGOING closer's natural end before the NEW pass's own pre-end notification. A window at or
+    /// past half the item's playable span reverses them (the new notification fires while the old
+    /// closer still sounds and is absorbed by its wrap marker), and a one-item loop then degrades to
+    /// butt-cuts. Clamped to half the span less <see cref="EdgeOrderMargin"/>; a span too short for
+    /// any window at all falls back to butt-splice wraps, the same choice the session makes for its
+    /// own loop crossfade. An unprobed file's span is unknown and the window stays as authored.
+    /// </summary>
+    private static TimeSpan WrapNotify(TimeSpan window, MediaCueNode media, TimeSpan? fileLength)
+    {
+        if (window <= TimeSpan.Zero || fileLength is not { } length)
+            return window;
+
+        var span = length - EndOffset(media, fileLength) - TimeSpan.FromMilliseconds(media.TrimInMs);
+        if (span <= TimeSpan.Zero)
+            return window;
+
+        var limit = TimeSpan.FromTicks(span.Ticks / 2) - EdgeOrderMargin;
+        if (limit < TimeSpan.Zero)
+            limit = TimeSpan.Zero;
+        return window < limit ? window : limit;
+    }
 
     /// <summary>What the probe says this cue's file runs for, or null when nobody has looked.</summary>
     private static TimeSpan? Duration(
@@ -975,7 +1005,12 @@ public static class ShowCompiler
             .Where(line => project.AudioPatch.Cells.Any(cell => cell.LineId == line.Id))
             .Select(line => new ShowAudioOutput(
                 Id: line.Id.ToString(),
-                DeviceId: line.DeviceHint.Length > 0 ? line.DeviceHint : null,
+                // An NDI line's address is its carrier's on-wire name (the hint is retired for the
+                // kind); the value is what the pre-carrier hint used to carry, so the compiled
+                // document is unchanged for every migrated show.
+                DeviceId: line.Kind == AudioLineKind.Ndi
+                    ? project.CarrierNameOf(line)
+                    : line.DeviceHint.Length > 0 ? line.DeviceHint : null,
                 GroupId: "main"));
 
     /// <summary>

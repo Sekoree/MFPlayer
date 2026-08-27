@@ -114,26 +114,36 @@ public class FileMenuTests
     // ── a new project is given a home when it is made ─────────────────────────────────────────
 
     [Fact]
-    public Task ANewProjectArrivesWithNowhereToGo() => ShellFixture.WithShell(shell =>
+    public Task ANewProjectArrivesWithItsHomeAlreadyDecided() => ShellFixture.WithShell(shell =>
     {
-        var launcher = new LauncherViewModel(shell.Settings, HaCue2.Session.MachineFacts.Nothing);
-        var opened = new List<(string Title, string Path)>();
+        // This test used to pin the OPPOSITE: the prompt asked only WHAT and adopted with an empty
+        // path, which keyed the shell's "where should this live?" picker - a second dialog for a
+        // decision that belongs to creating the thing (owner report, 2026-08-27). Now the prompt
+        // carries the WHERE and CREATE writes the file, so the shell has nothing left to ask; only a
+        // cleared folder still produces the empty-path ask-where route (NewProjectPromptTests).
+        var directory = Directory.CreateTempSubdirectory("hacue2-new-home").FullName;
 
-        launcher.ProjectOpened += (project, path) => opened.Add((project.Title, path));
+        try
+        {
+            var launcher = new LauncherViewModel(shell.Settings, HaCue2.Session.MachineFacts.Nothing);
+            var opened = new List<(string Title, string Path)>();
 
-        var prompt = launcher.NewProject();
-        prompt["Name"].Value = "Gala";
-        prompt.Commit();
+            launcher.ProjectOpened += (project, path) => opened.Add((project.Title, path));
 
-        // The empty path is what the shell keys "ask where this lives" on, and it is what every OTHER
-        // route into the shell does not produce - a recovered autosave is adopted under its original
-        // file's path precisely so it is not mistaken for a new show.
-        var created = Assert.Single(opened);
-        Assert.Equal("Gala", created.Title);
-        Assert.Equal("", created.Path);
+            var prompt = launcher.NewProject();
+            prompt["Name"].Value = "Gala";
+            prompt["Save in"].Value = directory;
+            prompt.Commit();
 
-        // And the prompt says what happens next, so the picker that follows is not a surprise.
-        Assert.Contains("where to save", prompt.Hint, StringComparison.Ordinal);
+            var created = Assert.Single(opened);
+            Assert.Equal("Gala", created.Title);
+            Assert.True(File.Exists(created.Path), "CREATE writes the project file at the chosen home");
+            Assert.Equal(directory, Path.GetDirectoryName(created.Path));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     });
 
     [Fact]

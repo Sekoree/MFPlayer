@@ -214,8 +214,8 @@ public sealed class VizNdiEngine : IDisposable
         }
     }
 
-    /// <summary>Interleaved downmix: mono duplicates; >2 channels average L/R-ish pairs (channel 0/1)
-    /// - deliberately simple, the feed drives beat detection and monitoring, not mastering.</summary>
+    /// <summary>Interleaved downmix: mono duplicates; >2 channels take channels 0/1 verbatim and drop
+    /// the rest - deliberately simple, the feed drives beat detection and monitoring, not mastering.</summary>
     internal static void DownmixToStereo(ReadOnlySpan<float> interleaved, int channels, float[] stereo, int frames)
     {
         if (channels == 2)
@@ -358,7 +358,12 @@ public sealed class VizNdiEngine : IDisposable
                 _log.LogError("HaViz NDI pump did not stop within 10 s - leaking NDI sender/visualizer to avoid a native use-after-free");
         }
 
-        _cts?.Dispose();
+        // Disposed only when the pump actually stopped: a wedged pump still touches the token
+        // (WaitHandle waits), and disposing under it turns the next wait into an
+        // ObjectDisposedException that reads as a spurious pump fault. Leaking the CTS on a wedged
+        // shutdown follows the same policy as the natives above.
+        if (pumpStopped)
+            _cts?.Dispose();
 
         // Barrier: _disposed is already set, so no NEW SubmitPcm passes its in-gate re-check;
         // taking the gate here waits out any submit currently inside it before natives go away.

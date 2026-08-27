@@ -706,6 +706,45 @@ public partial class AudioViewModel : ObservableObject
         }
     }
 
+    /// <summary>Preset labels, index-aligned with <see cref="AudioLatencyPreset"/>.</summary>
+    public IReadOnlyList<string> LatencyPresets { get; } =
+    [
+        "safe · ~200 ms (default)",
+        "balanced · ~130 ms",
+        "low · ~80 ms",
+    ];
+
+    /// <summary>
+    /// The project's output-latency preset - how deep the device queues run.
+    /// </summary>
+    /// <remarks>
+    /// Journaled and applied at the next bay open, like <see cref="MixRateIndex"/> - so it feeds
+    /// "Apply &amp; restart audio" rather than rebuilding the bay under a running show. The trade it
+    /// makes (GO-to-audible against underrun headroom) is documented on the enum; the labels above
+    /// carry rough end-to-end numbers at 48 kHz so the operator is choosing between times, not words.
+    /// </remarks>
+    public int LatencyPresetIndex
+    {
+        get => (int)_project.AudioPatch.LatencyPreset;
+        set
+        {
+            var patch = _project.AudioPatch;
+            if (value < 0 || value > (int)AudioLatencyPreset.Low
+                || (AudioLatencyPreset)value == patch.LatencyPreset)
+                return;
+
+            var chosen = (AudioLatencyPreset)value;
+            _journal.Do(new SetValueCommand<AudioLatencyPreset>(
+                Guid.Empty, "latencyPreset", "audio",
+                () => patch.LatencyPreset, preset => patch.LatencyPreset = preset, chosen,
+                $"set output latency {chosen}"));
+            _journal.CloseGroup();
+
+            OnPropertyChanged(nameof(LatencyPresetIndex));
+            OnPropertyChanged(nameof(NeedsAudioRestart));
+        }
+    }
+
     /// <summary>
     /// Lines eligible to pace the bay, plus an explicit "none".
     /// </summary>
@@ -771,11 +810,13 @@ public partial class AudioViewModel : ObservableObject
         _appliedRate is { } rate
         && (rate != _project.AudioPatch.MixSampleRate
             || _appliedMaster != _project.AudioPatch.ClockMasterLineId
+            || _appliedLatency != _project.AudioPatch.LatencyPreset
             || _appliedOrder != BusOrder()
             || _appliedLines != OpenableLines());
 
     private int? _appliedRate;
     private Guid? _appliedMaster;
+    private AudioLatencyPreset? _appliedLatency;
     private string? _appliedOrder;
     private string? _appliedLines;
 
@@ -812,7 +853,12 @@ public partial class AudioViewModel : ObservableObject
                 .Where(line => patch.Cells.Any(cell => cell.LineId == line.Id))
                 .OrderBy(line => line.Id)
                 .Select(line =>
-                    $"{line.Id}:{line.Kind}:{line.DeviceHint}:{line.Channels}:{line.SampleRate?.ToString() ?? "-"}"));
+                    // An NDI line's identity is its CARRIER's name (the hint is retired for the
+                    // kind), so renaming the sender re-lights the apply button like re-hinting a
+                    // device line always has.
+                    $"{line.Id}:{line.Kind}:"
+                    + $"{(line.Kind == AudioLineKind.Ndi ? _project.CarrierNameOf(line) : line.DeviceHint)}"
+                    + $":{line.Channels}:{line.SampleRate?.ToString() ?? "-"}"));
     }
 
     /// <summary>
@@ -835,6 +881,7 @@ public partial class AudioViewModel : ObservableObject
     {
         _appliedRate = _project.AudioPatch.MixSampleRate;
         _appliedMaster = _project.AudioPatch.ClockMasterLineId;
+        _appliedLatency = _project.AudioPatch.LatencyPreset;
         _appliedOrder = BusOrder();
         _appliedLines = OpenableLines();
         OnPropertyChanged(nameof(NeedsAudioRestart));

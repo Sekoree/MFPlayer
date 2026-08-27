@@ -52,11 +52,22 @@ public sealed class ProjectPatchBay : IDisposable
 
     private NdiSenderHub? _ownedNdiHub;
 
-    private ProjectPatchBay(AudioPatchBay bay, IReadOnlyList<string> channelIds, string? monitor)
+    /// <summary>The hub this bay leases NDI carriers from - the one the video side shares.</summary>
+    private NdiSenderHub? _hub;
+
+    /// <summary>The backend the lines were opened with, kept so <see cref="Reopen"/> can open the
+    /// new set the same way without the host re-supplying it.</summary>
+    private IAudioBackend? _backend;
+
+    /// <summary>The device/NDI line ids THIS bay opened - the set <see cref="Reopen"/> replaces.
+    /// Recorder terminals (attached by the host on arm) are deliberately not in it.</summary>
+    private readonly List<Guid> _openedByBay = [];
+
+    private ProjectPatchBay(AudioPatchBay bay, IReadOnlyList<string> channelIds, int mixSampleRate)
     {
         Bay = bay;
         LogicalChannelIds = channelIds;
-        MonitorTerminalId = monitor;
+        MixSampleRate = mixSampleRate;
     }
 
     public AudioPatchBay Bay { get; }
@@ -64,11 +75,15 @@ public sealed class ProjectPatchBay : IDisposable
     /// <summary>The bus order the session addresses logical channels by. Ids, never names.</summary>
     public IReadOnlyList<string> LogicalChannelIds { get; }
 
+    /// <summary>The rate the bus was built at. Fixed for the bay's life; a project that now says
+    /// otherwise needs the full engine restart, and <see cref="Reopen"/> says so.</summary>
+    public int MixSampleRate { get; }
+
     /// <summary>Where audition monitors, or null when no line offered itself.</summary>
-    public string? MonitorTerminalId { get; }
+    public string? MonitorTerminalId { get; private set; }
 
     /// <summary>Lines that could not be opened, and why - what the status bar reports.</summary>
-    public IReadOnlyList<string> Failures { get; private init; } = [];
+    public IReadOnlyList<string> Failures { get; private set; } = [];
 
     /// <summary>
     /// Opens every patched line this machine has and wires the project's patch onto them.
@@ -83,7 +98,6 @@ public sealed class ProjectPatchBay : IDisposable
         NdiSenderHub? ndiSenders = null)
     {
         ArgumentNullException.ThrowIfNull(project);
-        var ndiHub = ndiSenders;
 
         var patch = project.AudioPatch;
         var channels = patch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
@@ -106,6 +120,39 @@ public sealed class ProjectPatchBay : IDisposable
                 }
                 : null);
 
+        var ownedHub = ndiSenders is null ? new NdiSenderHub() : null;
+        var result = new ProjectPatchBay(bay, channelIds, patch.MixSampleRate)
+        {
+            _ownedNdiHub = ownedHub,
+            _hub = ndiSenders ?? ownedHub,
+            _backend = backend,
+        };
+        result.OpenLines(project);
+
+        if (result._outputs.Count > 0)
+        {
+            // Metering is switched on for the life of the show rather than when a meter becomes
+            // visible: the Output info drawer is summoned exactly when something sounds wrong, and a
+            // meter that starts measuring at that moment has no history to show for the seconds that
+            // prompted it. The cost is a peak/RMS pass over a buffer the bus already has in cache.
+            bay.EnableProgramMetering();
+            bay.Play();
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Opens every patched device/NDI line the document defines onto the (already running or about
+    /// to run) bay - the shared half of <see cref="Open"/> and <see cref="Reopen"/>.
+    /// </summary>
+    private void OpenLines(HaCueProject project)
+    {
+        var patch = project.AudioPatch;
+        var channels = patch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
+        var backend = _backend;
+        var ndiHub = _hub;
+
         var failures = new List<string>();
 
         // Enumerated ONCE, and only to turn a name into whatever this backend calls a device. A hint
@@ -114,11 +161,21 @@ public sealed class ProjectPatchBay : IDisposable
         var catalog = Catalog(backend);
         var opened = new List<IAudioOutput>();
         var senders = new List<NdiSenderHub.Lease>();
-        var ownedHub = ndiHub is null ? new NdiSenderHub() : null;
-        ndiHub ??= ownedHub;
         var openLines = new List<(Guid, int)>();
         string? monitor = null;
         string? automaticMaster = null;
+
+        // The named clock master can be judged before anything opens: an NDI line can never take the
+        // role, and a line that is gone, unpatched, or an encode session never reaches AddTerminal.
+        // A document naming one of those is a misconfiguration, not a decision to free-run - so the
+        // automatic election runs as the fallback (exactly as if none were named) instead of the bay
+        // silently free-running while the log claims the named master is pacing it (the audible
+        // symptom of a masterless bay is a ring-drop pop every couple of seconds).
+        var namedMaster = patch.ClockMasterLineId is { } namedId ? project.FindLine(namedId) : null;
+        var namedMasterEligible =
+            namedMaster is { Kind: AudioLineKind.LocalAudio }
+            && patch.Cells.Any(cell => cell.LineId == namedMaster.Id);
+        var masterTook = false;
 
         foreach (var line in project.AudioLines)
         {
@@ -142,29 +199,36 @@ public sealed class ProjectPatchBay : IDisposable
                 // one by name would look for a sound card called "HACUE-PROG" and report the show's own
                 // NDI feed as a missing interface.
                 var output = line.Kind == AudioLineKind.Ndi
-                    ? OpenNdi(ndiHub!, line, format, senders)
-                    : backend.CreateOutput(AudioDevices.DeviceIdFor(catalog, line.DeviceHint), format);
+                    ? OpenNdi(ndiHub!, project, line, format, senders)
+                    : backend.CreateOutput(
+                        AudioDevices.DeviceIdFor(catalog, line.DeviceHint), format,
+                        LatencyOptions(patch.LatencyPreset, format.SampleRate));
 
                 // The clock master paces the whole bay, so it must be a line that natively runs at the
                 // project rate - the document says which, and choosing it is a real decision. An NDI
                 // sender is never it: it paces on the network's terms, not the rig's.
                 //
-                // But a document that names NONE is not a decision to run without one: a masterless
-                // bay free-runs on the wall clock, and no two crystals agree - the device terminal's
-                // ring then drops a burst every couple of seconds, which is an audible pop, for the
-                // whole show ("ring full" every ~2 s in the incident log). When the document is
-                // silent, the FIRST local line whose device actually opened at the mix rate takes the
-                // role - the same line the operator would be told to pick - and the log says so.
-                var isMaster = patch.ClockMasterLineId is { } chosen
-                    ? chosen == line.Id && line.Kind != AudioLineKind.Ndi
+                // But a document that names NONE - or names a line that cannot take the role - is
+                // not a decision to run without one: a masterless bay free-runs on the wall clock,
+                // and no two crystals agree - the device terminal's ring then drops a burst every
+                // couple of seconds, which is an audible pop, for the whole show ("ring full" every
+                // ~2 s in the incident log). When no ELIGIBLE line is named, the FIRST local line
+                // whose device actually opened at the mix rate takes the role - the same line the
+                // operator would be told to pick - and the log says so.
+                var isMaster = namedMasterEligible
+                    ? patch.ClockMasterLineId == line.Id
                     : automaticMaster is null
                       && line.Kind == AudioLineKind.LocalAudio
                       && output.Format.SampleRate == patch.MixSampleRate;
 
-                if (isMaster && patch.ClockMasterLineId is null)
-                    automaticMaster = line.Name;
+                if (isMaster)
+                {
+                    masterTook = true;
+                    if (!namedMasterEligible)
+                        automaticMaster = line.Name;
+                }
 
-                bay.AddTerminal(
+                Bay.AddTerminal(
                     line.Id.ToString(),
                     output,
                     Matrix(cells, channels, line.Channels),
@@ -196,29 +260,156 @@ public sealed class ProjectPatchBay : IDisposable
             Trace.LogInformation(
                 "audio bay open: {OpenedCount} line(s) at {MixRate} Hz, clock master {Master}",
                 opened.Count, patch.MixSampleRate,
-                patch.ClockMasterLineId is { } masterId
-                    ? $"'{project.FindLine(masterId)?.Name ?? masterId.ToString()}'"
+                // The log answers for what the bay is ACTUALLY doing, never for what the document
+                // asked: a named master that failed to open, or an ineligible one (NDI, unpatched,
+                // gone), used to be logged as if it were pacing a bay that was free-running.
+                namedMasterEligible && masterTook
+                    ? $"'{namedMaster!.Name}'"
                     : automaticMaster is not null
-                        ? $"'{automaticMaster}' (automatic - the project names none; set one on the Audio patch to choose)"
-                        : "NOT SET and no line is eligible (bay free-runs on the wall clock; A/V genlock is off)");
+                        ? patch.ClockMasterLineId is not null
+                            ? $"'{automaticMaster}' (automatic fallback - '{namedMaster?.Name ?? "the named master"}' cannot take the role; pick a patched local line on the Audio patch)"
+                            : $"'{automaticMaster}' (automatic - the project names none; set one on the Audio patch to choose)"
+                        : namedMaster is not null
+                            ? namedMasterEligible
+                                ? $"NOT ACTIVE - '{namedMaster.Name}' failed to open (bay free-runs on the wall clock; A/V genlock is off)"
+                                : $"NOT ACTIVE - '{namedMaster.Name}' cannot take the role and no local line is eligible (bay free-runs on the wall clock; A/V genlock is off)"
+                            : patch.ClockMasterLineId is not null
+                                ? "NOT ACTIVE - the named master line is gone and no local line is eligible (bay free-runs on the wall clock; A/V genlock is off)"
+                                : "NOT SET and no line is eligible (bay free-runs on the wall clock; A/V genlock is off)");
 
-        if (opened.Count > 0)
+        Failures = failures;
+        _outputs.AddRange(opened);
+        _senders.AddRange(senders);
+        _openedByBay.AddRange(openLines.Select(open => open.Item1));
+
+        lock (_openGate)
+            _open.AddRange(openLines);
+
+        // The audition target holds the monitor terminal ID for the life of the SESSION, so a reopen
+        // keeps the previous monitor line whenever it is still among the open set - and only falls
+        // back to the first line of the new set when it is not.
+        MonitorTerminalId = MonitorTerminalId is { } previous
+                            && openLines.Any(open => open.Item1.ToString() == previous)
+            ? previous
+            : monitor;
+    }
+
+    /// <summary>
+    /// Replaces the bay's device/NDI terminals from the document WITHOUT tearing down the bus - the
+    /// audio half of "Apply &amp; restart audio" that leaves projector windows, NDI video legs and the
+    /// session itself running.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The bus's rate and channel vocabulary are fixed when the bay is built, so this refuses -
+    /// with the same words <see cref="Apply"/> uses - when the document now disagrees with the
+    /// running bay on either; those two edits still need the full engine restart, and the caller
+    /// falls back to it.
+    /// </para>
+    /// <para>
+    /// What the operator hears: the program goes quiet for the swap gap (every device line is
+    /// detached, then the new set attaches and fades in) - that IS the audio restart. Producer
+    /// clocks ride the wall-clock fallback while no master is attached and re-anchor to the new
+    /// master's first read (<see cref="AudioPatchBay.RemoveTerminal"/> /
+    /// <see cref="AudioPatchBay.AddTerminal"/>), so genlocked video keeps playing and nothing about
+    /// the transport is rebuilt. Recorder terminals stay attached throughout: a recording underway
+    /// survives an APPLY, which is what an archive recording is for.
+    /// </para>
+    /// <para>
+    /// NDI audio halves release their carrier leases and re-claim them, which re-anchors the
+    /// carrier's audio timecode onto its shared egress timeline (<see cref="NdiSenderHub"/>); the
+    /// video half's lease - and therefore the sender's network identity - is never touched.
+    /// </para>
+    /// </remarks>
+    /// <returns>What could not be opened, for the operator - like <see cref="Open"/>'s failures.</returns>
+    public IReadOnlyList<string> Reopen(HaCueProject project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+
+        if (project.AudioPatch.MixSampleRate != MixSampleRate)
+            return
+            [
+                $"the project now mixes at {project.AudioPatch.MixSampleRate} Hz and the running bay "
+                + $"at {MixSampleRate} Hz - reopen the show to apply that change",
+            ];
+
+        var channels = project.AudioPatch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
+        if (channels.Count != LogicalChannelIds.Count
+            || !channels.Select(channel => channel.Id.ToString())
+                .SequenceEqual(LogicalChannelIds, StringComparer.Ordinal))
+            return ["the logical outputs changed - reopen the show to apply that change"];
+
+        foreach (var lineId in _openedByBay)
         {
-            // Metering is switched on for the life of the show rather than when a meter becomes
-            // visible: the Output info drawer is summoned exactly when something sounds wrong, and a
-            // meter that starts measuring at that moment has no history to show for the seconds that
-            // prompted it. The cost is a peak/RMS pass over a buffer the bus already has in cache.
-            bay.EnableProgramMetering();
-            bay.Play();
+            Bay.RemoveTerminal(lineId.ToString());
+            lock (_openGate)
+                _open.RemoveAll(open => open.LineId == lineId);
         }
 
-        var result = new ProjectPatchBay(bay, channelIds, monitor) { Failures = failures };
-        result._outputs.AddRange(opened);
-        result._open.AddRange(openLines);
-        result._senders.AddRange(senders);
-        result._ownedNdiHub = ownedHub;
-        return result;
+        _openedByBay.Clear();
+
+        // Terminals first, then their outputs, then the NDI leases those outputs submit into - the
+        // same order Dispose uses, for the same lifetime reasons.
+        foreach (var output in _outputs.OfType<IDisposable>())
+            output.Dispose();
+        _outputs.Clear();
+
+        foreach (var sender in _senders)
+        {
+            try
+            {
+                sender.Dispose();
+            }
+            catch (Exception failure) when (failure is not OutOfMemoryException)
+            {
+                // One sender that will not close must not stop the swap.
+            }
+        }
+
+        _senders.Clear();
+
+        OpenLines(project);
+
+        if (_outputs.Count > 0)
+        {
+            Bay.EnableProgramMetering();
+            Bay.Play();
+        }
+
+        return Failures;
     }
+
+    /// <summary>
+    /// The device-queue sizing a latency preset asks the backend for, or null for the backend's own
+    /// defaults.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The queue between the mix and the device dominates GO-to-audible: the backend default holds
+    /// ~170 ms of ring at 48 kHz plus the device's high-latency FIFO, so a freshly fired cue's first
+    /// sample - and a genlocked video's deferred start, and a fader move - plays from behind
+    /// 200-350 ms of standing audio. Everything upstream of it is already milliseconds.
+    /// </para>
+    /// <para>
+    /// Low is HaPlay's live-monitoring sizing (<c>PortAudioLiveMonitoring</c>: target
+    /// max(rate/15, three 480-frame chunks), ring clamp(rate/4, 4096, 16384)), measured dropout-free
+    /// on real shows - which is what makes it offerable here without a compromise. Balanced halves
+    /// the distance. The suggested device latency scales with the queue: a Low queue feeding the
+    /// device's HIGH-latency FIFO would give most of the win back to the native side.
+    /// </para>
+    /// </remarks>
+    internal static AudioBackendOptions? LatencyOptions(AudioLatencyPreset preset, int sampleRate) =>
+        preset switch
+        {
+            AudioLatencyPreset.Balanced => new AudioBackendOptions(
+                SuggestedLatencySeconds: 0.06,
+                TargetQueueFrames: Math.Max(sampleRate / 10, 480 * 3)),
+            AudioLatencyPreset.Low => new AudioBackendOptions(
+                SuggestedLatencySeconds: 0.03,
+                RingCapacityFrames: Math.Clamp(sampleRate / 4, 4096, 16384),
+                TargetQueueFrames: Math.Max(Math.Max(sampleRate / 15, 480 * 3), 1920)),
+            _ => null,
+        };
 
     /// <summary>
     /// The backend's device list, or an empty one when it cannot be asked.
@@ -241,13 +432,15 @@ public sealed class ProjectPatchBay : IDisposable
 
     /// <summary>Opens an NDI sender's audio side as an ordinary bay terminal.</summary>
     private static IAudioOutput OpenNdi(
-        NdiSenderHub hub, AudioLineDefinition line, AudioFormat format, List<NdiSenderHub.Lease> senders)
+        NdiSenderHub hub, HaCueProject project, AudioLineDefinition line, AudioFormat format,
+        List<NdiSenderHub.Lease> senders)
     {
-        // Through the shared hub: a linked A/V line joins the SAME sender the video side opened for
-        // this name, so receivers see one source carrying both halves on one egress timeline. A
-        // format conflict (the sender already carries audio at another shape) is thrown and lands in
-        // the bay's per-line failure report - re-opening the show adopts the new shape.
-        var lease = hub.Acquire(line.DeviceHint.Length > 0 ? line.DeviceHint : line.Name);
+        // Through the shared hub, under the CARRIER's name: an A/V line joins the SAME sender the
+        // video side opened for that carrier, so receivers see one source carrying both halves on
+        // one egress timeline. A format conflict (the sender already carries audio at another shape)
+        // or a second line claiming this sender's audio half is thrown and lands in the bay's
+        // per-line failure report - re-opening the show adopts the new shape.
+        var lease = hub.Acquire(project.CarrierNameOf(line), NdiSenderRole.Audio);
 
         try
         {

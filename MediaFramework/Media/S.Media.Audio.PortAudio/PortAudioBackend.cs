@@ -77,6 +77,10 @@ public sealed class PortAudioBackend : IAudioBackend, IAudioDeviceSnapshotProvid
         var opt = options ?? new AudioBackendOptions();
         var output = new PortAudioOutput(format, ParseDeviceId(deviceId), opt.SuggestedLatencySeconds,
             opt.FramesPerBuffer, RingCapacityFrames(opt));
+        // Before Start, per the property's contract. Clamped to the ring: a target the ring cannot
+        // hold would make WaitForCapacity wait forever for room that cannot exist.
+        if (opt.TargetQueueFrames > 0)
+            output.TargetQueueSamples = Math.Min(opt.TargetQueueFrames, RingCapacityFrames(opt));
         return Started(output);
     }
 

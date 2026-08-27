@@ -67,6 +67,10 @@ public sealed class OutboundRampRunner
     private TimeSpan _lastSentAt = TimeSpan.MinValue;
     private volatile bool _finished;
     private volatile bool _finishRequested;
+    // The terminal value the pending finish must deliver. Freeze records its sampled value here so a
+    // failed/pending send retried from Advance resends the FROZEN value - never the authored FinalValue,
+    // which is exactly the jump Freeze promises not to make. Null = authored terminal (Finish/Interrupt).
+    private double? _requestedTerminal;
     private readonly Lock _sendGate = new();
     private bool _hasPending;
     private double _pendingValue;
@@ -176,6 +180,7 @@ public sealed class OutboundRampRunner
     {
         var at = elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed > _duration ? _duration : elapsed;
         _finishRequested = false;
+        _requestedTerminal = null;
         _finished = false;
         _lastSentAt = at;
         Emit(ValueAt(at), isFinal: false);
@@ -191,7 +196,8 @@ public sealed class OutboundRampRunner
             return;
         var at = elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed > _duration ? _duration : elapsed;
         _finishRequested = true;
-        if (Emit(ValueAt(at), isFinal: true) && _send is not null)
+        _requestedTerminal = ValueAt(at);
+        if (Emit(_requestedTerminal.Value, isFinal: true) && _send is not null)
             _finished = true;
     }
 
@@ -208,7 +214,7 @@ public sealed class OutboundRampRunner
             return;
         _finishRequested = true;
         _ = completion; // both paths land on the final value; the distinction is for callers' logging
-        if (Emit(FinalValue, isFinal: true) && _send is not null)
+        if (Emit(_requestedTerminal ?? FinalValue, isFinal: true) && _send is not null)
             _finished = true;
     }
 

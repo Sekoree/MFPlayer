@@ -27,10 +27,18 @@ public sealed record AudioDeviceInfo(
 /// <param name="SuggestedLatencySeconds">Requested device latency (the backend may round to what it supports).</param>
 /// <param name="FramesPerBuffer">Preferred callback buffer size in frames; <c>0</c> = backend default.</param>
 /// <param name="RingCapacityFrames">Producer/consumer ring capacity in frames; <c>0</c> = backend default.</param>
+/// <param name="TargetQueueFrames">
+/// Queue depth (frames) the producer pacing holds the ring at; <c>0</c> = backend default (half the
+/// ring). This is the standing latency between a producer's newest audio and the device, so it is THE
+/// knob for how late a freshly fired cue's first sample plays - independent of the ring's capacity,
+/// which is jitter headroom. Values below a few mix chunks risk underruns; see the low-latency sizing
+/// HaPlay's live monitoring ships (~65 ms at 48 kHz, measured dropout-free).
+/// </param>
 public sealed record AudioBackendOptions(
     double? SuggestedLatencySeconds = null,
     int FramesPerBuffer = 0,
-    int RingCapacityFrames = 0);
+    int RingCapacityFrames = 0,
+    int TargetQueueFrames = 0);
 
 /// <summary>
 /// A pluggable audio host backend (PortAudio, miniaudio, …): device discovery plus opening

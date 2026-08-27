@@ -89,6 +89,15 @@ public sealed record TransportSnapshot(
     /// that shows one row per CUE has to read this rather than the group's own position.
     /// </summary>
     public IReadOnlyList<VoicePlayhead> Voices { get; init; } = [];
+
+    /// <summary>
+    /// <see cref="System.Diagnostics.Stopwatch"/> timestamp of the moment the positions in this
+    /// snapshot were read, or zero when unknown. A UI that extrapolates a playhead between polls must
+    /// extrapolate from THIS - a stamp it takes itself lands after however many dispatcher hops the
+    /// snapshot crossed on its way up, and that delta varies poll to poll, so the readout jitters by
+    /// it and lags by whole command durations exactly when the session is busy.
+    /// </summary>
+    public long SampledAtTicks { get; init; }
 }
 
 /// <summary>A soundboard voice's playhead - for the UI's per-tile progress/countdown.</summary>
@@ -244,6 +253,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
     Task<(int Cursor, int Generation)> ICueRunnerHost.ReadGoCursorAsync(string groupId) =>
         InvokeAsync(() => Task.FromResult((GetGoCursor(groupId), _showGeneration)));
 
+    Task<IReadOnlyList<int>> ICueRunnerHost.ReadGoCursorsAsync(IReadOnlyList<string> groupIds) =>
+        InvokeAsync(() => Task.FromResult<IReadOnlyList<int>>(
+            [.. groupIds.Select(GetGoCursor)]));
+
     Task ICueRunnerHost.AdvanceGoCursorAsync(string groupId, int number, int generation) =>
         AdvanceGoCursorAsync(groupId, number, generation);
     private readonly ShowSessionMetadataPublisher _metadataPublisher;
@@ -311,10 +324,25 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             ? TimeSpan.FromSeconds(frameRate.Denominator / (double)frameRate.Numerator)
             : TimeSpan.FromMilliseconds(17);
 
+    /// <summary>
+    /// How far behind canvas time a LIVE layer's frame selection samples: two source periods, capped
+    /// at 100 ms. Two periods clears the delivery-vs-selection phase race in every alignment (see the
+    /// attach sites), but that race is against the canvas tick, not the source period - a
+    /// slideshow-rate live sender (1 fps stills) must not buy a few ms of phase margin with a
+    /// two-second standing latency. Same reasoning as <see cref="VideoDeliveryLead"/>'s cap.
+    /// </summary>
+    internal static TimeSpan LiveSelectionLag(Rational frameRate) =>
+        TimeSpan.FromTicks(Math.Min(
+            SourceFramePeriod(frameRate).Ticks * 2,
+            TimeSpan.FromMilliseconds(100).Ticks));
+
     /// <summary>A composition layer the active clip's video is fanned to, tagged by its composition + layer index
-    /// so a live placement edit can target the right one when a clip is placed onto more than one layer.</summary>
+    /// so a live placement edit can target the right one when a clip is placed onto more than one layer.
+    /// <paramref name="SelectionLag"/> is the layer's live selection lag (zero for file clips), carried here so a
+    /// live <see cref="VideoPlayheadOffset"/> edit re-applies the full offset instead of erasing the lag.</summary>
     private readonly record struct PlacedLayer(
-        string CompositionId, int LayerIndex, ClipCompositionRuntime.IPlacedClipLayer Slot);
+        string CompositionId, int LayerIndex, ClipCompositionRuntime.IPlacedClipLayer Slot,
+        TimeSpan SelectionLag = default);
 
     /// <summary>Resolves the placement-addressed representation used by the runtime. A legacy document's
     /// one opacity lane is expanded over every placement, preserving its original all-layers meaning.</summary>
@@ -1175,6 +1203,9 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                 var mastered = new HashSet<string>(StringComparer.Ordinal);
                 var fanoutIndex = 0;
                 var placements = binding.GetPlacements();
+                var selectionLag = player.IsLive && player.HasVideo
+                    ? LiveSelectionLag(player.Video.Format.FrameRate)
+                    : TimeSpan.Zero;
 
                 // GPU surface path (NXT-10): a single-placement clip whose source can render itself as a
                 // compositor layer surface, on a surface-hosting compositor, composites GPU-side - no CPU
@@ -1201,12 +1232,10 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                         var surfaceSlot = surfaceComp.AddSurfaceLayer(
                             surfaceSource.CreateLayerSurface(),
                             BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement));
-                        layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, surfaceSlot));
+                        layers.Add(new PlacedLayer(
+                            placement.CompositionId, placement.LayerIndex, surfaceSlot, selectionLag));
                         timelineClaims.Add(surfaceComp.AcquireTransportTimeline(group.Timeline));
-                        surfaceSlot.TimeSelectionOffset = player.IsLive && player.HasVideo
-                            ? -VideoPlayheadOffset
-                              - TimeSpan.FromTicks(SourceFramePeriod(player.Video.Format.FrameRate).Ticks * 2)
-                            : -VideoPlayheadOffset;
+                        surfaceSlot.TimeSelectionOffset = -VideoPlayheadOffset - selectionLag;
                         if (opacityEnvelopes.FirstOrDefault(candidate =>
                                 string.Equals(candidate.CompositionId, placement.CompositionId, StringComparison.Ordinal)
                                 && candidate.LayerIndex == placement.LayerIndex) is { } surfaceLane)
@@ -1247,7 +1276,7 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
                             videoSource.Format,
                             BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement),
                             alignmentTimeline: group.Timeline);
-                        layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, slot));
+                        layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, slot, selectionLag));
                         player.AttachVideoOutput(slot.Output, id: $"comp{fanoutIndex++}"); // unique id ⇒ router fans out
                         if (mastered.Add(placement.CompositionId))
                             timelineClaims.Add(comp.AcquireTransportTimeline(group.Timeline));
@@ -1269,12 +1298,9 @@ public sealed partial class ShowSession : IAsyncDisposable, ISessionPreviewHost,
             // arrives", a frame reaches the slot up to a tick+pump AFTER its PTS - one period of
             // lag left ~6 ms of sampling margin and a per-run phase coin toss of repeats. Two
             // periods (33 ms at 60 fps) clears every phase and is still two hundred milliseconds
-            // fresher than the pre-trim pipeline.
-            var liveSelectionLag = player.IsLive && player.HasVideo
-                ? TimeSpan.FromTicks(SourceFramePeriod(player.Video.Format.FrameRate).Ticks * 2)
-                : TimeSpan.Zero;
+            // fresher than the pre-trim pipeline. Capped for low-rate sources - see LiveSelectionLag.
             foreach (var placed in layers)
-                placed.Slot.TimeSelectionOffset = -VideoPlayheadOffset - liveSelectionLag;
+                placed.Slot.TimeSelectionOffset = -VideoPlayheadOffset - placed.SelectionLag;
 
             // Video half of a fade-in (and of a crossfade's incoming voice): like the audio routes attach
             // silent (gain 0) below, the layers attach BLACK (fade 0) so no full-opacity frame can composite

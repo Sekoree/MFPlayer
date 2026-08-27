@@ -78,6 +78,7 @@ public class SourceUriTests
             LowBandwidth = true,
             AudioBufferMs = 120,
             PaceFromIngestClock = true,
+            LimitedRange = true,
         };
 
         var uri = SourceUri.Ndi(options);
@@ -86,6 +87,8 @@ public class SourceUriTests
         Assert.Equal(options, restored);
         // Spaces and parentheses are what NDI names are made of; the URI has to survive them.
         Assert.Contains("STUDIO-PC", uri, StringComparison.Ordinal);
+        // The framework grammar's escape hatch for studio-range hardware senders, verbatim.
+        Assert.Contains("range=limited", uri, StringComparison.Ordinal);
     }
 
     /// <summary>The common case reads like something a person wrote, because the defaults are absent.</summary>

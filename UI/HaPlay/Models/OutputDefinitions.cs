@@ -4,6 +4,11 @@ using S.Media.Core.Video;
 
 namespace HaPlay.Models;
 
+// Serialized model. Non-CLR-default properties use `set`, not `init`: the source-generated
+// serializer assigns EVERY init property through one object initializer, so a field absent from
+// the JSON would load as the CLR default instead of the property initializer (see the FadeCueNode
+// doc note in CueList.cs). `init` remains only where the initializer IS the CLR default.
+
 public enum ManagedOutputKind
 {
     PortAudio,
@@ -92,7 +97,7 @@ public abstract record OutputDefinition(Guid Id, string DisplayName)
     /// registry (<c>MediaRuntime.Buses</c>); <see cref="OutputEffectDefinition.ConfigJson"/> is the
     /// kind's opaque config blob. Absent in older project files (deserializes empty).
     /// </summary>
-    public IReadOnlyList<OutputEffectDefinition> Effects { get; init; } = [];
+    public IReadOnlyList<OutputEffectDefinition> Effects { get; set; } = [];
 
     /// <summary>
     /// Operator-given name (UI rewrite P2, plan §5): the single naming truth shown wherever this
@@ -196,16 +201,16 @@ public sealed record EncodeSettingsDefinition(
     // so the encoded output never renegotiates mid-session. Absent in pre-Fps project files (0 = source).
     int Fps = 0)
 {
-    public IReadOnlyList<EncodeAudioLegDefinition> AudioLegs { get; init; } = [new EncodeAudioLegDefinition()];
+    public IReadOnlyList<EncodeAudioLegDefinition> AudioLegs { get; set; } = [new EncodeAudioLegDefinition()];
 
     /// <summary>"Average" (legacy/default) or "Constant". String-backed for project compatibility.</summary>
-    public string VideoBitrateMode { get; init; } = "Average";
+    public string VideoBitrateMode { get; set; } = "Average";
 
     /// <summary>Maximum B-frames (null = encoder default, 0 = disabled).</summary>
     public int? VideoMaxBFrames { get; init; }
 
     /// <summary>VBV capacity expressed as duration at the selected bitrate (0 = encoder default).</summary>
-    public int VideoVbvBufferMilliseconds { get; init; } = 1000;
+    public int VideoVbvBufferMilliseconds { get; set; } = 1000;
 
     /// <summary>Apply the H.264/H.265 encoder's zero-latency tune.</summary>
     public bool VideoLowLatencyTune { get; init; }
@@ -274,7 +279,7 @@ public sealed record LiveStreamOutputDefinition(
     EncodeSettingsDefinition? Encode = null,
     LocalStreamServerDefinition? LocalServer = null) : OutputDefinition(Id, DisplayName)
 {
-    public IReadOnlyList<StreamPushTargetDefinition> PushTargets { get; init; } = [];
+    public IReadOnlyList<StreamPushTargetDefinition> PushTargets { get; set; } = [];
 
     [JsonIgnore]
     public override ManagedOutputKind Kind => ManagedOutputKind.LiveStream;

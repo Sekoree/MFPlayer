@@ -215,7 +215,7 @@ public static class AudioPresentation
             {
                 Id = line.Id,
                 Name = line.Name,
-                Kind = $"{KindLabel(line.Kind)} · {line.DeviceHint}",
+                Kind = KindColumn(project, line),
                 Channels = line.Channels.ToString(),
                 Rate = line.SampleRate is { } declared
                     ? new Status(
@@ -248,11 +248,19 @@ public static class AudioPresentation
         if (absent)
             return new Status("absent on this machine", Gel.Red);
 
+        // A device/NDI line nothing is patched to is SKIPPED by the bay: it is present, silent, and
+        // one matrix visit from working. Reading green "open" here was exactly the trap this
+        // method's three-state history exists to close (review C2ᵖ - a freshly added A/V sender's
+        // audio half carried no cells and wore green over silence), so it wears amber and names the
+        // way out instead.
+        var patchable = line.Kind is not (AudioLineKind.FileRecord or AudioLineKind.Stream);
+        if (patchable && carries == 0)
+            return new Status("not patched · route it on the matrix", Gel.Amber);
+
         // Only lines the bay would have opened can be judged against what it did open. It skips record
         // and stream lines - those are encode sessions that open on ARM, and the Rec column speaks for
         // them - and it skips a line nothing is patched to, which is not open because it has no work.
-        var openable = line.Kind is not (AudioLineKind.FileRecord or AudioLineKind.Stream)
-            && carries > 0;
+        var openable = patchable && carries > 0;
 
         // Null is "no session", not "not open" - with nothing running, nothing is expected to be open
         // and saying so on every row would be noise rather than a warning.
@@ -269,6 +277,23 @@ public static class AudioPresentation
         AudioLineKind.FileRecord => "File",
         _ => "Live stream",
     };
+
+    /// <summary>
+    /// The KIND column. An NDI line shows its CARRIER's on-wire name (its hint is retired), what the
+    /// sender carries, and - when a video half exists - the twin row's name, the same "↔" mark the
+    /// video tab wears, so one sender's two rows can be spotted from either tab (review C3ᵖ).
+    /// </summary>
+    private static string KindColumn(HaCueProject project, AudioLineDefinition line)
+    {
+        if (line.Kind != AudioLineKind.Ndi)
+            return $"{KindLabel(line.Kind)} · {line.DeviceHint}";
+
+        var wire = project.CarrierNameOf(line);
+        var videoHalf = line.CarrierId is { } carrierId ? project.VideoHalfOf(carrierId) : null;
+        return videoHalf is null
+            ? $"NDI · audio · {wire}"
+            : $"NDI · audio+video · {wire} ↔ “{videoHalf.Name}”";
+    }
 
     private static string CellLabel(HaCueProject project, PatchCell cell) =>
         $"{project.FindLine(cell.LineId)?.Name ?? "absent"}·{cell.LineChannel + 1}";

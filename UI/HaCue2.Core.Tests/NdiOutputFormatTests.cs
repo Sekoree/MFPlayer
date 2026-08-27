@@ -66,10 +66,14 @@ public sealed class NdiOutputFormatTests
     }
 
     [Fact]
-    public void TheOptionsAndTheAudioLinkRoundTrip()
+    public void TheOptionsAndTheCarrierRoundTrip()
     {
         var project = new HaCueProject { Title = "NDI" };
-        var line = new AudioLineDefinition { Name = "Feed", Kind = AudioLineKind.Ndi, Channels = 8 };
+        var carrier = new NdiCarrierDefinition { Name = "HACUE-FEED" };
+        var line = new AudioLineDefinition
+        {
+            Name = "Feed", Kind = AudioLineKind.Ndi, Channels = 8, CarrierId = carrier.Id,
+        };
         var output = new VideoOutputDefinition
         {
             Name = "Feed",
@@ -78,22 +82,23 @@ public sealed class NdiOutputFormatTests
             NdiHeight = 720,
             NdiFrameRate = 59.94,
             NdiPixelFormat = NdiWireFormat.Uyvy,
-            NdiCarriesAudio = true,
-            NdiAudioChannels = 8,
-            LinkedAudioLineId = line.Id,
+            CarrierId = carrier.Id,
         };
-        line.LinkedVideoOutputId = output.Id;
+        project.NdiCarriers.Add(carrier);
         project.VideoOutputs.Add(output);
         project.AudioLines.Add(line);
 
         var restored = HaCueProjectFile.Deserialize(HaCueProjectFile.Serialize(project));
         var restoredOutput = Assert.Single(restored.VideoOutputs);
         var restoredLine = Assert.Single(restored.AudioLines);
+        var restoredCarrier = Assert.Single(restored.NdiCarriers);
 
         Assert.Equal((1280, 720, 59.94), (restoredOutput.NdiWidth, restoredOutput.NdiHeight, restoredOutput.NdiFrameRate));
         Assert.Equal(NdiWireFormat.Uyvy, restoredOutput.NdiPixelFormat);
-        Assert.True(restoredOutput.NdiCarriesAudio);
-        Assert.Equal(restoredLine.Id, restoredOutput.LinkedAudioLineId);
-        Assert.Equal(restoredOutput.Id, restoredLine.LinkedVideoOutputId);
+        Assert.Equal("HACUE-FEED", restoredCarrier.Name);
+        Assert.Equal(carrier.Id, restoredOutput.CarrierId);
+        Assert.Equal(carrier.Id, restoredLine.CarrierId);
+        Assert.Equal("HACUE-FEED", restored.CarrierNameOf(restoredLine));
+        Assert.Equal("HACUE-FEED", restored.CarrierNameOf(restoredOutput));
     }
 }

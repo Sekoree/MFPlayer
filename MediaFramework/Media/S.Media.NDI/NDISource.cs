@@ -56,6 +56,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
     private bool _hasLastResolvedVideoPts;
     private bool _hasVideoFormat;
     private bool _presentVideoByAbsoluteTimecode;
+    private VideoColorRange? _colorRangeOverride;
     private readonly bool _paceRouterFromIngestClock;
     private bool _disposed;
     private int _captureThreadStuck;
@@ -170,12 +171,13 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         if (audioRingCapacityDuration <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(options), "AudioRingCapacityDuration must be > 0.");
 
-        var resolvedMinBuffered = options.AudioMinBufferedDuration ?? NDIAudioReceiver.DefaultMinBufferedDuration;
+        var resolvedMinBuffered = options.AudioMinBufferedDuration ?? NDIAudioBuffering.DefaultMinBufferedDuration;
         if (resolvedMinBuffered < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(options), "AudioMinBufferedDuration must be >= 0.");
 
         _receiveAudio = options.ReceiveAudio;
         _receiveVideo = options.ReceiveVideo;
+        _colorRangeOverride = options.ColorRangeOverride;
         _presentVideoByAbsoluteTimecode = options.PresentVideoByAbsoluteTimecode;
         _paceRouterFromIngestClock = options.PaceRouterFromIngestClock;
         _audioCapacityDuration = audioRingCapacityDuration;
@@ -416,9 +418,9 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         if (snap is null) return;
 
         var keep = keepBuffered <= TimeSpan.Zero
-            ? TimeSpan.FromTicks(NDIAudioReceiver.DefaultMinBufferedDuration.Ticks * 2)
-            : (keepBuffered < NDIAudioReceiver.DefaultMinBufferedDuration
-                ? NDIAudioReceiver.DefaultMinBufferedDuration
+            ? TimeSpan.FromTicks(NDIAudioBuffering.DefaultMinBufferedDuration.Ticks * 2)
+            : (keepBuffered < NDIAudioBuffering.DefaultMinBufferedDuration
+                ? NDIAudioBuffering.DefaultMinBufferedDuration
                 : keepBuffered);
         var keepFrames = Math.Max(0, (int)(keep.TotalSeconds * snap.Format.SampleRate));
         var keepFloats = checked(keepFrames * snap.Channels);
@@ -553,7 +555,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
         catch (Exception ex)
         {
             // The combined NDISource is the path HaPlay uses. Keep it aligned with the standalone
-            // NDIAudioReceiver/NDIVideoReceiver fault-boundary contract: never let a background
+            // Fault-boundary contract (inherited from the old standalone receivers): never let a background
             // capture/unpack/native error escape the thread and crash the host.
             _faultEx = ex;
             _state = NDIConnectionState.Disconnected;
@@ -630,7 +632,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
             generation = _videoTimelineGeneration;
         }
 
-        if (NDIVideoFrameUnpack.TryUnpack(video, pts, out var vf) && vf is not null)
+        if (NDIVideoFrameUnpack.TryUnpack(video, pts, out var vf, _colorRangeOverride) && vf is not null)
         {
             // Log (and sample luma) BEFORE handing the frame to the queue - a consumer may dequeue and
             // dispose it the moment it lands, and its pooled backing can be recycled immediately after.
@@ -683,7 +685,7 @@ public sealed unsafe class NDISource : IDisposable, INDIOverflowReporter
             return existing;
 
         var capacityFrames = Math.Max(MinAudioCapacityFrames, (int)(_audioCapacityDuration.TotalSeconds * sampleRate));
-        var minBufferedFrames = NDIAudioReceiver.ComputeMinBufferedFrames(
+        var minBufferedFrames = NDIAudioBuffering.ComputeMinBufferedFrames(
             _audioMinBufferedDuration, sampleRate, capacityFrames);
         var snap = new NDIAudioJitterBuffer(new AudioFormat(sampleRate, channels), capacityFrames, minBufferedFrames);
         Volatile.Write(ref _audioState, snap);

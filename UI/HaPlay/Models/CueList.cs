@@ -7,11 +7,11 @@ public sealed record CueListsCollectionDocument
 {
     public const int CurrentSchemaVersion = 1;
 
-    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
     public string? Generator { get; init; }
 
-    public List<CueList> CueLists { get; init; } = [];
+    public List<CueList> CueLists { get; set; } = [];
 }
 
 /// <summary>
@@ -21,9 +21,9 @@ public sealed record CueListsCollectionDocument
 /// </summary>
 public sealed record CueList
 {
-    public string Schema { get; init; } = "HaPlayCueList/v3";
+    public string Schema { get; set; } = "HaPlayCueList/v3";
 
-    public string Name { get; init; } = "Cue List";
+    public string Name { get; set; } = "Cue List";
 
     /// <summary>Legacy persisted standby-window cap. Ignored by the current cue runtime; all
     /// upcoming standby targets are prepared.</summary>
@@ -35,7 +35,7 @@ public sealed record CueList
 
     /// <summary>Trigger mode applied to cues created via the toolbar (Phase 5.8.2). Default
     /// <see cref="CueTriggerMode.Manual"/> so older lists load unchanged.</summary>
-    public CueTriggerMode DefaultTriggerMode { get; init; } = CueTriggerMode.Manual;
+    public CueTriggerMode DefaultTriggerMode { get; set; } = CueTriggerMode.Manual;
 
     /// <summary>When true, the cue player re-runs the renumber pass after every insert/reorder so the
     /// operator's numbering stays sequential (Phase 5.8.2).
@@ -58,34 +58,34 @@ public sealed record CueList
     public int? StopFadeMs { get; init; }
 
     /// <summary>Gain curve for this list's stop fade. Default Linear so older files load unchanged.</summary>
-    public CueFadeCurve StopFadeCurve { get; init; } = CueFadeCurve.Linear;
+    public CueFadeCurve StopFadeCurve { get; set; } = CueFadeCurve.Linear;
 
     /// <summary>Virtual canvases used by the cue player. Multiple video outputs may reference the
     /// same composition (fan-out: composition is rendered once, fed to every referencing output).</summary>
-    public List<CueComposition> Compositions { get; init; } = new();
+    public List<CueComposition> Compositions { get; set; } = new();
 
     /// <summary>Video output bindings - each pairs an output line id (from the shared
     /// <c>OutputManagementView</c> registry) with the composition that feeds it. Audio outputs
     /// are referenced directly by id from <see cref="CueAudioRoute"/> entries, so no per-cue-list
     /// audio binding is needed.</summary>
-    public List<CueVideoOutputBinding> VideoOutputs { get; init; } = new();
+    public List<CueVideoOutputBinding> VideoOutputs { get; set; } = new();
 
-    public List<CueNode> Nodes { get; init; } = new();
+    public List<CueNode> Nodes { get; set; } = new();
 }
 
 public sealed record CueComposition
 {
-    public Guid Id { get; init; } = Guid.NewGuid();
+    public Guid Id { get; set; } = Guid.NewGuid();
 
-    public string Name { get; init; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
 
-    public int Width { get; init; } = 1920;
+    public int Width { get; set; } = 1920;
 
-    public int Height { get; init; } = 1080;
+    public int Height { get; set; } = 1080;
 
-    public int FrameRateNum { get; init; } = 60;
+    public int FrameRateNum { get; set; } = 60;
 
-    public int FrameRateDen { get; init; } = 1;
+    public int FrameRateDen { get; set; } = 1;
 
     /// <summary>Optional composition-level video FX mapping applied to the full canvas before it
     /// fans out to output mappings. Null = no extra composition stage.</summary>
@@ -106,7 +106,7 @@ public sealed record CueComposition
 
 public sealed record CueVideoOutputBinding
 {
-    public Guid Id { get; init; } = Guid.NewGuid();
+    public Guid Id { get; set; } = Guid.NewGuid();
 
     /// <summary>Id of an output line in the shared <c>OutputManagementView</c> registry
     /// (matches <c>OutputDefinition.Id</c>). Empty when not yet picked.</summary>
@@ -126,7 +126,7 @@ public sealed record CueVideoOutputBinding
     /// mapping. Mapping applies only when this is <c>true</c> <em>and</em> <see cref="Mapping"/> is
     /// non-null. Defaults <c>true</c> so pre-flag saves (which stored a mapping only when they wanted it
     /// active) load unchanged.</summary>
-    public bool MappingEnabled { get; init; } = true;
+    public bool MappingEnabled { get; set; } = true;
 }
 
 /// <summary>Output mapping for one composition→output binding (Doc/HaPlay-Output-Mapping-Plan.md §3).</summary>
@@ -134,7 +134,7 @@ public sealed record CueOutputMapping
 {
     /// <summary>Sections drawn back-to-front onto the output. Empty = nothing drawn (all black);
     /// use a single full-canvas section for identity.</summary>
-    public List<CueOutputMappingSection> Sections { get; init; } = new();
+    public List<CueOutputMappingSection> Sections { get; set; } = new();
 
     /// <summary>Output canvas size; null = composition size.</summary>
     public int? OutputWidth { get; init; }
@@ -152,20 +152,20 @@ public sealed record CueOutputMapping
 /// affine destination placement (output pixels, rotation around the destination center).</summary>
 public sealed record CueOutputMappingSection
 {
-    public Guid Id { get; init; } = Guid.NewGuid();
+    public Guid Id { get; set; } = Guid.NewGuid();
 
-    public string Name { get; init; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
 
-    public bool Enabled { get; init; } = true;
+    public bool Enabled { get; set; } = true;
 
     /// <summary>Source slice, normalized [0,1] canvas coordinates.</summary>
     public double SrcX { get; init; }
 
     public double SrcY { get; init; }
 
-    public double SrcWidth { get; init; } = 1.0;
+    public double SrcWidth { get; set; } = 1.0;
 
-    public double SrcHeight { get; init; } = 1.0;
+    public double SrcHeight { get; set; } = 1.0;
 
     /// <summary>Destination placement in output pixels. Width/height ≤ 0 = natural slice size.</summary>
     public double DestX { get; init; }
@@ -180,10 +180,10 @@ public sealed record CueOutputMappingSection
     public double RotationDegrees { get; init; }
 
     /// <summary>Per-section alpha multiplier [0,1].</summary>
-    public double Opacity { get; init; } = 1.0;
+    public double Opacity { get; set; } = 1.0;
 
     /// <summary>Per-section brightness [0,1] - panel brightness matching.</summary>
-    public double Brightness { get; init; } = 1.0;
+    public double Brightness { get; set; } = 1.0;
 
     /// <summary>Reserved for Phase 3 corner-pin (TL, TR, BR, BL in output pixels); ignored in Phase 1.</summary>
     public List<CuePoint>? Corners { get; init; }
@@ -239,13 +239,13 @@ public enum CueLayerPosition
 [JsonDerivedType(typeof(FadeCueNode), typeDiscriminator: "fade")]
 public abstract record CueNode
 {
-    public Guid Id { get; init; } = Guid.NewGuid();
+    public Guid Id { get; set; } = Guid.NewGuid();
 
-    public string Number { get; init; } = string.Empty;
+    public string Number { get; set; } = string.Empty;
 
-    public string Label { get; init; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
 
-    public CueTriggerMode TriggerMode { get; init; } = CueTriggerMode.Manual;
+    public CueTriggerMode TriggerMode { get; set; } = CueTriggerMode.Manual;
 
     public int PreWaitMs { get; init; }
 
@@ -445,7 +445,7 @@ public enum CueScheduleDays
 
 public sealed record CueGroupNode : CueNode
 {
-    public CueGroupFireMode FireMode { get; init; } = CueGroupFireMode.FirstCueOnly;
+    public CueGroupFireMode FireMode { get; set; } = CueGroupFireMode.FirstCueOnly;
 
     /// <summary>Playlist options, used when <see cref="FireMode"/> is
     /// <see cref="CueGroupFireMode.Playlist"/> or <see cref="CueGroupFireMode.ArmedList"/>.
@@ -454,7 +454,7 @@ public sealed record CueGroupNode : CueNode
     /// pattern) so toggling modes never loses the operator's configuration.</summary>
     public CuePlaylistOptions? Playlist { get; init; }
 
-    public List<CueNode> Children { get; init; } = new();
+    public List<CueNode> Children { get; set; } = new();
 }
 
 /// <summary>Playlist behavior for a <see cref="CueGroupNode"/> (Ideas/CuePlayer-Enhancements.md §3).
@@ -595,7 +595,7 @@ public sealed record MediaCueNode : CueNode
     /// <summary>Subtitle tracks to render over this cue's video - none / one / many. Each is an embedded
     /// container stream (<see cref="CueSubtitleSelection.StreamIndex"/>) or a sidecar file
     /// (<see cref="CueSubtitleSelection.Path"/>), with optional font/placement overrides. Empty = no subtitles.</summary>
-    public IReadOnlyList<CueSubtitleSelection> Subtitles { get; init; } = [];
+    public IReadOnlyList<CueSubtitleSelection> Subtitles { get; set; } = [];
 
     /// <summary>Probed source frame rate (numerator / denominator). 0/0 when unknown or no video.</summary>
     public int SourceFrameRateNum { get; init; }
@@ -621,18 +621,18 @@ public sealed record MediaCueNode : CueNode
     /// <summary>Amount trimmed from the end of the source. 0 means play through the probed duration.</summary>
     public int EndOffsetMs { get; init; }
 
-    public CueEndBehavior EndBehavior { get; init; } = CueEndBehavior.Stop;
+    public CueEndBehavior EndBehavior { get; set; } = CueEndBehavior.Stop;
 
     public int FadeInMs { get; init; }
 
     public int FadeOutMs { get; init; }
 
     /// <summary>Gain curve for <see cref="FadeInMs"/>. Default Linear - older files load unchanged.</summary>
-    public CueFadeCurve FadeInCurve { get; init; } = CueFadeCurve.Linear;
+    public CueFadeCurve FadeInCurve { get; set; } = CueFadeCurve.Linear;
 
     /// <summary>Gain curve for <see cref="FadeOutMs"/> - also used when this cue's fade-out wins the
     /// stop-fade precedence (per-cue &gt; list <see cref="CueList.StopFadeMs"/> &gt; app default).</summary>
-    public CueFadeCurve FadeOutCurve { get; init; } = CueFadeCurve.Linear;
+    public CueFadeCurve FadeOutCurve { get; set; } = CueFadeCurve.Linear;
 
     /// <summary>Per-cue master level (dB, default 0 = unity so older files load unchanged). Multiplies
     /// EVERY audio route of the cue on top of the per-route <see cref="CueAudioRoute.GainDb"/> - the
@@ -646,10 +646,10 @@ public sealed record MediaCueNode : CueNode
 
     /// <summary>Per-source-channel audio routing - picks a cue audio output + a device channel
     /// directly. Replaces the previous virtual-output + route-override model.</summary>
-    public List<CueAudioRoute> AudioRoutes { get; init; } = new();
+    public List<CueAudioRoute> AudioRoutes { get; set; } = new();
 
     /// <summary>Per-composition appearance - layer index, position preset, opacity.</summary>
-    public List<CueVideoPlacement> VideoPlacements { get; init; } = new();
+    public List<CueVideoPlacement> VideoPlacements { get; set; } = new();
 
     /// <summary>Volume-automation keyframes (Ideas/CuePlayer-Timeline-Editor.md Phase B), sorted by
     /// time. Times are CLIP-relative (post-<see cref="StartOffsetMs"/>) so the envelope survives seeks
@@ -678,23 +678,23 @@ public sealed record CueAutomationPoint
 
     public double LevelDb { get; init; }
 
-    public CueFadeCurve CurveToNext { get; init; } = CueFadeCurve.Linear;
+    public CueFadeCurve CurveToNext { get; set; } = CueFadeCurve.Linear;
 }
 
 public sealed record ActionCueNode : CueNode
 {
-    public CueActionKind ActionKind { get; init; } = CueActionKind.OSCOut;
+    public CueActionKind ActionKind { get; set; } = CueActionKind.OSCOut;
 
     public Guid? EndpointId { get; init; }
 
-    public string AddressOrMessage { get; init; } = string.Empty;
+    public string AddressOrMessage { get; set; } = string.Empty;
 
-    public List<string> Arguments { get; init; } = new();
+    public List<string> Arguments { get; set; } = new();
 }
 
 public sealed record CommentCueNode : CueNode
 {
-    public string Text { get; init; } = string.Empty;
+    public string Text { get; set; } = string.Empty;
 }
 
 /// <summary>Visualizer control cue (#26): firing it STARTS (or stops) the projectM visualizer as a
@@ -707,7 +707,7 @@ public sealed record VisualizerCueNode : CueNode
     public Guid CompositionId { get; init; }
 
     /// <summary>False = this cue STOPS the composition's visualizer instead of starting one.</summary>
-    public bool StartVisualizer { get; init; } = true;
+    public bool StartVisualizer { get; set; } = true;
 
     /// <summary>Optional *.milk preset folder (null = built-in idle preset).</summary>
     public string? PresetDirectory { get; init; }
@@ -715,7 +715,7 @@ public sealed record VisualizerCueNode : CueNode
     /// <summary>Placements onto compositions - the SAME editor/model as media cues (#26 v3): position,
     /// size, opacity, rotation, fit. Older files carry the legacy Dest*/Opacity fields instead; they are
     /// migrated to one placement at load.</summary>
-    public List<CueVideoPlacement> VideoPlacements { get; init; } = new();
+    public List<CueVideoPlacement> VideoPlacements { get; set; } = new();
 
     /// <summary>Timeline occupancy like an image slide: 0 = infinite (runs until a Stop cue; the
     /// chain advances immediately), &gt;0 = the next Auto-Follow cue fires after this many ms (the
@@ -730,34 +730,34 @@ public sealed record VisualizerCueNode : CueNode
     public int RenderFps { get; init; }
 
     /// <summary>Seconds before the visualizer automatically advances to another preset.</summary>
-    public double PresetDurationSeconds { get; init; } = 30;
+    public double PresetDurationSeconds { get; set; } = 30;
 
     /// <summary>Whether automatic/manual advances choose a random preset instead of the next one.</summary>
-    public bool ShufflePresets { get; init; } = true;
+    public bool ShufflePresets { get; set; } = true;
 
     /// <summary>projectM beat sensitivity (0..5; the library default is 1).</summary>
-    public double BeatSensitivity { get; init; } = 1;
+    public double BeatSensitivity { get; set; } = 1;
 
     /// <summary>Seconds used to cross-fade between presets.</summary>
-    public double TransitionSeconds { get; init; } = 2;
+    public double TransitionSeconds { get; set; } = 2;
 
     /// <summary>Legacy single-rect placement (pre-v3 files); migrated to <see cref="VideoPlacements"/>.</summary>
     public double DestX { get; init; }
 
     public double DestY { get; init; }
 
-    public double DestWidth { get; init; } = 1.0;
+    public double DestWidth { get; set; } = 1.0;
 
-    public double DestHeight { get; init; } = 1.0;
+    public double DestHeight { get; set; } = 1.0;
 
-    public double Opacity { get; init; } = 1.0;
+    public double Opacity { get; set; } = 1.0;
 
     /// <summary>Audio feed: true = every playing media cue drives the visualizer; false = only the
     /// cues in <see cref="FeedCueIds"/> plus media cues flagged <see cref="MediaCueNode.SendToVisualizer"/>.</summary>
-    public bool FeedAll { get; init; } = true;
+    public bool FeedAll { get; set; } = true;
 
     /// <summary>Selected feed sources (stable cue IDs) when <see cref="FeedAll"/> is false.</summary>
-    public List<Guid> FeedCueIds { get; init; } = new();
+    public List<Guid> FeedCueIds { get; set; } = new();
 }
 
 /// <summary>Control-flow cue: firing it moves the playhead to a TARGET cue (loops, section repeats,
@@ -842,9 +842,9 @@ public sealed record CueVideoPlacement
     public int LayerIndex { get; init; }
 
     /// <summary>Fit of the (cropped) source within its destination rectangle.</summary>
-    public CueLayerPosition Position { get; init; } = CueLayerPosition.Cover;
+    public CueLayerPosition Position { get; set; } = CueLayerPosition.Cover;
 
-    public double Opacity { get; init; } = 1.0;
+    public double Opacity { get; set; } = 1.0;
 
     /// <summary>Destination rectangle on the composition canvas, normalized to [0,1].
     /// Defaults to the full canvas - older cues load unchanged.</summary>
@@ -852,9 +852,9 @@ public sealed record CueVideoPlacement
 
     public double DestY { get; init; }
 
-    public double DestWidth { get; init; } = 1.0;
+    public double DestWidth { get; set; } = 1.0;
 
-    public double DestHeight { get; init; } = 1.0;
+    public double DestHeight { get; set; } = 1.0;
 
     /// <summary>Per-edge source crop insets as fractions [0,1). Default 0 = no trim.</summary>
     public double CropLeft { get; init; }
@@ -897,7 +897,7 @@ public sealed record CueColorAdjust
 {
     public double Brightness { get; init; }
 
-    public double Contrast { get; init; } = 1.0;
+    public double Contrast { get; set; } = 1.0;
 }
 
 /// <summary>Chroma-key ("green screen") settings on a video placement. Semantics (and defaults)
@@ -909,15 +909,15 @@ public sealed record CueChromaKey
     /// <summary>Key color RGB, each [0, 1]. Default = pure green.</summary>
     public double KeyR { get; init; }
 
-    public double KeyG { get; init; } = 1.0;
+    public double KeyG { get; set; } = 1.0;
 
     public double KeyB { get; init; }
 
-    public double Similarity { get; init; } = 0.4;
+    public double Similarity { get; set; } = 0.4;
 
-    public double Smoothness { get; init; } = 0.08;
+    public double Smoothness { get; set; } = 0.08;
 
-    public double SpillSuppression { get; init; } = 0.1;
+    public double SpillSuppression { get; set; } = 0.1;
 }
 
 public enum CueTriggerMode
@@ -1014,7 +1014,7 @@ public sealed record CueClipboardDocument
 {
     public const int CurrentVersion = 1;
 
-    public int Version { get; init; } = CurrentVersion;
+    public int Version { get; set; } = CurrentVersion;
 
-    public List<CueNode> Cues { get; init; } = [];
+    public List<CueNode> Cues { get; set; } = [];
 }

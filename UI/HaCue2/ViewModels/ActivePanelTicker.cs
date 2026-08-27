@@ -97,6 +97,11 @@ public sealed class ActivePanelTicker : IDisposable
     /// calm whole-second poll text until the start is inside <see cref="CuePresentation.UpcomingPreciseWindow"/>,
     /// then tick their milliseconds here.
     /// </remarks>
+    /// <summary>Raised after each smooth-clock tick that ran, with the tick's timestamp - for other
+    /// surfaces that extrapolate off the same rows (the timeline sheet's follow mode) without a
+    /// second timer that could disagree with this one.</summary>
+    public event Action<long>? ClockTicked;
+
     public void TickClocks()
     {
         if (Rows.Count == 0 || _runtime.IsPaused)
@@ -139,11 +144,21 @@ public sealed class ActivePanelTicker : IDisposable
                 }
             }
         }
+
+        ClockTicked?.Invoke(now);
     }
+
+    /// <summary>
+    /// A row's playhead extrapolated to <paramref name="now"/> - the ONE extrapolation rule, exposed
+    /// for surfaces that follow the same rows off <see cref="ClockTicked"/> (the timeline sheet's
+    /// follow mode). Living here keeps the poll stamp an implementation detail of this class.
+    /// </summary>
+    public static TimeSpan ExtrapolatedPosition(ActiveCueRow row, long now) =>
+        row.Position + Stopwatch.GetElapsedTime(row.PolledAtTicks, now);
 
     private static void TickActiveRow(ActiveCueRow row, long now)
     {
-        var elapsed = row.Position + Stopwatch.GetElapsedTime(row.PolledAtTicks, now);
+        var elapsed = ExtrapolatedPosition(row, now);
         row.Clock = CuePresentation.PreciseClock(elapsed);
         if (row.Duration is { TotalMilliseconds: > 0 } length)
         {

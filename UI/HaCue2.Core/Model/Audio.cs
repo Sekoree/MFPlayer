@@ -18,6 +18,18 @@ public sealed record ProjectAudioPatch
     /// </summary>
     public Guid? ClockMasterLineId { get; set; }
 
+    /// <summary>
+    /// How deep the device queues run - the GO-to-audible trade (register: reduce UI latency without
+    /// compromises, so the compromise is the operator's to make).
+    /// </summary>
+    /// <remarks>
+    /// Applied when the bay opens, like <see cref="MixSampleRate"/>. A PROJECT setting because the
+    /// right answer depends on the show's machine and rig, and a show carried to another booth
+    /// should behave the same way there. Default is <see cref="AudioLatencyPreset.Safe"/> - the
+    /// depths every show ran at before the setting existed.
+    /// </remarks>
+    public AudioLatencyPreset LatencyPreset { get; set; } = AudioLatencyPreset.Safe;
+
     public List<LogicalAudioChannel> LogicalChannels { get; set; } = [];
 
     /// <summary>
@@ -31,6 +43,30 @@ public sealed record ProjectAudioPatch
 
     public OutputGroup? GroupOf(Guid channelId) =>
         Groups.FirstOrDefault(group => group.MemberIds.Contains(channelId));
+}
+
+/// <summary>
+/// Device-queue depth presets for the bay's device lines.
+/// </summary>
+/// <remarks>
+/// The queue between the mix and the device is the show's standing output latency: every freshly
+/// fired cue's first sample plays from behind it, genlocked video defers its start by the same
+/// depth, and a fader move rides it too. Deeper absorbs more machine jitter; shallower is a faster
+/// GO. The numbers live where the bay opens devices (<c>ProjectPatchBay</c>).
+/// </remarks>
+public enum AudioLatencyPreset
+{
+    /// <summary>The backend defaults (~170 ms queue at 48 kHz plus the device's own high-latency
+    /// FIFO). Survives heavy UI load and slow machines; the default.</summary>
+    Safe,
+
+    /// <summary>~100 ms queue with a mid device FIFO - a GO noticeably tighter, still generous
+    /// jitter headroom.</summary>
+    Balanced,
+
+    /// <summary>~65 ms queue at 48 kHz - the sizing HaPlay's live monitoring ships, measured
+    /// dropout-free - with a low device FIFO. The tightest supported; below this underruns start.</summary>
+    Low,
 }
 
 /// <summary>A named channel that exists whether or not any hardware does.</summary>
@@ -105,10 +141,24 @@ public sealed record AudioLineDefinition
     public bool Required { get; set; }
 
     /// <summary>
-    /// The video output that is this line's video half, when it is one side of a linked A/V
-    /// carrier (an NDI sender carrying both) - the row the VIDEO tab shows for the same sender.
+    /// The NDI carrier this line is the audio half of. Null on every other kind; required on
+    /// <see cref="AudioLineKind.Ndi"/> (the validator refuses a dangling or missing reference).
+    /// The carrier owns the on-wire source name; this line owns the audio shape.
     /// </summary>
-    public Guid? LinkedVideoOutputId { get; set; }
+    public Guid? CarrierId { get; set; }
+
+    /// <summary>The schema-3 video-half link, read once and consumed by <see cref="CarrierMigration"/>.</summary>
+    /// <remarks>Write-only, like <c>MappingSection.LegacyWarpGrid</c>: read from an old file, never
+    /// written back to one. The value only breaks a tie - the migration joins halves by the effective
+    /// sender name the old runtime actually used.</remarks>
+    [System.Text.Json.Serialization.JsonPropertyName("linkedVideoOutputId")]
+    public Guid? LegacyLinkedVideoOutputWriteback
+    {
+        set => LegacyLinkedVideoOutputId = value;
+    }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal Guid? LegacyLinkedVideoOutputId { get; private set; }
 
     /// <summary>
     /// Where a <see cref="AudioLineKind.FileRecord"/> line writes, or a

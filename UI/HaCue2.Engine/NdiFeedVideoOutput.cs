@@ -1,4 +1,6 @@
 using HaCue2.Core.Model;
+using Microsoft.Extensions.Logging;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Decode.FFmpeg.Video;
 
@@ -22,8 +24,10 @@ namespace HaCue2.Engine;
 /// carrying (see <see cref="NdiSenderHub"/>).
 /// </para>
 /// </remarks>
-internal sealed class NdiFeedVideoOutput : IVideoOutput, IDisposable
+internal sealed class NdiFeedVideoOutput : IVideoOutput, IVideoOutputCooperativeAbort, IDisposable
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaCue2.NdiFeedVideoOutput");
+
     private readonly NdiSenderHub.Lease _lease;
     private readonly double _frameRateCap;
     private readonly NdiWireFormat _wire;
@@ -54,20 +58,44 @@ internal sealed class NdiFeedVideoOutput : IVideoOutput, IDisposable
             : TimeSpan.Zero;
         _nextDue = TimeSpan.MinValue;
 
-        if (_wire == NdiWireFormat.Uyvy && format.PixelFormat != PixelFormat.Uyvy
-            && VideoCpuFrameConverter.CanConvert(format.PixelFormat, PixelFormat.Uyvy, format.Width, format.Height))
+        // The operator's wire choice is a real setting: convert when the composition produces
+        // something else, and SAY SO when the converter cannot - a silently ignored option reads as
+        // a broken feed on the receiver with nothing in the logs to explain it.
+        var wireFormat = _wire switch
         {
-            _converter?.Dispose();
-            _converter = new VideoCpuFrameConverter();
-            _converter.Configure(format.PixelFormat, PixelFormat.Uyvy, format.Width, format.Height);
-            _lease.Video.Configure(format with { PixelFormat = PixelFormat.Uyvy });
-            return;
+            NdiWireFormat.Uyvy => PixelFormat.Uyvy,
+            NdiWireFormat.Bgra => PixelFormat.Bgra32,
+            _ => (PixelFormat?)null,
+        };
+
+        if (wireFormat is { } wanted && format.PixelFormat != wanted)
+        {
+            if (VideoCpuFrameConverter.CanConvert(format.PixelFormat, wanted, format.Width, format.Height))
+            {
+                _converter?.Dispose();
+                _converter = new VideoCpuFrameConverter();
+                _converter.Configure(format.PixelFormat, wanted, format.Width, format.Height);
+                _lease.Video.Configure(format with { PixelFormat = wanted });
+                return;
+            }
+
+            Trace.LogWarning(
+                "NDI '{Source}': wire format {Wire} requested but {From}→{To} at {W}x{H} is not convertible - sending the composition's format instead",
+                _lease.Sender.SourceName, _wire, format.PixelFormat, wanted, format.Width, format.Height);
         }
 
         _converter?.Dispose();
         _converter = null;
         _lease.Video.Configure(format);
     }
+
+    /// <summary>
+    /// <see cref="IVideoOutputCooperativeAbort"/>: forwarded to the shared sender's video half so an
+    /// owning pump's teardown is not stuck waiting out a pace interval. Wrapper-must-forward rule -
+    /// today HaCue2's pumps do not own this output (<c>disposeInner:false</c>), but a future owning
+    /// pump probing the wrapper must not silently lose the capability the inner sender has.
+    /// </summary>
+    public void RequestSubmitAbort() => (_lease.Video as IVideoOutputCooperativeAbort)?.RequestSubmitAbort();
 
     public void Submit(VideoFrame frame)
     {

@@ -43,7 +43,7 @@ public sealed class AudioPatchBay : IDisposable
     private bool _disposed;
 
     /// <summary>
-    /// Lock-free view of terminalId → its routed output's clock, for <see cref="TerminalClockProxy"/>.
+    /// Lock-free view of terminalId → its routed output's clock, for <see cref="TerminalClockSource"/>.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -136,11 +136,13 @@ public sealed class AudioPatchBay : IDisposable
         // silently turn a rate-adapted secondary into the pace master while the bay reports no master.
         _router.AutoWirePrimary = false;
         // Producer leases rebase their clocks from whatever terminal is CURRENTLY the clock master,
-        // through this late-bound proxy: no master (yet, or after removal) degrades every producer
-        // clock to the wall-clock fallback domain, and a master appearing later is picked up as an
-        // announced re-anchor - both behaviors inherited from the extracted AudibleClientClock.
-        // Producers get the RAW master proxy: each subtracts its OWN ring plus the downstream lead.
-        var rawMaster = new MasterClockProxy(this);
+        // through this late-bound provider: no master (yet, or after removal) answers null, which
+        // degrades every producer clock to the wall-clock fallback domain WITHOUT an exception - a
+        // masterless bay is the normal state of every new show, and this resolve runs on the clock
+        // hot path. A master appearing later is picked up as an announced re-anchor - both behaviors
+        // inherited from the extracted AudibleClientClock.
+        // Producers get the RAW master provider: each subtracts its OWN ring plus the downstream lead.
+        Func<IPlaybackClock?> rawMaster = () => _masterTerminalClock;
         _bus = new ProgramBusSource(
             logicalChannels,
             mixSampleRate,
@@ -366,8 +368,9 @@ public sealed class AudioPatchBay : IDisposable
     /// The bay hands this out so a voice that has NO producer of its own - a silent video cue, whose
     /// audio is routed nowhere - can still be timed by the same crystal as everything the audience
     /// hears. Without it such a voice free-runs on a Stopwatch and its picture drifts against the
-    /// sound. Reads throw while no master is attached (see <see cref="MasterClockProxy"/>), which
-    /// consumers treat as a terminal outage rather than a fault.
+    /// sound. While no master is attached, reads degrade to the wall-clock fallback domain (spliced
+    /// onto the high-water) and recover when a master appears - a masterless bay is the normal state
+    /// of every new show, not a fault, and reading it raises no exception.
     /// </remarks>
     public IPlaybackClock MasterClock => _masterClock;
 
@@ -755,7 +758,7 @@ public sealed class AudioPatchBay : IDisposable
                 terminalChannels,
                 MixSampleRate,
                 clockContext: new ProgramBusClockContext(
-                    new TerminalClockProxy(this, terminalId),
+                    TerminalClockSource(terminalId),
                     () => TerminalLeadTicks(terminalId)));
             ProgramBusProducer input;
             try
@@ -819,26 +822,13 @@ public sealed class AudioPatchBay : IDisposable
     }
 
     /// <summary>
-    /// A producer lease's view of its terminal's device clock. Lock-free: resolves through
-    /// <see cref="_terminalClocks"/>, so a clock read never contends with the control plane.
+    /// A monitor bus's view of its terminal's device clock: lock-free resolve through
+    /// <see cref="_terminalClocks"/> (a clock read never contends with the control plane), null once
+    /// the terminal is gone - the extracted client clock then rides its wall-clock fallback instead
+    /// of catching a throw per read.
     /// </summary>
-    private sealed class TerminalClockProxy(AudioPatchBay bay, string terminalId) : IPlaybackClock
-    {
-        private IPlaybackClock Inner =>
-            bay._terminalClocks.TryGetValue(terminalId, out var clock)
-                ? clock
-                : throw new InvalidOperationException(
-                    $"terminal '{terminalId}' exposes no playback clock");
-
-        public TimeSpan ElapsedSinceStart => Inner.ElapsedSinceStart;
-        public long EpochId => Inner.EpochId;
-        public bool IsAdvancing => Inner.IsAdvancing;
-
-        /// <summary>The sanctioned accessor: ONE resolve, then one atomic sample off the terminal. The
-        /// three members above each resolve separately, which is fine now that resolving is a lock-free
-        /// dictionary read - it was three lock acquisitions per composed reading before.</summary>
-        public ClockReading Read() => Inner.Read();
-    }
+    private Func<IPlaybackClock?> TerminalClockSource(string terminalId) =>
+        () => _terminalClocks.TryGetValue(terminalId, out var clock) ? clock : null;
 
     /// <summary>Per-terminal pump health (queue depth, drops, submit failures).</summary>
     public bool TryGetTerminalStats(string terminalId, out AudioRouter.OutputPumpStats stats) =>
@@ -899,22 +889,6 @@ public sealed class AudioPatchBay : IDisposable
         if (_masterTerminal is { } terminal)
             ticks += AudioOutputLatency.Of(terminal).Ticks;
         return ticks;
-    }
-
-    /// <summary>Late-bound view of the CURRENT clock-master terminal's playback clock. Throws when no
-    /// master is attached - the extracted client clock treats that exactly like a terminal outage
-    /// (wall-clock fallback spliced onto the high-water) and recovers when a master appears, because
-    /// the first successful read carries an unseen epoch id.</summary>
-    private sealed class MasterClockProxy(AudioPatchBay bay) : IPlaybackClock
-    {
-        private IPlaybackClock Inner =>
-            bay._masterTerminalClock
-            ?? throw new InvalidOperationException("the bay has no clock-master terminal");
-
-        public TimeSpan ElapsedSinceStart => Inner.ElapsedSinceStart;
-        public long EpochId => Inner.EpochId;
-        public bool IsAdvancing => Inner.IsAdvancing;
-        public ClockReading Read() => Inner.Read();
     }
 
     private sealed class OwnedWrapperChain(List<IDisposable> wrappers) : IDisposable

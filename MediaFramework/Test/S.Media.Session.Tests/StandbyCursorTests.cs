@@ -174,4 +174,44 @@ public sealed class StandbyCursorTests
 
         Assert.Equal("a2", (await session.GetStandbyCueAsync("listA"))?.Id);
     }
+
+    /// <summary>
+    /// The batch form exists so a UI snapshot poll costs ONE dispatcher hop for all its lists; it
+    /// must answer exactly as the per-list form does (both run GO's own selection), in input order.
+    /// </summary>
+    [Fact]
+    public async Task TheBatchStandbyReadAgreesWithThePerListOne()
+    {
+        await using var session = Session();
+        await session.LoadDocumentAsync(TwoLists());
+        await session.GoAsync("listA");
+
+        var batch = await session.GetStandbyCuesAsync(["listA", "listB", "no-such-list"]);
+
+        Assert.Equal(3, batch.Count);
+        Assert.Equal((await session.GetStandbyCueAsync("listA"))?.Id, batch[0]?.Id);
+        Assert.Equal((await session.GetStandbyCueAsync("listB"))?.Id, batch[1]?.Id);
+        Assert.Null(batch[2]);
+
+        Assert.Empty(await session.GetStandbyCuesAsync([]));
+    }
+
+    /// <summary>
+    /// Every transport snapshot carries the timestamp its positions were read at, so a poller can
+    /// extrapolate from where the reading happened instead of from when it arrived - the arrival
+    /// stamp is later by however many dispatcher hops the snapshot crossed, and that varies.
+    /// </summary>
+    [Fact]
+    public async Task ASnapshotStampsWhereItsPositionsWereRead()
+    {
+        await using var session = Session();
+        await session.LoadDocumentAsync(TwoLists());
+        await session.GoAsync("listA");
+
+        var before = System.Diagnostics.Stopwatch.GetTimestamp();
+        var snapshot = Assert.Single(session.Snapshot(), s => s.GroupId == "listA");
+        var after = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        Assert.InRange(snapshot.SampledAtTicks, before, after);
+    }
 }

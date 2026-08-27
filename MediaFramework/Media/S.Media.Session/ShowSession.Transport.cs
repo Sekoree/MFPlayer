@@ -261,6 +261,19 @@ public sealed partial class ShowSession
     }
 
     /// <summary>
+    /// <see cref="GetStandbyCueAsync"/> for several lists at once, through ONE dispatcher hop.
+    /// </summary>
+    /// <remarks>One answer per input, same order. This is the form a UI snapshot poll wants: asking
+    /// per list queued one round-trip behind the session dispatcher for each, and a busy dispatcher
+    /// (a GO, a reload) delayed the whole snapshot by their sum.</remarks>
+    public Task<IReadOnlyList<CueDefinition?>> GetStandbyCuesAsync(IReadOnlyList<string> groupIds)
+    {
+        ArgumentNullException.ThrowIfNull(groupIds);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _fires.PeekNextManyAsync(groupIds);
+    }
+
+    /// <summary>
     /// Moves a list's GO cursor so <paramref name="cueId"/> becomes standby. Null rewinds to the top.
     /// </summary>
     /// <returns>False when <paramref name="cueId"/> names no cue - the cursor is left alone.</returns>

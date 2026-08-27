@@ -246,7 +246,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // F-23: spelled out rather than "f… tx…ms y…" - an operator mid-fault should not have to
         // decode abbreviations, and a BLACK visualizer must read differently from zero receivers.
         var receivers = engine.ConnectionCount == 1 ? "1 receiver" : $"{engine.ConnectionCount} receivers";
-        var black = engine.LastFrameLuma <= 0 ? " · output is BLACK (frame luma 0)" : "";
+        // LastFrameLuma is -1 until the first frame - normal startup, not a black output.
+        var black = engine.LastFrameLuma == 0 ? " · output is BLACK (frame luma 0)" : "";
         PresetText = engine.VisualizerFailed
             ? "visualizer unavailable (GL/projectM failed)"
             : $"{receivers} · {engine.FramesSent} frames sent · submit {engine.AverageSubmitMs} ms{black}"

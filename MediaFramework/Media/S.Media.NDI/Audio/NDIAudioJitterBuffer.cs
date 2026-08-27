@@ -42,7 +42,7 @@ internal sealed class NDIAudioJitterBuffer
         }
 
         var primed = Volatile.Read(ref _primed) != 0;
-        var toRead = NDIAudioReceiver.ComputeReadCount(
+        var toRead = NDIAudioBuffering.ComputeReadCount(
             destination.Length,
             _ring.BufferedFloats,
             MinBufferedFloats,

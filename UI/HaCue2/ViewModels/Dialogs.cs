@@ -52,6 +52,9 @@ public static class Dialogs
     public static PromptViewModel AddAudioLine(
         ProjectJournal journal, AudioLineKind kind, AudioDevices? devices)
     {
+        if (kind == AudioLineKind.Ndi)
+            return AddNdiAudioLine(journal);
+
         var name = new PromptField { Label = "Name", Value = Suggest(kind) };
         var local = kind == AudioLineKind.LocalAudio;
         var catalog = local && devices is { Enumerated: true } ? devices : null;
@@ -256,6 +259,251 @@ public static class Dialogs
             : null;
 
     /// <summary>
+    /// A new audio-only NDI sender - the common NDI case, first-class at last.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The name typed here IS the on-wire source name: it becomes an <see cref="NdiCarrierDefinition"/>,
+    /// which is the one place that name is stored. A video half can join the same carrier later
+    /// (Edit line… → "audio + video") without this line being recreated.
+    /// </para>
+    /// <para>
+    /// <b>The line arrives PATCHED</b>, one cell per channel onto the first logical outputs in bus
+    /// order, at unity. An unpatched line is skipped by the bay - review finding B1's silent NDI
+    /// feed - and a sender the operator just asked for is meant to carry the program, which is
+    /// exactly what the seed says. The cells are ordinary cells: re-patching them is one drag.
+    /// </para>
+    /// </remarks>
+    private static PromptViewModel AddNdiAudioLine(ProjectJournal journal)
+    {
+        var name = new PromptField
+        {
+            Label = "Name",
+            Value = Suggest(AudioLineKind.Ndi),
+            Hint = "the NDI source name receivers see on the network",
+        };
+        var channels = new PromptField { Label = "Channels", Kind = PromptFieldKind.Number, Value = "2" };
+
+        return new PromptViewModel(
+            "Add NDI sender line",
+            "an audio feed on the network · arrives patched to the first outputs so it sounds after apply",
+            [name, channels],
+            _ =>
+            {
+                var project = journal.Project;
+                var trimmed = name.Value.Trim();
+
+                using (journal.Composite($"add NDI line “{trimmed}”", "audio", quiet: true))
+                {
+                    var carrier = AddCarrier(journal, trimmed);
+                    var line = new AudioLineDefinition
+                    {
+                        Name = trimmed,
+                        Kind = AudioLineKind.Ndi,
+                        Channels = Math.Clamp(channels.Number(2), 1, 64),
+                        CarrierId = carrier.Id,
+                    };
+                    journal.Do(new AddItemCommand<AudioLineDefinition>(
+                        project.AudioLines, line, project.AudioLines.Count,
+                        "audio", $"add line “{trimmed}”"));
+                    SeedLineCells(journal, line);
+                }
+
+                journal.CloseGroup();
+            });
+    }
+
+    /// <summary>
+    /// Edits an existing audio line with its OWN kind's fields - the add dialog's shape, prefilled,
+    /// applied as one undoable step (review B3: audio lines had no edit dialog at all, so an
+    /// audio-only NDI feed could not change its channel count or sender name after creation).
+    /// </summary>
+    /// <remarks>
+    /// For an NDI line the Name field edits the CARRIER - the sender on the wire and both tab rows -
+    /// and a carriage choice can grow the sender's video half, the mirror of the video-side editor
+    /// growing its audio half. Width and rate changes take effect on the next audio apply, exactly
+    /// like adding a line does; the status bar says so.
+    /// </remarks>
+    public static PromptViewModel? EditAudioLine(
+        ProjectJournal journal, Guid? lineId, AudioDevices? devices)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+
+        var project = journal.Project;
+        if (lineId is not { } id || project.FindLine(id) is not { } line)
+            return null;
+
+        var ndi = line.Kind == AudioLineKind.Ndi;
+        var local = line.Kind == AudioLineKind.LocalAudio;
+        var carrier = ndi && line.CarrierId is { } carrierRef ? project.FindCarrier(carrierRef) : null;
+        var videoHalf = carrier is not null ? project.VideoHalfOf(carrier.Id) : null;
+
+        var name = new PromptField
+        {
+            Label = "Name",
+            Value = carrier?.Name ?? line.Name,
+            Hint = ndi ? "the NDI source name · renames the sender and both tab rows" : "",
+        };
+        var channels = new PromptField
+        {
+            Label = "Channels",
+            Kind = PromptFieldKind.Number,
+            Value = line.Channels.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        };
+
+        List<PromptField> fields = [name, channels];
+
+        PromptField? device = null, rate = null, carriage = null;
+        if (local)
+        {
+            device = new PromptField
+            {
+                Label = "Device",
+                Kind = PromptFieldKind.Suggestion,
+                Options = devices is { Enumerated: true }
+                    ? [.. devices.OutputsFor("").Select(found => found.Name)]
+                    : [],
+                Value = line.DeviceHint,
+                Hint = "matched by name · leave empty for the default device",
+            };
+            rate = new PromptField
+            {
+                Label = "Sample rate",
+                Kind = PromptFieldKind.Suggestion,
+                Options = CommonSampleRates,
+                Value = line.SampleRate?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "",
+                Hint = $"empty follows the show's {project.AudioPatch.MixSampleRate:N0} Hz · set it when the device cannot",
+            };
+            fields.InsertRange(1, [device, rate]);
+        }
+        else if (ndi)
+        {
+            carriage = new PromptField
+            {
+                Label = "Carries",
+                Kind = PromptFieldKind.Choice,
+                Options = ["audio only", "audio + video"],
+                SelectedIndex = videoHalf is null ? 0 : 1,
+                Hint = videoHalf is null
+                    ? "audio + video adds the sender's video row under VIDEO · OUTPUTS"
+                    : "audio only removes the sender's video row - its mapping goes with it",
+            };
+            fields.Add(carriage);
+        }
+
+        return new PromptViewModel(
+            $"Edit “{line.Name}”",
+            $"{Describe(line.Kind)} line",
+            fields,
+            _ =>
+            {
+                var editedName = name.Value.Trim();
+                var editedChannels = Math.Clamp(channels.Number(line.Channels), 1, 64);
+                var wantsVideo = ndi && carriage!.SelectedIndex == 1;
+                var lineTarget = line;
+
+                using (journal.Composite($"edit line “{editedName}”", "audio", quiet: true))
+                {
+                    Set(line.Id, "name", "audio", () => lineTarget.Name,
+                        value => lineTarget.Name = value, editedName);
+                    Set(line.Id, "channels", "audio", () => lineTarget.Channels,
+                        value => lineTarget.Channels = value, editedChannels);
+
+                    if (local)
+                    {
+                        Set(line.Id, "deviceHint", "audio", () => lineTarget.DeviceHint,
+                            value => lineTarget.DeviceHint = value, device!.Value.Trim());
+                        Set(line.Id, "sampleRate", "audio", () => lineTarget.SampleRate,
+                            value => lineTarget.SampleRate = value, NativeRate(rate));
+                    }
+
+                    if (ndi && carrier is not null)
+                    {
+                        var carrierTarget = carrier;
+                        Set(carrier.Id, "name", "audio", () => carrierTarget.Name,
+                            value => carrierTarget.Name = value, editedName);
+
+                        if (wantsVideo && videoHalf is null)
+                        {
+                            // The video half arrives now: same carrier, new row under VIDEO ·
+                            // OUTPUTS, shown on a composition once one is assigned there - the
+                            // same starting state the video tab's own add leaves.
+                            journal.Do(new AddItemCommand<VideoOutputDefinition>(
+                                project.VideoOutputs,
+                                new VideoOutputDefinition
+                                {
+                                    Name = editedName,
+                                    Kind = VideoOutputKind.Ndi,
+                                    CarrierId = carrier.Id,
+                                },
+                                project.VideoOutputs.Count,
+                                "video", $"add output “{editedName}”"));
+                        }
+                        else if (!wantsVideo && videoHalf is not null)
+                        {
+                            journal.Do(new RemoveItemCommand<VideoOutputDefinition>(
+                                project.VideoOutputs, videoHalf, "video",
+                                $"delete output “{videoHalf.Name}”"));
+                        }
+                        else if (videoHalf is not null)
+                        {
+                            var outputTarget = videoHalf;
+                            Set(videoHalf.Id, "name", "video", () => outputTarget.Name,
+                                value => outputTarget.Name = value, editedName);
+                        }
+                    }
+                }
+
+                journal.CloseGroup();
+                return;
+
+                void Set<T>(Guid subject, string property, string domain, Func<T> read, Action<T> write, T value)
+                {
+                    if (!EqualityComparer<T>.Default.Equals(read(), value))
+                        journal.Do(new SetValueCommand<T>(
+                            subject, property, domain, read, write, value, $"edit {property}"));
+                }
+            },
+            confirm: "SAVE");
+    }
+
+    /// <summary>Adds the carrier row for a new NDI sender name, inside the caller's composite.</summary>
+    private static NdiCarrierDefinition AddCarrier(ProjectJournal journal, string name)
+    {
+        var project = journal.Project;
+        var carrier = new NdiCarrierDefinition { Name = name };
+        journal.Do(new AddItemCommand<NdiCarrierDefinition>(
+            project.NdiCarriers, carrier, project.NdiCarriers.Count,
+            "audio", $"add sender “{name}”"));
+        return carrier;
+    }
+
+    /// <summary>
+    /// Seeds a new line's patch: channel-per-channel onto the first logical outputs in bus order,
+    /// unity gain - the same Main L/R shape a new project's vocabulary is born with.
+    /// </summary>
+    private static void SeedLineCells(ProjectJournal journal, AudioLineDefinition line)
+    {
+        var patch = journal.Project.AudioPatch;
+        var channels = patch.LogicalChannels.OrderBy(channel => channel.SortOrder).ToList();
+
+        for (var index = 0; index < Math.Min(channels.Count, line.Channels); index++)
+        {
+            journal.Do(new AddItemCommand<PatchCell>(
+                patch.Cells,
+                new PatchCell
+                {
+                    LogicalChannelId = channels[index].Id,
+                    LineId = line.Id,
+                    LineChannel = index,
+                },
+                patch.Cells.Count,
+                "patch",
+                $"patch “{channels[index].Name}” → “{line.Name}” {index + 1}"));
+        }
+    }
+
+    /// <summary>
     /// Confirms deleting an audio line, naming everything that goes with it.
     /// </summary>
     /// <remarks>
@@ -278,13 +526,19 @@ public static class Dialogs
             return null;
 
         var references = ProjectReferences.To(journal.Project, ProjectReferences.AudioLine, id);
-        var linkedOutput = line.LinkedVideoOutputId is { } videoId
-            ? journal.Project.VideoOutputs.FirstOrDefault(output => output.Id == videoId)
-            : null;
+        var carrier = line.CarrierId is { } carrierId ? journal.Project.FindCarrier(carrierId) : null;
+        var videoHalf = carrier is not null ? journal.Project.VideoHalfOf(carrier.Id) : null;
 
         var consequences = references.Select(reference => reference.Description).ToList();
-        if (linkedOutput is not null)
-            consequences.Add($"its video half “{linkedOutput.Name}” (VIDEO · OUTPUTS) goes with it");
+
+        // Removing the audio half DOWNGRADES the carrier rather than cascading (review B6): the old
+        // behaviour deleted the whole video output - mapping and warp included - because two rows
+        // joined three ways could not survive losing one. Under the carrier model a video-only
+        // sender is an ordinary state, so the video half simply keeps sending.
+        if (videoHalf is not null)
+            consequences.Add($"“{carrier!.Name}” keeps sending video - only its audio goes");
+        else if (carrier is not null)
+            consequences.Add($"the NDI sender “{carrier.Name}” goes with it");
 
         return new PromptViewModel(
             $"Remove “{line.Name}”?",
@@ -296,19 +550,22 @@ public static class Dialogs
             [],
             _ =>
             {
-                if (linkedOutput is null)
+                if (carrier is null || videoHalf is not null)
                 {
+                    // Ordinary line, or a carrier whose video half stays: the line (and its cells,
+                    // snapshots, patch-cue levels) goes; the carrier - if any - is still referenced.
                     ProjectEdits.DeleteAudioLine(journal, id);
                     return;
                 }
 
-                // The same carrier both ways: see RemoveVideoOutput.
+                // The last half of an audio-only sender: the carrier row goes with it, or the
+                // validator would flag an orphan name nothing sends under.
                 using (journal.Composite($"delete line “{line.Name}”", "audio", quiet: true))
                 {
                     ProjectEdits.DeleteAudioLine(journal, id);
-                    journal.Do(new RemoveItemCommand<VideoOutputDefinition>(
-                        journal.Project.VideoOutputs, linkedOutput, "video",
-                        $"delete output “{linkedOutput.Name}”"));
+                    journal.Do(new RemoveItemCommand<NdiCarrierDefinition>(
+                        journal.Project.NdiCarriers, carrier, "audio",
+                        $"delete sender “{carrier.Name}”"));
                 }
 
                 journal.CloseGroup();
@@ -820,16 +1077,25 @@ public static class Dialogs
 
         List<PromptField> fields =
         [
-            new() { Label = "Name", Value = Suggest(kind) },
-            target,
             new()
             {
-                Label = "Required",
-                Kind = PromptFieldKind.Toggle,
-                // Register item 25: a REQUIRED output that is absent is an error, not a warning.
-                Hint = "absent on the night = an error, not a warning",
+                Label = "Name",
+                Value = Suggest(kind),
+                // For NDI the name IS the target: it becomes the carrier's on-wire source name, the
+                // one place that name is stored - so there is no separate Target field to disagree
+                // with it (the old model's rename-splits-the-sender trap, review B5/B7).
+                Hint = kind == VideoOutputKind.Ndi ? "the NDI source name receivers see on the network" : "",
             },
         ];
+        if (kind != VideoOutputKind.Ndi)
+            fields.Add(target);
+        fields.Add(new()
+        {
+            Label = "Required",
+            Kind = PromptFieldKind.Toggle,
+            // Register item 25: a REQUIRED output that is absent is an error, not a warning.
+            Hint = "absent on the night = an error, not a warning",
+        });
 
         PromptField? ndiFormat = null;
         PromptField? ndiRate = null;
@@ -867,8 +1133,8 @@ public static class Dialogs
                 Label = "Carries",
                 Kind = PromptFieldKind.Choice,
                 Options = ["video only", "video + audio"],
-                Hint = "video + audio adds the matching line under AUDIO · DEVICES - "
-                       + "one sender on the network carries both",
+                Hint = "video + audio adds the matching line under AUDIO · DEVICES, patched to the "
+                       + "first outputs - one sender on the network carries both",
             };
             ndiAudioChannels = new PromptField
             {
@@ -879,7 +1145,7 @@ public static class Dialogs
             };
             ndiStreams.Picked += _ => ndiAudioChannels.IsEnabled = ndiStreams.SelectedIndex == 1;
 
-            fields.InsertRange(2, [ndiFormat, ndiRate, ndiWire, ndiStreams, ndiAudioChannels]);
+            fields.InsertRange(1, [ndiFormat, ndiRate, ndiWire, ndiStreams, ndiAudioChannels]);
         }
 
         if (kind == VideoOutputKind.LocalScreen)
@@ -994,11 +1260,9 @@ public static class Dialogs
                             _ => NdiWireFormat.Auto,
                         }
                         : NdiWireFormat.Auto,
-                    NdiCarriesAudio = carriesAudio,
-                    NdiAudioChannels = ndi ? Math.Clamp(ndiAudioChannels!.Number(2), 1, 64) : 2,
                 };
 
-                if (!carriesAudio)
+                if (!ndi)
                 {
                     journal.Do(new AddItemCommand<VideoOutputDefinition>(
                         project.VideoOutputs, definition, project.VideoOutputs.Count,
@@ -1006,28 +1270,35 @@ public static class Dialogs
                     return;
                 }
 
-                // One sender, two tabs: the audio half is a real line under AUDIO · DEVICES, linked
-                // both ways so either row can name (and remove) its twin. One undo step, because the
-                // operator added ONE output.
-                var line = new AudioLineDefinition
+                // One sender, one name, stored once: the carrier. Its audio half - when asked for -
+                // is a real line under AUDIO · DEVICES referencing the SAME carrier, and it arrives
+                // patched (see AddNdiAudioLine for why). One undo step, because the operator added
+                // ONE output.
+                using (journal.Composite($"add NDI output “{outputName}”", "video", quiet: true))
                 {
-                    Name = outputName,
-                    Kind = AudioLineKind.Ndi,
-                    DeviceHint = definition.TargetHint.Length > 0 ? definition.TargetHint : outputName,
-                    Channels = definition.NdiAudioChannels,
-                };
-                definition.LinkedAudioLineId = line.Id;
-                line.LinkedVideoOutputId = definition.Id;
-
-                using (journal.Composite($"add A/V output “{outputName}”", "video", quiet: true))
-                {
+                    var carrier = AddCarrier(journal, outputName);
+                    definition.CarrierId = carrier.Id;
                     journal.Do(new AddItemCommand<VideoOutputDefinition>(
                         project.VideoOutputs, definition, project.VideoOutputs.Count,
                         "video", $"add output “{outputName}”"));
-                    journal.Do(new AddItemCommand<AudioLineDefinition>(
-                        project.AudioLines, line, project.AudioLines.Count,
-                        "audio", $"add line “{outputName}”"));
+
+                    if (carriesAudio)
+                    {
+                        var line = new AudioLineDefinition
+                        {
+                            Name = outputName,
+                            Kind = AudioLineKind.Ndi,
+                            Channels = Math.Clamp(ndiAudioChannels!.Number(2), 1, 64),
+                            CarrierId = carrier.Id,
+                        };
+                        journal.Do(new AddItemCommand<AudioLineDefinition>(
+                            project.AudioLines, line, project.AudioLines.Count,
+                            "audio", $"add line “{outputName}”"));
+                        SeedLineCells(journal, line);
+                    }
                 }
+
+                journal.CloseGroup();
             });
     }
 
@@ -1050,14 +1321,23 @@ public static class Dialogs
         var kind = output.Kind;
         var local = kind == VideoOutputKind.LocalScreen;
         var ndi = kind == VideoOutputKind.Ndi;
+        var carrier = ndi && output.CarrierId is { } carrierRef ? project.FindCarrier(carrierRef) : null;
+        var audioHalf = carrier is not null ? project.AudioHalfOf(carrier.Id) : null;
 
-        var name = new PromptField { Label = "Name", Value = output.Name };
+        var name = new PromptField
+        {
+            Label = "Name",
+            // For NDI the CARRIER's name is the identity being edited - renaming here renames the
+            // sender on the wire and both tab rows with it, in one place (review B5/B7).
+            Value = carrier?.Name ?? output.Name,
+            Hint = ndi ? "the NDI source name · renames the sender and both tab rows" : "",
+        };
         var target = new PromptField
         {
             Label = "Target",
             Kind = local ? PromptFieldKind.Choice : PromptFieldKind.Text,
             Options = local ? screens : [],
-            Value = local ? "" : output.TargetHint,
+            Value = local || ndi ? "" : output.TargetHint,
             Hint = Target(kind),
         };
         if (local && int.TryParse(output.TargetHint, out var screenNumber)
@@ -1072,7 +1352,7 @@ public static class Dialogs
             Hint = "absent on the night = an error, not a warning",
         };
 
-        List<PromptField> fields = [name, target, required];
+        List<PromptField> fields = ndi ? [name, required] : [name, target, required];
 
         PromptField? ndiFormat = null, ndiRate = null, ndiWire = null, ndiStreams = null, ndiChannels = null;
         if (ndi)
@@ -1106,18 +1386,20 @@ public static class Dialogs
             {
                 Label = "Carries",
                 Kind = PromptFieldKind.Choice,
-                Options = ["video only", "video + audio"],
-                SelectedIndex = output.NdiCarriesAudio ? 1 : 0,
-                Hint = "video + audio keeps the matching line under AUDIO · DEVICES in step",
+                // The full carriage triangle: a sender can grow an audio half, drop it, or give up
+                // its video half and continue as an audio-only feed - without being recreated.
+                Options = ["video only", "video + audio", "audio only · this video row goes"],
+                SelectedIndex = audioHalf is null ? 0 : 1,
+                Hint = "what the sender carries · the AUDIO · DEVICES line is the audio half",
             };
             ndiChannels = new PromptField
             {
                 Label = "Audio channels",
                 Kind = PromptFieldKind.Number,
-                Value = output.NdiAudioChannels.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                IsEnabled = output.NdiCarriesAudio,
+                Value = (audioHalf?.Channels ?? 2).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                IsEnabled = audioHalf is not null,
             };
-            ndiStreams.Picked += _ => ndiChannels.IsEnabled = ndiStreams.SelectedIndex == 1;
+            ndiStreams.Picked += _ => ndiChannels.IsEnabled = ndiStreams.SelectedIndex >= 1;
             fields.AddRange([ndiFormat, ndiRate, ndiWire, ndiStreams, ndiChannels]);
         }
 
@@ -1128,15 +1410,18 @@ public static class Dialogs
             _ =>
             {
                 var editedName = name.Value.Trim();
-                var editedHint = local ? ScreenHint(target) : target.Value.Trim();
-                var wantsAudio = ndi && ndiStreams!.SelectedIndex == 1;
+                var editedHint = local ? ScreenHint(target) : ndi ? "" : target.Value.Trim();
+                var carriage = ndi ? ndiStreams!.SelectedIndex : 0;
+                var wantsAudio = ndi && carriage >= 1;
+                var dropsVideo = ndi && carriage == 2;
                 var ndiSize = ndi ? WindowSize(ndiFormat!.Value) : (0, 0);
                 var target2 = output;
 
                 using (journal.Composite($"edit output “{editedName}”", "video", quiet: true))
                 {
                     Set("name", () => target2.Name, value => target2.Name = value, editedName);
-                    Set("targetHint", () => target2.TargetHint, value => target2.TargetHint = value, editedHint);
+                    if (!ndi)
+                        Set("targetHint", () => target2.TargetHint, value => target2.TargetHint = value, editedHint);
                     Set("required", () => target2.Required, value => target2.Required = value, required.IsOn);
 
                     if (ndi)
@@ -1147,46 +1432,53 @@ public static class Dialogs
                             FrameRate(ndiRate!.Value));
                         Set("ndiPixelFormat", () => target2.NdiPixelFormat,
                             value => target2.NdiPixelFormat = value, (NdiWireFormat)ndiWire!.SelectedIndex);
-                        Set("ndiAudioChannels", () => target2.NdiAudioChannels,
-                            value => target2.NdiAudioChannels = value, Math.Clamp(ndiChannels!.Number(2), 1, 64));
-                        Set("ndiCarriesAudio", () => target2.NdiCarriesAudio,
-                            value => target2.NdiCarriesAudio = value, wantsAudio);
 
-                        var line = output.LinkedAudioLineId is { } lineId ? project.FindLine(lineId) : null;
+                        // The one place the sender's name is stored: the carrier. Both tab rows are
+                        // display labels kept in step with it, so a rename cannot split the sender
+                        // on the network (review B5/B7).
+                        if (carrier is not null)
+                        {
+                            var carrierTarget = carrier;
+                            Set2(carrier.Id, "name", () => carrierTarget.Name,
+                                value => carrierTarget.Name = value, editedName);
+                        }
+
+                        var line = audioHalf;
                         if (wantsAudio && line is null)
                         {
-                            // The audio half arrives now: same carrier, new row under AUDIO · DEVICES.
+                            // The audio half arrives now: same carrier, new row under AUDIO ·
+                            // DEVICES, patched so it sounds after apply (see AddNdiAudioLine).
                             var added = new AudioLineDefinition
                             {
                                 Name = editedName,
                                 Kind = AudioLineKind.Ndi,
-                                DeviceHint = editedHint.Length > 0 ? editedHint : editedName,
                                 Channels = Math.Clamp(ndiChannels!.Number(2), 1, 64),
-                                LinkedVideoOutputId = output.Id,
+                                CarrierId = output.CarrierId,
                             };
-                            Set("linkedAudioLine", () => target2.LinkedAudioLineId,
-                                value => target2.LinkedAudioLineId = value, (Guid?)added.Id);
                             journal.Do(new AddItemCommand<AudioLineDefinition>(
                                 project.AudioLines, added, project.AudioLines.Count,
                                 "audio", $"add line “{editedName}”"));
+                            SeedLineCells(journal, added);
                         }
                         else if (!wantsAudio && line is not null)
                         {
-                            Set("linkedAudioLine", () => target2.LinkedAudioLineId,
-                                value => target2.LinkedAudioLineId = value, null);
+                            // Downgrade to video-only: the line and its cells go, the carrier stays.
                             ProjectEdits.DeleteAudioLine(journal, line.Id);
                         }
                         else if (line is not null)
                         {
-                            // Keep the twin's identity in step with this side's edits.
                             var lineTarget = line;
                             Set2(line.Id, "name", () => lineTarget.Name, value => lineTarget.Name = value, editedName);
-                            Set2(line.Id, "deviceHint", () => lineTarget.DeviceHint,
-                                value => lineTarget.DeviceHint = value,
-                                editedHint.Length > 0 ? editedHint : editedName);
                             Set2(line.Id, "channels", () => lineTarget.Channels,
                                 value => lineTarget.Channels = value, Math.Clamp(ndiChannels!.Number(2), 1, 64));
                         }
+
+                        // Downgrade to audio-only: the video ROW goes - its mapping and settings
+                        // with it, which the option's own label says - and the sender continues as
+                        // an audio feed. The carrier and line survive untouched.
+                        if (dropsVideo)
+                            journal.Do(new RemoveItemCommand<VideoOutputDefinition>(
+                                project.VideoOutputs, output, "video", $"delete output “{editedName}”"));
                     }
                 }
 
@@ -1267,11 +1559,18 @@ public static class Dialogs
         if (output.Record is not null)
             consequences.Add("its recording settings go with it");
 
-        var linkedLine = output.LinkedAudioLineId is { } audioId
-            ? journal.Project.FindLine(audioId)
+        var carrier = output.Kind == VideoOutputKind.Ndi && output.CarrierId is { } carrierId
+            ? journal.Project.FindCarrier(carrierId)
             : null;
-        if (linkedLine is not null)
-            consequences.Add($"its audio half “{linkedLine.Name}” (AUDIO · DEVICES) goes with it");
+        var audioHalf = carrier is not null ? journal.Project.AudioHalfOf(carrier.Id) : null;
+
+        // The symmetric half of RemoveAudioLine's downgrade (review B6): losing the video row makes
+        // the sender audio-only, it does not take the audio half - and an evening of somebody's
+        // patch - down with it.
+        if (audioHalf is not null)
+            consequences.Add($"“{carrier!.Name}” keeps sending audio via “{audioHalf.Name}” - only its video goes");
+        else if (carrier is not null)
+            consequences.Add($"the NDI sender “{carrier.Name}” goes with it");
 
         return new PromptViewModel(
             $"Remove “{output.Name}”?",
@@ -1279,14 +1578,17 @@ public static class Dialogs
             [],
             _ =>
             {
-                // The linked audio line is the same SENDER: removing one side and leaving the other
-                // would keep the carrier alive under a row that no longer exists in this tab.
                 using (journal.Composite($"delete output “{output.Name}”", "video", quiet: true))
                 {
-                    if (linkedLine is not null)
-                        ProjectEdits.DeleteAudioLine(journal, linkedLine.Id);
                     journal.Do(new RemoveItemCommand<VideoOutputDefinition>(
                         journal.Project.VideoOutputs, output, "video", $"delete output “{output.Name}”"));
+
+                    // The last half of a video-only sender takes the carrier row with it, or the
+                    // validator would flag an orphan name nothing sends under.
+                    if (carrier is not null && audioHalf is null)
+                        journal.Do(new RemoveItemCommand<NdiCarrierDefinition>(
+                            journal.Project.NdiCarriers, carrier, "video",
+                            $"delete sender “{carrier.Name}”"));
                 }
 
                 journal.CloseGroup();
@@ -1366,6 +1668,64 @@ public static class Dialogs
     }
 
     /// <summary>Renames anything that has a name and an id, through the journal.</summary>
+    /// <summary>
+    /// Renames an NDI sender through its carrier: the on-wire name, the audio line's row and the
+    /// video half's row move together, as one undo step (review B5 - the audio-side rename used to
+    /// rename only its own row, so the tabs disagreed and the wire name never changed).
+    /// </summary>
+    public static PromptViewModel? RenameNdiCarrier(ProjectJournal journal, AudioLineDefinition line)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+        ArgumentNullException.ThrowIfNull(line);
+
+        var project = journal.Project;
+        var carrier = line.CarrierId is { } carrierId ? project.FindCarrier(carrierId) : null;
+        var current = carrier?.Name ?? line.Name;
+
+        return new PromptViewModel(
+            "Rename sender",
+            $"{current} · renames the NDI source on the wire and both tab rows",
+            [new PromptField { Label = "Name", Value = current }],
+            prompt =>
+            {
+                var name = prompt["Name"].Value.Trim();
+                if (name.Length == 0 || name == current)
+                    return;
+
+                var videoHalf = carrier is not null ? project.VideoHalfOf(carrier.Id) : null;
+                var lineTarget = line;
+
+                using (journal.Composite($"rename sender to “{name}”", "audio", quiet: true))
+                {
+                    if (carrier is not null)
+                    {
+                        var carrierTarget = carrier;
+                        journal.Do(new SetValueCommand<string>(
+                            carrier.Id, "name", "audio",
+                            () => carrierTarget.Name, value => carrierTarget.Name = value, name,
+                            $"rename sender to “{name}”"));
+                    }
+
+                    journal.Do(new SetValueCommand<string>(
+                        line.Id, "name", "audio",
+                        () => lineTarget.Name, value => lineTarget.Name = value, name,
+                        $"rename to “{name}”"));
+
+                    if (videoHalf is not null)
+                    {
+                        var outputTarget = videoHalf;
+                        journal.Do(new SetValueCommand<string>(
+                            videoHalf.Id, "name", "video",
+                            () => outputTarget.Name, value => outputTarget.Name = value, name,
+                            $"rename to “{name}”"));
+                    }
+                }
+
+                journal.CloseGroup();
+            },
+            confirm: "RENAME");
+    }
+
     public static PromptViewModel? RenameTo(
         ProjectJournal journal,
         string current,
@@ -1953,6 +2313,13 @@ public static class Dialogs
                    + "removes long-run drift skips · needs the audio stream on",
         };
 
+        var limitedRange = new PromptField
+        {
+            Label = "Studio range", Kind = PromptFieldKind.Toggle, IsOn = existing.LimitedRange,
+            Hint = "for a hardware sender shipping limited-range video · leave off for OBS/NDI-HX - "
+                   + "wrong either way looks washed out or crushed",
+        };
+
         // HaPlay's latency probe, on the shared Machine seam: measures the smallest glitch-free
         // buffer against the LIVE network and writes the floor into the field above. The buffer is
         // the dominant tunable latency between a sender's audio and its low-latency video.
@@ -2003,7 +2370,7 @@ public static class Dialogs
             });
         };
 
-        fields.AddRange([audio, video, proxy, buffer, probe, genlock]);
+        fields.AddRange([audio, video, proxy, buffer, probe, genlock, limitedRange]);
 
         return new PromptViewModel(
             editing is null ? "Add NDI input cue" : "Edit NDI input",
@@ -2025,6 +2392,7 @@ public static class Dialogs
                     // cue the framework refuses to open. Quietly requiring audio here matches the
                     // both-off rule above - keep what was typed, correct the half that cannot be.
                     PaceFromIngestClock = genlock.IsOn && (audio.IsOn || !video.IsOn),
+                    LimitedRange = limitedRange.IsOn,
                 };
 
                 Commit(cues, editing, SourceUri.Ndi(options), name.Value);

@@ -34,6 +34,10 @@ public sealed partial class ShowSession
         var downstreamLead = showClock is S.Media.Time.IPipelineLeadClock pipeline
             ? pipeline.CurrentPipelineLead
             : TimeSpan.Zero;
+        // One stamp for the whole batch, taken WHERE the positions are read: the reads below complete
+        // within microseconds of it, while the consumer may be dispatcher-hops away by the time it
+        // stamps anything itself. See TransportSnapshot.SampledAtTicks.
+        var sampledAt = System.Diagnostics.Stopwatch.GetTimestamp();
         var snaps = new TransportSnapshot[views.Count];
         for (var i = 0; i < views.Count; i++)
         {
@@ -91,6 +95,7 @@ public sealed partial class ShowSession
                 Timeline = timeline,
                 AudibleLatency = audibleLatency,
                 Voices = voices,
+                SampledAtTicks = sampledAt,
             };
         }
         return snaps;
@@ -202,7 +207,9 @@ public sealed partial class ShowSession
                         player.Video.PlayheadOffset = value;
                     foreach (var voice in view.Group.Voices)
                         foreach (var placed in voice.Layers)
-                            placed.Slot.TimeSelectionOffset = -value;
+                            // The layer's own live selection lag rides along: re-pushing the venue
+                            // offset alone would silently erase it for every sounding live layer.
+                            placed.Slot.TimeSelectionOffset = -value - placed.SelectionLag;
                 }
                 catch
                 {

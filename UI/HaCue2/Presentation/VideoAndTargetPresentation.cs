@@ -344,7 +344,7 @@ public static class VideoPresentation
         {
             Id = output.Id,
             Name = output.Name,
-            Kind = $"{KindLabel(output.Kind)} · {output.TargetHint}"
+            Kind = KindLabel(project, output)
                  + (output.Kind == VideoOutputKind.LocalScreen && output.Fullscreen ? " · fullscreen" : ""),
             Shows = project.Compositions
                 .FirstOrDefault(composition => composition.Id == output.CompositionId)?.Name
@@ -397,13 +397,28 @@ public static class VideoPresentation
         }),
     ];
 
-    private static string KindLabel(VideoOutputKind kind) => kind switch
+    /// <summary>
+    /// The KIND column, derived from what the output actually is - for NDI, from what its carrier
+    /// actually CARRIES. Every NDI row used to be hardcoded "video+audio" whatever the sender did
+    /// (review C1ᵖ), and neither tab's row named its twin (C3ᵖ); the cross-reference "↔ name" is the
+    /// same mark the audio row wears, so the two halves of one sender can be spotted from either tab.
+    /// </summary>
+    private static string KindLabel(HaCueProject project, VideoOutputDefinition output)
     {
-        VideoOutputKind.LocalScreen => "local",
-        VideoOutputKind.Ndi => "NDI · video+audio",
-        VideoOutputKind.Record => "record",
-        _ => "stream",
-    };
+        if (output.Kind != VideoOutputKind.Ndi)
+            return output.Kind switch
+            {
+                VideoOutputKind.LocalScreen => $"local · {output.TargetHint}",
+                VideoOutputKind.Record => $"record · {output.TargetHint}",
+                _ => $"stream · {output.TargetHint}",
+            };
+
+        var wire = project.CarrierNameOf(output);
+        var audioHalf = output.CarrierId is { } carrierId ? project.AudioHalfOf(carrierId) : null;
+        return audioHalf is null
+            ? $"NDI · video · {wire}"
+            : $"NDI · video+audio · {wire} ↔ “{audioHalf.Name}”";
+    }
 }
 
 /// <summary>Turns endpoints and trigger inputs into the rows the Targets view binds to.</summary>

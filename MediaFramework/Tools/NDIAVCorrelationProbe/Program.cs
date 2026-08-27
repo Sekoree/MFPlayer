@@ -9,7 +9,9 @@
 // independent receivers begin their A and V streams. Re-run after the fix: one connection ⇒ a single anchor.
 using System.Diagnostics;
 using NDILib;
+using S.Media.Core.Audio;
 using S.Media.Core.Registry;
+using S.Media.Core.Video;
 using S.Media.NDI;
 using S.Media.Time;
 
@@ -95,31 +97,53 @@ Volatile.Write(ref running, false);
 
 // --- ONE-connection model (direct): one receiver delivers both, by construction. -------------------------
 using var combined = NDISource.Open(chosen, new NDISourceOptions { ReceiveVideo = true, ReceiveAudio = true });
-var combinedReady = SpinWait.SpinUntil(() => combined.IngestClock.IsAdvancing, TimeSpan.FromSeconds(8));
+// WaitForStreams, not a bare IsAdvancing spin: the ingest clock is audio-driven and can start
+// advancing milliseconds before the first VIDEO frame latches its format - checking the formats
+// at that instant intermittently reported "NOT confirmed" against a healthy sender.
+var combinedReady = combined.WaitForStreams(TimeSpan.FromSeconds(8))
+                    && SpinWait.SpinUntil(() => combined.IngestClock.IsAdvancing, TimeSpan.FromSeconds(4));
 var hasVideo = combined.TryGetVideoFormat(out var vf);
 var hasAudio = combined.TryGetAudioFormat(out var af);
 
-// --- THE FIX: open ndi:// through the registry exactly as MediaPlayer does (SelectAndOpenVideo then SelectAndOpenAudio).
-//     With the shared cache, both must land on ONE receiver - LiveConnectionCount rises by 1, not 2 - and
-//     releasing both leases tears it down. -----------------------------------------------------------------
-var registry = MediaRegistry.Build(b => b.Use(new NDIModule()));
+// --- THE FIX: open ndi:// through the registry exactly as MediaPlayer does (the atomic OpenAsync).
+//     The paired lease lands both streams on ONE receiver - LiveConnectionCount rises by 1, not 2 -
+//     and disposing the result tears it down. (The single-stream SelectAndOpenVideo/Audio calls get
+//     independent receivers by design now; correlated A/V is the atomic open's contract.) ----------
+// OpenAsync is a default interface member - reach it through IMediaRegistry, as MediaPlayer does.
+IMediaRegistry registry = MediaRegistry.Build(b => b.Use(new NDIModule()));
 var ndiUri = "ndi://" + Uri.EscapeDataString(chosen.Name);
 var connectionsBefore = NDISource.LiveConnectionCount;
-registry.SelectAndOpenVideo(ndiUri, null, out var regVideo);
-registry.SelectAndOpenAudio(ndiUri, null, out var regAudio);
+var opened = await registry.OpenAsync(new MediaOpenRequest(ndiUri)
+{
+    Video = new VideoSourceOpenOptions(),
+    Audio = new AudioSourceOpenOptions(),
+});
 var registryOpened = NDISource.LiveConnectionCount - connectionsBefore;
-(regVideo as IDisposable)?.Dispose();
-(regAudio as IDisposable)?.Dispose();
+await opened.DisposeAsync();
 var releasedToBaseline = NDISource.LiveConnectionCount == connectionsBefore;
 
 Console.WriteLine();
 Console.WriteLine($"two-connection (old)   : V first frame @ {vFirst} ms, A first frame @ {aFirst} ms → independent anchor offset {anchorOffset:+0;-0;0} ms");
 Console.WriteLine($"one-connection (direct): both on one receiver (V={(hasVideo ? $"{vf.Width}x{vf.Height}" : "-")} + A={(hasAudio ? $"{af.SampleRate}Hz/{af.Channels}ch" : "-")}): {(combinedReady && hasVideo && hasAudio ? "confirmed" : "NOT confirmed")}");
-Console.WriteLine($"registry path (fix)    : one ndi:// OpenVideo+OpenAudio opened {registryOpened} receiver(s) - expected 1 (shared); released to baseline: {releasedToBaseline}");
+Console.WriteLine($"registry path (fix)    : one atomic ndi:// OpenAsync opened {registryOpened} receiver(s) - expected 1 (shared); released to baseline: {releasedToBaseline}");
 Console.WriteLine();
 
-var fixWorks = registryOpened == 1 && releasedToBaseline && combinedReady && hasVideo && hasAudio;
-Console.WriteLine(fixWorks
-    ? $"NDIAVCorrelationProbe OK - the registry now shares ONE receiver for A+V (was two, ~{Math.Abs(anchorOffset)} ms apart at startup). A and V anchor together on the one audio-driven ingest clock; the startup lip-sync offset is removed."
-    : $"NDIAVCorrelationProbe FAIL - registry opened {registryOpened} receiver(s) (expected 1), releasedToBaseline={releasedToBaseline}.");
+var registryOk = registryOpened == 1 && releasedToBaseline;
+var combinedOk = combinedReady && hasVideo && hasAudio;
+var fixWorks = registryOk && combinedOk;
+if (fixWorks)
+{
+    Console.WriteLine($"NDIAVCorrelationProbe OK - the registry now shares ONE receiver for A+V (was two, ~{Math.Abs(anchorOffset)} ms apart at startup). A and V anchor together on the one audio-driven ingest clock; the startup lip-sync offset is removed.");
+}
+else
+{
+    // Name the check that actually failed - a FAIL that always prints the registry numbers sent
+    // a reader chasing the wrong half when the direct combined open was the culprit.
+    var reasons = new List<string>();
+    if (!registryOk)
+        reasons.Add($"registry opened {registryOpened} receiver(s) (expected 1), releasedToBaseline={releasedToBaseline}");
+    if (!combinedOk)
+        reasons.Add($"direct one-connection open: ready={combinedReady}, video={(hasVideo ? "yes" : "no")}, audio={(hasAudio ? "yes" : "no")}");
+    Console.WriteLine($"NDIAVCorrelationProbe FAIL - {string.Join("; ", reasons)}.");
+}
 return fixWorks ? 0 : 6;

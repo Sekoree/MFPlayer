@@ -173,7 +173,8 @@ public partial class App : Application
     /// that pass one are the New-project prompt and the sample-show harness, and asking the harness
     /// where to save would put a modal in front of every screenshot run.
     /// </remarks>
-    public static void ShowNewProject(HaCueProject project) => Open(project, "", isNew: true).Show();
+    public static void ShowNewProject(HaCueProject project, string path = "") =>
+        Open(project, path, isNew: path.Length == 0).Show();
 
     /// <summary>Returns to the launcher - what "close project" leaves the operator looking at.</summary>
     public static void ShowLauncher() => OpenLauncher().Show();

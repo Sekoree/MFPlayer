@@ -263,7 +263,9 @@ public static class SampleProject
             ],
         };
 
-        return new HaCueProject
+        // Authored in the pre-carrier shape above (hints carrying sender names) and folded through
+        // the SAME migration a loaded file gets, so the sample exercises it on every launch.
+        var project = new HaCueProject
         {
             Title = "midsummer-2026",
             Settings = new ProjectSettings
@@ -383,6 +385,8 @@ public static class SampleProject
             ],
             CueLists = [preshow, actOne, interval],
         };
+        CarrierMigration.Migrate(project);
+        return project;
     }
 
     private static AudioLineDefinition Line(

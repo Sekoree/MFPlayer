@@ -3,6 +3,11 @@ using HaPlay.Resources;
 
 namespace HaPlay.Services;
 
+// Serialized model. Non-CLR-default properties use `set`, not `init`: the source-generated
+// serializer assigns EVERY init property through one object initializer, so a field absent from
+// the JSON would load as the CLR default instead of the property initializer (see the FadeCueNode
+// doc note in CueList.cs). `init` remains only where the initializer IS the CLR default.
+
 /// <summary>
 /// Metadata written as <c>session.json</c> inside each recovery folder (<c>…/HaPlay/recovery/{sessionId}</c>).
 /// The folder's mere existence is the crash marker - created when the app starts and deleted on a clean
@@ -13,7 +18,7 @@ namespace HaPlay.Services;
 public sealed record RecoverySessionInfo
 {
     /// <summary>Opaque per-launch id; also the recovery folder name.</summary>
-    public string SessionId { get; init; } = string.Empty;
+    public string SessionId { get; set; } = string.Empty;
 
     /// <summary>OS process id that owns this session - used as a best-effort liveness check so a still-running
     /// instance is not mistaken for a crashed one.</summary>
@@ -32,7 +37,7 @@ public sealed record RecoverySessionInfo
     public bool HasUnsavedScripts { get; init; }
 
     /// <summary>Project-relative script paths whose editor buffers had not reached disk when captured.</summary>
-    public List<string> DirtyScriptPaths { get; init; } = [];
+    public List<string> DirtyScriptPaths { get; set; } = [];
 
     /// <summary>Best-effort app-version stamp of the process that produced the capture.</summary>
     public string? HaPlayVersion { get; init; }

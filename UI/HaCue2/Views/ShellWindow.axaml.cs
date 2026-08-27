@@ -276,11 +276,12 @@ public partial class ShellWindow : Window
             // project is seeded with is one decision and it already lives there.
             var launcher = new LauncherViewModel(Shell.Settings, App.Machine);
 
-            launcher.ProjectOpened += (project, _) =>
+            launcher.ProjectOpened += (project, path) =>
             {
-                // Always the NEW route from here: this menu item only ever produces a freshly created
-                // project, and it has to be asked where it lives like any other.
-                App.ShowNewProject(project);
+                // The prompt already created the file at the chosen location; only a project that
+                // arrives with nowhere to live (folder left empty, or the write failed) still gets
+                // the ask-where fallback.
+                App.ShowNewProject(project, path);
                 Close();
             };
 
@@ -480,6 +481,11 @@ public partial class ShellWindow : Window
 
     private void OnDiagnostics(object? sender, RoutedEventArgs e)
         => _diagnostics = Reopen(_diagnostics, () => new DiagnosticsWindow { DataContext = Shell.OpenDiagnostics() });
+
+    /// <summary>The status-bar chip's apply: the same verb as the Audio pane's own button. Line
+    /// failures land in the host's problem report, exactly as they do from that button.</summary>
+    private async void OnApplyAudio(object? sender, RoutedEventArgs e)
+        => await Shell.RestartAudioAsync();
 
     private void OnProjectStatus(object? sender, RoutedEventArgs e)
         => _projectStatus = Reopen(

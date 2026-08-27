@@ -27,8 +27,13 @@ namespace HaCue2.Engine;
 /// </remarks>
 public sealed class TriggerClocks : IDisposable
 {
-    /// <summary>Four times a second - fine enough for a cue called on the clock, cheap enough to ignore.</summary>
-    private static readonly TimeSpan Tick = TimeSpan.FromMilliseconds(250);
+    /// <summary>
+    /// The pass cadence, which is also this path's worst-case firing lateness: a crossing is honoured
+    /// on the first pass after it. 250 ms was visible slop against incoming timecode - a
+    /// timecode-called cue is usually placed against something on stage - so the pass runs at 50 ms;
+    /// it is a cheap scan of the enabled bindings, and it does no work at all while disarmed.
+    /// </summary>
+    private static readonly TimeSpan Tick = TimeSpan.FromMilliseconds(50);
 
     /// <summary>
     /// How far back a crossing may be honoured, in seconds.

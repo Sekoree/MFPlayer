@@ -75,7 +75,7 @@ internal sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelC
             throw new ArgumentException(
                 $"frame format {frame.Format} does not match sender format {_format}", nameof(frame));
         var timecode100Ns = _presentationTimeline is not null
-            ? _presentationTimeline.TimecodeFromPresentationTime(frame.PresentationTime)
+            ? _presentationTimeline.TimecodeFromPresentationTime(NDIEgressStream.Audio, frame.PresentationTime)
             : frame.PresentationTime.Ticks;
         SubmitCore(frame.Samples.Span, timecode100Ns);
     }
@@ -92,8 +92,18 @@ internal sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelC
         var samplesPerChannel = packedSamples.Length / channels;
         if (samplesPerChannel == 0) return;
 
-        // NDI timecode is 100 ns units - same as TimeSpan.Ticks.
-        var timecode100Ns = _samplesSentPerChannel * 10_000_000L / _format.SampleRate;
+        // NDI timecode is 100 ns units - same as TimeSpan.Ticks. The stream position (sample counter ÷
+        // rate) IS this terminal's presentation time: it advances exactly with the bus that feeds it.
+        var streamPosition100Ns = _samplesSentPerChannel * 10_000_000L / _format.SampleRate;
+
+        // On an independent-domain carrier (HaCue2's linked A/V sender) the stream position is mapped
+        // through the shared egress timeline so audio timecodes share the video half's wall epoch -
+        // without this the two halves counted from unrelated zeros and drifted apart across edits.
+        // A shared-domain timeline is left alone: its single anchor belongs to real muxed PTS values,
+        // and a counter-based zero would hijack it.
+        var timecode100Ns = _presentationTimeline is { IndependentStreamDomains: true } timeline
+            ? timeline.TimecodeFromPresentationTime(NDIEgressStream.Audio, TimeSpan.FromTicks(streamPosition100Ns))
+            : streamPosition100Ns;
         SubmitCore(packedSamples, timecode100Ns);
     }
 

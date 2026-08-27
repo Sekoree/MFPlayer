@@ -437,6 +437,10 @@ public struct NDIListenerEvent
 // Discovery Server - High-level records
 // ------------------------------------------------------------------
 
+/// <summary>A listener event with its strings marshalled to managed memory - the raw
+/// <see cref="NDIListenerEvent"/> holds pointers that die with the SDK's free_events call.</summary>
+public readonly record struct NDIListenerEventInfo(string Uuid, string? Name, string? Value);
+
 /// <summary>A discovered receiver on the NDI Discovery Server.</summary>
 public readonly record struct NDIDiscoveredReceiver(
     string Uuid, string? Name, string? InputUuid, string? InputName, string? Address,

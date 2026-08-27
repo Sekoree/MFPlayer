@@ -47,9 +47,9 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
     // Discovery is inherently latent; bound the blocking wait during open.
     private static readonly TimeSpan DiscoveryTimeout = TimeSpan.FromSeconds(5);
 
-    // One ref-counted receiver per paired OpenVideo + OpenAudio call for the same ndi://, so audio and video
-    // arrive on a single connection anchored together (one audio-driven ingest clock) rather than two
-    // independently-anchored receivers. Independent consumers get independent receivers.
+    // The atomic OpenAsync path leases audio + video from ONE receiver (single audio-driven ingest
+    // clock anchoring both), via an explicit LeasePair. The single-stream OpenVideo/OpenAudio entry
+    // points each get their own receiver - correlated A/V requires the atomic open.
     private readonly SharedNDISourceCache _cache;
 
     public NDIDecoderProvider(TimeSpan? audioMinBuffer = null) =>
@@ -68,6 +68,7 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
                 AudioMinBufferedDuration = descriptor.AudioMinBufferedDuration ?? audioMinBuffer,
                 // Opt-in genlock: only an `ingestClock=1` descriptor advertises the ingest clock for router pacing.
                 PaceRouterFromIngestClock = descriptor.PaceFromIngestClock,
+                ColorRangeOverride = descriptor.ColorRangeOverride,
             });
             // Warm up so the A/V formats are available before the open path reads them - the audio router needs
             // the format up front (live NDI delivers no format until the first frame arrives). Best-effort: an
@@ -136,14 +137,17 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
         {
             progress?.Report(new MediaPrepareProgress("connecting", Message: request.Uri));
             var descriptor = ParseSourceUri(request.Uri);
-            var video = request.Video is not null && descriptor.ReceiveVideo ? _cache.LeaseVideo(request.Uri) : null;
-            IAudioSource? audio = null;
+            var wantVideo = request.Video is not null && descriptor.ReceiveVideo;
+            var wantAudio = request.Audio is not null && descriptor.ReceiveAudio;
+            if (!wantVideo && !wantAudio)
+                throw new InvalidOperationException(
+                    $"NDI source '{descriptor.SourceName}' has no enabled stream requested by the player.");
+
+            // ONE paired lease call: both adapters come off one receiver by construction (the atomic
+            // NXT-02 contract), with no ambient pairing state for a concurrent open to collide with.
+            var (video, audio) = _cache.LeasePair(request.Uri, wantVideo, wantAudio);
             try
             {
-                audio = request.Audio is not null && descriptor.ReceiveAudio ? _cache.LeaseAudio(request.Uri) : null;
-                if (video is null && audio is null)
-                    throw new InvalidOperationException(
-                        $"NDI source '{descriptor.SourceName}' has no enabled stream requested by the player.");
                 _ = video?.Format; // surface formats before returning (live NDI delivers none until the first frame)
                 _ = audio?.Format;
             }
@@ -190,7 +194,8 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
         bool ReceiveVideo,
         bool LowBandwidth,
         TimeSpan? AudioMinBufferedDuration,
-        bool PaceFromIngestClock = false);
+        bool PaceFromIngestClock = false,
+        VideoColorRange? ColorRangeOverride = null);
 
     /// <summary>Parses an NDI source descriptor. Query options are deliberately provider-owned so a persisted
     /// HaPlay item keeps its stream-selection, bandwidth, and jitter-buffer policy when opened through the
@@ -225,9 +230,22 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
         if (paceFromIngestClock && !receiveAudio)
             throw new ArgumentException("NDI ingestClock pacing requires the audio stream.", nameof(uri));
 
+        // `range=` overrides the full-range default stamped on received video (NDI carries no range
+        // metadata) - `limited` is the escape hatch for a hardware sender that ships studio range.
+        VideoColorRange? rangeOverride = null;
+        if (values.TryGetValue("range", out var rangeText))
+        {
+            rangeOverride = rangeText.ToLowerInvariant() switch
+            {
+                "full" => VideoColorRange.Full,
+                "limited" => VideoColorRange.Limited,
+                _ => throw new ArgumentException("NDI option 'range' must be 'full' or 'limited'.", nameof(uri)),
+            };
+        }
+
         return new SourceDescriptor(
             Uri.UnescapeDataString(encodedName), receiveAudio, receiveVideo,
-            ReadBool(values, "lowBandwidth", false), audioBuffer, paceFromIngestClock);
+            ReadBool(values, "lowBandwidth", false), audioBuffer, paceFromIngestClock, rangeOverride);
     }
 
     private static Dictionary<string, string> ParseQuery(string query)

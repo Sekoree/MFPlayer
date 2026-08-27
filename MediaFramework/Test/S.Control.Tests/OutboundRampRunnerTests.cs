@@ -86,6 +86,28 @@ public class OutboundRampRunnerTests
     }
 
     [Fact]
+    public void Freeze_RetryAfterAFailedSend_ResendsTheFrozenValue_NotTheAuthoredTerminal()
+    {
+        var sent = new List<double>();
+        var failFirst = true;
+        var runner = new OutboundRampRunner(Ramp(0, 1, 10), v =>
+        {
+            if (failFirst) { failFirst = false; throw new InvalidOperationException("endpoint down"); }
+            sent.Add(v);
+        }, sendRateHz: 25);
+
+        runner.Freeze(TimeSpan.FromSeconds(2.5));
+        Assert.False(runner.IsFinished); // the freeze send failed; delivery is still owed
+
+        // The retry path must deliver the FROZEN value - jumping the desk to the authored terminal
+        // here is exactly the move Freeze exists to prevent.
+        runner.Advance(TimeSpan.FromSeconds(2.6));
+
+        Assert.True(runner.IsFinished);
+        Assert.Equal(0.25d, Assert.Single(sent), 10);
+    }
+
+    [Fact]
     public void Reposition_SeedsTheSoughtValueAndAllowsACompletedRampToRunAgain()
     {
         var sent = new List<double>();

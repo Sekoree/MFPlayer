@@ -65,6 +65,10 @@ public sealed class MiniAudioBackend : IAudioBackend, IDisposable
             deviceId,
             FramesPerBuffer(format, opt),
             RingCapacityFrames(opt));
+        // Before Start, per the property's contract; clamped so the pacing never waits for ring
+        // room that cannot exist.
+        if (opt.TargetQueueFrames > 0)
+            output.TargetQueueSamples = Math.Min(opt.TargetQueueFrames, RingCapacityFrames(opt));
         return Started(output);
     }
 

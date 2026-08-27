@@ -13,7 +13,9 @@ namespace HaViz.Desktop.Capture;
 public sealed class LineInCapture : IDisposable
 {
     private Thread? _thread;
-    private volatile bool _stopRequested;
+    // Per-generation stop flag, captured by the pump it belongs to. A shared field would let a new
+    // Start() clear the request and revive a pump whose Join timed out - two pumps then feed the sink.
+    private CancellationTokenSource? _stop;
 
     public bool IsCapturing => _thread is not null;
 
@@ -57,8 +59,9 @@ public sealed class LineInCapture : IDisposable
 
         var map = new ChannelMap(channelsZeroBased);
 
-        _stopRequested = false;
-        _thread = new Thread(() => Pump(input, map, openChannels, channelsZeroBased.Length, rate, sink))
+        var stop = new CancellationTokenSource();
+        _stop = stop;
+        _thread = new Thread(() => Pump(input, map, openChannels, channelsZeroBased.Length, rate, sink, stop.Token))
         {
             IsBackground = true,
             Name = "haviz-linein",
@@ -66,14 +69,14 @@ public sealed class LineInCapture : IDisposable
         _thread.Start();
     }
 
-    private void Pump(PortAudioInput input, ChannelMap map, int srcChannels, int outChannels, int rate, PcmSubmit sink)
+    private void Pump(PortAudioInput input, ChannelMap map, int srcChannels, int outChannels, int rate, PcmSubmit sink, CancellationToken stop)
     {
         const int framesPerPull = 512;
         var src = new float[framesPerPull * srcChannels];
         var dst = new float[framesPerPull * outChannels];
         try
         {
-            while (!_stopRequested)
+            while (!stop.IsCancellationRequested)
             {
                 var got = input.ReadInto(src); // frame-aligned by contract
                 if (got <= 0)
@@ -101,7 +104,10 @@ public sealed class LineInCapture : IDisposable
     {
         if (_thread is not { } thread)
             return;
-        _stopRequested = true;
+        _stop?.Cancel();
+        // The CTS is deliberately not disposed: a pump that outlived the Join still reads its token,
+        // and cancelling a fresh generation's CTS can never reach it.
+        _stop = null;
         thread.Join(TimeSpan.FromSeconds(2));
         _thread = null;
     }

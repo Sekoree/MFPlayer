@@ -2,13 +2,18 @@ using System.Text.Json.Serialization;
 
 namespace HaPlay.Models;
 
+// Serialized model. Non-CLR-default properties use `set`, not `init`: the source-generated
+// serializer assigns EVERY init property through one object initializer, so a field absent from
+// the JSON would load as the CLR default instead of the property initializer (see the FadeCueNode
+// doc note in CueList.cs). `init` remains only where the initializer IS the CLR default.
+
 /// <summary>
 /// Phase C.5 (§6.8) - discriminated playlist entry. Replaces the v1 flat <see cref="string"/> path
 /// list with a polymorphic union so live inputs (PortAudio capture, NDI receivers) sit alongside
 /// file items in the same playlist / cue list. Persisted via <c>kind</c> discriminator so projects
 /// round-trip even before <see cref="NDIInputPlaylistItem"/> / <see cref="PortAudioInputPlaylistItem"/>
 /// can actually play (e.g. an audio-only NDI input saved today reloads fine after
-/// <c>NDIVideoReceiver</c> backfill).
+/// <c>NDISource</c> backfill).
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(FilePlaylistItem), typeDiscriminator: "file")]
@@ -25,7 +30,7 @@ public abstract record PlaylistItem
     /// playlist (file added twice, two NDI receivers of the same source) without collisions on
     /// selection / equality. Round-trips through the project file so re-opening a project keeps
     /// the selected-item reference stable.</summary>
-    public Guid Id { get; init; } = Guid.NewGuid();
+    public Guid Id { get; set; } = Guid.NewGuid();
 
     [JsonIgnore] public abstract string DisplayName { get; }
 
@@ -49,7 +54,7 @@ public sealed record FilePlaylistItem(string Path) : PlaylistItem
 
     /// <summary>Subtitle tracks to render over this item when played in the media player - none / one / many
     /// (embedded stream or sidecar, with optional font/placement overrides). Empty = no subtitles.</summary>
-    public IReadOnlyList<CueSubtitleSelection> Subtitles { get; init; } = [];
+    public IReadOnlyList<CueSubtitleSelection> Subtitles { get; set; } = [];
 
     public override string DisplayName =>
         string.IsNullOrEmpty(Path) ? "(empty)" : System.IO.Path.GetFileName(Path);
@@ -98,9 +103,9 @@ public sealed record SubtitlePlaylistItem(string Path) : PlaylistItem
     public int? Alignment { get; init; }
 
     /// <summary>Render canvas size; the placement scales it onto the composition.</summary>
-    public int CanvasWidth { get; init; } = 1920;
+    public int CanvasWidth { get; set; } = 1920;
 
-    public int CanvasHeight { get; init; } = 1080;
+    public int CanvasHeight { get; set; } = 1080;
 
     public override string DisplayName =>
         string.IsNullOrEmpty(Path) ? "(subtitles)" : System.IO.Path.GetFileName(Path);
@@ -114,40 +119,40 @@ public sealed record SubtitlePlaylistItem(string Path) : PlaylistItem
 /// media cue. Colours are 0xAARRGGBB.</summary>
 public sealed record TextPlaylistItem : PlaylistItem
 {
-    public string Text { get; init; } = "Text";
+    public string Text { get; set; } = "Text";
 
-    public string FontFamily { get; init; } = "Inter";
+    public string FontFamily { get; set; } = "Inter";
 
-    public double FontSizePx { get; init; } = 96;
+    public double FontSizePx { get; set; } = 96;
 
     public bool Bold { get; init; }
 
     public bool Italic { get; init; }
 
     /// <summary>Text fill colour (0xAARRGGBB). Default opaque white.</summary>
-    public uint ColorArgb { get; init; } = 0xFFFFFFFF;
+    public uint ColorArgb { get; set; } = 0xFFFFFFFF;
 
     /// <summary>Background box colour (0xAARRGGBB). Default fully transparent (no box).</summary>
-    public uint BackgroundArgb { get; init; } = 0x00000000;
+    public uint BackgroundArgb { get; set; } = 0x00000000;
 
     /// <summary>Outline colour (0xAARRGGBB). Default opaque black; only drawn when width &gt; 0.</summary>
-    public uint OutlineArgb { get; init; } = 0xFF000000;
+    public uint OutlineArgb { get; set; } = 0xFF000000;
 
     public double OutlineWidthPx { get; init; }
 
-    public TextAlignH HAlign { get; init; } = TextAlignH.Center;
+    public TextAlignH HAlign { get; set; } = TextAlignH.Center;
 
-    public TextAlignV VAlign { get; init; } = TextAlignV.Middle;
+    public TextAlignV VAlign { get; set; } = TextAlignV.Middle;
 
     /// <summary>Word-wrap width as a fraction [0,1] of the canvas width. 0 = no wrap (single line grows).</summary>
-    public double WrapWidthFraction { get; init; } = 0.9;
+    public double WrapWidthFraction { get; set; } = 0.9;
 
-    public double PaddingPx { get; init; } = 24;
+    public double PaddingPx { get; set; } = 24;
 
     /// <summary>Render canvas size. Defaults to 1080p; the placement system scales it onto the composition.</summary>
-    public int CanvasWidth { get; init; } = 1920;
+    public int CanvasWidth { get; set; } = 1920;
 
-    public int CanvasHeight { get; init; } = 1080;
+    public int CanvasHeight { get; set; } = 1080;
 
     public override string DisplayName
     {
@@ -172,28 +177,28 @@ public sealed record TextPlaylistItem : PlaylistItem
 public sealed record MMDPlaylistItem(string ModelPath) : PlaylistItem
 {
     /// <summary>MSAA in the GL renderer (the add-dialog toggle).</summary>
-    public bool Antialias { get; init; } = true;
+    public bool Antialias { get; set; } = true;
 
     /// <summary>Stage-5 physics - hair/skirt secondary motion (the add-dialog toggle).</summary>
-    public bool Physics { get; init; } = true;
+    public bool Physics { get; set; } = true;
 
     public string? MotionPath { get; init; }
 
     /// <summary>Camera VMD; when set it overrides the manual placement below.</summary>
     public string? CameraMotionPath { get; init; }
 
-    public int RenderWidth { get; init; } = 1280;
-    public int RenderHeight { get; init; } = 720;
+    public int RenderWidth { get; set; } = 1280;
+    public int RenderHeight { get; set; } = 720;
 
     // Manual camera placement (MMD conventions: orbit target at distance, XYZ rotation in degrees).
-    public double CameraDistance { get; init; } = -35;
+    public double CameraDistance { get; set; } = -35;
     public double CameraTargetX { get; init; }
-    public double CameraTargetY { get; init; } = 12;
+    public double CameraTargetY { get; set; } = 12;
     public double CameraTargetZ { get; init; }
     public double CameraRotationXDeg { get; init; }
     public double CameraRotationYDeg { get; init; }
     public double CameraRotationZDeg { get; init; }
-    public double CameraFovDeg { get; init; } = 30;
+    public double CameraFovDeg { get; set; } = 30;
 
     public override string DisplayName =>
         string.IsNullOrEmpty(ModelPath) ? "(MMD model unset)" : System.IO.Path.GetFileName(ModelPath);
@@ -238,7 +243,7 @@ public sealed record YouTubePlaylistItem(string VideoId) : PlaylistItem
 
     /// <summary>Subtitle overlays for playback - filled with the prepared caption sidecar by the dialog;
     /// same shape as <see cref="FilePlaylistItem.Subtitles"/> so the overlay path is shared.</summary>
-    public IReadOnlyList<CueSubtitleSelection> Subtitles { get; init; } = [];
+    public IReadOnlyList<CueSubtitleSelection> Subtitles { get; set; } = [];
 
     public override string DisplayName =>
         !string.IsNullOrWhiteSpace(Title) ? Title! : $"YouTube · {VideoId}";
@@ -267,7 +272,7 @@ public sealed record NDIInputPlaylistItem(string SourceName) : PlaylistItem
     public bool VideoOnly { get; init; }
 
     /// <summary>Reconnect interval (seconds) when the source disappears. 0 disables retries.</summary>
-    public int RetrySeconds { get; init; } = 5;
+    public int RetrySeconds { get; set; } = 5;
 
     /// <summary>Manual override for the audio jitter-buffer reserve, in milliseconds. <c>null</c> keeps the
     /// framework default (~50 ms). Smaller brings the audio forward toward the live video - lower latency, at
@@ -305,8 +310,8 @@ public sealed record PortAudioInputPlaylistItem(string DeviceName) : PlaylistIte
     /// no device with <see cref="DeviceName"/> exists on the host.</summary>
     public int? GlobalDeviceIndex { get; init; }
 
-    public int Channels { get; init; } = 2;
-    public int SampleRate { get; init; } = 48000;
+    public int Channels { get; set; } = 2;
+    public int SampleRate { get; set; } = 48000;
 
     /// <summary>Optional suggested latency override (seconds); null uses the device's
     /// default-low-input-latency.</summary>

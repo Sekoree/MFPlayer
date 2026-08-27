@@ -108,6 +108,13 @@ public sealed record AppSettings
     public int NewProjectMixRate { get; set; } = 48_000;
 
     /// <summary>
+    /// Where the New-project prompt offers to create the file - the last folder the operator chose
+    /// there. Empty until a first project has been created; the prompt then falls back to the most
+    /// recent project's folder, then to the user's documents folder.
+    /// </summary>
+    public string NewProjectFolder { get; set; } = "";
+
+    /// <summary>
     /// A new cue's default fade in/out, in ms. Zero: a cue fades because somebody asked it to.
     /// </summary>
     /// <remarks>

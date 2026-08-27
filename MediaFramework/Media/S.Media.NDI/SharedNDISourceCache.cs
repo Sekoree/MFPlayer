@@ -6,107 +6,61 @@ using S.Media.Time;
 namespace S.Media.NDI;
 
 /// <summary>
-/// Shares one ref-counted <see cref="NDISource"/> across the provider's paired
-/// <c>OpenVideo</c>/<c>OpenAudio</c> calls, so an <c>ndi://</c> open uses ONE receiver delivering both audio
-/// and video - anchored together on the single audio-driven ingest clock - instead of two independently
-/// anchored receivers (the ~startup A/V offset <c>NDIAVCorrelationProbe</c> measured). Independent consumers
-/// get independent receivers; otherwise their reads/rebases would mutate the same queues and steal frames.
-/// The paired receiver is torn down when its last leased adapter is disposed.
+/// Builds leased receiver views for the provider's <c>ndi://</c> opens. A PAIRED open
+/// (<see cref="LeasePair"/> - the atomic <c>OpenAsync</c> path every player uses) creates ONE
+/// <see cref="NDISource"/> delivering both audio and video, anchored together on the single
+/// audio-driven ingest clock, instead of two independently anchored receivers (the ~startup A/V
+/// offset <c>NDIAVCorrelationProbe</c> measured). Pairing is explicit by construction - both leases
+/// come out of one call - never inferred from ambient state: the old thread-id marker could join an
+/// unrelated same-name open that happened to land on a recycled pool thread, whose
+/// <c>RebaseToLatest</c> would then drain the stranger's buffers. Single-stream opens
+/// (<see cref="LeaseVideo"/> / <see cref="LeaseAudio"/>) always get their own receiver.
 /// </summary>
+/// <remarks>
+/// The network-bound open (discovery + first-frame wait, seconds) runs with NO lock held: an entry
+/// is shared only through the leases its creating call returns, so there is nothing for another
+/// thread to observe early - and one absent source no longer stalls every other <c>ndi://</c> open
+/// behind a global gate. A paired receiver is torn down when its last leased adapter is disposed.
+/// </remarks>
 internal sealed class SharedNDISourceCache(Func<string, NDISource> open)
 {
-    private const long PairWindowMilliseconds = 2_000;
+    public IVideoSource LeaseVideo(string sourceKey) => new VideoLease(CreateEntry(sourceKey, leases: 1));
 
-    private readonly object _gate = new();
-    private readonly Dictionary<string, List<Entry>> _entries = new(StringComparer.Ordinal);
+    public IAudioSource LeaseAudio(string sourceKey) => new AudioLease(CreateEntry(sourceKey, leases: 1));
 
-    public IVideoSource LeaseVideo(string sourceKey) => new VideoLease(AcquireVideo(sourceKey));
-
-    public IAudioSource LeaseAudio(string sourceKey) => new AudioLease(AcquireAudio(sourceKey));
-
-    private Entry AcquireVideo(string name)
+    /// <summary>Leases the requested streams from ONE shared receiver (at least one must be requested).</summary>
+    public (IVideoSource? Video, IAudioSource? Audio) LeasePair(string sourceKey, bool video, bool audio)
     {
-        lock (_gate)
-        {
-            var entry = AddEntryLocked(name);
-            entry.RefCount++;
-            entry.PendingAudioPairThreadId = Environment.CurrentManagedThreadId;
-            entry.PendingAudioPairExpiresAtMs = Environment.TickCount64 + PairWindowMilliseconds;
-            return entry;
-        }
+        if (!video && !audio)
+            throw new ArgumentException("a paired NDI lease must request video, audio, or both");
+
+        var entry = CreateEntry(sourceKey, leases: (video ? 1 : 0) + (audio ? 1 : 0));
+        return (video ? new VideoLease(entry) : null, audio ? new AudioLease(entry) : null);
     }
 
-    private Entry AcquireAudio(string name)
+    private Entry CreateEntry(string name, int leases)
     {
-        lock (_gate)
-        {
-            var entry = FindPendingAudioPairLocked(name) ?? AddEntryLocked(name);
-            entry.RefCount++;
-            entry.PendingAudioPairThreadId = null;
-            entry.PendingAudioPairExpiresAtMs = 0;
-            return entry;
-        }
+        // The lease count is fixed before anyone can release: every lease this entry will ever have
+        // is created by this same call, so a plain interlocked count is the entire lifetime protocol.
+        var source = open(name);
+        return new Entry(source, leases);
     }
 
-    private Entry AddEntryLocked(string name)
+    private sealed class Entry(NDISource source, int leases)
     {
-        // Opened under the lock so the paired audio acquire cannot miss the just-created receiver. NDI opens
-        // are infrequent (per cue/clip), and the source receives both A and V for correlated timeline anchoring.
-        var entry = new Entry(name, open(name), this);
-        if (!_entries.TryGetValue(name, out var list))
-        {
-            list = [];
-            _entries[name] = list;
-        }
+        private int _leases = leases;
 
-        list.Add(entry);
-        return entry;
-    }
-
-    private Entry? FindPendingAudioPairLocked(string name)
-    {
-        if (!_entries.TryGetValue(name, out var list))
-            return null;
-
-        var threadId = Environment.CurrentManagedThreadId;
-        var now = Environment.TickCount64;
-        for (var i = list.Count - 1; i >= 0; i--)
-        {
-            var entry = list[i];
-            if (entry.PendingAudioPairThreadId == threadId && now <= entry.PendingAudioPairExpiresAtMs)
-                return entry;
-        }
-
-        return null;
-    }
-
-    private void Release(Entry entry)
-    {
-        lock (_gate)
-        {
-            if (--entry.RefCount > 0)
-                return;
-            if (_entries.TryGetValue(entry.Name, out var list))
-            {
-                list.Remove(entry);
-                if (list.Count == 0)
-                    _entries.Remove(entry.Name);
-            }
-        }
-
-        // Outside the lock - receiver teardown stops a capture thread and can block.
-        entry.Source.Dispose();
-    }
-
-    private sealed class Entry(string name, NDISource source, SharedNDISourceCache owner)
-    {
-        public string Name { get; } = name;
         public NDISource Source { get; } = source;
-        public int RefCount;
-        public int? PendingAudioPairThreadId;
-        public long PendingAudioPairExpiresAtMs;
 
-        public void Release() => owner.Release(this);
+        public void Release()
+        {
+            if (Interlocked.Decrement(ref _leases) > 0)
+                return;
+
+            // Receiver teardown stops a capture thread and can block - callers dispose leases from
+            // ordinary consumer threads, never under a cache-wide lock (there is none).
+            Source.Dispose();
+        }
     }
 
     /// <summary>A leased view of the shared source's video adapter - delegates everything, and on dispose

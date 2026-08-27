@@ -75,6 +75,9 @@ public partial class CuesViewModel : ObservableObject
 
         Cues = [];
         ActivePanel = new ActivePanelTicker(runtime, () => Project);
+        // The sheet's follow mode rides the SAME smooth clock as the Active panel, so the two can
+        // never show a different position for the same group.
+        ActivePanel.ClockTicked += Timeline.FollowTick;
         ActivePanel.Start();
 
         // The source exists BEFORE the first Rebuild: Rebuild clears the tree selection before it
@@ -829,10 +832,23 @@ public partial class CuesViewModel : ObservableObject
     }
 
     /// <summary>Pauses or resumes - one button, and it reports which it would do.</summary>
+    /// <remarks>
+    /// The flag flips OPTIMISTICALLY, before the engine confirms. It is what the next press reads -
+    /// fire-and-forget against the polled flag meant a second press inside the poll interval re-sent
+    /// "pause" instead of resuming - and it is what gates the smooth clock, so the clocks freeze on
+    /// THIS dispatcher pass instead of creeping up to a poll period ahead and snapping back. The
+    /// engine's TransportChanged poll lands moments later and re-asserts whatever is actually true.
+    /// </remarks>
     public void TogglePause()
     {
-        if (Engine is { } host)
-            _ = host.SetPausedAsync(!_runtime.IsPaused);
+        if (Engine is not { } host)
+            return;
+
+        var paused = !_runtime.IsPaused;
+        _runtime.IsPaused = paused;
+        OnPropertyChanged(nameof(IsPaused));
+        OnPropertyChanged(nameof(PauseLabel));
+        _ = host.SetPausedAsync(paused);
     }
 
     public bool IsPaused => _runtime.IsPaused;
@@ -3236,9 +3252,65 @@ public sealed partial class TimelineViewModel : ObservableObject
     /// </param>
     public void PlacePlayhead(double fractionOfWindow, bool toGrid = false)
     {
+        // A manual placement while following is the operator asserting a position, so the latch
+        // visibly releases rather than the cursor being dragged back on the next tick - the same
+        // reason a scroll wheel stops a terminal's tail.
+        if (FollowTransport)
+            FollowTransport = false;
+
         var at = _view.At(Math.Clamp(fractionOfWindow, 0, 1));
         _playheadMs = Math.Clamp(toGrid ? Snap(at) : Math.Round(at), 0, SpanMs);
 
+        OnPropertyChanged(nameof(Playhead));
+        OnPropertyChanged(nameof(PlayheadLabel));
+    }
+
+    /// <summary>
+    /// Whether the playhead follows the running transport instead of holding where it was placed.
+    /// </summary>
+    /// <remarks>
+    /// Opt-in (register: the playhead is an AUTHORING position by default): rehearsing, the operator
+    /// wants the cursor on the sheet to be where the group IS - it used to sit still while the group
+    /// played, with the only live position in the Active panel, a different visual place. Placing the
+    /// playhead by hand switches it back off.
+    /// </remarks>
+    [ObservableProperty]
+    private bool _followTransport;
+
+    /// <summary>
+    /// One smooth-clock tick of follow mode: adopts the running group's position as the playhead.
+    /// </summary>
+    /// <remarks>
+    /// The position is the sounding children's, in the group's own coordinate - the furthest of
+    /// (timeline offset + that child's extrapolated playhead), which is the same rule the Active
+    /// panel's group header uses. Reads the SAME rows and the same poll stamps, so the sheet and the
+    /// panel cannot disagree. Holds (rather than rewinding) when nothing of the group is sounding:
+    /// where the run ended is where "play from here" should resume.
+    /// </remarks>
+    public void FollowTick(long now)
+    {
+        if (!FollowTransport || _group is null)
+            return;
+
+        var at = -1d;
+
+        foreach (var child in _group.Children)
+        {
+            if (_runtime.ActiveCues.FirstOrDefault(row => row.CueId == child.Id) is not { } row)
+                continue;
+
+            // Through the ticker's one extrapolation rule - the sheet must read the row exactly as
+            // the Active panel does or the two drift apart between polls.
+            var position = ActivePanelTicker.ExtrapolatedPosition(row, now);
+            var ms = child.TimelineOffsetMs + position.TotalMilliseconds;
+            if (ms > at)
+                at = ms;
+        }
+
+        if (at < 0)
+            return;
+
+        _playheadMs = Math.Clamp(at, 0, SpanMs);
         OnPropertyChanged(nameof(Playhead));
         OnPropertyChanged(nameof(PlayheadLabel));
     }

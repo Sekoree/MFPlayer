@@ -53,7 +53,7 @@ public static class NDIAudioBufferProbe
             var underruns = MeasureUnderruns(source, ms, warm, meas, cancellationToken);
             if (underruns < 0) // no audio on the source - presets are meaningless
             {
-                var d = NDIAudioReceiver.DefaultMinBufferedDuration;
+                var d = NDIAudioBuffering.DefaultMinBufferedDuration;
                 return new NDIAudioBufferPresets(d, d, d) { HasAudio = false };
             }
 

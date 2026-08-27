@@ -303,12 +303,15 @@ internal sealed class CueRunner
         CueGraph graph, string groupId, string defaultGroup)
     {
         var (cursor, generation) = await _host.ReadGoCursorAsync(groupId).ConfigureAwait(false);
-        var next = graph.Cues
+        return (SelectNext(graph, groupId, defaultGroup, cursor), generation);
+    }
+
+    /// <summary>The selection itself, shared by GO and both peeks so they can never disagree.</summary>
+    private static CueDefinition? SelectNext(CueGraph graph, string groupId, string defaultGroup, int cursor) =>
+        graph.Cues
             .Where(c => (c.GroupId ?? defaultGroup) == groupId && c.Number > cursor && c.Armed && c.Enabled)
             .OrderBy(c => c.Number)
             .FirstOrDefault();
-        return (next, generation);
-    }
 
     /// <summary>
     /// What GO would fire next on <paramref name="groupId"/>, without firing it.
@@ -319,6 +322,25 @@ internal sealed class CueRunner
     {
         var graph = CurrentGraphState.Graph;
         var (next, _) = await SelectNextGoCueAsync(graph, groupId, _host.DefaultGroupId).ConfigureAwait(false);
+        return next;
+    }
+
+    /// <summary>
+    /// <see cref="PeekNextAsync"/> for every group at once, through ONE cursor read.
+    /// </summary>
+    /// <remarks>The per-group form costs a dispatcher round-trip each; a host polling standby for
+    /// all its cue lists four times a second paid lists × 4 hops/s for cursors that live side by
+    /// side. One answer per input, same order.</remarks>
+    public async Task<IReadOnlyList<CueDefinition?>> PeekNextManyAsync(IReadOnlyList<string> groupIds)
+    {
+        if (groupIds.Count == 0)
+            return [];
+
+        var graph = CurrentGraphState.Graph;
+        var cursors = await _host.ReadGoCursorsAsync(groupIds).ConfigureAwait(false);
+        var next = new CueDefinition?[groupIds.Count];
+        for (var i = 0; i < groupIds.Count; i++)
+            next[i] = SelectNext(graph, groupIds[i], _host.DefaultGroupId, cursors[i]);
         return next;
     }
 

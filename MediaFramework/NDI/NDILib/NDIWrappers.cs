@@ -1210,18 +1210,21 @@ public sealed class NDIRecvListener : IDisposable
     /// Returns pending events in the order they were received.
     /// Use <c>0</c> for <paramref name="timeoutMs"/> to poll immediately.
     /// </summary>
-    public NDIListenerEvent[] GetEvents(uint timeoutMs = 0)
+    public NDIListenerEventInfo[] GetEvents(uint timeoutMs = 0)
     {
         var ptr = Native.NDIlib_recv_listener_get_events(_instance, out var count, timeoutMs);
         if (ptr == nint.Zero || count == 0)
             return [];
 
+        // Marshal the strings BEFORE freeing (like GetReceivers) - NDIListenerEvent holds native
+        // string pointers, so returning the raw structs after free_events hands out dangling reads.
         var structSize = Marshal.SizeOf<NDIListenerEvent>();
-        var result = new NDIListenerEvent[count];
+        var result = new NDIListenerEventInfo[count];
         for (var i = 0; i < count; i++)
         {
             var itemPtr = nint.Add(ptr, i * structSize);
-            result[i] = Marshal.PtrToStructure<NDIListenerEvent>(itemPtr);
+            var raw = Marshal.PtrToStructure<NDIListenerEvent>(itemPtr);
+            result[i] = new NDIListenerEventInfo(raw.Uuid ?? string.Empty, raw.Name, raw.Value);
         }
 
         Native.NDIlib_recv_listener_free_events(_instance, ptr);
@@ -1491,18 +1494,20 @@ public sealed class NDISendListener : IDisposable
     /// Returns pending events in the order they were received.
     /// Use <c>0</c> for <paramref name="timeoutMs"/> to poll immediately.
     /// </summary>
-    public NDIListenerEvent[] GetEvents(uint timeoutMs = 0)
+    public NDIListenerEventInfo[] GetEvents(uint timeoutMs = 0)
     {
         var ptr = Native.NDIlib_send_listener_get_events(_instance, out var count, timeoutMs);
         if (ptr == nint.Zero || count == 0)
             return [];
 
+        // Marshal the strings BEFORE freeing (like GetSenders) - see the recv listener overload.
         var structSize = Marshal.SizeOf<NDIListenerEvent>();
-        var result = new NDIListenerEvent[count];
+        var result = new NDIListenerEventInfo[count];
         for (var i = 0; i < count; i++)
         {
             var itemPtr = nint.Add(ptr, i * structSize);
-            result[i] = Marshal.PtrToStructure<NDIListenerEvent>(itemPtr);
+            var raw = Marshal.PtrToStructure<NDIListenerEvent>(itemPtr);
+            result[i] = new NDIListenerEventInfo(raw.Uuid ?? string.Empty, raw.Name, raw.Value);
         }
 
         Native.NDIlib_send_listener_free_events(_instance, ptr);

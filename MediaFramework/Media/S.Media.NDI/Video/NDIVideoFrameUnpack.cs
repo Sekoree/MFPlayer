@@ -13,6 +13,7 @@ internal static class NDIVideoFrameUnpack
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.Video.NDIVideoFrameUnpack");
     private static int _geometryHeuristicLogCount;
+    private static int _uyvaAlphaDropLogged;
 
     /// <summary>
     /// OBS / NDI HX PGM is computer-range (full) BT.709 UYVY. Limited-range GL or swscale flags crush
@@ -97,7 +98,11 @@ internal static class NDIVideoFrameUnpack
         return n == 0 ? 0 : (double)sum / n;
     }
 
-    public static bool TryUnpack(in NDIVideoFrameV2 native, TimeSpan presentationTime, out VideoFrame? frame)
+    public static bool TryUnpack(
+        in NDIVideoFrameV2 native,
+        TimeSpan presentationTime,
+        out VideoFrame? frame,
+        VideoColorRange? colorRangeOverride = null)
     {
         frame = null;
         if (native.Xres <= 0 || native.Yres <= 0 || native.PData == nint.Zero)
@@ -109,11 +114,17 @@ internal static class NDIVideoFrameUnpack
         if (!TryResolveGeometry(native, pixelFormat, out var width, out var height, out var stride))
             return false;
 
+        if (native.FourCC == NDIFourCCVideoType.Uyva && Interlocked.Exchange(ref _uyvaAlphaDropLogged, 1) == 0)
+            Trace.LogWarning(
+                "NDIVideoFrameUnpack: UYVA sender detected - the alpha plane is discarded and frames composite as opaque (keyed graphics lose their key).");
+
         var rate = native.FrameRateD > 0
             ? new Rational(native.FrameRateN, native.FrameRateD)
             : new Rational(30, 1);
         var format = new VideoFormat(width, height, pixelFormat, rate);
         var metadata = MetadataForFourCc(native.FourCC);
+        if (colorRangeOverride is { } range)
+            metadata = metadata with { ColorRange = range };
 
         try
         {

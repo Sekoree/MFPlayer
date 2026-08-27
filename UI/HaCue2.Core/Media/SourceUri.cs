@@ -154,6 +154,8 @@ public static class SourceUri
             query.Add($"audioBufferMs={buffer.ToString(CultureInfo.InvariantCulture)}");
         if (options.PaceFromIngestClock)
             query.Add("ingestClock=1");
+        if (options.LimitedRange)
+            query.Add("range=limited");
 
         var name = Uri.EscapeDataString(options.Name.Trim());
 
@@ -171,6 +173,8 @@ public static class SourceUri
             LowBandwidth = Bool(values, "lowBandwidth", false),
             AudioBufferMs = Int(values, "audioBufferMs"),
             PaceFromIngestClock = Bool(values, "ingestClock", false),
+            LimitedRange = values.TryGetValue("range", out var range)
+                           && range.Equals("limited", StringComparison.OrdinalIgnoreCase),
         };
     }
 
@@ -273,6 +277,16 @@ public sealed record NdiSourceOptions(string Name)
 
     /// <summary>Pace playback from the sender's ingest clock rather than this machine's wall clock.</summary>
     public bool PaceFromIngestClock { get; init; }
+
+    /// <summary>
+    /// Treat the sender's video as limited (studio) range instead of the assumed full range.
+    /// </summary>
+    /// <remarks>
+    /// NDI carries no range metadata, so the framework stamps full-range BT.709 on every received
+    /// frame - right for OBS and NDI-HX, washed out for a hardware sender shipping studio range.
+    /// This writes the framework's <c>range=limited</c> escape hatch; false writes nothing.
+    /// </remarks>
+    public bool LimitedRange { get; init; }
 }
 
 /// <summary>A capture device on this machine, addressed by name.</summary>

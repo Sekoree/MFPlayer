@@ -51,6 +51,14 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
     /// <summary>Makes the next <see cref="PlayAsync"/> report failure - a clip that would not open.</summary>
     public bool PlayFails { get; set; }
 
+    /// <summary>
+    /// When set, decides a <see cref="PlayAsync"/> outcome per cue instead of <see cref="PlayFails"/>.
+    /// The hook a race test needs: the executor's advance fires OUTSIDE its state gate, and this is
+    /// the only seam where a test can end another cue while that fire is still in flight. Returning
+    /// false records nothing, exactly like <see cref="PlayFails"/>; null falls through to it.
+    /// </summary>
+    public Func<CueNode, Task<bool>>? PlayOverride { get; set; }
+
     /// <summary>Makes waits report cancellation - the show stopping mid-chain.</summary>
     public bool Cancelled { get; set; }
 
@@ -59,20 +67,27 @@ internal sealed class FakeCueHost(HaCueProject project) : ICueExecutionHost
 
     IReadOnlyList<Guid> ICueExecutionHost.Sounding => SoundingCues;
 
-    public Task<bool> PlayAsync(
+    public async Task<bool> PlayAsync(
         CueNode cue,
         CueList? list,
         TimeSpan? crossfade = null,
         FadeShape crossfadeCurve = default)
     {
-        if (PlayFails)
-            return Task.FromResult(false);
+        if (PlayOverride is { } outcome)
+        {
+            if (!await outcome(cue))
+                return false;
+        }
+        else if (PlayFails)
+        {
+            return false;
+        }
 
         Played.Add(cue.Id);
         ControlStarts.Add((cue.Id, _timelineClock.ElapsedSinceStart));
         Transitions.Add((cue.Id, crossfade, crossfadeCurve));
         SoundingCues.Add(cue.Id);
-        return Task.FromResult(true);
+        return true;
     }
 
     /// <summary>Batches recorded as batches, so a test can tell "all together" from "one after another".</summary>

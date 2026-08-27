@@ -192,17 +192,42 @@ public sealed record VideoOutputDefinition
     /// <summary>NDI: the wire pixel format. Auto sends the composition's frames as they are.</summary>
     public NdiWireFormat NdiPixelFormat { get; set; } = NdiWireFormat.Auto;
 
-    /// <summary>NDI: whether this sender also carries the show's audio (register: linked A/V).</summary>
-    public bool NdiCarriesAudio { get; set; }
-
-    /// <summary>NDI: the audio channel count the sender declares when it carries audio.</summary>
-    public int NdiAudioChannels { get; set; } = 2;
-
     /// <summary>
-    /// The audio line that is this output's audio half, when the carrier has one - the row the
-    /// AUDIO tab shows for the same sender. One NDI source on the network, two tabs describing it.
+    /// The NDI carrier this output is the video half of. Null on every other kind; required on
+    /// <see cref="VideoOutputKind.Ndi"/> (the validator refuses a dangling or missing reference).
+    /// Whether the sender also carries audio is DERIVED - an <see cref="AudioLineDefinition"/>
+    /// referencing the same carrier is the audio half, and the channel count lives on that line -
+    /// so the flag-disagrees-with-link states of the old model cannot be written any more.
     /// </summary>
-    public Guid? LinkedAudioLineId { get; set; }
+    public Guid? CarrierId { get; set; }
+
+    /// <summary>The schema-3 audio-half link, read once and consumed by <see cref="CarrierMigration"/>.</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("linkedAudioLineId")]
+    public Guid? LegacyLinkedAudioLineWriteback
+    {
+        set => LegacyLinkedAudioLineId = value;
+    }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal Guid? LegacyLinkedAudioLineId { get; private set; }
+
+    /// <summary>The schema-3 carries-audio flag; accepted so old files parse, decided by the LINK.</summary>
+    /// <remarks>The flag could contradict the link (the incoherence the carrier model removes), and
+    /// where they disagreed the RUNTIME behaved by the audio line's existence - so the migration
+    /// does too, and the flag's value is deliberately dropped.</remarks>
+    [System.Text.Json.Serialization.JsonPropertyName("ndiCarriesAudio")]
+    public bool LegacyNdiCarriesAudioWriteback
+    {
+        set { _ = value; }
+    }
+
+    /// <summary>The schema-3 audio channel count; accepted so old files parse, superseded by the
+    /// line's own <see cref="AudioLineDefinition.Channels"/> (which is what the bay opened).</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("ndiAudioChannels")]
+    public int LegacyNdiAudioChannelsWriteback
+    {
+        set { _ = value; }
+    }
 }
 
 /// <summary>The pixel format an NDI sender puts on the wire.</summary>

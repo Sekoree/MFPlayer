@@ -30,12 +30,16 @@ public sealed class EngineRuntime : IAsyncDisposable
     /// <summary>Four times a second - fast enough to read as live, slow enough to cost nothing.</summary>
     private static readonly TimeSpan Tick = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>The meter-only refresh. 25 Hz is where a falling bar stops reading as steps.</summary>
+    private static readonly TimeSpan MeterTick = TimeSpan.FromMilliseconds(40);
+
     private readonly ShowHost _host;
     private readonly ShowRuntime _runtime;
     private readonly HaCueProject _project;
     private readonly AppSettings _settings;
     private readonly ProgramMeterPresenter _meterPresenter = new();
     private readonly DispatcherTimer _timer;
+    private readonly DispatcherTimer _meterTimer;
     private bool _polling;
 
     /// <summary>The wire monitor's depth. Enough to see what just happened, bounded so a controller
@@ -69,11 +73,25 @@ public sealed class EngineRuntime : IAsyncDisposable
         // Raised on engine threads, so it marshals itself onto the dispatcher.
         host.SoundingChanged += OnSoundingChanged;
 
+        // A pause or a seek is the same situation with a different verb: clocks that keep creeping
+        // for up to a poll period after PAUSE (and then snap back), or that hold the pre-seek reading,
+        // read as a button that failed. Same immediate poll.
+        host.TransportChanged += OnSoundingChanged;
+
         // Input rather than Background: Background is the lowest priority there is, and it starves
         // exactly when the operator is looking - a GO kicks off enough layout and render work that
         // the poll showing its result could slip far past its 250 ms.
         _timer = new DispatcherTimer(Tick, DispatcherPriority.Input, (_, _) => Poll());
         _timer.Start();
+
+        // Meters get their own, faster tick: at 4 Hz a level meter reads as steps and a short
+        // transient can land and decay entirely between polls. The bay reads are lock-free, and this
+        // tick touches ONLY the meters - none of the snapshot, standby or presentation work the main
+        // poll does - so 25 Hz costs a peak/RMS copy and nothing else. Background priority, unlike
+        // the poll: a meter frame that slips under load is invisible, a transport reading is not.
+        _meterTimer = new DispatcherTimer(
+            MeterTick, DispatcherPriority.Background, (_, _) => PollMeters());
+        _meterTimer.Start();
     }
 
     private void OnSoundingChanged() =>
@@ -84,6 +102,37 @@ public sealed class EngineRuntime : IAsyncDisposable
 
     /// <summary>Raised on every poll, for the surfaces whose values move continuously.</summary>
     public event Action? Ticked;
+
+    /// <summary>Raised on every meter-rate tick - for the meter surfaces alone, nothing else.</summary>
+    public event Action? MetersTicked;
+
+    /// <summary>
+    /// The meter-only refresh: reads the bay's levels and republishes <see cref="ShowRuntime.Meters"/>,
+    /// touching nothing else the 4 Hz poll owns.
+    /// </summary>
+    private void PollMeters()
+    {
+        try
+        {
+            _runtime.Meters = _meterPresenter.Present(
+                BayPresentation.Meters(_project, _host.Diagnostics()), _settings, DateTimeOffset.UtcNow);
+            MetersTicked?.Invoke();
+        }
+        catch (ObjectDisposedException)
+        {
+            _meterTimer.Stop();
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            // Same reasoning as Poll: a meter frame nobody got is not a reason to take the app down,
+            // and a persistent fault is one log line, not twenty-five a second.
+            if (!string.Equals(_lastPollFailure, failure.Message, StringComparison.Ordinal))
+            {
+                _lastPollFailure = failure.Message;
+                MediaDiagnostics.LogError(failure, "HaCue2: a meter poll failed");
+            }
+        }
+    }
 
     /// <summary>
     /// Arms or disarms a record or stream target.
@@ -341,7 +390,9 @@ public sealed class EngineRuntime : IAsyncDisposable
     {
         _host.Triggers.Observed -= OnObserved;
         _host.SoundingChanged -= OnSoundingChanged;
+        _host.TransportChanged -= OnSoundingChanged;
         _timer.Stop();
+        _meterTimer.Stop();
 
         // Back to "nobody has measured". Leaving the last set behind would have the Audio screen
         // reporting the devices of a session that is over as still open.

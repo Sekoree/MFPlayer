@@ -69,7 +69,7 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     /// <summary>
     /// Skips ahead to the most recent samples by advancing the read pointer so the ring holds no
     /// more than <paramref name="keepBuffered"/> of capture. Mirrors
-    /// <c>NDIAudioReceiver.RebaseToLatest</c>: the capture callback runs continuously from
+    /// <c>NDISource.RebaseToLatest</c>: the capture callback runs continuously from
     /// <see cref="Start"/>, so by the time a HaPlay session reaches Play the ring may already hold
     /// seconds of stale audio. Without this call the router would consume that backlog in FIFO order
     /// and audio would play back <c>Tconnect</c> seconds behind real time.

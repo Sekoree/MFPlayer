@@ -174,10 +174,16 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
             throw new NotSupportedException(
                 $"NDIVideoSender does not accept pixel format {format.PixelFormat}; supported: {string.Join(", ", AcceptedFormats)}");
         // Planar 4:2:0 formats need even dimensions so chroma grids align.
-        if ((format.PixelFormat is PixelFormat.I420 or PixelFormat.Nv12 or PixelFormat.P216 or PixelFormat.Pa16)
+        if ((format.PixelFormat is PixelFormat.I420 or PixelFormat.Nv12)
             && (format.Width % 2 != 0 || format.Height % 2 != 0))
             throw new ArgumentException(
                 $"{format.PixelFormat} requires even width/height (got {format.Width}x{format.Height})",
+                nameof(format));
+
+        // 4:2:2 (P216/PA16) subsamples chroma horizontally only - odd heights are legal.
+        if ((format.PixelFormat is PixelFormat.P216 or PixelFormat.Pa16) && format.Width % 2 != 0)
+            throw new ArgumentException(
+                $"{format.PixelFormat} requires even width (got {format.Width}x{format.Height})",
                 nameof(format));
 
         // Packed staging assumes an even stride in bytes (RGBA/BGRA/UYVY use full width × Bpp).
@@ -188,7 +194,10 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
                 nameof(format));
 
         _format = format;
-        _sharedPresentationTimeline?.Reset();
+        // Only the VIDEO stream's mapping resets: on a linked carrier (independent-domain timeline) an
+        // edit re-sync reconfigures the video half while the bay's audio half is live, and re-anchoring
+        // the whole carrier here is what made the two halves' timecode bases drift apart across edits.
+        _sharedPresentationTimeline?.ResetStream(NDIEgressStream.Video);
         _presentationAnchor = null;
         _configured = true;
         // Fresh session: clear any cooperative abort left set by a prior pump's teardown so this reused,
@@ -309,7 +318,8 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
     {
         if (_sharedPresentationTimeline is not null)
         {
-            var tc = _sharedPresentationTimeline.TimecodeFromPresentationTime(frame.PresentationTime);
+            var tc = _sharedPresentationTimeline.TimecodeFromPresentationTime(
+                NDIEgressStream.Video, frame.PresentationTime);
             return (tc, NDIConstants.TimestampUndefined);
         }
 

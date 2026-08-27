@@ -79,23 +79,28 @@
     <DockPanel>
 
       <Border Classes="transport" DockPanel.Dock="Top">
-        <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="7">
+        <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="7">
           <Button Grid.Column="0" Classes="icon" Content="{x:Static res:Strings.TlFromPlayhead}" Click="OnPlayFrom" />
           <Button Grid.Column="1" Classes="icon" Content="⏹" Click="OnStopTimeline" />
           <Button Grid.Column="2" Classes="icon" Content="{x:Static res:Strings.TlZoomOut}" Click="OnZoomOut" />
           <Button Grid.Column="3" Classes="icon" Content="{x:Static res:Strings.TlZoomIn}" Click="OnZoomIn" />
           <Button Grid.Column="4" Classes="icon" Content="{x:Static res:Strings.TlZoomFit}" Click="OnZoomFit" />
-          <ListBox Grid.Column="5" Theme="{StaticResource Segment}"
+          <!-- Rehearsal follow: the playhead adopts the running group's position (clicking the ruler
+               releases it). Off by default - the playhead is an authoring cursor first. -->
+          <ToggleButton Grid.Column="5" Theme="{StaticResource ChipToggle}"
+                        Content="{x:Static res:Strings.TlFollow}"
+                        IsChecked="{Binding FollowTransport}" />
+          <ListBox Grid.Column="6" Theme="{StaticResource Segment}"
                    ItemsSource="{Binding SnapModes}" SelectedItem="{Binding SnapMode}" />
-          <Button Grid.Column="6" Content="{x:Static res:Strings.TlDuckUnder}" Click="OnDuck" />
-          <TextBlock Grid.Column="7" Classes="mono dim3 small" VerticalAlignment="Center"
+          <Button Grid.Column="7" Content="{x:Static res:Strings.TlDuckUnder}" Click="OnDuck" />
+          <TextBlock Grid.Column="8" Classes="mono dim3 small" VerticalAlignment="Center"
                      Margin="8,0" Text="{Binding PlayheadLabel, StringFormat='▮ {0}'}" />
           <!-- The refusal sits beside the buttons: "the show is not running" is the usual answer on a
                laptop, and a modal for it is one nobody reads. -->
-          <TextBlock Grid.Column="7" Classes="mono small warn" HorizontalAlignment="Right"
+          <TextBlock Grid.Column="8" Classes="mono small warn" HorizontalAlignment="Right"
                      VerticalAlignment="Center" Margin="8,0" Text="{Binding TransportProblem}" />
-          <Button Grid.Column="8" Classes="icon" Content="{Binding DockLabel}" Click="OnUndock" />
-          <Button Grid.Column="9" Classes="icon" Content="{x:Static res:Strings.TlClose}" Click="OnClose" />
+          <Button Grid.Column="9" Classes="icon" Content="{Binding DockLabel}" Click="OnUndock" />
+          <Button Grid.Column="10" Classes="icon" Content="{x:Static res:Strings.TlClose}" Click="OnClose" />
         </Grid>
       </Border>
 

@@ -4,6 +4,7 @@ using HaCue2.Controls;
 using HaCue2.Core.Journal;
 using HaCue2.Core.Media;
 using HaCue2.Core.Model;
+using HaCue2.Core.Serialization;
 using HaCue2.Core.Timeline;
 using HaCue2.Core.Validation;
 using HaCue2.Engine;
@@ -56,34 +57,121 @@ public partial class LauncherViewModel : ObservableObject
     public void Adopt(HaCueProject project, string path) => ProjectOpened?.Invoke(project, path);
 
     /// <summary>
-    /// The prompt behind "New project…".
+    /// The prompt behind "New project…". Asks WHAT and WHERE in one dialog: CREATE writes the file
+    /// to the chosen folder immediately, so nothing asks again afterwards.
     /// </summary>
     /// <remarks>
-    /// It asks WHAT, and the shell asks WHERE the moment this closes. Split that way because a file
-    /// picker is a platform window the launcher cannot host inside a field, and because the name typed
-    /// here is what the picker suggests as the filename.
+    /// <para>
+    /// It used to ask only WHAT, and the shell opened a save picker the moment the prompt closed - a
+    /// second dialog for a decision that belongs to creating the thing. The folder field remembers
+    /// the last choice (<see cref="AppSettings.NewProjectFolder"/>), falling back to the most recent
+    /// project's folder, then the user's documents.
+    /// </para>
+    /// <para>
+    /// Media root: a saved project with an EMPTY root already resolves media against its own folder
+    /// (<c>MediaPaths.RootOf</c>), so "beside the project file" is the honest default and the toggle
+    /// simply says so; only switching it off makes the explicit folder mean anything. Creating the
+    /// file at CREATE is what makes that default true from the first minute - an unsaved show has no
+    /// "beside".
+    /// </para>
     /// </remarks>
-    public PromptViewModel NewProject() =>
-        new(
+    public PromptViewModel NewProject()
+    {
+        var saveIn = new PromptField
+        {
+            Label = "Save in",
+            Kind = PromptFieldKind.Folder,
+            Value = DefaultProjectFolder(),
+            Hint = "the project file is created here on CREATE · empty asks where later",
+        };
+        var beside = new PromptField
+        {
+            Label = "Media beside project",
+            Kind = PromptFieldKind.Toggle,
+            IsOn = true,
+            Hint = "media resolves against the project's own folder · relinking searches under it",
+        };
+        var mediaRoot = new PromptField
+        {
+            Label = "Media root",
+            Kind = PromptFieldKind.Folder,
+            Value = "",
+            IsEnabled = false,
+            Hint = "used instead when this show's media lives somewhere else",
+        };
+        beside.PropertyChanged += (_, changed) =>
+        {
+            if (changed.PropertyName == nameof(PromptField.IsOn))
+                mediaRoot.IsEnabled = !beside.IsOn;
+        };
+
+        return new PromptViewModel(
             "New project",
-            "seeded with a Main L/R pair and one cue list · you will be asked where to save it next",
-            [
-                new PromptField { Label = "Name", Value = "Untitled show" },
-                new PromptField
-                {
-                    Label = "Media root",
-                    Kind = PromptFieldKind.Folder,
-                    Value = "",
-                    Hint = "where this show's media lives · relinking searches under it",
-                },
-            ],
-            prompt => Adopt(
-                ProjectFiles.Create(
+            "seeded with a Main L/R pair and one cue list",
+            [new PromptField { Label = "Name", Value = "Untitled show" }, saveIn, beside, mediaRoot],
+            prompt =>
+            {
+                var project = ProjectFiles.Create(
                     prompt["Name"].Value.Trim(),
-                    prompt["Media root"].Value.Trim(),
-                    _settings),
-                ""),
+                    beside.IsOn ? "" : mediaRoot.Value.Trim(),
+                    _settings);
+                var path = TryCreateProjectFile(project, saveIn.Value.Trim());
+                if (path.Length > 0)
+                {
+                    // Remembered for the next prompt; persisted by the NoteOpened the adoption runs.
+                    _settings.NewProjectFolder = saveIn.Value.Trim();
+                }
+
+                Adopt(project, path);
+            },
             confirm: "CREATE");
+    }
+
+    /// <summary>
+    /// Writes the fresh project into <paramref name="folder"/> and answers its path - or "" when the
+    /// folder is empty or refuses the write, which sends the shell down the old ask-where route
+    /// instead of losing the project over a typo'd path.
+    /// </summary>
+    private static string TryCreateProjectFile(HaCueProject project, string folder)
+    {
+        if (folder.Length == 0)
+            return "";
+
+        try
+        {
+            Directory.CreateDirectory(folder);
+
+            // "Untitled show" again next week must not overwrite last week's: count up, never clobber.
+            var stem = string.Join("_", project.Title.Split(Path.GetInvalidFileNameChars(),
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            if (stem.Length == 0)
+                stem = "Untitled show";
+            var path = Path.Combine(folder, stem + ProjectFiles.Extension);
+            for (var suffix = 2; File.Exists(path); suffix++)
+                path = Path.Combine(folder, $"{stem} ({suffix}){ProjectFiles.Extension}");
+
+            File.WriteAllText(path, HaCueProjectFile.Serialize(project));
+            return path;
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException
+                                            or ArgumentException or NotSupportedException)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>Last chosen → most recent project's folder → the user's documents.</summary>
+    private string DefaultProjectFolder()
+    {
+        if (_settings.NewProjectFolder.Length > 0 && Directory.Exists(_settings.NewProjectFolder))
+            return _settings.NewProjectFolder;
+
+        if (Recents.FirstOrDefault(recent => !recent.IsMissing) is { } recent
+            && Path.GetDirectoryName(recent.Path) is { Length: > 0 } folder)
+            return folder;
+
+        return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+    }
 
     /// <summary>What the operator has opened before, newest first, straight from app-settings.json.</summary>
     public IReadOnlyList<RecentProjectRow> Recents { get; private set; }
@@ -106,9 +194,11 @@ public partial class LauncherViewModel : ObservableObject
     [ObservableProperty]
     private RecentProjectRow? _selectedRecent;
 
+    // "a Main L/R logical pair patched to the machine's default device" was a lie: Create()
+    // deliberately adopts NO device (a line is a machine fact, and the document travels).
     public string SeedNote { get; } =
         "New projects are seeded from your defaults (Settings · Application · New project defaults): "
-        + "a Main L/R logical pair patched to the machine's default device.";
+        + "a Main L/R logical pair and one cue list. Patch them to this rig's devices on the Audio tab.";
 
     /// <summary>
     /// Opens a recent by loading its file.

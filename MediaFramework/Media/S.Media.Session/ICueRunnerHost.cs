@@ -54,6 +54,13 @@ internal interface ICueRunnerHost
     /// The generation lets a cursor advance no-op when a reload swapped the show in between.</remarks>
     Task<(int Cursor, int Generation)> ReadGoCursorAsync(string groupId);
 
+    /// <summary>
+    /// Every named group's GO cursor in ONE dispatcher hop - the batch form of
+    /// <see cref="ReadGoCursorAsync"/>, for a host polling standby across all its cue lists at once.
+    /// One cursor per input, same order.
+    /// </summary>
+    Task<IReadOnlyList<int>> ReadGoCursorsAsync(IReadOnlyList<string> groupIds);
+
     /// <summary>GO's cursor advance. A no-op when the generation no longer matches.</summary>
     Task AdvanceGoCursorAsync(string groupId, int number, int generation);
 

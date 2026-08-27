@@ -148,7 +148,7 @@ public sealed class ProjectVideoOutputs : IDisposable
                      !wanted.Contains(open.Id)
                      || (open.Signature is not null
                          && project.VideoOutputs.FirstOrDefault(item => item.Id == open.Id) is { } now
-                         && NdiSignature(now) != open.Signature)).ToList())
+                         && NdiSignature(project, now) != open.Signature)).ToList())
         {
             Close(stale);
             _open.Remove(stale);
@@ -247,12 +247,11 @@ public sealed class ProjectVideoOutputs : IDisposable
                     // audio half the bay leases by the same name. The composition stays the cadence
                     // owner (the hub never SDK-clocks video); the feed stage carries this output's own
                     // rate cap and wire pixel format.
-                    var lease = _ndiHub.Acquire(
-                        output.TargetHint.Length > 0 ? output.TargetHint : output.Name);
+                    var lease = _ndiHub.Acquire(project.CarrierNameOf(output), NdiSenderRole.Video);
                     var feed = new NdiFeedVideoOutput(lease, output.NdiFrameRate, output.NdiPixelFormat);
 
                     opened.Add(new OpenVideoOutput(
-                        output.Id, compositionId, feed, NdiSignature(output)));
+                        output.Id, compositionId, feed, NdiSignature(project, output)));
                 }
                 catch (Exception failure) when (failure is not OutOfMemoryException)
                 {
@@ -395,13 +394,15 @@ public sealed class ProjectVideoOutputs : IDisposable
 
     /// <summary>Closes one output's own resources. A window that will not close must not stop the rest.</summary>
     /// <summary>What has to match for an open NDI feed to be left alone on an edit. Everything in
-    /// here requires a re-open to change: the name IS the sender's network identity, and the rest is
-    /// baked into the feed stage.</summary>
-    private static string NdiSignature(VideoOutputDefinition output) =>
+    /// here requires a re-open to change: the carrier name IS the sender's network identity, and the
+    /// rest is baked into the feed stage. Audio carriage deliberately is NOT here - the audio half is
+    /// the bay's lease on the same carrier, and re-opening the video leg over an audio edit is
+    /// exactly the linked-carrier split this signature exists to avoid.</summary>
+    private static string NdiSignature(HaCueProject project, VideoOutputDefinition output) =>
         output.Kind != VideoOutputKind.Ndi
             ? ""
-            : $"{(output.TargetHint.Length > 0 ? output.TargetHint : output.Name)}|{output.NdiWidth}x{output.NdiHeight}"
-              + $"|{output.NdiFrameRate:0.###}|{output.NdiPixelFormat}|{output.NdiCarriesAudio}|{output.NdiAudioChannels}";
+            : $"{project.CarrierNameOf(output)}|{output.NdiWidth}x{output.NdiHeight}"
+              + $"|{output.NdiFrameRate:0.###}|{output.NdiPixelFormat}";
 
     private void Close(OpenVideoOutput open)
     {

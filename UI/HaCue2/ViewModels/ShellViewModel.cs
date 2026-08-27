@@ -291,6 +291,8 @@ public partial class ShellViewModel : ObservableObject
         // thread - the pane only has to know what arrived, not when.
         _engine.Ticked += () => Targets.Observe(Runtime.LastSignal);
         _engine.Ticked += OutputInfo.Refresh;
+        // Meters alone re-read at meter rate - the drawer's other rows stay on the 4 Hz poll.
+        _engine.MetersTicked += OutputInfo.RefreshMeters;
         // A recording that starts dropping frames does so quietly, so the readout is polled rather
         // than updated on arm and disarm - the drop count is the only warning before the file gaps.
         _engine.Ticked += Audio.RefreshRecorders;
@@ -493,12 +495,20 @@ public partial class ShellViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Stops and restarts the audio engine, adopting a new mix rate or clock master.
+    /// Applies the document's audio-line changes to the running rig.
     /// </summary>
     /// <remarks>
-    /// A real stop and start, because the bus width and rate are fixed when the bay is built. Anything
-    /// sounding goes silent - which is why this is a button rather than a consequence of editing a
-    /// combo box, and why the operator is told so before they press it.
+    /// <para>
+    /// Normally a BAY-ONLY swap (<see cref="ShowHost.RestartAudioAsync"/>): the device/NDI terminals
+    /// are rebuilt under the running session, so projector windows, NDI video legs, the transport and
+    /// any recording stay up, and only the audio goes quiet for the swap gap. This used to be a full
+    /// engine stop/start - every projector window blinked and NDI receivers saw the video source
+    /// drop - while the button's copy promised only audio silence.
+    /// </para>
+    /// <para>
+    /// The full restart remains for the two edits the bay cannot adopt in place, because they change
+    /// the bus itself: the mix rate and the logical-output vocabulary.
+    /// </para>
     /// </remarks>
     public async Task RestartAudioAsync()
     {
@@ -506,6 +516,17 @@ public partial class ShellViewModel : ObservableObject
         {
             // No engine to restart: adopting the new values is all there is to do, and the button
             // stops offering a restart that would do nothing.
+            Audio.NoteAudioStarted();
+            return;
+        }
+
+        // The swap reads the engine's own document copy: adopt the coalesced edit that is almost
+        // certainly still waiting behind the 300 ms debounce - APPLY usually follows an edit by less.
+        await FlushPendingEditAsync().ConfigureAwait(true);
+
+        if (Host is { } host && host.CanRestartAudioInPlace())
+        {
+            await host.RestartAudioAsync().ConfigureAwait(true);
             Audio.NoteAudioStarted();
             return;
         }
@@ -1337,4 +1358,7 @@ public sealed class OutputInfoViewModel(ShowRuntime runtime) : ObservableObject
         OnPropertyChanged(nameof(BaySummary));
         OnPropertyChanged(nameof(BayClock));
     }
+
+    /// <summary>The meter-rate half of <see cref="Refresh"/>: bars only, 25 times a second.</summary>
+    public void RefreshMeters() => OnPropertyChanged(nameof(Meters));
 }

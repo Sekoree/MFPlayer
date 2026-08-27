@@ -147,23 +147,40 @@ public class AudioViewModelTests
         });
 
     [Fact]
-    public Task ALineWithNoSessionAndALineNothingIsPatchedToAreNotReportedAsShut() =>
+    public Task ALineNothingIsPatchedToSaysSoInsteadOfClaimingOpen() =>
         ShellFixture.WithShell(shell =>
         {
             var line = new AudioLineDefinition { Name = "spare", DeviceHint = "default" };
             shell.Project.AudioLines.Add(line);
             shell.Audio.Refresh();
 
-            // No bay has measured anything, so nothing is expected to be open. Null and empty are
-            // different answers here on purpose.
-            Assert.Null(shell.Runtime.OpenLines);
-            Assert.Equal("open", shell.Audio.Lines.Single(item => item.Id == line.Id).State.Text);
+            // This row used to read green "open" - the bay SKIPS an unpatched line, so the state was
+            // a lie over silence, and it was exactly the state a freshly added A/V sender's audio
+            // half sat in (review C2ᵖ). Session or no session, an unpatched line is one matrix visit
+            // from working, and the row now says that instead. The no-session state is SET rather
+            // than asserted: this test owns its preconditions, not the fixture's defaults.
+            shell.Runtime.OpenLines = null;
+            shell.Audio.Refresh();
+            Assert.Equal(
+                "not patched · route it on the matrix",
+                shell.Audio.Lines.Single(item => item.Id == line.Id).State.Text);
 
-            // A running bay skips a line nothing is patched to, so it is shut for a reason that is not
-            // a fault and must not be reported as one.
             shell.Runtime.OpenLines = [];
             shell.Audio.Refresh();
-            Assert.Equal("open", shell.Audio.Lines.Single(item => item.Id == line.Id).State.Text);
+            Assert.Equal(
+                "not patched · route it on the matrix",
+                shell.Audio.Lines.Single(item => item.Id == line.Id).State.Text);
+
+            // Patched, it joins the ordinary judgement: a running bay that skipped it says shut.
+            shell.Project.AudioPatch.Cells.Add(new PatchCell
+            {
+                LogicalChannelId = shell.Project.AudioPatch.LogicalChannels[0].Id,
+                LineId = line.Id,
+            });
+            shell.Audio.Refresh();
+            Assert.Equal(
+                "not open · restart audio",
+                shell.Audio.Lines.Single(item => item.Id == line.Id).State.Text);
         });
 }
 

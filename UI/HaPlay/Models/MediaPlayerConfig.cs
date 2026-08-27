@@ -2,6 +2,11 @@ using System.Text.Json.Serialization;
 
 namespace HaPlay.Models;
 
+// Serialized model. Non-CLR-default properties use `set`, not `init`: the source-generated
+// serializer assigns EVERY init property through one object initializer, so a field absent from
+// the JSON would load as the CLR default instead of the property initializer (see the FadeCueNode
+// doc note in CueList.cs). `init` remains only where the initializer IS the CLR default.
+
 /// <summary>
 /// Persisted per-player state - playlist + transport flags + selected output lines (matched on load
 /// by <see cref="OutputDefinition.DisplayName"/>). Written via <see cref="MediaPlayerConfigJsonContext"/>
@@ -10,18 +15,18 @@ namespace HaPlay.Models;
 public sealed record MediaPlayerConfig
 {
     /// <summary>Schema tag - bump when the on-disk shape changes incompatibly.</summary>
-    public string Schema { get; init; } = "HaPlayPlayerConfig/v1";
+    public string Schema { get; set; } = "HaPlayPlayerConfig/v1";
 
-    public string Name { get; init; } = "Player";
+    public string Name { get; set; } = "Player";
 
     /// <summary>Phase C (§4.3.2) - all playlist tabs owned by this player.</summary>
-    public List<PlaylistConfig> PlaylistTabs { get; init; } = new();
+    public List<PlaylistConfig> PlaylistTabs { get; set; } = new();
 
     /// <summary>Index into <see cref="PlaylistTabs"/> that was visible when the player was saved.</summary>
     public int SelectedPlaylistTabIndex { get; init; }
 
     /// <summary>Legacy v1 flat playlist fields. Kept so older player/project files still load cleanly.</summary>
-    public List<string> PlaylistPaths { get; init; } = new();
+    public List<string> PlaylistPaths { get; set; } = new();
 
     public string? MediaFilePath { get; init; }
 
@@ -43,29 +48,29 @@ public sealed record MediaPlayerConfig
     /// deck's dockable panels so they stay identifiable when split/floated apart.</summary>
     public uint? TintArgb { get; init; }
 
-    public PlayerOutputPreset OutputPreset { get; init; } = PlayerOutputPreset.AsSource;
+    public PlayerOutputPreset OutputPreset { get; set; } = PlayerOutputPreset.AsSource;
 
-    public PlayerTransitionMode TransitionMode { get; init; } = PlayerTransitionMode.Cut;
+    public PlayerTransitionMode TransitionMode { get; set; } = PlayerTransitionMode.Cut;
 
-    public int TransitionDurationMs { get; init; } = 500;
+    public int TransitionDurationMs { get; set; } = 500;
 
     /// <summary>§4.3.5 - Custom preset width in pixels (only honored when <see cref="OutputPreset"/>
     /// is <see cref="PlayerOutputPreset.Custom"/>). Defaults to 1920 so an empty config produces a
     /// sensible Custom raster instead of zero.</summary>
-    public int CustomOutputWidth { get; init; } = 1920;
+    public int CustomOutputWidth { get; set; } = 1920;
 
     /// <summary>§4.3.5 - Custom preset height in pixels (only honored when <see cref="OutputPreset"/>
     /// is <see cref="PlayerOutputPreset.Custom"/>). Defaults to 1080.</summary>
-    public int CustomOutputHeight { get; init; } = 1080;
+    public int CustomOutputHeight { get; set; } = 1080;
 
     /// <summary>Display names of output lines that were checked for this player when the config was saved.</summary>
-    public List<string> SelectedOutputDisplayNames { get; init; } = new();
+    public List<string> SelectedOutputDisplayNames { get; set; } = new();
 
-    public List<OutputGainConfig> OutputGains { get; init; } = new();
+    public List<OutputGainConfig> OutputGains { get; set; } = new();
 
     /// <summary>UI rewrite P5b - auto-preset rules: source channel count → downmix preset applied
     /// to the routing matrix when media with that channel count loads.</summary>
-    public List<ChannelPresetRule> ChannelPresetRules { get; init; } = new();
+    public List<ChannelPresetRule> ChannelPresetRules { get; set; } = new();
 
     /// <summary>
     /// Explicit source channel count used to size the audio matrix before a media file is open.
@@ -77,7 +82,7 @@ public sealed record MediaPlayerConfig
     /// Per-input-channel attenuation/mute (column trims) for the audio matrix.
     /// Applied on top of every cell that reads from the matching input channel.
     /// </summary>
-    public List<InputChannelTrimConfig> InputTrims { get; init; } = new();
+    public List<InputChannelTrimConfig> InputTrims { get; set; } = new();
 }
 
 public sealed record PlaylistConfig
@@ -85,13 +90,13 @@ public sealed record PlaylistConfig
     /// <summary>v1 used a flat <c>Paths</c> string list; v2 (Phase C.5 §6.8) carries discriminated
     /// <see cref="Items"/> so live inputs round-trip alongside files. Loaders fall back to <see cref="Paths"/>
     /// when <see cref="Items"/> is empty so v1 playlist files keep working.</summary>
-    public string Schema { get; init; } = "HaPlayPlaylist/v2";
+    public string Schema { get; set; } = "HaPlayPlaylist/v2";
 
-    public string Name { get; init; } = "Set A";
+    public string Name { get; set; } = "Set A";
 
     /// <summary>Phase C.5 (§6.8) - discriminated playlist entries. Canonical on write; on read, falls
     /// back to <see cref="Paths"/> when this list is empty.</summary>
-    public List<PlaylistItem> Items { get; init; } = new();
+    public List<PlaylistItem> Items { get; set; } = new();
 
     /// <summary>Phase C.5 (§6.8) - selected playlist item by <see cref="PlaylistItem.Id"/>. <see langword="null"/>
     /// means "use first item" or fall back to <see cref="SelectedPath"/> for v1 files.</summary>
@@ -119,7 +124,7 @@ public sealed record PlaylistConfig
 
 public sealed record OutputGainConfig
 {
-    public string OutputDisplayName { get; init; } = string.Empty;
+    public string OutputDisplayName { get; set; } = string.Empty;
 
     public double GainDb { get; init; }
 
@@ -128,10 +133,10 @@ public sealed record OutputGainConfig
     /// <summary>Phase C (§4.3.4) - per-output channel-mix mode. Falls back to <see cref="AudioRouteMixMode.Stereo"/>
     /// for older configs so a missing field doesn't surprise the loader. When <see cref="MatrixCells"/> is
     /// non-empty, the matrix takes precedence and <see cref="MixMode"/> is the "preset that was last applied".</summary>
-    public AudioRouteMixMode MixMode { get; init; } = AudioRouteMixMode.Stereo;
+    public AudioRouteMixMode MixMode { get; set; } = AudioRouteMixMode.Stereo;
 
     /// <summary>Phase C (§4.3.4) - full N×M matrix cells. Empty means "fall back to <see cref="MixMode"/>".</summary>
-    public List<AudioMatrixCellConfig> MatrixCells { get; init; } = new();
+    public List<AudioMatrixCellConfig> MatrixCells { get; set; } = new();
 }
 
 public sealed record InputChannelTrimConfig

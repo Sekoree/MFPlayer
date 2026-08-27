@@ -3,6 +3,11 @@ using S.Control;
 
 namespace HaPlay.Models;
 
+// Serialized model. Non-CLR-default properties use `set`, not `init`: the source-generated
+// serializer assigns EVERY init property through one object initializer, so a field absent from
+// the JSON would load as the CLR default instead of the property initializer (see the FadeCueNode
+// doc note in CueList.cs). `init` remains only where the initializer IS the CLR default.
+
 /// <summary>
 /// Top-level project file (§7 of the UI refactor plan). Captures every persistable piece of a HaPlay
 /// session in one file so a show is one save/open away. Cue lists (§5) live under
@@ -12,7 +17,7 @@ namespace HaPlay.Models;
 public sealed record HaPlayProject
 {
     /// <summary>Bump on every breaking field change so the loader can migrate (§9.4).</summary>
-    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
     /// <summary>Best-effort app version stamp - informational only.</summary>
     public string? HaPlayVersion { get; init; }
@@ -25,26 +30,26 @@ public sealed record HaPlayProject
     public List<string>? SavedSections { get; init; }
 
     /// <summary>All output definitions in display order. Identity is <see cref="OutputDefinition.Id"/>.</summary>
-    public List<OutputDefinition> Outputs { get; init; } = new();
+    public List<OutputDefinition> Outputs { get; set; } = new();
 
     /// <summary>Legacy (pre-UI-rewrite-P2): the virtual-audio-channel model was removed in favor of
     /// output aliases + matrix presets. Kept only so old project files deserialize; ignored on load
     /// (a one-time migration toast tells the operator) and written empty on save.</summary>
-    public List<VirtualAudioChannelAssignment> VirtualAudioChannels { get; init; } = new();
+    public List<VirtualAudioChannelAssignment> VirtualAudioChannels { get; set; } = new();
 
     /// <summary>Per-player config (§4.5 will split this; Phase A keeps the existing <see cref="MediaPlayerConfig"/> shape).</summary>
-    public List<MediaPlayerConfig> Players { get; init; } = new();
+    public List<MediaPlayerConfig> Players { get; set; } = new();
 
-    public List<ActionEndpoint> ActionEndpoints { get; init; } = new();
+    public List<ActionEndpoint> ActionEndpoints { get; set; } = new();
 
-    public List<CueList> CueLists { get; init; } = new();
+    public List<CueList> CueLists { get; set; } = new();
 
     /// <summary>Soundboard tabs (touch-friendly sound clip grids).</summary>
-    public List<SoundboardConfig> Soundboards { get; init; } = new();
+    public List<SoundboardConfig> Soundboards { get; set; } = new();
 
-    public List<ControlGraphConfig> ControlGraphs { get; init; } = new();
+    public List<ControlGraphConfig> ControlGraphs { get; set; } = new();
 
-    public ControlSystemConfig ControlSystem { get; init; } = new();
+    public ControlSystemConfig ControlSystem { get; set; } = new();
 
     /// <summary>
     /// Per-project session-restore setting (default off). When on, HaPlay writes edits through to this

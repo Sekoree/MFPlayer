@@ -167,7 +167,12 @@ public static class CuePresentation
                 Remaining = remaining is { } left ? $"−{PreciseClock(left)}" : "",
                 Length = length is { } run ? PreciseClock(run) : "",
                 Position = state.Elapsed,
-                PolledAtTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+                // The stamp taken WHERE the position was read, not here: this code runs after the
+                // snapshot's dispatcher hops, which vary poll to poll, and extrapolating from a stamp
+                // taken on arrival made the millisecond digits step at every 250 ms correction.
+                PolledAtTicks = state.SampledAtTicks > 0
+                    ? state.SampledAtTicks
+                    : System.Diagnostics.Stopwatch.GetTimestamp(),
                 Duration = length,
                 Progress = length is { TotalMilliseconds: > 0 } span
                     ? Math.Clamp(state.Elapsed / span, 0, 1)
@@ -377,6 +382,13 @@ public static class CuePresentation
         var playing = group.Children.Where(child => child.Enabled).ToList();
         var known = playing.All(child => Played(child, durations) is not null);
 
+        // The header's aggregates are computed FROM the children's positions, so they share the
+        // children's read stamp - stamping "now" here re-introduced the arrival-time jitter the
+        // per-row stamp just removed.
+        var polledAt = header.Children.Count > 0
+            ? header.Children[0].PolledAtTicks
+            : System.Diagnostics.Stopwatch.GetTimestamp();
+
         TimeSpan Start(CueNode child) =>
             offsets ? TimeSpan.FromMilliseconds(child.TimelineOffsetMs) : TimeSpan.Zero;
 
@@ -443,7 +455,7 @@ public static class CuePresentation
                 // smooth-clock timer) inside the last ten - see UpcomingCueRow.
                 Countdown = UpcomingCountdown(starts),
                 StartsInAtPoll = starts,
-                PolledAtTicks = System.Diagnostics.Stopwatch.GetTimestamp(),
+                PolledAtTicks = polledAt,
             });
 
             if (!overlaps)
@@ -464,7 +476,7 @@ public static class CuePresentation
         // Values + stamp for the smooth-clock timer; zero total marks "unknown, leave it alone".
         header.TotalValue = known ? total : TimeSpan.Zero;
         header.RemainingAtPoll = remaining;
-        header.PolledAtTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        header.PolledAtTicks = polledAt;
         header.HasUpcoming = header.Upcoming.Count > 0;
 
         header.IsNearEnd = known && remaining > TimeSpan.Zero && remaining <= TimeSpan.FromSeconds(10);

@@ -26,7 +26,14 @@ public sealed class Bcf2000GuideScriptsTests
         return docPath!;
     }
 
-    [Fact]
+    // The entire Doc/ tree - including the guide this test compiles - was deliberately removed in
+    // 3d3abc6f ("Last few review changes", 2026-08-14). Per this file's own contract note, the tests
+    // should be deleted (or the doc restored) in a follow-up; skipped rather than deleted here so the
+    // owner makes that call. Restore both doc and tests from 3d3abc6f^ if the purge was accidental.
+    private const string GuideDocRemoved =
+        "Doc/HaPlay-Control-X32-BCF2000-Layers.md was removed with the Doc/ tree in 3d3abc6f; delete these tests or restore the doc.";
+
+    [Fact(Skip = GuideDocRemoved)]
     public void GuideScripts_Compile()
     {
         var docPath = RequireGuideDoc();
@@ -101,7 +108,7 @@ public sealed class Bcf2000GuideScriptsTests
             "Guide scripts produced compile diagnostics:\n" + string.Join("\n", compileErrors.Select(d => $"  - {d.Message}")));
     }
 
-    [Fact]
+    [Fact(Skip = GuideDocRemoved)]
     public void GuideLayerNav_PressingNextLayerRunsWithoutRuntimeError()
     {
         var docPath = RequireGuideDoc();

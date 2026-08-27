@@ -47,6 +47,7 @@ public partial class AudioView : UserControl
             "snapshot:remove" => Dialogs.RemoveSnapshot(journal, audio.SelectedSnapshot?.Id),
             "patch" => audio.PatchSelectedToDevice(),
             "relink" => audio.RelinkAbsentLines(App.Machine.Devices),
+            "line:edit" => Dialogs.EditAudioLine(journal, audio.SelectedLine?.Id, App.Machine.Devices),
             "line:rename" => RenameLine(journal, audio.SelectedLine?.Id),
             "line:remove" => Dialogs.RemoveAudioLine(journal, audio.SelectedLine?.Id),
             // The cascade register item 11 promises: patch cells, cue sends, snapshot cells, group
@@ -59,10 +60,16 @@ public partial class AudioView : UserControl
     }
 
     /// <summary>Renames an audio line through the journal, by id.</summary>
+    /// <remarks>An NDI line's name is its CARRIER's - the sender on the wire - so the rename goes
+    /// through the carrier and carries the video half's row with it. The audio-side rename renaming
+    /// only its own row while the wire name stayed put was review finding B5.</remarks>
     private static PromptViewModel? RenameLine(ProjectJournal journal, Guid? lineId)
     {
         if (lineId is not { } id || journal.Project.FindLine(id) is not { } line)
             return null;
+
+        if (line.Kind == AudioLineKind.Ndi)
+            return Dialogs.RenameNdiCarrier(journal, line);
 
         return Dialogs.RenameTo(
             journal, line.Name, "audio", () => line.Name, name => line.Name = name, id);
@@ -154,9 +161,10 @@ public partial class AudioView : UserControl
     /// Restarts the audio engine so a new mix rate or clock master takes effect.
     /// </summary>
     /// <remarks>
-    /// The bus width and rate are fixed when the bay opens, so this is a genuine stop and start rather
-    /// than a live change - which is exactly why it is a button the operator presses rather than
-    /// something that happens under a running show when a combo box changes.
+    /// Normally a bay-only swap now - the session, the projector windows and any NDI video legs stay
+    /// up and only the audio goes quiet for the swap gap. A mix-rate or logical-output change still
+    /// needs the genuine stop/start, because those are fixed when the bay opens; either way it is a
+    /// button the operator presses rather than something that happens when a combo box changes.
     /// </remarks>
     private async void OnRestartAudio(object? sender, RoutedEventArgs e)
     {

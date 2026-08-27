@@ -1,4 +1,5 @@
 using NDILib;
+using S.Media.Core.Video;
 using S.Media.NDI.Clock;
 
 namespace S.Media.NDI;
@@ -50,4 +51,12 @@ public sealed class NDISourceOptions
     /// absolute timeline, the time reference is a deployment concern. See <c>Doc/HaPlay-MultiOutput-Sync.md</c>.
     /// </summary>
     public bool PresentVideoByAbsoluteTimecode { get; init; }
+
+    /// <summary>
+    /// Overrides the color range stamped on received video frames. NDI carries no range metadata, so
+    /// frames default to full-range BT.709 - right for OBS/NDI-HX senders (the field-verified case),
+    /// washed out for a limited-range hardware sender. Set <see cref="VideoColorRange.Limited"/> for
+    /// such a sender; <see langword="null"/> keeps the default.
+    /// </summary>
+    public VideoColorRange? ColorRangeOverride { get; init; }
 }

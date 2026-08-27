@@ -118,7 +118,7 @@
 
     <!-- ── status bar ─────────────────────────────────────────────────────────────────────── -->
     <Border Classes="statusbar" DockPanel.Dock="Bottom">
-      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="15">
+      <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto,Auto" ColumnSpacing="15">
         <ToggleButton Grid.Column="0" Theme="{StaticResource ChipToggle}"
                       IsChecked="{Binding IsOutputInfoOpen}"
                       Content="{x:Static res:Strings.ShellOutputInfo}"
@@ -137,17 +137,26 @@
             <Style Selector="Button.allQuiet"><Setter Property="Foreground" Value="{DynamicResource BoothInk3}" /></Style>
           </Button.Styles>
         </Button>
+        <!-- The rig is not running what the document says. Visible from EVERY tab because the edit
+             that lights it is often made on the VIDEO tab (an A/V sender's audio half), where the
+             Audio pane's own apply button cannot be seen at all - review finding B1. -->
+        <Button Grid.Column="3" Theme="{StaticResource LinkButton}"
+                Foreground="{DynamicResource GelAmber}"
+                IsVisible="{Binding Audio.NeedsAudioRestart}"
+                Content="{x:Static res:Strings.ShellAudioNotApplied}"
+                ToolTip.Tip="{x:Static res:Strings.ShellAudioNotAppliedTooltip}"
+                Click="OnApplyAudio" />
         <!-- The undo toast names the DOMAIN as well as the edit ("undo: patch - Fold L → Out 3 gain"):
              with one journal across every view, ⌘Z can otherwise change a screen nobody is looking at. -->
-        <TextBlock Grid.Column="3" Classes="mono dim2 small" VerticalAlignment="Center"
+        <TextBlock Grid.Column="4" Classes="mono dim2 small" VerticalAlignment="Center"
                    MaxWidth="230" TextTrimming="CharacterEllipsis"
                    Text="{Binding YouTubeDownloadSummary}" />
-        <TextBlock Grid.Column="4" Classes="mono dim3 small" VerticalAlignment="Center"
+        <TextBlock Grid.Column="5" Classes="mono dim3 small" VerticalAlignment="Center"
                    HorizontalAlignment="Right" TextTrimming="CharacterEllipsis"
                    IsVisible="{Binding CanUndo}" Text="{Binding UndoSummary}" />
-        <TextBlock Grid.Column="5" Classes="mono dim3 small" VerticalAlignment="Center"
+        <TextBlock Grid.Column="6" Classes="mono dim3 small" VerticalAlignment="Center"
                    Text="{Binding UnsavedSummary}" />
-        <TextBlock Grid.Column="6" Classes="mono ok small" VerticalAlignment="Center"
+        <TextBlock Grid.Column="7" Classes="mono ok small" VerticalAlignment="Center"
                    Text="{Binding SavedSummary}" />
       </Grid>
     </Border>

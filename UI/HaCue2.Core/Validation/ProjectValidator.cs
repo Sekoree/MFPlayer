@@ -29,6 +29,7 @@ public static class ProjectValidator
         var issues = new List<ShowValidationIssue>();
 
         ValidateDefinitions(project, issues);
+        ValidateNdiCarriers(project, issues);
         ValidateLogicalChannels(project, issues);
         ValidateGroups(project, issues);
         ValidatePatch(project, issues);
@@ -93,6 +94,9 @@ public static class ProjectValidator
                 Identity(section.Id, "mappingSection", output.Id.ToString());
         }
 
+        foreach (var carrier in project.NdiCarriers)
+            Identity(carrier.Id, "ndiCarrier", carrier.Id.ToString());
+
         var endpointNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var endpoint in project.ActionEndpoints)
         {
@@ -143,6 +147,77 @@ public static class ProjectValidator
     /// <summary>True when nothing would stop the show opening. Warnings do not.</summary>
     public static bool IsRunnable(IReadOnlyList<ShowValidationIssue> issues) =>
         !issues.Any(issue => issue.Severity == ShowValidationSeverity.Error);
+
+    /// <summary>
+    /// The carrier-coherence rules the 2026-08-25 review asked for (F6).
+    /// </summary>
+    /// <remarks>
+    /// Each half of an NDI sender is single-writer by construction (its native staging buffers have
+    /// one owner), so two rows resolving to one half is BROKEN OUTPUT - torn frames or garbled
+    /// audio - not a configuration taste. The engine's <c>NdiSenderHub</c> refuses the second claim
+    /// at open time; these rules catch the same states here, where the operator can still fix them
+    /// before the show opens. Name collisions are checked case-insensitively like every other name
+    /// here: two carriers differing only by case ARE two legal senders on the wire, but under
+    /// pressure they are a mistake, and the wire does not need the distinction.
+    /// </remarks>
+    private static void ValidateNdiCarriers(HaCueProject project, List<ShowValidationIssue> issues)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var carrier in project.NdiCarriers)
+        {
+            var id = carrier.Id.ToString();
+            if (string.IsNullOrWhiteSpace(carrier.Name))
+                issues.Add(Error("ndiCarrier", id, "An NDI sender has no source name."));
+            else if (!names.Add(carrier.Name))
+                issues.Add(Error("ndiCarrier", id,
+                    $"More than one NDI sender is called “{carrier.Name}” - receivers would see "
+                    + "whichever won the name; rename one of them."));
+
+            var lineHalves = project.AudioLines
+                .Where(line => line.Kind == AudioLineKind.Ndi && line.CarrierId == carrier.Id)
+                .ToList();
+            var outputHalves = project.VideoOutputs
+                .Where(output => output.Kind == VideoOutputKind.Ndi && output.CarrierId == carrier.Id)
+                .ToList();
+
+            if (lineHalves.Count > 1)
+                issues.Add(Error("ndiCarrier", id,
+                    $"“{carrier.Name}” has {lineHalves.Count} audio lines "
+                    + $"({string.Join(", ", lineHalves.Select(line => $"“{line.Name}”"))}) - a sender's "
+                    + "audio half has one writer; give each line its own sender."));
+            if (outputHalves.Count > 1)
+                issues.Add(Error("ndiCarrier", id,
+                    $"“{carrier.Name}” has {outputHalves.Count} video outputs "
+                    + $"({string.Join(", ", outputHalves.Select(output => $"“{output.Name}”"))}) - a "
+                    + "sender's video half has one writer; give each output its own sender."));
+
+            // A warning, not an error: an unused sender name wastes nothing but attention, exactly
+            // like a patched-but-unfed logical output.
+            if (lineHalves.Count == 0 && outputHalves.Count == 0)
+                issues.Add(Warn("ndiCarrier", id,
+                    $"NDI sender “{carrier.Name}” has no audio line and no video output - nothing sends under it."));
+        }
+
+        foreach (var line in project.AudioLines.Where(line => line.Kind == AudioLineKind.Ndi))
+        {
+            if (line.CarrierId is not { } carrierId)
+                issues.Add(Error("audioLine", line.Id.ToString(),
+                    $"NDI line “{line.Name}” names no sender - it has no source name to send under."));
+            else if (project.FindCarrier(carrierId) is null)
+                issues.Add(Error("audioLine", line.Id.ToString(),
+                    $"NDI line “{line.Name}” names a sender that no longer exists."));
+        }
+
+        foreach (var output in project.VideoOutputs.Where(output => output.Kind == VideoOutputKind.Ndi))
+        {
+            if (output.CarrierId is not { } carrierId)
+                issues.Add(Error("videoOutput", output.Id.ToString(),
+                    $"NDI output “{output.Name}” names no sender - it has no source name to send under."));
+            else if (project.FindCarrier(carrierId) is null)
+                issues.Add(Error("videoOutput", output.Id.ToString(),
+                    $"NDI output “{output.Name}” names a sender that no longer exists."));
+        }
+    }
 
     private static void ValidateLogicalChannels(HaCueProject project, List<ShowValidationIssue> issues)
     {

@@ -314,6 +314,8 @@ public sealed partial class ShowHost
 
             _paused = paused;
         }
+
+        TransportChanged?.Invoke();
     }
 
     /// <summary>
@@ -380,6 +382,15 @@ public sealed partial class ShowHost
     public event Action? SoundingChanged;
 
     /// <summary>
+    /// Raised when transport state OTHER than the sounding set changed under the poll - a pause flip,
+    /// a seek landing. Same contract as <see cref="SoundingChanged"/>: the UI polls a fresh snapshot
+    /// immediately instead of waiting out its tick, so a pause stops the clocks on the next dispatcher
+    /// pass rather than letting them creep up to a poll period ahead and snap back. Raised from
+    /// engine threads; subscribers must marshal themselves.
+    /// </summary>
+    public event Action? TransportChanged;
+
+    /// <summary>
     /// Marks a cue sounding, stamped NOW.
     /// </summary>
     /// <remarks>
@@ -433,9 +444,16 @@ public sealed partial class ShowHost
     public async Task<string?> SeekCueAsync(Guid cueId, TimeSpan position)
     {
         if (await SeekAutomationRunAsync(cueId, position).ConfigureAwait(false))
+        {
+            TransportChanged?.Invoke();
             return null;
+        }
+
         if (await SeekVisualizerAutomationRunAsync(cueId, position).ConfigureAwait(false))
+        {
+            TransportChanged?.Invoke();
             return null;
+        }
 
         string group;
 
@@ -451,6 +469,7 @@ public sealed partial class ShowHost
             return "that cue has no transport to seek";
 
         await _session.SeekAsync(MediaTimeFor(cueId, position), group).ConfigureAwait(false);
+        TransportChanged?.Invoke();
         return null;
     }
 
@@ -507,6 +526,7 @@ public sealed partial class ShowHost
             return "nothing in that group is playing";
 
         await _session.SeekManyAsync(batch).ConfigureAwait(false);
+        TransportChanged?.Invoke();
         return null;
     }
 
@@ -559,6 +579,17 @@ public sealed partial class ShowHost
             .ToDictionary(snapshot => snapshot.GroupId, StringComparer.Ordinal);
         var automationPlayheads = AutomationRunSnapshots();
 
+        // One document walk instead of a linear FindCue per sounding cue INSIDE the gate below - the
+        // same O(cues × sounding) fix SeekCuesAsync already carries, and this one ran four times a
+        // second while contending the transport control plane's lock.
+        var cuesById = new Dictionary<Guid, CueNode>();
+        foreach (var cue in _project.AllCues())
+            cuesById.TryAdd(cue.Id, cue);
+
+        // For rows with no transport playhead (a wall-time or automation row, whose position was read
+        // moments ago on this thread); transport rows carry the stamp taken beside the position reads.
+        var sampledFallback = Stopwatch.GetTimestamp();
+
         paused = IsPaused;
         lock (_gate)
         {
@@ -607,7 +638,7 @@ public sealed partial class ShowHost
                     // file - a cue trimmed to start at 36:00 read "38:17 of 2:36:09" two minutes in,
                     // beside siblings reading "02:17", and the panel looked half an hour out of sync.
                     if (playing
-                        && _project.FindCue(entry.Key) is MediaCueNode media)
+                        && cuesById.GetValueOrDefault(entry.Key) is MediaCueNode media)
                     {
                         elapsed = media.CueTimeAt(elapsed);
 
@@ -626,19 +657,25 @@ public sealed partial class ShowHost
                         // shows the static field alone otherwise.
                         playhead is { IsVolumeAutomated: true }
                             ? LinearToDb(playhead.CueVolume)
-                            : null);
+                            : null,
+                        playhead is { SampledAtTicks: > 0 } ? playhead.SampledAtTicks : sampledFallback);
                 }),
             ];
         }
 
         var standby = new Dictionary<Guid, Guid>();
 
-        foreach (var list in _project.CueLists)
-        {
-            var cue = await _session.GetStandbyCueAsync(ShowCompiler.GroupId(list)).ConfigureAwait(false);
+        // ONE dispatcher hop for every list's standby cursor. Per-list queries each round-tripped the
+        // session dispatcher, so an 8-list show paid 32 hops/s here - and a busy dispatcher (a GO's
+        // own open) delayed the snapshot by their sum, at exactly the moment the operator watches it.
+        var lists = _project.CueLists;
+        var standbyCues = await _session
+            .GetStandbyCuesAsync([.. lists.Select(ShowCompiler.GroupId)]).ConfigureAwait(false);
 
-            if (cue is not null && Guid.TryParse(cue.Id, out var id))
-                standby[list.Id] = id;
+        for (var i = 0; i < lists.Count && i < standbyCues.Count; i++)
+        {
+            if (standbyCues[i] is { } cue && Guid.TryParse(cue.Id, out var id))
+                standby[lists[i].Id] = id;
         }
 
         return new ShowState(sounding, standby, active, paused, Problems);

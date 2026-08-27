@@ -89,6 +89,7 @@ public static class Strings
     public static string TlLive => Get(nameof(TlLive));
     public static string TlLiveHint => Get(nameof(TlLiveHint));
     public static string TlFromPlayhead => Get(nameof(TlFromPlayhead));
+    public static string TlFollow => Get(nameof(TlFollow));
     public static string TlZoomOut => Get(nameof(TlZoomOut));
     public static string TlZoomIn => Get(nameof(TlZoomIn));
     public static string TlZoomFit => Get(nameof(TlZoomFit));
@@ -162,6 +163,8 @@ public static class Strings
     public static string AudProjectMix => Get(nameof(AudProjectMix));
     public static string AudMixRate => Get(nameof(AudMixRate));
     public static string AudClockMaster => Get(nameof(AudClockMaster));
+    public static string AudLatency => Get(nameof(AudLatency));
+    public static string AudLatencyHint => Get(nameof(AudLatencyHint));
     public static string AudTheClockMasterMustRun => Get(nameof(AudTheClockMasterMustRun));
     public static string AudApplyRestartAudio => Get(nameof(AudApplyRestartAudio));
     public static string AudDirectory => Get(nameof(AudDirectory));
@@ -423,6 +426,10 @@ public static class Strings
     public static string InspNextPresetHint => Get(nameof(InspNextPresetHint));
     public static string VidEditOutput => Get(nameof(VidEditOutput));
     public static string VidEditOutputMenu => Get(nameof(VidEditOutputMenu));
+    public static string ShellAudioNotApplied => Get(nameof(ShellAudioNotApplied));
+    public static string ShellAudioNotAppliedTooltip => Get(nameof(ShellAudioNotAppliedTooltip));
+    public static string AudEditLine => Get(nameof(AudEditLine));
+    public static string AudEditLineMenu => Get(nameof(AudEditLineMenu));
     public static string InspPlacementLivesOnTheVideo => Get(nameof(InspPlacementLivesOnTheVideo));
     public static string InspEndpoint => Get(nameof(InspEndpoint));
     public static string InspAddress => Get(nameof(InspAddress));

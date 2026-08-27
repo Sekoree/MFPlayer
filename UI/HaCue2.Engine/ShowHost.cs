@@ -37,9 +37,16 @@ namespace HaCue2.Engine;
 /// <param name="AutomatedVolumeDb">The cue volume automation is currently driving, in dB, or null when
 /// nothing is overriding the authored level. Lets the inspector show "base −6.0 dB · automated now
 /// −12.0 dB" rather than a static field that silently lies while a track drives the cue.</param>
+/// <param name="SampledAtTicks">
+/// <see cref="System.Diagnostics.Stopwatch"/> timestamp of the moment <paramref name="Elapsed"/> was
+/// read off the transport, or zero when unknown. A display extrapolating the playhead between polls
+/// must extrapolate from this rather than stamping on arrival: the snapshot crosses dispatcher hops
+/// on its way up, that crossing time varies poll to poll, and a stamp taken at the end makes the
+/// millisecond digits step back and forth by exactly that variation on every correction.
+/// </param>
 public sealed record ActiveCueState(
     Guid CueId, Guid ListId, TimeSpan Elapsed, TimeSpan? Length, bool IsFading, long StartedTicks,
-    double? AutomatedVolumeDb = null);
+    double? AutomatedVolumeDb = null, long SampledAtTicks = 0);
 
 /// <summary>What the show is doing right now, as one snapshot.</summary>
 /// <param name="Sounding">Cue ids currently playing.</param>
@@ -994,6 +1001,56 @@ public sealed partial class ShowHost : ICueExecutionHost, IRemoteApiTransport, I
 
         foreach (var failure in _bay.Apply(project))
             Report(failure);
+    }
+
+    /// <summary>
+    /// Whether "Apply &amp; restart audio" can be a bay-only swap (<see cref="RestartAudioAsync"/>)
+    /// rather than the full engine restart. False exactly when the bus's own shape changed - the mix
+    /// rate or the logical-output vocabulary - which is fixed for the bay's life.
+    /// </summary>
+    public bool CanRestartAudioInPlace()
+    {
+        var channels = _project.AudioPatch.LogicalChannels
+            .OrderBy(channel => channel.SortOrder)
+            .Select(channel => channel.Id.ToString());
+        return _project.AudioPatch.MixSampleRate == _bay.MixSampleRate
+               && channels.SequenceEqual(_bay.LogicalChannelIds, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Rebuilds the audio bay's device/NDI terminals from the current document under the RUNNING
+    /// session - projector windows, NDI video legs, transport state and recordings all stay up. The
+    /// program is silent for the swap gap; that is the "restart audio" the button promises, and all
+    /// it costs now.
+    /// </summary>
+    /// <remarks>
+    /// Serialized against document reloads: the swap reads <c>_project</c> and the reload replaces
+    /// it, and a reload's own <see cref="ProjectPatchBay.Apply"/> racing the swap would push a
+    /// matrix at a terminal being detached. Off the caller's thread because device opens block on
+    /// native enumeration for hundreds of milliseconds, which is too long for a UI thread and
+    /// forever for the session dispatcher.
+    /// </remarks>
+    /// <returns>The lines that could not be opened, exactly as a fresh start would report them.</returns>
+    public async Task<IReadOnlyList<string>> RestartAudioAsync()
+    {
+        await _reloading.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var failures = await Task.Run(() => _bay.Reopen(_project)).ConfigureAwait(false);
+
+            foreach (var failure in failures)
+                Report($"audio line {failure}");
+
+            // Clocks re-read the transport immediately: the swap moved the audible-latency floor
+            // (a new device queue) and possibly the clock master, and a 250 ms-stale panel over a
+            // just-restarted bay reads as a hang.
+            TransportChanged?.Invoke();
+            return failures;
+        }
+        finally
+        {
+            _reloading.Release();
+        }
     }
 
     /// <summary>Applies an output's current crop/warp to its open composition immediately.</summary>

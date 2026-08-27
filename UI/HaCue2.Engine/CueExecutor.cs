@@ -35,7 +35,13 @@ public sealed class CueExecutor(ICueExecutionHost host)
         // The item that closed the previous pass while a WRAP crossfade carried it into this one.
         // Its later natural-end edge belongs to the playlist but is already handled; the marker is
         // consumed there so it cannot advance the new pass or fall to the ordinary Follow rule.
-        Guid? CrossfadedFrom = null);
+        Guid? CrossfadedFrom = null,
+        // The last already-passed item whose natural end this run absorbed. An advance's fire runs
+        // outside the gate, and when it FAILS the recovery must know whether the outgoing item's end
+        // edge arrived (and was spent) meanwhile - a spent edge never comes again, so restoring the
+        // pre-advance run would strand the group. Cleared on every publish so each in-flight fire
+        // reads only its own window.
+        Guid? SpentEdge = null);
     private sealed record ArmedRun(
         Guid GroupId,
         IReadOnlyList<Guid> Order,
@@ -1033,9 +1039,23 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         // A positive crossfade advances the run while the outgoing item is still alive. Its later
         // natural-end edge belongs to this playlist, but must not advance the new item or fall through
-        // to the outgoing cue's ordinary Follow rule and fire the successor a second time.
+        // to the outgoing cue's ordinary Follow rule and fire the successor a second time. The spent
+        // edge is RECORDED on the stored run: if the advance's own fire is still in flight and fails,
+        // its recovery reads this to learn the edge it would have fallen back on is already gone.
         if (position < run.Index)
+        {
+            if (!approaching)
+            {
+                lock (_stateGate)
+                {
+                    if (_playlistRuns.TryGetValue(run.GroupId, out var current)
+                        && ReferenceEquals(current.Order, run.Order))
+                        _playlistRuns[run.GroupId] = current with { SpentEdge = ended };
+                }
+            }
+
             return true;
+        }
 
         // A zero-window playlist has no useful pre-end edge. For a positive window, natural end is
         // still a fallback if a backend could not issue pre-end notification.
@@ -1057,7 +1077,7 @@ public sealed class CueExecutor(ICueExecutionHost host)
             return await FinishPlaylistAsync(group, run).ConfigureAwait(false);
         }
 
-        var advanced = run with { Index = nextIndex };
+        var advanced = run with { Index = nextIndex, SpentEdge = null };
         lock (_stateGate)
             _playlistRuns[group.Id] = advanced;
 
@@ -1068,12 +1088,54 @@ public sealed class CueExecutor(ICueExecutionHost host)
             group.CrossfadeCurve.Resolve(Project)).ConfigureAwait(false);
 
         if (!fired)
-        {
-            lock (_stateGate)
-                _playlistRuns[group.Id] = run;
-        }
+            await RecoverFailedAdvanceAsync(group, run, advanced, ended).ConfigureAwait(false);
 
         return true;
+    }
+
+    /// <summary>
+    /// Puts a playlist back on its feet after an advance's fire failed. The fire ran outside the
+    /// gate, so the group's state may have moved meanwhile; every branch is judged against what is
+    /// stored NOW rather than what this call published:
+    /// <list type="bullet">
+    /// <item>a foreign run (different Order list) means a GO retook the group mid-flight - it owns
+    /// the state, and restoring over it would resurrect a run the operator already replaced;</item>
+    /// <item>our run with the outgoing item's end edge SPENT (absorbed while the fire was in
+    /// flight) gets the continuation that edge would have driven: one fire from cold, and the
+    /// pre-advance run back only if that fails too. Restoring it outright would strand the group -
+    /// the edge that re-advances it never comes again;</item>
+    /// <item>our run with the edge still owed is restored, and the edge re-advances it from cold.</item>
+    /// </list>
+    /// </summary>
+    private async Task RecoverFailedAdvanceAsync(
+        GroupCueNode group, PlaylistRun before, PlaylistRun published, Guid ended)
+    {
+        bool edgeSpent;
+        lock (_stateGate)
+        {
+            if (!_playlistRuns.TryGetValue(group.Id, out var stored)
+                || !ReferenceEquals(stored.Order, published.Order)
+                || stored.Index != published.Index)
+                return;
+
+            edgeSpent = stored.SpentEdge == ended;
+            if (!edgeSpent)
+                _playlistRuns[group.Id] = before;
+        }
+
+        if (!edgeSpent)
+            return;
+
+        if (await FireAsync(published.Order[published.Index], depth: 1).ConfigureAwait(false))
+            return;
+
+        lock (_stateGate)
+        {
+            if (_playlistRuns.TryGetValue(group.Id, out var stored)
+                && ReferenceEquals(stored.Order, published.Order)
+                && stored.Index == published.Index)
+                _playlistRuns[group.Id] = before;
+        }
     }
 
     private async Task<bool> TryCrossfadeWrapAsync(GroupCueNode group, PlaylistRun run, Guid ended)
@@ -1099,8 +1161,28 @@ public sealed class CueExecutor(ICueExecutionHost host)
 
         if (!fired)
         {
+            bool closerEnded;
             lock (_stateGate)
-                _playlistRuns[group.Id] = run;
+            {
+                // A foreign run (different Order list) means a GO retook the group mid-flight;
+                // it owns the state now and nothing here may write over it.
+                if (!_playlistRuns.TryGetValue(group.Id, out var stored)
+                    || !ReferenceEquals(stored.Order, next.Order))
+                    return true;
+
+                // Marker gone = the closer's natural end arrived while the fire was in flight and
+                // was spent consuming it. That edge was the pass's last way forward: restoring the
+                // completed run would strand the group with no advance and no end policy, so the
+                // recovery is the continuation that edge would have driven - the new pass's opener
+                // from cold, whose failure is left published exactly as FinishPlaylistAsync leaves
+                // a fresh pass's failed opener.
+                closerEnded = stored.CrossfadedFrom is null;
+                if (!closerEnded)
+                    _playlistRuns[group.Id] = run; // the closer still sounds; its end re-runs the pass logic
+            }
+
+            if (closerEnded)
+                await FireAsync(order[0], depth: 1).ConfigureAwait(false);
         }
 
         return true;

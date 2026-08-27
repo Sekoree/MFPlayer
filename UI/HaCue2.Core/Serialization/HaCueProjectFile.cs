@@ -37,6 +37,7 @@ public static class HaCueProjectFile
         var project = JsonSerializer.Deserialize(json, HaCueProjectJsonContext.Default.HaCueProject)
                       ?? throw new HaCueProjectFormatException("The project file is empty.");
         RepairSplitDestinationWriteback(project);
+        CarrierMigration.Migrate(project);
         foreach (var cue in project.AllCues())
             foreach (var placement in CuePlacements.Of(cue))
                 LayerEffectRack.MigrateLegacy(placement);

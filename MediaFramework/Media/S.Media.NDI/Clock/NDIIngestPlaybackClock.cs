@@ -15,7 +15,7 @@ namespace S.Media.NDI.Clock;
 /// Wire <see cref="MediaClock.SetMaster"/> to this instance when playing out with NDI as the
 /// timing authority. Call <see cref="Audio.AudioRouterNDIExtensions.SlaveToNDI"/> on an
 /// <see cref="S.Media.Core.Audio.AudioRouter"/> to pace decode from ingest media time.
-/// Pass the clock into <see cref="Audio.NDIAudioReceiver"/> so the capture
+/// Pass the clock into <see cref="NDISource.Open"/> options so the capture
 /// thread calls <see cref="NotifyAudioFrame"/> before <c>NDIlib_recv_free_audio</c>.
 /// </para>
 /// <para>
@@ -23,7 +23,7 @@ namespace S.Media.NDI.Clock;
 /// last known media end so progress still tracks audio block size.
 /// </para>
 /// <para>
-/// <see cref="Audio.NDIAudioReceiver"/> invokes <see cref="AttachReceiver"/> on construction so
+/// <see cref="NDISource"/> invokes <see cref="AttachReceiver"/> when its capture starts so
 /// a clock instance can be reused across receiver lifetimes.
 /// </para>
 /// </remarks>
@@ -101,7 +101,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
     }
 
     /// <summary>
-    /// Resets session state for a new <see cref="Audio.NDIAudioReceiver"/> using this clock.
+    /// Resets session state for a new receiver session using this clock.
     /// Called automatically by the receiver constructor.
     /// </summary>
     public void AttachReceiver()
@@ -215,7 +215,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
         }
     }
 
-    /// <summary>Call when the receiver capture thread stops (e.g. <see cref="Audio.NDIAudioReceiver.Dispose"/>).</summary>
+    /// <summary>Call when the receiver capture thread stops (e.g. <see cref="NDISource.Dispose"/>).</summary>
     public void NotifyCaptureStopped()
     {
         lock (_gate)

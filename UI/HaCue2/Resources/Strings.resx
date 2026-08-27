@@ -220,6 +220,9 @@
   <data name="TlFromPlayhead" xml:space="preserve">
     <value>▶ FROM PLAYHEAD</value>
   </data>
+  <data name="TlFollow" xml:space="preserve">
+    <value>FOLLOW</value>
+  </data>
   <data name="TlZoomOut" xml:space="preserve">
     <value>ZOOM −</value>
   </data>
@@ -441,6 +444,12 @@
   </data>
   <data name="AudTheClockMasterMustRun" xml:space="preserve">
     <value>The clock master must run natively at the mix rate - it is never resampled, so the show clock never drifts against it. Lines that cannot be one are not offered.</value>
+  </data>
+  <data name="AudLatency" xml:space="preserve">
+    <value>Output latency</value>
+  </data>
+  <data name="AudLatencyHint" xml:space="preserve">
+    <value>How deep the device queues run: how soon after GO a cue is heard, against headroom for a busy machine. Lower it only if this rig plays clean there. Applies with the next audio restart.</value>
   </data>
   <data name="AudApplyRestartAudio" xml:space="preserve">
     <value>APPLY &amp; RESTART AUDIO</value>
@@ -2208,5 +2217,17 @@
   </data>
   <data name="VidEditOutputMenu" xml:space="preserve">
     <value>Edit output…</value>
+  </data>
+  <data name="ShellAudioNotApplied" xml:space="preserve">
+    <value>⚠ APPLY AUDIO</value>
+  </data>
+  <data name="ShellAudioNotAppliedTooltip" xml:space="preserve">
+    <value>The rig is not running what the document says: an audio line, sender, clock master, rate or latency changed. Applies by restarting audio only - video outputs stay up; a mix-rate or logical-output change restarts the whole show engine.</value>
+  </data>
+  <data name="AudEditLine" xml:space="preserve">
+    <value>EDIT…</value>
+  </data>
+  <data name="AudEditLineMenu" xml:space="preserve">
+    <value>Edit line…</value>
   </data>
 </root>

@@ -315,6 +315,7 @@
                      KeyDown="OnLinesKeyDown" PointerPressed="OnRowRightPressed">
               <ListBox.ContextMenu>
                 <ContextMenu>
+                  <MenuItem Header="{x:Static res:Strings.AudEditLineMenu}" Click="OnDialog" Tag="line:edit" />
                   <MenuItem Header="{x:Static res:Strings.AudRename2}" Click="OnDialog" Tag="line:rename" />
                   <MenuItem Header="{x:Static res:Strings.AudRelinkAbsentLines}" Click="OnDialog" Tag="relink" />
                   <Separator />
@@ -353,6 +354,11 @@
               </HeaderedContentControl>
               <TextBlock Margin="10,4,10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
                          Text="{x:Static res:Strings.AudTheClockMasterMustRun}" />
+              <HeaderedContentControl Theme="{StaticResource Field}" Header="{x:Static res:Strings.AudLatency}">
+                <ComboBox ItemsSource="{Binding LatencyPresets}" SelectedIndex="{Binding LatencyPresetIndex}" />
+              </HeaderedContentControl>
+              <TextBlock Margin="10,4,10,4" FontSize="10.5" Classes="dim3" TextWrapping="Wrap"
+                         Text="{x:Static res:Strings.AudLatencyHint}" />
               <!-- Register item 14: never a silent rebuild. The button only lights up when the running
                    bay actually differs from the document, so it says something rather than sitting
                    there inviting a restart nobody needs. -->
@@ -365,6 +371,12 @@
 
           <c:PanelBox Grid.Row="1" Header="{Binding SelectedLineName}" Hint="selected line">
             <StackPanel Margin="0,6,0,8">
+              <!-- The per-kind edit dialog (review B3: an audio line - an audio-only NDI sender's
+                   channel count or wire name in particular - had no edit surface at all). -->
+              <ContentControl Theme="{StaticResource FieldWide}" IsVisible="{Binding HasSelectedLine}">
+                <Button Classes="block" Content="{x:Static res:Strings.AudEditLine}"
+                        Click="OnDialog" Tag="line:edit" />
+              </ContentControl>
               <!-- Hidden rather than disabled for an interface line: a directory and a filename
                    pattern are not dimmed-out properties of a sound card, they are meaningless for one. -->
               <StackPanel IsVisible="{Binding Record.IsRecording}">
